@@ -83,6 +83,12 @@ struct AutomationSettings {
     items: Vec<ItemRule>,
     skills: Vec<SkillRule>,
     equipment: Vec<EquipmentRule>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_attack_strategies",
+        skip_serializing_if = "Option::is_none"
+    )]
+    attack_strategies: Option<Vec<AttackStrategyRule>>,
     allocation: Allocation,
     follow: Follow,
     travel: Travel,
@@ -512,6 +518,73 @@ enum SkillTarget {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AttackStrategyRule {
+    id: String,
+    species_ids: Vec<u32>,
+    skill_id: u8,
+    level: u8,
+    behavior: AttackStrategyBehavior,
+    max_attempts: u8,
+    max_uses: u8,
+    cooldown_seconds: u16,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_conditions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    conditions: Option<Vec<Value>>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum AttackStrategyBehavior {
+    Opener,
+    Repeat,
+}
+impl<'de> Deserialize<'de> for AttackStrategyBehavior {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "opener" => Ok(Self::Opener),
+            "repeat" => Ok(Self::Repeat),
+            _ => Err(serde::de::Error::custom(
+                "Invalid attack strategy behavior.",
+            )),
+        }
+    }
+}
+fn deserialize_attack_strategies<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<AttackStrategyRule>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Vec::<AttackStrategyRule>::deserialize(deserializer).map(Some)
+}
+impl AttackStrategyRule {
+    fn valid(&self) -> bool {
+        !self.id.is_empty()
+            && self.id.len() <= 48
+            && self
+                .id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            && !self.species_ids.is_empty()
+            && self.species_ids.len() <= 64
+            && unique_by(&self.species_ids, |id| *id)
+            && self.species_ids.iter().all(|id| positive_id(*id))
+            && matches!(self.skill_id, 11 | 12 | 16)
+            && (1..=10).contains(&self.level)
+            && (1..=100).contains(&self.max_attempts)
+            && (1..=self.max_attempts).contains(&self.max_uses)
+            && (1..=3600).contains(&self.cooldown_seconds)
+            && conditions_valid(&self.conditions, false)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EquipmentRule {
     #[serde(
         default,
@@ -628,7 +701,11 @@ fn unique_by<T, K: Eq + Hash>(items: &[T], key: impl Fn(&T) -> K) -> bool {
 
 impl AutomationSettings {
     fn validate(&self) -> Result<(), String> {
-        let valid = (-100..=100).contains(&self.combat.level_difference)
+        let valid = self.attack_strategies.as_ref().map_or(true, |rules| {
+            rules.len() <= 32
+                && unique_by(rules, |rule| rule.id.clone())
+                && rules.iter().all(AttackStrategyRule::valid)
+        }) && (-100..=100).contains(&self.combat.level_difference)
             && self.combat.rules.len() <= 64
             && unique_by(&self.combat.rules, |r| r.class_id)
             && self.combat.rules.iter().all(|r| {
@@ -768,6 +845,45 @@ mod tests {
 
     fn valid(value: Value) -> bool {
         serde_json::from_value::<Settings>(value).is_ok_and(|settings| settings.validate().is_ok())
+    }
+
+    #[test]
+    fn attack_strategy_schema_round_trip_and_bounds() {
+        let mut value = settings();
+        value["automation"] = automation();
+        let rule = json!({"id":"opening-bolt","speciesIds":[4000,4001],"skillId":11,"level":10,"behavior":"opener","maxAttempts":3,"maxUses":2,"cooldownSeconds":1});
+        value["automation"]["attackStrategies"] = json!([rule.clone(),{ "id":"repeat-bolt", "speciesIds":[4000], "skillId":11,"level":1,"behavior":"repeat","maxAttempts":3,"maxUses":3,"cooldownSeconds":2}]);
+        assert!(valid(value.clone()));
+        let parsed: Settings = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+        for (field, bad) in [
+            ("skillId", json!(19)),
+            ("level", json!(0)),
+            ("maxAttempts", json!(0)),
+            ("maxUses", json!(4)),
+            ("cooldownSeconds", json!(3601)),
+            ("speciesIds", json!([])),
+            ("speciesIds", json!([4000, 4000])),
+            ("id", json!("bad id")),
+            ("behavior", json!("combo")),
+            ("behavior", json!({"opener":null})),
+            ("behavior", json!({"repeat":null})),
+            ("conditions", json!(null)),
+            ("rawPacket", json!([1])),
+        ] {
+            let mut bad_value = value.clone();
+            bad_value["automation"]["attackStrategies"][0][field] = bad;
+            assert!(!valid(bad_value), "{field}");
+        }
+        let mut duplicate = value.clone();
+        duplicate["automation"]["attackStrategies"][1]["id"] = json!("opening-bolt");
+        assert!(!valid(duplicate));
+        let mut null = value.clone();
+        null["automation"]["attackStrategies"] = Value::Null;
+        assert!(!valid(null));
+        let mut candidate = value.clone();
+        candidate["automation"]["attackStrategies"][0]["conditions"] = json!([{ "field":"actorStatus","actor":{"scope":"candidate"},"statusId":1,"operator":"eq","value":false}]);
+        assert!(!valid(candidate));
     }
 
     fn disposition() -> Value {

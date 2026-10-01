@@ -54,7 +54,7 @@ export interface NavigationSummary {
   reachable: number;
 }
 
-export interface RouteOptions { range?: number; maxDistance?: number; avoidWalls?: boolean; goal?: 'walk' | 'attack' }
+export interface RouteOptions { range?: number; maxDistance?: number; avoidWalls?: boolean; goal?: 'walk' | 'attack' | 'cast' }
 type TileState = 'blocked' | 'portal' | 'walkable';
 interface OpenCell { cell: number; cost: number; priority: number }
 interface SearchScratch { costs: Float64Array; parents: Int32Array; seen: Uint32Array; closed: Uint32Array; stamp: number; queue?: Int32Array }
@@ -256,6 +256,12 @@ export class GridNavigator {
       && (range > 1 || this.clearApproach(from, to));
   }
 
+  /** Spell destinations need a valid coordinate and directional LOS, not walkability. */
+  canCast(from: Position, to: Position, range: number): boolean {
+    return this.safe(from) && this.index(to)>=0 && attackDistance(from,to)<=range
+      && projectileLineOfSight(from,to,p=>this.sight[this.index(p)]===1);
+  }
+
   private clearApproach(from: Position, to: Position): boolean {
     let current = from;
     let error = Math.abs(to.x - from.x) - Math.abs(to.y - from.y);
@@ -299,13 +305,13 @@ export class GridNavigator {
     const range = options.range ?? 0;
     const maxDistance = options.maxDistance ?? this.count - 1;
     if (!Number.isInteger(range) || range < 0 || range > MAX_MAP_DIMENSION || !Number.isInteger(maxDistance)
-      || maxDistance < 0 || !this.safe(from) || (!this.available(to) && distance(from, to) !== 0)) return null;
+      || maxDistance < 0 || !this.safe(from) || this.index(to)<0 || (options.goal!=='cast' && !this.available(to) && distance(from, to) !== 0)) return null;
     const start = this.index(from);
     const target = this.index(to);
-    const goalMode = options.goal === 'attack' ? 'attack' : 'walk';
+    const goalMode = options.goal === 'cast' ? 'cast' : options.goal === 'attack' ? 'attack' : 'walk';
     // One-cell melee also requires a clear walking approach. Longer attacks may
     // fire across a visible barrier into another walking component.
-    if (((goalMode !== 'attack' || range <= 1) && this.components[start] !== this.components[target]) || Math.max(0, distance(from, to) - range) > maxDistance) return null;
+    if (((goalMode === 'walk' || goalMode === 'attack' && range <= 1) && this.components[start] !== this.components[target]) || Math.max(0, distance(from, to) - range) > maxDistance) return null;
     // Geometry is immutable. Only the effective temporary-block set invalidates
     // exact results; extend this key whenever a new route option is introduced.
     const key = `${start}:${target}:${range}:${maxDistance}:${options.avoidWalls === false ? 0 : 1}:${goalMode}`;
@@ -318,8 +324,8 @@ export class GridNavigator {
     this.cacheRoute(key, cells);
     return cells;
   }
-  private findRoute(from: Position, to: Position, range: number, maxDistance: number, avoidWalls: boolean, goalMode: 'walk' | 'attack'): Position[] | null {
-    const goal = goalMode === 'attack' ? (p: Position) => this.canAttack(p, to, range)
+  private findRoute(from: Position, to: Position, range: number, maxDistance: number, avoidWalls: boolean, goalMode: 'walk' | 'attack' | 'cast'): Position[] | null {
+    const goal = goalMode === 'cast' ? (p:Position)=>this.canCast(p,to,range) : goalMode === 'attack' ? (p: Position) => this.canAttack(p, to, range)
       : (p: Position) => distance(p, to) <= range && this.clearApproach(p, to);
     // Prove capped local failures before exploring the whole component. This
     // square bounds every cell BFS can reach within the cap; successful queries

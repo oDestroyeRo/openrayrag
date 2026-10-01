@@ -47,6 +47,39 @@ describe('persistent field run ownership', () => {
     const result=planDisposition(policy,context());expect(result.actions).toEqual([]);expect(result.unmet[0]?.count).toBe(1);
     expect(sent).toEqual([]);
   });
+  it('keeps canceled ground execution fenced until the exact requested coordinate is confirmed',()=>{
+    const {controller,receive,packet}=setup();const automation=policy();automation.combat.mode='off';
+    receive({type:'spawn',entity:{...player,statuses:[],sp:200,maxSp:200}},{type:'inventory',items:[],equipment:Array(10).fill(0),ammoId:-1},{type:'skills',learned:[{skillId:19,level:1}]});
+    controller.start({...settings,automation});controller.pause('External owner',60_000);
+    controller.engine.manualAction({type:'skill',mode:'ground',skillId:19,level:1,position:{x:105,y:100}});
+    controller.tick();controller.pause('Temporary interruption',60_000);
+    expect(controller.snapshot().reason).toContain('Waiting for a confirmed result');
+    const ground=(y:number)=>new BitWriter().u8(FEATURE_OP.skill).u8(4).i32(1).position({x:105,y}).u8(19).u8(1).u8(0).position({x:100,y:100}).f32(1.5);
+    packet(ground(101));expect(controller.snapshot().reason).toContain('Waiting for a confirmed result');
+    packet(ground(100));expect(controller.snapshot().reason).not.toContain('Waiting for a confirmed result');
+    expect(controller.runRequested).toBe(true);expect(controller.engine.running).toBe(false);
+  });
+  it.each([0,2])('settles a late canceled bolt before emergency escape when motion is %s seconds', motion => {
+    const {controller,receive,packet,sent,step}=setup();const automation=policy();
+    automation.escape={...DEFAULT_ESCAPE,enabled:true};
+    automation.attackStrategies=[{id:'open',speciesIds:[4000],skillId:11,level:1,behavior:'opener',maxAttempts:1,maxUses:1,cooldownSeconds:1}];
+    receive({type:'spawn',entity:{...player,statuses:[],sp:200,maxSp:200}},
+      {type:'inventory',items:[{bagId:601,itemId:601,type:1,count:2}],equipment:Array(10).fill(0),ammoId:-1},
+      {type:'skills',learned:[{skillId:11,level:1}]});
+    controller.start({...settings,automation});step();
+    expect(sent.filter(a=>a.type==='skill')).toHaveLength(1);
+    packet(new BitWriter().u8(OP.heal).i32(1).i32(0).i32(20).i32(100));
+    for(let n=0;n<31;n++){step(1000);packet(new BitWriter().u8(FEATURE_OP.sp).i32(200).i32(200));}
+    packet(new BitWriter().u8(FEATURE_OP.skill).u8(1).i32(1).i32(1).i32(2).u8(11).u8(1).u8(0)
+      .position({x:100,y:100}).i32(1).u8(0).u8(1).f32(motion).f32(0).bool(false));
+    expect(controller.engine.featureActionsSettled).toBe(false);
+    step(Math.max(1,motion)*1000-1);
+    expect(sent.filter(a=>a.type==='useItem')).toHaveLength(0);
+    expect(controller.engine.featureActionsSettled).toBe(false);
+    step(1);step(250);
+    expect(sent.filter(a=>a.type==='useItem')).toEqual([{type:'useItem',itemId:601}]);
+    expect(sent.filter(a=>a.type==='skill')).toHaveLength(1);
+  });
   it('keeps a low HP run waiting and resumes only after authoritative recovery', () => {
     const { controller, sent, receive, step } = setup(); controller.start(settings); step();
     receive({ type: 'hit', id: 1, damage: 80, position: { x: 100, y: 100 } });

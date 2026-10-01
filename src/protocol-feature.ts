@@ -7,7 +7,7 @@ export const FEATURE_OP = {
   sit: 14, skill: 29, skillImpact: 30, skillFailure: 31, featureError: 32, experience: 34, sp: 39,
   serverEvent: 91, currency: 40, respawn: 41, requestFailure: 42, targeted: 43, useItem: 47,
   equipment: 48, inventoryDelta: 50, stats: 56, learnedSkill: 57,
-  allocateStats: 58, status: 61, removeStatus: 62, grantedSkills: 98, maskedSkill: 104,
+  allocateStats: 58, status: 61, removeStatus: 62, inventoryItem: 63, grantedSkills: 98, maskedSkill: 104,
 } as const;
 
 export type Attributes = [number, number, number, number, number, number];
@@ -43,6 +43,7 @@ export type FeatureEvent =
   | { type: 'learnedSkill'; skillId: number; level: number; points: number }
   | { type: 'inventory'; items: InventoryItem[]; cart?: InventoryItem[]; equipment: number[]; ammoId: number }
   | { type: 'inventoryDelta'; add: boolean; bagId: number; change: number; weight: number; item?: InventoryItem }
+  | { type: 'inventoryItem'; item: InventoryItem }
   | { type: 'equipment'; bagId: number; slot: number; equipped: boolean }
   | { type: 'targeted'; id: number }
   | { type: 'experience'; baseTotal: number; baseGained: number; jobTotal: number; jobGained: number }
@@ -208,6 +209,7 @@ function parseFeatures(data: Uint8Array): FeatureEvent[] | null {
       if (!add) r.bool();
       events = [{ type: 'inventoryDelta', add, bagId, change, weight, ...(item ? { item } : {}) }]; break;
     }
+    case FEATURE_OP.inventoryItem: { const bagId=positive(r.i32(),'bag ID'); events=[{type:'inventoryItem',item:readItem(r,2,bagId)}]; break; }
     case FEATURE_OP.equipment: events = [{ type: 'equipment', bagId: positive(r.i32(), 'bag ID'), slot: bounded(r.u8(), 0, 13, 'equipment slot'), equipped: r.bool() }]; break;
     case FEATURE_OP.targeted: events = [{ type: 'targeted', id: positive(r.i32()) }]; break;
     case FEATURE_OP.experience: events = [{ type: 'experience', baseTotal: resource(r.i32(), 'experience'), baseGained: r.i32(), jobTotal: resource(r.i32(), 'job experience'), jobGained: r.i32() }]; break;

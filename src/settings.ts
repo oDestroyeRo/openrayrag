@@ -8,6 +8,7 @@ export interface MonsterRule { classId: number; action: 'attack' | 'ignore'; pri
 export interface LootRule { itemId: number; action: 'pickup' | 'ignore'; priority: number }
 export interface ItemRule { itemId: number; resource: 'hp' | 'sp'; belowPercent: number; minStock: number; cooldownSeconds: number; conditions?: ActorPredicate[] }
 export interface SkillRule { skillId: number; level: number; target: 'self' | 'enemy'; hpBelowPercent: number; spAbovePercent: number; cooldownSeconds: number; conditions?: ActorPredicate[] }
+export interface AttackStrategyRule {id:string;speciesIds:number[];skillId:11|12|16;level:number;behavior:'opener'|'repeat';maxAttempts:number;maxUses:number;cooldownSeconds:number;conditions?:ActorPredicate[]}
 export interface EquipmentRule { itemId: number; hpBelowPercent: number; monsterClassId: number; conditions?: ActorPredicate[] }
 export interface EscapeSettings {
   enabled: boolean; hpBelowPercent: number; mode: 'random' | 'save'; method: 'item' | 'skill';
@@ -24,6 +25,7 @@ export interface AutomationSettings {
   items: ItemRule[];
   skills: SkillRule[];
   equipment: EquipmentRule[];
+  attackStrategies?: AttackStrategyRule[];
   allocation: { stats: Array<{ stat: number; target: number }>; skills: Array<{ skillId: number; target: number }> };
   follow: { name: string; distance: number; lostSeconds: number };
   travel: { destinationMap: string; returnToLockMap: boolean; waypoints: Array<Position & { map: string }>; loop: boolean };
@@ -69,13 +71,20 @@ export function automationSettings(settings: Settings): AutomationSettings { ret
 export function escapeSettings(settings: Settings): EscapeSettings { return automationSettings(settings).escape ?? DEFAULT_ESCAPE; }
 export function validateAutomation(a: AutomationSettings): AutomationSettings {
   try {
-    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply']);
+    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies']);
     if (Object.hasOwn(a,'supply')) validateSupplySettings(a.supply);
     const escape = a.escape === undefined ? DEFAULT_ESCAPE : a.escape;
     strictKeys(escape,['enabled','hpBelowPercent','mode','method','minStock','cooldownSeconds']);
     if (typeof escape.enabled !== 'boolean' || !bounded(escape.hpBelowPercent,1,95) || !['random','save'].includes(escape.mode)
       || !['item','skill'].includes(escape.method) || !bounded(escape.minStock,0,9999) || !bounded(escape.cooldownSeconds,1,3600)) throw new Error();
     if (Object.hasOwn(a,'disposition')) validateDispositionPolicy(a.disposition);
+    if(Object.hasOwn(a,'attackStrategies')) {
+      if(!Array.isArray(a.attackStrategies)||a.attackStrategies.length>32||new Set(a.attackStrategies.map(r=>r.id)).size!==a.attackStrategies.length)throw new Error();
+      for(const r of a.attackStrategies){
+        strictKeys(r,['id','speciesIds','skillId','level','behavior','maxAttempts','maxUses','cooldownSeconds','conditions']);
+        if(typeof r.id!=='string'||! /^[a-zA-Z0-9_-]{1,48}$/.test(r.id)||!list(r.speciesIds,64,id,v=>v)||!r.speciesIds.length||![11,12,16].includes(r.skillId)||!bounded(r.level,1,10)||!['opener','repeat'].includes(r.behavior)||!bounded(r.maxAttempts,1,100)||!bounded(r.maxUses,1,r.maxAttempts)||!bounded(r.cooldownSeconds,1,3600)||Object.hasOwn(r,'conditions')&&!validActorConditions(r.conditions))throw new Error();
+      }
+    }
     if (a.loadout === undefined) a = {...a,loadout:structuredClone(DEFAULT_LOADOUT)};
     strictKeys(a.loadout,['enabled','autoAmmo','minAmmoStock','ammoPreferences','restore','cooldownSeconds']);
     for(const r of a.loadout.ammoPreferences) strictKeys(r,['itemId']);

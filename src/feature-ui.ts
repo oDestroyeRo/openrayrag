@@ -23,7 +23,7 @@ interface Hooks {
   notify(text: string, error?: boolean): void; changed(): void;
 }
 type Field = { path: string; label: string; kind?: 'text' | 'checkbox'; min?: number; max?: number; options?: Array<[string,string]> };
-type Column = { key: string; label: string; kind?: 'text'; min?: number; max?: number; options?: Array<[string,string]> };
+type Column = { key: string; label: string; kind?: 'text' | 'ids'; min?: number; max?: number; options?: Array<[string,string]> };
 type Row = Record<string, unknown>;
 const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const text = (v: unknown): string => typeof v === 'string' ? v : '';
@@ -110,13 +110,13 @@ class RuleEditor {
     this.root.className = 'rule-editor';
     const summary = document.createElement('summary'); summary.textContent = title; this.root.append(summary,this.rows);
     this.add.type = 'button'; this.add.className = 'secondary compact'; this.add.textContent = '＋ Add rule';
-    this.add.addEventListener('click', () => { const rows = this.read(); if (rows.length < maximum) this.write([...rows,{...initial}]); changed(); });
+    this.add.addEventListener('click', () => { const rows = this.read(); if (rows.length < maximum) this.write([...rows,{...initial,...(typeof initial.id==='string'?{id:crypto.randomUUID()}:{})}]); changed(); });
     this.root.addEventListener('input',changed); this.root.append(this.add); this.write([]);
   }
   read(): Row[] {
     return [...this.rows.children].map(row => {const result:Row=Object.fromEntries(this.columns.map(column => {
       const input = row.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-column="${column.key}"]`)!;
-      return [column.key,column.kind === 'text' || column.options ? input.value : Number(input.value)];
+      return [column.key,column.kind==='ids'?input.value.split(',').map(id=>Number(id.trim())):column.kind === 'text' || column.options ? input.value : Number(input.value)];
     }));const conditions=this.conditions.get(row)?.read();if(conditions!==undefined)result.conditions=conditions;return result;});
   }
   write(values: Row[]): void {
@@ -124,13 +124,16 @@ class RuleEditor {
     for (const value of values) {
       const row = document.createElement('div'); row.className = 'rule-row';
       for (const column of this.columns) {
-        const label = fieldElement({ path:column.key,label:column.label,kind:column.kind,min:column.min,max:column.max,options:column.options });
+        const label = fieldElement({ path:column.key,label:column.label,kind:column.kind==='ids'?'text':column.kind,min:column.min,max:column.max,options:column.options });
         const input = label.querySelector<HTMLInputElement | HTMLSelectElement>('input,select')!; delete input.dataset.setting;
         input.dataset.column = column.key; input.value = String(value[column.key] ?? this.initial[column.key] ?? '');
+        if(column.key==='id'&&input instanceof HTMLInputElement)input.maxLength=48;
+        if(column.kind==='ids'&&input instanceof HTMLInputElement){input.maxLength=704;input.value=Array.isArray(value[column.key])?(value[column.key] as number[]).join(', '):input.value;}
         if (input instanceof HTMLInputElement && ['itemId','skillId','classId'].includes(column.key)) input.setAttribute('list',`${column.key}-catalog`);
         row.append(label);
       }
       if(this.observations){const editor=new ActorPredicateEditor(this.observations,this.changed,this.allowCandidate);editor.write(value.conditions as import('./actor-observations').ActorPredicate[]|undefined);this.conditions.set(row,editor);row.append(editor.root);}
+      if(typeof this.initial.id==='string')for(const direction of [-1,1]){const move=document.createElement('button');move.type='button';move.className='secondary compact';move.textContent=direction<0?'Move earlier':'Move later';move.addEventListener('click',()=>{const sibling=direction<0?row.previousElementSibling:row.nextElementSibling;if(sibling){if(direction<0)this.rows.insertBefore(row,sibling);else this.rows.insertBefore(sibling,row);this.root.dispatchEvent(new Event('input',{bubbles:true}));}});row.append(move);}
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-button rule-remove'; remove.textContent = 'Remove';
       remove.addEventListener('click', () => { this.conditions.delete(row);row.remove(); this.add.disabled = this.locked || this.rows.childElementCount >= this.maximum; this.root.dispatchEvent(new Event('input',{bubbles:true})); });
       row.append(remove); this.rows.append(row);
@@ -156,7 +159,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     if (v && typeof v === 'object') return Object.keys(v).length <= 256 && Object.values(v).every(entry => bounded(entry,depth+1));
     return false;
   }
-  if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','supply','supplyGuard','elapsedSeconds','deaths','lootStats','actors','loadout'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','supply','supplyGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
   if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
   if(value.ruleConditions!==undefined&&!bounded(value.ruleConditions,0))return false;
   const barter = object(value.world).barter;
@@ -173,6 +176,7 @@ export class FeatureUi {
   private status: Record<string, unknown> = {};
   private dispositionEditor!: RuleEditor;
   private dispositionPlan: DispositionPlan | null = null;
+  private attackStrategiesPresent = false;
   constructor(private readonly host: HTMLElement, private readonly hooks: Hooks) {
     let storage: Pick<Storage,'getItem'|'setItem'>;
     try { storage = localStorage; } catch { storage = {getItem:()=>null,setItem:()=>{throw new Error('Profile storage is unavailable.');}}; }
@@ -234,11 +238,14 @@ export class FeatureUi {
   private dispositionOutput(): HTMLElement { return this.host.querySelector<HTMLElement>('#disposition-preview')!; }
   private note(section: Section, message: string): void { const p = document.createElement('p'); p.className = 'hint'; p.textContent = message; this.panel(section).append(p); }
   private editor(section: Section, path: string, title: string, columns: Column[], initial: Row, max: number): RuleEditor {
-    const editor = new RuleEditor(title,columns,initial,max,this.hooks.changed,['combat.rules','items','skills','equipment'].includes(path)?()=>actorSnapshotAt(this.status.actorObservations):undefined,path==='combat.rules'); this.editors.set(path,editor); this.panel(section).append(editor.root); return editor;
+    const editor = new RuleEditor(title,columns,initial,max,this.hooks.changed,['combat.rules','items','skills','equipment','attackStrategies'].includes(path)?()=>actorSnapshotAt(this.status.actorObservations):undefined,path==='combat.rules'); this.editors.set(path,editor); this.panel(section).append(editor.root); return editor;
   }
   private rules(): void {
     this.editor('combat','combat.rules','Monster policies & priority',[idColumn('classId','Monster class ID'),{key:'action',label:'Action',options:[['attack','Attack'],['ignore','Ignore']]},priority],{classId:1002,action:'attack',priority:0},64);
     this.note('combat','Ignore rules apply when their conditions match; known-false ignores fall back to selected combat. Unknown conditions block that class. Attack conditions also guard selected species. Higher priority wins among eligible targets.');
+    this.editor('combat','attackStrategies','Ordered attack skills by species',[{key:'id',label:'Stable rule ID',kind:'text'},{key:'speciesIds',label:'Monster species IDs · comma separated',kind:'ids'},{key:'skillId',label:'Verified actor skill',options:[['11','Fire Bolt'],['12','Cold Bolt'],['16','Lightning Bolt']]},{key:'level',label:'Level',min:1,max:10},{key:'behavior',label:'Use',options:[['opener','Before first normal attack'],['repeat','Repeat during engagement']]},{key:'maxAttempts',label:'Maximum dispatch attempts per actor',min:1,max:100},{key:'maxUses',label:'Maximum confirmed uses per actor',min:1,max:100},{key:'cooldownSeconds',label:'Cooldown seconds',min:1,max:3600}],{id:'opening-bolt',speciesIds:[4000],skillId:11,level:1,behavior:'opener',maxAttempts:1,maxUses:1,cooldownSeconds:3},32);
+    this.note('combat','An empty attack strategy list uses ordinary combat. Earlier matching rules win, even when two rules use the same skill. Opener means before this controller first sends a normal attack at that observed actor. Attempts and confirmations survive Stop/Start and target switches. An unresolved cast cannot be retried on that actor lifetime. Unknown prerequisites wait up to 30 seconds, then skip that actor for 30 seconds while retaining run intent. Only the three bolt skills have automatic cast positioning; combos, kiting, party support and automatic ground AoE remain unavailable.');
+    const strategyState=document.createElement('div');strategyState.id='attack-strategy-state';strategyState.className='telemetry-summary';strategyState.hidden=true;this.panel('combat').append(strategyState);
     this.note('recovery','Rest starts above the emergency HP threshold. Resume needs both configured HP and SP targets. Recovery timeouts keep the run waiting.');
     this.note('recovery','Emergency escape is opt-in: random uses Fly Wing or Teleport; save point uses Butterfly Wing or Return. It waits for your refreshed character, then for HP recovery. Stock reserve applies to wings. A rejected or uncertain attempt never falls back to another action.');
     this.editor('travel','travel.waypoints','Waypoints',[{key:'map',label:'Map code',kind:'text'},{key:'x',label:'X',min:0,max:511},{key:'y',label:'Y',min:0,max:511}],{map:'prt_fild08',x:150,y:150},64);
@@ -266,6 +273,7 @@ export class FeatureUi {
     this.manualButton('Equip',()=>({type:'equip',bagId:Number(bag.value),equipped:true}),buttons);this.manualButton('Unequip',()=>({type:'equip',bagId:Number(bag.value),equipped:false}),buttons);
     this.manualButton('Self skill',()=>({type:'skill',mode:'self',skillId:Number(skill.value),level:Number(level.value)}),buttons);
     this.manualButton('Target skill',()=>({type:'skill',mode:'target',skillId:Number(skill.value),level:Number(level.value),target:Number(target.value)}),buttons);
+    this.note('inventory','Manual Thunderstorm uses verified range 9 (5 while Blind), stationary projectile sight and exact ground confirmation. Its center may be blocked terrain. Other unverified skills retain adjacent manual targeting. Effective SP needs observed equipment/card/refine metadata; server-only cooldown or disabled state can still reject a cast.');
     this.manualButton('Ground skill',()=>({type:'skill',mode:'ground',skillId:Number(skill.value),level:Number(level.value),position:{x:Number(x.value),y:Number(y.value)}}),buttons);
     this.manualButton('Spend 1 skill point',()=>({type:'allocateSkill',skillId:Number(skill.value)}),buttons);
     const allocation=document.createElement('div');allocation.className='form-grid';manual.append(allocation);const attributes=['STR','AGI','VIT','INT','DEX','LUK'].map((stat,index)=>this.input(allocation,`manual-stat-${index}`,`${stat} increments`,'number','0',0,99));
@@ -300,6 +308,7 @@ export class FeatureUi {
     }
     for (const [path,editor] of this.editors) {
       const rows = editor.read();
+      if(path==='attackStrategies'){for(const row of rows)row.skillId=Number(row.skillId);if(!rows.length&&!this.attackStrategiesPresent)continue;}
       if (path === 'allocation.stats') for (const row of rows) row.stat = Number(row.stat);
       setPath(automation,path,rows);
     }
@@ -308,12 +317,13 @@ export class FeatureUi {
   }
   write(automation: AutomationSettings): void {
     automation = validateAutomation(automation);automation={...automation,supply:automation.supply??structuredClone(DEFAULT_SUPPLY)};
+    this.attackStrategiesPresent=Object.hasOwn(automation,'attackStrategies');
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
       const value = getPath(automation,field.path);
       if (field.kind === 'checkbox') (input as HTMLInputElement).checked = value === true; else input.value = String(value ?? '');
     }
-    for (const [path,editor] of this.editors) editor.write(getPath(automation,path) as Row[]);
+    for (const [path,editor] of this.editors) editor.write((getPath(automation,path)??[]) as Row[]);
     const policy=automation.disposition??DEFAULT_DISPOSITION;
     this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!.value=String(policy.maxSpend);
     this.dispositionEditor.write(policy.rules.map(row=>({...row,store:row.store?'1':'0',cart:row.cart?'1':'0',sell:row.sell?'1':'0',allowUnique:row.allowUnique?'1':'0'})));
@@ -476,6 +486,7 @@ export class FeatureUi {
   }
   render(value: unknown): void {
     this.status=object(value);const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
+    const strategyState=this.host.querySelector<HTMLElement>('#attack-strategy-state')!;const strategy=object(s.attackStrategies);const engagements=Array.isArray(strategy.entries)?strategy.entries:[];strategyState.hidden=engagements.length===0;strategyState.textContent=engagements.slice(0,8).map(entry=>{const actor=object(entry);const rules=Array.isArray(actor.rules)?actor.rules:[];return `Actor #${number(actor.id)??'?'} · ${actor.normalStarted===true?'normal attack started':'opener window open'}`+rules.slice(0,32).map(value=>{const rule=object(value);return `\n  ${text(rule.id)} · ${number(rule.attempts)??'?'} attempts · ${number(rule.uses)??'?'} confirmed${rule.uncertain===true?' · unresolved':rule.rejected===true?' · rejected':''}`;}).join('');}).join('\n')+(strategy.truncated===true?'\nAdditional actor ledgers omitted from display.':'');
     const conditionState=this.host.querySelector<HTMLElement>('#actor-condition-state')!;const traces=Array.isArray(s.ruleConditions)?s.ruleConditions:[];conditionState.hidden=traces.length===0;conditionState.textContent=traces.slice(0,32).map(entry=>{const rule=object(entry);const conditions=Array.isArray(rule.conditions)?rule.conditions:[];return text(rule.rule)+(rule.truncated===true?' · additional evidence omitted':'')+conditions.map(condition=>{const trace=object(condition);return '\n  '+text(trace.state)+' · '+text(trace.reason);}).join('');}).join('\n');
     if(this.dispositionPlan){try{const settings=this.read();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
     const supply=object(s.supply),supplyOutput=this.host.querySelector<HTMLElement>('#supply-preview')!;

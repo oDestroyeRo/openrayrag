@@ -1,3 +1,4 @@
+import { matchesSkillExecution } from './skill-execution';
 import type { ActorPredicate } from './actor-observations';
 import { BotEngine, type Action, type Snapshot } from './engine';
 import { decode } from './protocol';
@@ -199,14 +200,14 @@ export class CompanionController {
     const receipt = this.featureReceipt;
     if (!this.blockedReason || !receipt) return;
     const action = receipt.action; const state = this.engine.character;
+    const execution=action.type==='skill'?events.find(event=>matchesSkillExecution(action,event,this.engine.playerId)):undefined;
     const confirmed = action.type === 'useItem' ? state.inventoryKnown && state.count(action.itemId) < receipt.count
       : action.type === 'allocateSkill' ? state.skillsRevision > receipt.skills && (state.learned.get(action.skillId) ?? 0) > receipt.level
       : action.type === 'allocateStats' ? state.statsRevision > receipt.stats && !!receipt.attributes && !!state.stats?.attributes
         && action.attributes.every((count, i) => state.stats!.attributes![i]! >= receipt.attributes![i]! + count)
-      : action.type === 'skill' && events.some(event => event.type === 'skillResult' && event.source === this.engine.playerId
-        && event.skillId === action.skillId && event.level === action.level && event.mode === action.mode && !event.indirect
-        && (action.mode !== 'target' || event.target === action.target));
+      : action.type === 'skill' && execution!==undefined;
     if (!confirmed) return;
+    if(execution?.type==='skillResult')this.engine.settleConfirmedSkill(execution);
     const policy = automationSettings(this.requestedSettings!);
     const seconds = action.type === 'useItem' ? policy.items.find(rule => rule.itemId === action.itemId)?.cooldownSeconds ?? 1
       : action.type === 'skill' ? policy.skills.find(rule => rule.skillId === action.skillId)?.cooldownSeconds ?? 1 : 0;

@@ -55,6 +55,11 @@ export class CharacterState {
         else { this.inventoryKnown = false; break; }
         this.inventoryRevision++; break;
       }
+      case 'inventoryItem': {
+        const previous=this.inventory.get(event.item.bagId);
+        if(!this.inventoryKnown || previous?.type!==2 || previous.itemId!==event.item.itemId || !previous.guid || previous.guid!==event.item.guid || previous.count!==event.item.count) {this.inventoryKnown=false;break;}
+        this.inventory.set(event.item.bagId,{...event.item,slots:event.item.slots?.slice()});this.inventoryRevision++;break;
+      }
       case 'equipment':
         if (event.slot === 13) this.ammoId = event.equipped ? event.bagId : -1;
         else { while (this.equipment.length <= event.slot) this.equipment.push(0); if (event.equipped) this.equipment[event.slot] = event.bagId; else if (this.equipment[event.slot] === event.bagId) this.equipment[event.slot] = 0; }
