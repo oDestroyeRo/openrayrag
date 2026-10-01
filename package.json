@@ -1,0 +1,24 @@
+{
+  "name": "rayrag-companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run bridge && vite --host 127.0.0.1",
+    "build": "npm run bridge && tsc --noEmit && vite build",
+    "bridge": "node scripts/build-bridge.mjs",
+    "test": "vitest run",
+    "check": "npm run build && npm test && cargo test --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings",
+    "tauri": "tauri",
+    "app:dev": "tauri dev",
+    "app:build": "tauri build --bundles app"
+  },
+  "dependencies": { "@tauri-apps/api": "2.12.1" },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.2",
+    "vitest": "5.0.3",
+    "esbuild": "0.28.2"
+  }
+}
