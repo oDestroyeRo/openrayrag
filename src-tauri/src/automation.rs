@@ -95,6 +95,12 @@ struct AutomationSettings {
         skip_serializing_if = "Option::is_none"
     )]
     disposition: Option<DispositionPolicy>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_supply",
+        skip_serializing_if = "Option::is_none"
+    )]
+    supply: Option<SupplySettings>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -102,6 +108,114 @@ struct AutomationSettings {
 struct DispositionPolicy {
     max_spend: u32,
     rules: Vec<DispositionRule>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SupplySettings {
+    enabled: bool,
+    stock_enabled: bool,
+    weight_enabled: bool,
+    weight_start_percent: u8,
+    weight_end_percent: u8,
+    minimum_interval_seconds: u32,
+    max_trips: u8,
+    max_actions: u8,
+    max_duration_seconds: u16,
+    max_spend: u32,
+    storage_service: String,
+    buy_service: String,
+    sell_service: String,
+}
+fn deserialize_supply<'de, D>(deserializer: D) -> Result<Option<SupplySettings>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    SupplySettings::deserialize(deserializer).map(Some)
+}
+impl SupplySettings {
+    fn valid(&self) -> bool {
+        let contract = |id: &str| {
+            id.len() <= 128
+                && id
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+        };
+        (!self.enabled || self.stock_enabled || self.weight_enabled)
+            && (1..=100).contains(&self.weight_start_percent)
+            && self.weight_end_percent > 0
+            && self.weight_end_percent < self.weight_start_percent
+            && (1..=86400).contains(&self.minimum_interval_seconds)
+            && (1..=100).contains(&self.max_trips)
+            && (1..=100).contains(&self.max_actions)
+            && (30..=3600).contains(&self.max_duration_seconds)
+            && self.max_spend <= 2_000_000_000
+            && contract(&self.storage_service)
+            && contract(&self.buy_service)
+            && contract(&self.sell_service)
+    }
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SupplyResumeGuard {
+    version: u8,
+    character: String,
+    latched: bool,
+    remaining_trips: u8,
+    actions: u8,
+    spent: u32,
+    reserved: u32,
+    interval_seconds: u32,
+    deadline_seconds: u16,
+    interrupted: bool,
+    uncertain: bool,
+    #[serde(deserialize_with = "deserialize_supply_destination")]
+    return_destination: Option<SupplyDestination>,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SupplyDestination {
+    map: String,
+    position: SupplyPosition,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SupplyPosition {
+    x: u16,
+    y: u16,
+}
+fn deserialize_supply_destination<'de, D>(
+    deserializer: D,
+) -> Result<Option<SupplyDestination>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<SupplyDestination>::deserialize(deserializer)
+}
+impl SupplyResumeGuard {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.version == 1
+            && !self.character.trim().is_empty()
+            && self.character.encode_utf16().count() <= 64
+            && !self
+                .character
+                .chars()
+                .any(|c| c <= '\u{001f}' || c == '\u{007f}')
+            && self.remaining_trips <= 100
+            && self.actions <= 100
+            && self.spent <= 2_000_000_000
+            && self.reserved <= 2_000_000_000
+            && self.interval_seconds <= 86400
+            && self.deadline_seconds <= 3600
+            && self.return_destination.as_ref().map_or(true, |d| {
+                map_code(&d.map, false) && d.position.x <= 511 && d.position.y <= 511
+            })
+        {
+            Ok(())
+        } else {
+            Err("Invalid supply resume state.".into())
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -611,7 +725,8 @@ impl AutomationSettings {
             && self
                 .disposition
                 .as_ref()
-                .map_or(true, DispositionPolicy::valid);
+                .map_or(true, DispositionPolicy::valid)
+            && self.supply.as_ref().map_or(true, SupplySettings::valid);
         if valid {
             Ok(())
         } else {
@@ -622,7 +737,7 @@ impl AutomationSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::{EscapeResumeGuard, Settings};
+    use super::{EscapeResumeGuard, Settings, SupplyResumeGuard, SupplySettings};
     use serde_json::{json, Value};
 
     fn settings() -> Value {
@@ -1079,6 +1194,33 @@ mod tests {
             assert!(!valid(malformed));
         }
         value["automation"]["combat"]["rules"] = json!([{"classId":4000,"action":"attack","priority":0,"conditions":[{"field":"actorStatus","actor":{"scope":"candidate"},"statusId":1,"operator":"eq","value":false}]}]);
+        assert!(valid(value));
+    }
+    #[test]
+    fn supply_settings_and_reload_guards_match_shared_ts_boundaries() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../../src/data/supply-boundary-cases.json"))
+                .unwrap();
+        for case in cases.as_array().unwrap() {
+            let actual = if case["kind"] == "settings" {
+                serde_json::from_value::<SupplySettings>(case["value"].clone())
+                    .is_ok_and(|v| v.valid())
+            } else {
+                serde_json::from_value::<SupplyResumeGuard>(case["value"].clone())
+                    .is_ok_and(|v| v.validate().is_ok())
+            };
+            assert_eq!(actual, case["valid"].as_bool().unwrap(), "{}", case["name"]);
+        }
+        let mut value = settings();
+        value["automation"] = automation();
+        value["automation"]["supply"] = cases[0]["value"].clone();
+        assert!(valid(value.clone()));
+        value["automation"]["supply"] = Value::Null;
+        assert!(!valid(value.clone()));
+        value["automation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("supply");
         assert!(valid(value));
     }
 }

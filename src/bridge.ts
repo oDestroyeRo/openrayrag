@@ -5,6 +5,7 @@ import { worldCommand, validateWorldAction } from './world-protocol';
 import { CompanionController, type CompanionSnapshot } from './controller';
 import { LoginController, loginDriver, loginReady, type LoginProfile, type LoginStatus, type UnityClient } from './login';
 import { currentMapInfo, loadMapCatalog, type MapCatalog } from './map-data';
+import type { SupplyResumeGuard } from './supply-trip';
 import type { EscapeResumeGuard } from './escape';
 
 interface BridgeWindow extends Window {
@@ -12,7 +13,7 @@ interface BridgeWindow extends Window {
   createUnityInstance?: (...args: unknown[]) => Promise<UnityClient>;
   __TAURI_INTERNALS__?: { invoke: (name: string, args: unknown) => Promise<unknown> };
   __RAYRAG__?: {
-    control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings, escapeGuard?: EscapeResumeGuard) => void;
+    control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard) => void;
     perform: (action: 'command' | 'workflow' | 'routine' | 'service', request: unknown) => void;
     snapshot: () => CompanionSnapshot;
   };
@@ -162,13 +163,13 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   };
 
   page.__RAYRAG__ = {
-    control(action, settings, escapeGuard) {
+    control(action, settings, escapeGuard, supplyGuard) {
       if (action === 'heartbeat') { heartbeat = Date.now(); controller.heartbeat(true); return; }
       if (action === 'stop') { cancelLogin(); stop('Stopped by you.'); return; }
       try {
         if (page.buildUrl !== VERIFIED_BUILD) throw new Error('This game build is not verified.');
         if (!settings) throw new Error('Choose combat settings first.');
-        controller.heartbeat(true); controller.start(settings, escapeGuard); heartbeat = Date.now();
+        controller.heartbeat(true); controller.start(settings, escapeGuard, supplyGuard); heartbeat = Date.now();
       } catch (error) { controller.engine.reason = error instanceof Error ? error.message : 'Could not start.'; }
       publish();
     },

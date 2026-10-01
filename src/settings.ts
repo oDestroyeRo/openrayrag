@@ -1,6 +1,7 @@
 import type { Position } from './protocol';
 import { validActorConditions, type ActorPredicate } from './actor-observations';
 import { validateDispositionPolicy, type DispositionPolicy } from './disposition';
+import { validateSupplySettings, type SupplySettings } from './supply-trip';
 
 export const MAX_TARGETS = 64;
 export interface MonsterRule { classId: number; action: 'attack' | 'ignore'; priority: number; conditions?: ActorPredicate[] }
@@ -30,6 +31,7 @@ export interface AutomationSettings {
   respawn: { enabled: boolean; maxDeaths: number };
   schedule: { enabled: boolean; startHour: number; endHour: number };
   disposition?: DispositionPolicy;
+  supply?: SupplySettings;
 }
 export interface Settings {
   map: string; targets: number[]; radius: number; minHpPercent: number; loot: boolean;
@@ -67,7 +69,8 @@ export function automationSettings(settings: Settings): AutomationSettings { ret
 export function escapeSettings(settings: Settings): EscapeSettings { return automationSettings(settings).escape ?? DEFAULT_ESCAPE; }
 export function validateAutomation(a: AutomationSettings): AutomationSettings {
   try {
-    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition']);
+    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply']);
+    if (Object.hasOwn(a,'supply')) validateSupplySettings(a.supply);
     const escape = a.escape === undefined ? DEFAULT_ESCAPE : a.escape;
     strictKeys(escape,['enabled','hpBelowPercent','mode','method','minStock','cooldownSeconds']);
     if (typeof escape.enabled !== 'boolean' || !bounded(escape.hpBelowPercent,1,95) || !['random','save'].includes(escape.mode)

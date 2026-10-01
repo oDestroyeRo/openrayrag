@@ -1,0 +1,556 @@
+[
+  {
+    "name": "disabled default",
+    "kind": "settings",
+    "value": {
+      "enabled": false,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 100,
+      "maxDurationSeconds": 600,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": true
+  },
+  {
+    "name": "bounded enabled source services",
+    "kind": "settings",
+    "value": {
+      "enabled": true,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 100,
+      "maxActions": 100,
+      "maxDurationSeconds": 600,
+      "maxSpend": 2000000000,
+      "storageService": "",
+      "buyService": "trader.prt-fild05.tool-dealer.buy.v1",
+      "sellService": ""
+    },
+    "valid": true
+  },
+  {
+    "name": "reject setting enabled 1",
+    "kind": "settings",
+    "value": {
+      "enabled": 1,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 100,
+      "maxDurationSeconds": 600,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "reject setting maxTrips 0",
+    "kind": "settings",
+    "value": {
+      "enabled": true,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 0,
+      "maxActions": 100,
+      "maxDurationSeconds": 600,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "reject setting maxActions 101",
+    "kind": "settings",
+    "value": {
+      "enabled": true,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 101,
+      "maxDurationSeconds": 600,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "reject setting maxDurationSeconds 29",
+    "kind": "settings",
+    "value": {
+      "enabled": true,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 100,
+      "maxDurationSeconds": 29,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "reject setting maxSpend 2000000001",
+    "kind": "settings",
+    "value": {
+      "enabled": true,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 100,
+      "maxDurationSeconds": 600,
+      "maxSpend": 2000000001,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "reject setting weightEndPercent 80",
+    "kind": "settings",
+    "value": {
+      "enabled": true,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 80,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 100,
+      "maxDurationSeconds": 600,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "reject setting weightEndPercent 0",
+    "kind": "settings",
+    "value": {
+      "enabled": true,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 0,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 100,
+      "maxDurationSeconds": 600,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "reject setting stockEnabled False",
+    "kind": "settings",
+    "value": {
+      "enabled": true,
+      "stockEnabled": false,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 100,
+      "maxDurationSeconds": 600,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "reject setting buyService xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "kind": "settings",
+    "value": {
+      "enabled": true,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 100,
+      "maxDurationSeconds": 600,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "sellService": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "reject setting unknown True",
+    "kind": "settings",
+    "value": {
+      "enabled": true,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 100,
+      "maxDurationSeconds": 600,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "",
+      "sellService": "",
+      "unknown": true
+    },
+    "valid": false
+  },
+  {
+    "name": "null optional settings",
+    "kind": "settings",
+    "value": null,
+    "valid": false
+  },
+  {
+    "name": "missing spend",
+    "kind": "settings",
+    "value": {
+      "enabled": false,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 100,
+      "maxDurationSeconds": 600,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "full bounded guard",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 3,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "nullable destination guard",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 3,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": null
+    },
+    "valid": true
+  },
+  {
+    "name": "reject guard version",
+    "kind": "guard",
+    "value": {
+      "version": 2,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 3,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "reject guard character",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 3,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "reject guard remainingTrips",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 101,
+      "actions": 3,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "reject guard actions",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 101,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "reject guard reserved",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 3,
+      "spent": 100,
+      "reserved": 2000000001,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "reject guard intervalSeconds",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 3,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 86401,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "reject guard deadlineSeconds",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 3,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 3601,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "reject guard npcId",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 3,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      },
+      "npcId": 20
+    },
+    "valid": false
+  },
+  {
+    "name": "reject guard uncertain",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 3,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": "yes",
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "missing return destination",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 3,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true
+    },
+    "valid": false
+  }
+]

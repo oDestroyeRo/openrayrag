@@ -1,4 +1,5 @@
 import { validateSettings, type Settings } from './settings';
+import { validateSupplyResumeGuard, type SupplyResumeGuard } from './supply-trip';
 import type { EscapeResumeGuard, EscapeSnapshot } from './escape';
 
 const INITIAL_DELAY = 5_000;
@@ -63,9 +64,9 @@ export interface RunSession {
   sessionId: string; connected: boolean; compatible: boolean; map: string;
   player: { name: string; dead?: boolean } | null; runRequested?: boolean;
   kills?: number; looted?: number; deaths?: number; attacks?: number;
-  escape?: EscapeSnapshot;
+  escape?: EscapeSnapshot; supplyGuard?:SupplyResumeGuard;
 }
-export interface ResumeRequest { generation: number; sessionId: string; settings: Settings; escapeGuard?: EscapeResumeGuard }
+export interface ResumeRequest { generation: number; sessionId: string; settings: Settings; escapeGuard?: EscapeResumeGuard; supplyGuard?:SupplyResumeGuard }
 const MAX_ESCAPE_GUARDS = 64;
 interface RetainedEscape { session: string; cooldownUntil: number; latched: boolean }
 
@@ -82,9 +83,18 @@ export class PersistentFieldRun {
   private totals = { kills: 0, looted: 0, deaths: 0, attacks: 0 };
   private readonly escapeGuards = new Map<string, RetainedEscape>();
   private escapeOverflowUncertain = false;
+  private readonly supplyGuards=new Map<string,{session:string;at:number;guard:SupplyResumeGuard}>();
+  private supplyOverflow=false;
   constructor(private readonly now = Date.now) {}
   begin(settings: Settings, character: string, sessionId: string, metrics: { kills: number; looted: number; deaths: number; attacks?: number } = { kills: 0, looted: 0, deaths: 0 }): void {
-    this.desired = validateSettings(settings);
+    const checked=validateSettings(settings);
+    // Reserve the first enabled allowance before native Start can outlive its
+    // last publication. Default-off runs allocate no supply state.
+    const initial=checked.automation?.supply?.enabled&&!this.supplyGuards.has(character)&&this.supplyGuards.size<64
+      ?validateSupplyResumeGuard({version:1,character,latched:false,remainingTrips:checked.automation.supply.maxTrips,
+        actions:0,spent:0,reserved:0,intervalSeconds:0,deadlineSeconds:0,interrupted:false,uncertain:false,returnDestination:null}):undefined;
+    this.desired = checked;
+    if(initial)this.supplyGuards.set(character,{session:sessionId,at:this.now(),guard:initial});
     this.pruneEscapeGuards();
     if (!this.escapeGuards.has(character) && this.escapeGuards.size < MAX_ESCAPE_GUARDS)
       this.escapeGuards.set(character, this.escapeOverflowUncertain
@@ -101,6 +111,16 @@ export class PersistentFieldRun {
     // bounded cooldown through a subsequent explicit Start in this app session.
   }
   observe(status: RunSession): void {
+    if(status.supplyGuard){
+      try{
+        const guard=validateSupplyResumeGuard(status.supplyGuard),old=this.supplyGuards.get(guard.character);
+        // A blank/new page cannot replenish the finite allowance of an older page.
+        if(old?.session===status.sessionId||!old&&this.supplyGuards.size<64||old&&guard.remainingTrips<old.guard.remainingTrips){
+          if(old){guard.remainingTrips=Math.min(old.guard.remainingTrips,guard.remainingTrips);if(guard.remainingTrips===old.guard.remainingTrips)guard.reserved=Math.max(old.guard.reserved,guard.reserved);}
+          this.supplyGuards.set(guard.character,{session:status.sessionId,at:this.now(),guard});
+        }else if(!old)this.supplyOverflow=true;
+      }catch{/* Ignore unvalidated guard telemetry. */}
+    }
     if (status.escape && Number.isInteger(status.escape.cooldownSeconds) && status.escape.cooldownSeconds >= 0 && status.escape.cooldownSeconds <= 3600) {
       const name = status.player?.name ?? [...this.escapeGuards].find(([,guard])=>guard.session===status.sessionId)?.[0];
       this.pruneEscapeGuards();
@@ -149,6 +169,18 @@ export class PersistentFieldRun {
     if (sessionId === guard.session || !guard.latched && guard.cooldownUntil <= this.now()) return undefined;
     return { latched: true, cooldownSeconds: Math.max(0, Math.min(3600, Math.ceil((guard.cooldownUntil - this.now()) / 1000))) };
   }
+  supplyGuardForStart(settings:Settings,character:string,sessionId:string,automatic=false):SupplyResumeGuard|undefined {
+    const old=this.supplyGuards.get(character);
+    if(!settings.automation?.supply?.enabled&&!old)return undefined;
+    if(!old)return this.supplyOverflow||this.supplyGuards.size>=64?{version:1,character,latched:true,remainingTrips:0,actions:0,spent:0,reserved:0,intervalSeconds:86400,deadlineSeconds:0,interrupted:true,uncertain:true,returnDestination:null}:undefined;
+    const guard=structuredClone(old.guard),elapsed=Math.floor(Math.max(0,this.now()-old.at)/1000);
+    guard.intervalSeconds=Math.max(0,guard.intervalSeconds-elapsed);guard.deadlineSeconds=Math.max(0,guard.deadlineSeconds-elapsed);
+    if(automatic&&sessionId!==old.session){if(!guard.returnDestination)guard.remainingTrips=Math.max(0,guard.remainingTrips-1);guard.interrupted=true;guard.uncertain=true;}
+    // An explicit Start may create a new field run after a canceled, reconciled
+    // trip. Its spent trip allowance and latch survive; the old trip never resumes.
+    if(!automatic&&!guard.uncertain){guard.interrupted=false;guard.returnDestination=null;}
+    return validateSupplyResumeGuard(guard);
+  }
   resumeFor(status: RunSession): ResumeRequest | null {
     if (!this.desired || this.limitReason || !status.connected || !status.compatible || !status.player
       || status.player.name !== this.character || !/^[a-zA-Z0-9_-]{1,64}$/.test(status.map)
@@ -171,13 +203,38 @@ export class PersistentFieldRun {
     const escapeGuard = settings.automation?.escape?.enabled
       ? { latched: true, cooldownSeconds: Math.max(settings.automation.escape.cooldownSeconds,
         this.guardForStart(settings,this.character,status.sessionId)?.cooldownSeconds ?? 0) } : undefined;
-    return { generation: this.generation, sessionId: status.sessionId, settings: validateSettings(settings), ...(escapeGuard ? { escapeGuard } : {}) };
+    const supplyGuard=this.supplyGuardForStart(settings,this.character,status.sessionId,true);
+    return { generation: this.generation, sessionId: status.sessionId, settings: validateSettings(settings), ...(escapeGuard ? { escapeGuard } : {}),...(supplyGuard?{supplyGuard}:{}) };
   }
   completeResume(request: ResumeRequest, success: boolean): boolean {
     if (request.generation !== this.generation || request.sessionId !== this.pendingSession || !this.desired) return false;
+    if(request.supplyGuard&&validateSupplyResumeGuard(request.supplyGuard).character!==this.character)return false;
     this.pendingSession = '';
-    if (success) this.session = request.sessionId;
+    if (success) {this.session = request.sessionId;
+      if(request.supplyGuard)this.completeSupplyStart(request.supplyGuard.character,request.sessionId,request.supplyGuard);
+    }
     return true;
+  }
+  completeSupplyStart(character:string,sessionId:string,guard?:SupplyResumeGuard):void{
+    const old=this.supplyGuards.get(character);if(!guard&&!old)return;
+    const requested=validateSupplyResumeGuard(guard??old!.guard);if(requested.character!==character)throw new Error('Supply guard belongs to another character.');
+    if(!old&&this.supplyGuards.size>=64){this.supplyOverflow=true;return;}
+    let retained=requested;
+    if(old){
+      const latest=structuredClone(old.guard),elapsed=Math.floor(Math.max(0,this.now()-old.at)/1000);
+      latest.intervalSeconds=Math.max(0,latest.intervalSeconds-elapsed);latest.deadlineSeconds=Math.max(0,latest.deadlineSeconds-elapsed);
+      // A successful callback may follow a newer sent/reconciled publication.
+      // Same-owner telemetry is authoritative; transfer must retain uncertainty.
+      if(old.session===sessionId)retained=latest;
+      else{
+        retained.uncertain=retained.uncertain||latest.uncertain;retained.latched=retained.latched||latest.latched;
+        retained.intervalSeconds=Math.max(retained.intervalSeconds,latest.intervalSeconds);
+        if(latest.uncertain){retained.interrupted=true;retained.returnDestination=latest.returnDestination??retained.returnDestination;
+          retained.deadlineSeconds=latest.deadlineSeconds;}
+      }
+      retained.remainingTrips=Math.min(requested.remainingTrips,latest.remainingTrips);retained.reserved=Math.max(requested.reserved,latest.reserved);
+    }
+    this.supplyGuards.set(character,{session:sessionId,at:this.now(),guard:retained});
   }
   get metrics(): Readonly<typeof this.totals> { return { ...this.totals }; }
   get targetIds(): number[] { return this.desired?.targets.slice() ?? []; }

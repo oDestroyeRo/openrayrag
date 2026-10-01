@@ -60,8 +60,15 @@ fn control_bot(
     settings: Option<Settings>,
     request: Option<serde_json::Value>,
     escape_guard: Option<automation::EscapeResumeGuard>,
+    supply_guard: Option<automation::SupplyResumeGuard>,
 ) -> Result<(), String> {
     require_window(&window, "main")?;
+    if let Some(guard) = &supply_guard {
+        if action != "start" {
+            return Err("Supply resume state is only accepted by start.".into());
+        }
+        guard.validate()?;
+    }
     if let Some(guard) = &escape_guard {
         if action != "start" {
             return Err("Escape resume state is only accepted by start.".into());
@@ -111,7 +118,11 @@ fn control_bot(
         let settings_json = serde_json::to_string(&settings).map_err(|_| "Invalid settings.")?;
         let escape_json =
             serde_json::to_string(&escape_guard).map_err(|_| "Invalid escape resume state.")?;
-        format!("window.__RAYRAG__?.control({action_json},{settings_json},{escape_json})")
+        let supply_json =
+            serde_json::to_string(&supply_guard).map_err(|_| "Invalid supply resume state.")?;
+        format!(
+            "window.__RAYRAG__?.control({action_json},{settings_json},{escape_json},{supply_json})"
+        )
     };
     game.eval(script)
         .map_err(|_| "Could not reach the game controller.".into())

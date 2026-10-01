@@ -88,7 +88,7 @@ const startButton = element<HTMLButtonElement>('start');
 const stopButton = element<HTMLButtonElement>('stop');
 const native = isTauri();
 interface SavedLogin { username: string; characterSlot: number; autoLogin: boolean }
-type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean; escape?: EscapeSnapshot };
+type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean; escape?: EscapeSnapshot; supplyGuard?:import('./supply-trip').SupplyResumeGuard };
 let savedLogin: SavedLogin | null = null;
 let loginBusy = false;
 let loginStartedAt = 0;
@@ -142,7 +142,7 @@ function resumeFieldRun(s: GameStatus): void {
   const request = fieldRun.resumeFor(s);
   if (!request) return;
   const generation = runGeneration;
-  const task = invoke('control_bot', { action: 'start', settings: request.settings, escapeGuard: request.escapeGuard });
+  const task = invoke('control_bot', { action: 'start', settings: request.settings, escapeGuard: request.escapeGuard, supplyGuard:request.supplyGuard });
   pendingResume = task;
   void task.then(() => { fieldRun.completeResume(request, true); })
     .catch(() => {
@@ -363,10 +363,13 @@ startButton.addEventListener('click', () => void perform(async () => {
   fieldRun.begin(checked, latest.player.name, latest.sessionId, { kills: latest.kills, looted: latest.looted, deaths: latest.deaths, attacks: latest.attacks });
   limitHeld = false; configureReconnect();
   reconnect.observe(latest.connected, true, latest.login.phase, Date.now(), latest.login.message);
+  const supplyGuard=fieldRun.supplyGuardForStart(checked,latest.player.name,latest.sessionId);
+  const supplyCharacter=latest.player.name,supplySession=latest.sessionId;
   const task = invoke('control_bot', { action: 'start', settings: checked,
-    escapeGuard: fieldRun.guardForStart(checked, latest?.player?.name ?? '', latest?.sessionId ?? '') });
+    escapeGuard: fieldRun.guardForStart(checked, latest?.player?.name ?? '', latest?.sessionId ?? ''),
+    supplyGuard });
   pendingResume = task;
-  try { await task; }
+  try { await task;if(generation===runGeneration)fieldRun.completeSupplyStart(supplyCharacter,supplySession,supplyGuard); }
   catch (error) { if (generation === runGeneration) { fieldRun.stop(); configureReconnect(); } throw error; }
   finally { if (pendingResume === task) pendingResume = null; }
 }));
