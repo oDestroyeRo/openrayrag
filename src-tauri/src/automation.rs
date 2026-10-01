@@ -116,13 +116,28 @@ struct DispositionRule {
     allow_unique: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Restock {
     Off,
     Storage,
     Cart,
     Buy,
+}
+
+impl<'de> Deserialize<'de> for Restock {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "off" => Ok(Self::Off),
+            "storage" => Ok(Self::Storage),
+            "cart" => Ok(Self::Cart),
+            "buy" => Ok(Self::Buy),
+            _ => Err(serde::de::Error::custom("Invalid restock mode.")),
+        }
+    }
 }
 
 fn deserialize_disposition<'de, D>(deserializer: D) -> Result<Option<DispositionPolicy>, D::Error>
@@ -603,6 +618,32 @@ mod tests {
         value["automation"]["disposition"]["rules"][0]["desired"] = json!(32767);
         value["automation"]["disposition"]["rules"][0]["maximum"] = json!(32767);
         assert!(valid(value));
+    }
+
+    #[test]
+    fn disposition_restock_accepts_only_canonical_strings() {
+        let mut value = settings();
+        value["automation"] = automation();
+        value["automation"]["disposition"] = disposition();
+        for mode in ["off", "storage", "cart", "buy"] {
+            value["automation"]["disposition"]["rules"][0]["restock"] = json!(mode);
+            assert!(valid(value.clone()));
+            let parsed: Settings = serde_json::from_str(&value.to_string()).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+            value["automation"]["disposition"]["rules"][0]["restock"] = json!({mode:null});
+            assert!(!valid(value.clone()));
+            assert!(serde_json::from_str::<Settings>(&value.to_string()).is_err());
+        }
+        for invalid in [
+            json!(null),
+            json!("unknown"),
+            json!(1),
+            json!(false),
+            json!([]),
+        ] {
+            value["automation"]["disposition"]["rules"][0]["restock"] = invalid;
+            assert!(!valid(value.clone()));
+        }
     }
 
     #[test]
