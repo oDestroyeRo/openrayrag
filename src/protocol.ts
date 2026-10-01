@@ -1,4 +1,9 @@
-// RayRag's deployed V8 build. This is a deliberately small, bounded decoder.
+import { decodeFeatures, FEATURE_OP } from './protocol-feature';
+import type { FeatureEvent } from './protocol-feature';
+export { featureCommand, validateExpandedAction, decodeFeatures, FEATURE_OP, FeatureProtocolError } from './protocol-feature';
+export type { ExpandedAction, FeatureEvent, InventoryItem, SkillLevel, PlayerStats, Attributes } from './protocol-feature';
+
+// RayRag's deployed V8 build. Packet readers are deliberately bounded.
 // Numeric IDs are from the pre-July Rebuild enum, NOT current upstream master.
 export const GAME_URL = 'https://websea01.rayrag.com/';
 export const SOCKET_URL = 'wss://gamesea01.rayrag.com/ws';
@@ -6,17 +11,19 @@ export const VERIFIED_BUILD = 'Build_2569-09-01-01-55';
 export const OP = {
   enter: 3, spawn: 6, walk: 7, move: 10, attack: 11, remove: 15,
   clear: 16, map: 18, stop: 19, stopImmediate: 20, hit: 23,
-  death: 36, heal: 37, resurrection: 46, stats: 56, tracking: 60, drop: 81, pickup: 82,
+  death: 36, heal: 37, resurrection: 46, tracking: 60, drop: 81, pickup: 82,
+  ...FEATURE_OP,
 } as const;
 
 export interface Position { x: number; y: number }
 export interface Entity extends Position {
   id: number; classId: number; name: string; kind: number; level: number;
   hp: number; maxHp: number; dead: boolean;
+  sp?: number; maxSp?: number; sitting?: boolean; statuses?: { id: number; seconds: number }[];
 }
 export interface Walk { origin: Position; cells: Position[]; secondsPerCell: number; firstSeconds: number; locked: boolean }
 export interface Drop extends Position { id: number; itemId: number; count: number; isNew: boolean }
-export type GameEvent =
+export type GameEvent = FeatureEvent
   | { type: 'enter'; id: number; map: string }
   | { type: 'map'; map: string }
   | { type: 'spawn'; entity: Entity }
@@ -30,7 +37,6 @@ export type GameEvent =
   | { type: 'death'; id: number }
   | { type: 'resurrection'; id: number; hp: number; position: Position }
   | { type: 'heal'; id: number; hp: number; maxHp: number }
-  | { type: 'stats'; hp: number; maxHp: number; level: number }
   | { type: 'drop'; drop: Drop }
   | { type: 'pickup'; picker: number; id: number };
 
@@ -78,7 +84,7 @@ function position(x: number, y: number): Position {
   return { x, y };
 }
 function health(hp: number, maxHp: number): void {
-  if (hp < 0 || maxHp < 0 || hp > maxHp || maxHp > 2_000_000_000) throw new Error('Invalid health');
+  if (hp < 0 || maxHp < 0 || hp > maxHp || maxHp > 0x7fffffff) throw new Error('Invalid health');
 }
 function mapName(value: string): string {
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(value)) throw new Error('Unknown map format');
@@ -104,15 +110,23 @@ function spawn(r: Reader): GameEvent[] {
   const level = e.u8();
   const hp = e.i32();
   const maxHp = e.i32();
-  e.i32(); e.i32(); // SP and maximum SP.
-  const statuses = e.i32();
-  if (statuses < -1 || statuses > 128) throw new Error('Unknown status layout');
+  const sp = e.i32(); const maxSp = e.i32(); health(sp, maxSp);
+  const statusCount = e.i32();
+  if (statusCount < -1 || statusCount > 128) throw new Error('Unknown status layout');
+  const statuses: { id: number; seconds: number }[] = []; const statusIds = new Set<number>();
   // MemoryPack 1.21.4 writes unmanaged KeyValuePair<byte,float> with 3 padding bytes.
-  for (let i = 0; i < statuses; i++) { e.u8(); e.take(3); e.f32(); }
+  for (let i = 0; i < statusCount; i++) {
+    const id = e.u8(); e.take(3); const seconds = e.f32();
+    if (statusIds.has(id)) throw new Error('Invalid status');
+    statusIds.add(id); statuses.push({ id, seconds });
+  }
   e.u8(); // IsMainCharacter; actual identity comes from EnterServer.
   if (e.offset !== size || id <= 0 || classId < 0 || kind > 4 || state > 4) throw new Error('Invalid entity');
   health(hp, maxHp);
-  const events: GameEvent[] = [{ type: 'spawn', entity: { id, classId, name, kind, level, ...pos, hp, maxHp, dead: state === 3 } }];
+  // Non-self player broadcasts can reach the owner with placeholder SP. Match
+  // the official client: only a positive maximum establishes a player SP value.
+  const resources = kind === 0 && maxSp === 0 ? {} : { sp, maxSp };
+  const events: GameEvent[] = [{ type: 'spawn', entity: { id, classId, name, kind, level, ...pos, hp, maxHp, ...resources, sitting: state === 2, statuses, dead: state === 3 } }];
   // Only the player and monsters are retained. Appearance blocks are skipped.
   if (state === 1 && (kind === 0 || kind === 1)) {
     if (kind === 0) {
@@ -153,6 +167,8 @@ export function decode(data: Uint8Array): GameEvent[] {
   if (!data.length || data.length > 1_000_000) throw new Error('Invalid packet size');
   const r = new Reader(data);
   const opcode = r.u8();
+  const features = decodeFeatures(data);
+  if (features !== null) return features;
   switch (opcode) {
     case OP.enter: return [{ type: 'enter', id: r.i32(), map: mapName(r.string()) }];
     case OP.map: return [{ type: 'map', map: mapName(r.string()) }];
@@ -200,11 +216,6 @@ export function decode(data: Uint8Array): GameEvent[] {
       const id = r.i32(); r.i32();
       const hp = r.i32(); const maxHp = r.i32(); health(hp, maxHp);
       return [{ type: 'heal', id, hp, maxHp }];
-    }
-    case OP.stats: {
-      const level = r.i32(); r.take(44);
-      const hp = r.i32(); const maxHp = r.i32(); health(hp, maxHp);
-      return [{ type: 'stats', level, hp, maxHp }];
     }
     case OP.drop: {
       const id = r.i32(); const pos = position(r.f32(), r.f32());

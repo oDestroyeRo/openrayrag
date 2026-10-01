@@ -1,16 +1,6 @@
 {
   "identifier": "controller",
   "description": "The bundled controller can open the fixed game URL and start or stop its bot.",
-  "windows": [
-    "main"
-  ],
-  "permissions": [
-    "core:event:allow-listen",
-    "core:event:allow-unlisten",
-    "allow-open-game",
-    "allow-control-bot",
-    "allow-login-game",
-    "allow-saved-login",
-    "allow-forget-login"
-  ]
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-open-game", "allow-control-bot", "allow-login-game", "allow-reconnect-game", "allow-saved-login", "allow-forget-login"]
 }

@@ -72,6 +72,44 @@ describe('Unity login interface', () => {
     expect(calls[3]?.[0]).toContain('/Login/Username/');
     expect(calls[4]?.[0]).toContain('/Login/Password/');
   });
+  it('requires the selection pane and its OK control, not only their shared parent', () => {
+    let pane = false, button = false;
+    const driver = loginDriver({ SendMessage(object, method) {
+      if (object.endsWith('/CharacterSelectPane') && !pane || object.endsWith('/OkButton') && !button) {
+        console.log(`SendMessage: object ${object} not found!`); return;
+      }
+      console.log(`SendMessage: object ${object} does not have receiver for function ${method}!`);
+    } });
+    expect(driver.selectionReady()).toBe(false); pane = true;
+    expect(driver.selectionReady()).toBe(false); button = true;
+    expect(driver.selectionReady()).toBe(true);
+  });
+  it('prepares the slot once and dispatches enter only on a later ready tick', () => {
+    const calls: string[] = [];
+    const driver = loginDriver({ SendMessage(object, method) {
+      if (method === '__rayrag_login_ready_probe__') console.log(`SendMessage: object ${object} does not have receiver for function ${method}!`);
+      else calls.push(method);
+    } });
+    expect(driver.select(2)).toBe(false);
+    expect(calls).toEqual(['SetCharacterInfo']);
+    expect(driver.select(2)).toBe(true);
+    expect(driver.select(2)).toBe(true);
+    expect(calls).toEqual(['SetCharacterInfo','ClickOk']);
+  });
+  it('rechecks readiness after slot preparation and never resends the slot', () => {
+    let ready = true;
+    const calls: string[] = [];
+    const driver = loginDriver({ SendMessage(object, method) {
+      if (method === '__rayrag_login_ready_probe__') console.log(ready
+        ? `SendMessage: object ${object} does not have receiver for function ${method}!`
+        : `SendMessage: object ${object} not found!`);
+      else calls.push(method);
+    } });
+    expect(driver.select(0)).toBe(false); ready = false;
+    expect(driver.select(0)).toBe(false); expect(calls).toEqual(['SetCharacterInfo']);
+    ready = true; expect(driver.select(0)).toBe(true);
+    expect(calls).toEqual(['SetCharacterInfo','ClickOk']);
+  });
   it('does not submit credentials when a required input no longer exists', async () => {
     const submit = vi.fn();
     const driver = loginDriver({ SendMessage(object, method) {
@@ -107,6 +145,55 @@ describe('automatic login and character selection', () => {
     expect(driver.select).toHaveBeenCalledExactlyOnceWith(2);
     expect(login.status.phase).toBe('entering');
     login.complete(); expect(login.status.phase).toBe('complete');
+  });
+  it('waits through read-only readiness failures and requires stable readiness', async () => {
+    let ready = false, throws = true;
+    const { login, driver, start, step } = setup({ selectionReady: () => { if (throws) throw new Error('UI loading'); return ready; } });
+    await start(); login.receive(list([0])); step();
+    expect(login.status.phase).toBe('selecting'); expect(driver.select).not.toHaveBeenCalled();
+    throws = false; ready = true; step(100); step(100);
+    expect(driver.select).not.toHaveBeenCalled();
+    ready = false; step(100); ready = true; step(100); step(199);
+    expect(driver.select).not.toHaveBeenCalled(); step(1);
+    expect(driver.select).toHaveBeenCalledOnce(); expect(login.status.phase).toBe('entering');
+  });
+  it('cancels between slot preparation and enter without clicking or resending', async () => {
+    let now = 1000;
+    const calls: string[] = [];
+    const driver = loginDriver({ SendMessage(object, method) {
+      if (method === '__rayrag_login_ready_probe__') console.log(`SendMessage: object ${object} does not have receiver for function ${method}!`);
+      else calls.push(method);
+    } });
+    const login = new LoginController(driver, () => now);
+    await login.start(profile()); login.receive(list([0])); login.tick(); now += 200; login.tick();
+    expect(calls.filter(method => method === 'SetCharacterInfo')).toHaveLength(1);
+    expect(calls).not.toContain('ClickOk'); login.cancel(); now += 1000; login.tick();
+    expect(login.status.phase).toBe('cancelled'); expect(calls).not.toContain('ClickOk');
+  });
+  it('keeps dispatched selection failures terminal and names the failed stage', async () => {
+    for (const failedMethod of ['SetCharacterInfo','ClickOk']) {
+      let now = 1000;
+      const calls: string[] = [];
+      const login = new LoginController(loginDriver({ SendMessage(object, method) {
+        if (method === '__rayrag_login_ready_probe__') console.log(`SendMessage: object ${object} does not have receiver for function ${method}!`);
+        else {
+          calls.push(method);
+          if (method === failedMethod) throw new Error('Synthetic unavailable interface');
+        }
+      } }), () => now);
+      await login.start(profile()); login.receive(list([0]));
+      for (let i = 0; i < 10; i++) { now += 200; login.tick(); }
+      expect(login.status.phase).toBe('failed');
+      expect(login.status.message).toContain(failedMethod === 'ClickOk' ? 'enter with' : 'requested slot');
+      expect(calls.filter(method => method === failedMethod)).toHaveLength(1);
+      if (failedMethod === 'SetCharacterInfo') expect(calls).not.toContain('ClickOk');
+    }
+  });
+  it('expires the selection deadline after slot preparation without dispatching enter', async () => {
+    const { login, driver, start, step } = setup({ selectionReady: () => true, select: vi.fn(() => false) });
+    await start(); login.receive(list([0])); step(200); step(200);
+    expect(driver.select).toHaveBeenCalledOnce(); step(30_000);
+    expect(login.status.phase).toBe('failed'); expect(driver.select).toHaveBeenCalledOnce();
   });
   it('never opens character creation for an empty slot', async () => {
     const { login, driver, start, step } = setup({ selectionReady: () => true });

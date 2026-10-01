@@ -7,7 +7,7 @@ const KEYCHAIN_SERVICE: &str = "com.rayrag.companion.login";
 const KEYCHAIN_ACCOUNT: &str = "sea01";
 const VERIFIED_BUILD: &str = "Build_2569-09-01-01-55";
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct LoginProfile {
     username: String,
@@ -51,6 +51,18 @@ pub(crate) struct LoginState {
     pub pending: Option<PendingLogin>,
     pub in_world: bool,
     pub cancelled: bool,
+    // Session-only credentials never leave native memory except for a one-shot
+    // claim by the verified game page. They are discarded when it closes.
+    candidate: Option<LoginProfile>,
+    session_profile: Option<LoginProfile>,
+    reconnect_blocked: bool,
+    generation: u64,
+    active_session: Option<String>,
+    candidate_session: Option<String>,
+    profile_session: Option<String>,
+    active_connection: Option<String>,
+    candidate_connection: Option<String>,
+    profile_connection: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -60,13 +72,141 @@ pub(crate) struct PendingLoginResult {
 }
 
 impl LoginState {
-    fn claim(&mut self) -> PendingLoginResult {
+    fn queue(&mut self, profile: LoginProfile) -> u64 {
+        self.generation = self.generation.wrapping_add(1);
+        self.candidate_session = None;
+        self.candidate_connection = None;
+        self.candidate = Some(profile.clone());
+        self.pending = Some(PendingLogin {
+            profile,
+            expires_at: Instant::now() + Duration::from_secs(120),
+        });
+        self.cancelled = false;
+        self.generation
+    }
+
+    pub(crate) fn cancel(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.pending = None;
+        self.candidate = None;
+        self.candidate_session = None;
+        self.candidate_connection = None;
+        self.cancelled = true;
+    }
+
+    pub(crate) fn close(&mut self) {
+        let generation = self.generation.wrapping_add(1);
+        *self = Self {
+            generation,
+            ..Self::default()
+        };
+    }
+
+    pub(crate) fn observe(
+        &mut self,
+        session_id: &str,
+        connection_id: Option<&str>,
+        connected: bool,
+        has_player: bool,
+        phase: &str,
+        message: &str,
+    ) {
+        // Only the page that claimed a request can settle it. Status already
+        // queued by the outgoing page must not consume the next login handoff.
+        if self.active_session.as_deref() != Some(session_id)
+            || self.candidate.is_some() && self.candidate_session.is_none()
+        {
+            return;
+        }
+        if let Some(connection_id) = connection_id {
+            if self.active_connection.as_deref() != Some(connection_id) {
+                self.active_connection = Some(connection_id.to_owned());
+                if self.candidate_session.as_deref() == Some(session_id) && self.candidate.is_some()
+                {
+                    self.candidate_connection = Some(connection_id.to_owned());
+                } else {
+                    // Unity can return to its login scene without reloading this
+                    // page. A new unclaimed socket has no proven account owner.
+                    self.session_profile = None;
+                    self.profile_session = None;
+                    self.profile_connection = None;
+                }
+            }
+        }
+        self.in_world = connected && has_player;
+        if self.in_world {
+            if phase == "complete"
+                && self.candidate_session.as_deref() == Some(session_id)
+                && connection_id.is_some()
+                && self.candidate_connection.as_deref() == connection_id
+            {
+                if let Some(profile) = self.candidate.take() {
+                    self.session_profile = Some(profile);
+                    self.profile_session = Some(session_id.to_owned());
+                    self.profile_connection = connection_id.map(str::to_owned);
+                }
+                self.candidate_session = None;
+                self.candidate_connection = None;
+            } else if (self.profile_session.as_deref() != Some(session_id)
+                || self.profile_connection.as_deref() != connection_id)
+                && self.candidate.is_none()
+            {
+                // Manual login into a new page has no proven credential owner.
+                self.session_profile = None;
+                self.profile_session = None;
+                self.profile_connection = None;
+            }
+            self.reconnect_blocked = false;
+        } else if phase == "failed" || phase == "cancelled" {
+            self.pending = None;
+            self.candidate = None;
+            self.candidate_session = None;
+            self.candidate_connection = None;
+            self.reconnect_blocked = phase == "cancelled"
+                || !(message.contains("disconnected during sign-in")
+                    || message.to_lowercase().contains("sign-in timed out"));
+        }
+    }
+
+    pub(crate) fn reconnect_available(&self) -> bool {
+        self.session_profile.is_some() && !self.reconnect_blocked
+    }
+
+    fn reconnect_profile(&self) -> Result<Option<LoginProfile>, String> {
+        if self.in_world {
+            return Err("The character is already connected.".into());
+        }
+        if self.reconnect_blocked {
+            return Err("Sign in explicitly before reconnecting this account again.".into());
+        }
+        Ok(self.session_profile.clone())
+    }
+
+    fn claim(&mut self, session_id: String) -> PendingLoginResult {
+        let queued = self.candidate.is_some();
+        let profile = self
+            .pending
+            .take()
+            .filter(|p| Instant::now() < p.expires_at)
+            .map(|p| p.profile);
+        if self.active_session.as_deref() != Some(session_id.as_str()) {
+            self.active_connection = None;
+        }
+        self.active_session = Some(session_id.clone());
+        self.candidate_connection = None;
+        if profile.is_some() {
+            self.candidate_session = Some(session_id);
+        } else {
+            self.candidate = None;
+            self.candidate_session = None;
+            if !queued && self.profile_session.as_deref() != Some(session_id.as_str()) {
+                self.session_profile = None;
+                self.profile_session = None;
+                self.profile_connection = None;
+            }
+        }
         PendingLoginResult {
-            profile: self
-                .pending
-                .take()
-                .filter(|p| Instant::now() < p.expires_at)
-                .map(|p| p.profile),
+            profile,
             cancelled: self.cancelled,
         }
     }
@@ -151,24 +291,74 @@ pub(crate) async fn login_game(
             )
             .map_err(|_| "Could not save the login in macOS Keychain.")?;
         }
-        state.pending = Some(PendingLogin {
-            profile,
-            expires_at: Instant::now() + Duration::from_secs(120),
-        });
-        state.cancelled = false;
+        if state.session_profile.as_ref().is_some_and(|previous| {
+            previous.username != profile.username
+                || previous.password != profile.password
+                || previous.character_slot != profile.character_slot
+        }) {
+            state.session_profile = None;
+            state.profile_session = None;
+            state.profile_connection = None;
+        }
+        state.reconnect_blocked = false;
+        state.queue(profile);
     }
-    // Reuse the same window but start a fresh official-client session. Credentials
-    // are claimed once; reloads and disconnects cannot silently repeat a login.
+    reopen_game(&app)
+}
+
+fn reopen_game(app: &tauri::AppHandle) -> Result<(), String> {
     let result = if let Some(game) = app.get_webview_window("game") {
         game.navigate(super::GAME_URL.parse().unwrap())
             .and_then(|()| game.set_focus())
             .map_err(|_| "Could not reopen the game.".to_string())
     } else {
-        super::open_game_window(&app)
+        super::open_game_window(app)
     };
     if result.is_err() {
-        if let Ok(mut state) = state.lock() {
+        if let Ok(mut state) = app.state::<SharedLogin>().lock() {
             state.pending = None;
+            state.candidate = None;
+        }
+    }
+    result
+}
+
+#[tauri::command]
+pub(crate) async fn reconnect_game(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+) -> Result<(), String> {
+    super::require_window(&window, "main")?;
+    // Reuse this exact window. A concurrent close must never create a new one.
+    let game = app
+        .get_webview_window("game")
+        .ok_or("Open the game and sign in before reconnecting.")?;
+    let state = app.state::<SharedLogin>();
+    let generation = {
+        let mut state = state.lock().map_err(|_| "Login state is unavailable.")?;
+        let profile = state
+            .reconnect_profile()?
+            .ok_or("Sign in through Companion to enable session reconnect.")?;
+        profile.validate()?;
+        state.queue(profile)
+    };
+    {
+        let state = state.lock().map_err(|_| "Login state is unavailable.")?;
+        if state.generation != generation || app.get_webview_window("game").is_none() {
+            return Err("Reconnect was cancelled.".into());
+        }
+    }
+    let result = game
+        .navigate(super::GAME_URL.parse().unwrap())
+        .and_then(|()| game.set_focus())
+        .map_err(|_| "Could not reopen the game.".to_string());
+    if result.is_err() {
+        if let Ok(mut state) = state.lock() {
+            if state.generation == generation {
+                state.pending = None;
+                state.candidate = None;
+                state.candidate_session = None;
+            }
         }
     }
     result
@@ -182,8 +372,7 @@ pub(crate) fn cancel_pending_login(
     super::require_window(&window, "game")?;
     let state = app.state::<SharedLogin>();
     let mut state = state.lock().map_err(|_| "Login state is unavailable.")?;
-    state.pending = None;
-    state.cancelled = true;
+    state.cancel();
     Ok(())
 }
 
@@ -192,6 +381,7 @@ pub(crate) fn take_pending_login(
     app: tauri::AppHandle,
     window: WebviewWindow,
     build: String,
+    session_id: String,
 ) -> Result<PendingLoginResult, String> {
     super::require_window(&window, "game")?;
     if window
@@ -200,6 +390,11 @@ pub(crate) fn take_pending_login(
         .as_str()
         != super::GAME_URL
         || build != VERIFIED_BUILD
+        || session_id.is_empty()
+        || session_id.len() > 64
+        || !session_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
     {
         return Err("This game build is not verified for automatic login.".into());
     }
@@ -207,7 +402,7 @@ pub(crate) fn take_pending_login(
     let result = state
         .lock()
         .map_err(|_| "Login state is unavailable.")?
-        .claim();
+        .claim(session_id);
     Ok(result)
 }
 
@@ -249,16 +444,385 @@ mod tests {
             profile: profile(),
             expires_at: Instant::now() + Duration::from_secs(10),
         });
-        assert!(state.claim().profile.is_some());
-        assert!(state.claim().profile.is_none());
+        assert!(state.claim("test-page".into()).profile.is_some());
+        assert!(state.claim("test-page".into()).profile.is_none());
         state.pending = Some(PendingLogin {
             profile: profile(),
             expires_at: Instant::now() - Duration::from_secs(1),
         });
-        assert!(state.claim().profile.is_none());
+        assert!(state.claim("test-page".into()).profile.is_none());
         state.cancelled = true;
-        assert!(state.claim().cancelled);
-        assert!(state.claim().cancelled);
+        assert!(state.claim("test-page".into()).cancelled);
+        assert!(state.claim("test-page".into()).cancelled);
+    }
+
+    #[test]
+    fn retains_only_successful_session_login_and_clears_it_on_close() {
+        let mut state = LoginState::default();
+        state.queue(profile());
+        assert!(state.reconnect_profile().unwrap().is_none());
+        assert!(state.claim("test-page".into()).profile.is_some());
+        state.observe(
+            "test-page",
+            Some("test-connection"),
+            true,
+            true,
+            "complete",
+            "Signed in.",
+        );
+        assert!(state.reconnect_profile().is_err());
+        state.observe(
+            "test-page",
+            Some("test-connection"),
+            false,
+            true,
+            "complete",
+            "Disconnected.",
+        );
+        assert!(state.reconnect_profile().unwrap().is_some());
+        state.cancel();
+        assert!(state.claim("test-page".into()).profile.is_none());
+        assert!(state.claim("test-page".into()).cancelled);
+        assert!(state.reconnect_profile().unwrap().is_some());
+        state.close();
+        assert!(state.reconnect_profile().unwrap().is_none());
+        assert!(!state.cancelled);
+    }
+
+    #[test]
+    fn rejected_login_blocks_reconnect_but_network_loss_does_not() {
+        let mut state = LoginState::default();
+        state.queue(profile());
+        state.claim("test-page".into());
+        state.observe(
+            "test-page",
+            Some("test-connection"),
+            true,
+            true,
+            "complete",
+            "Signed in.",
+        );
+        state.observe(
+            "test-page",
+            Some("test-connection"),
+            false,
+            false,
+            "failed",
+            "Game disconnected during sign-in. No automatic retry will run.",
+        );
+        assert!(state.reconnect_profile().unwrap().is_some());
+        state.observe(
+            "test-page",
+            Some("test-connection"),
+            false,
+            false,
+            "failed",
+            "Sign-in was rejected.",
+        );
+        assert!(state.reconnect_profile().is_err());
+        state.observe(
+            "test-page",
+            Some("test-connection"),
+            true,
+            true,
+            "complete",
+            "Signed in manually.",
+        );
+        state.observe(
+            "test-page",
+            Some("test-connection"),
+            false,
+            false,
+            "complete",
+            "Disconnected.",
+        );
+        assert!(state.reconnect_profile().unwrap().is_some());
+    }
+
+    #[test]
+    fn cancellation_prevents_late_handoff_or_false_successful_profile() {
+        let mut state = LoginState::default();
+        state.queue(profile());
+        state.cancel();
+        state.claim("test-page".into());
+        state.observe(
+            "test-page",
+            Some("test-connection"),
+            true,
+            true,
+            "complete",
+            "Signed in manually.",
+        );
+        state.observe(
+            "test-page",
+            Some("test-connection"),
+            false,
+            false,
+            "idle",
+            "",
+        );
+        assert!(state.claim("test-page".into()).profile.is_none());
+        assert!(state.reconnect_profile().unwrap().is_none());
+    }
+
+    #[test]
+    fn old_page_status_cannot_consume_or_promote_a_retry_handoff() {
+        let mut state = LoginState::default();
+        state.queue(profile());
+        state.claim("old-page".into());
+        state.observe(
+            "old-page",
+            Some("test-connection"),
+            true,
+            true,
+            "complete",
+            "Signed in.",
+        );
+        state.observe(
+            "old-page",
+            Some("test-connection"),
+            false,
+            false,
+            "complete",
+            "Disconnected.",
+        );
+        let retry = state.reconnect_profile().unwrap().unwrap();
+        state.queue(retry);
+        state.observe(
+            "old-page",
+            Some("test-connection"),
+            false,
+            false,
+            "failed",
+            "Sign-in was rejected.",
+        );
+        state.observe(
+            "old-page",
+            Some("test-connection"),
+            true,
+            true,
+            "complete",
+            "Late old world.",
+        );
+        assert!(!state.in_world);
+        assert!(state.claim("new-page".into()).profile.is_some());
+        state.observe(
+            "old-page",
+            Some("test-connection"),
+            false,
+            false,
+            "failed",
+            "Sign-in was rejected.",
+        );
+        state.observe(
+            "old-page",
+            Some("test-connection"),
+            true,
+            true,
+            "complete",
+            "Late old world.",
+        );
+        assert!(!state.in_world);
+        assert!(state.candidate.is_some());
+        state.observe(
+            "new-page",
+            Some("test-connection"),
+            true,
+            true,
+            "complete",
+            "Signed in.",
+        );
+        assert_eq!(state.profile_session.as_deref(), Some("new-page"));
+        assert!(state.candidate.is_none());
+    }
+
+    #[test]
+    fn same_page_manual_socket_takeover_cannot_reuse_previous_account() {
+        let mut state = LoginState::default();
+        state.queue(profile());
+        state.claim("same-page".into());
+        state.observe(
+            "same-page",
+            Some("socket-a"),
+            true,
+            true,
+            "complete",
+            "Signed in.",
+        );
+        assert!(state.reconnect_available());
+        state.observe(
+            "same-page",
+            Some("socket-a"),
+            false,
+            false,
+            "complete",
+            "Disconnected.",
+        );
+        // Client Stop and harmless input do not create an unknown account owner.
+        state.cancel();
+        assert!(state.reconnect_available());
+        state.observe(
+            "same-page",
+            Some("socket-a"),
+            false,
+            false,
+            "complete",
+            "Disconnected.",
+        );
+        assert!(state.reconnect_profile().unwrap().is_some());
+        // Unity's reconnect/login scene can use another account without page reload.
+        state.observe(
+            "same-page",
+            Some("socket-b"),
+            true,
+            false,
+            "complete",
+            "Old login phase.",
+        );
+        assert!(!state.reconnect_available());
+        state.observe(
+            "same-page",
+            Some("socket-b"),
+            true,
+            true,
+            "complete",
+            "Old login phase.",
+        );
+        state.observe(
+            "same-page",
+            Some("socket-b"),
+            false,
+            false,
+            "complete",
+            "Disconnected.",
+        );
+        assert!(state.reconnect_profile().unwrap().is_none());
+    }
+
+    #[test]
+    fn explicitly_claimed_retry_can_bind_successful_credentials_to_a_new_socket() {
+        let mut state = LoginState::default();
+        state.queue(profile());
+        state.claim("old-page".into());
+        state.observe(
+            "old-page",
+            Some("old-socket"),
+            true,
+            true,
+            "complete",
+            "Signed in.",
+        );
+        state.observe(
+            "old-page",
+            Some("old-socket"),
+            false,
+            false,
+            "complete",
+            "Disconnected.",
+        );
+        state.queue(state.reconnect_profile().unwrap().unwrap());
+        state.claim("new-page".into());
+        state.observe(
+            "new-page",
+            Some("new-socket"),
+            true,
+            false,
+            "entering",
+            "Entering.",
+        );
+        state.observe(
+            "new-page",
+            Some("new-socket"),
+            true,
+            true,
+            "complete",
+            "Signed in.",
+        );
+        assert!(state.reconnect_available());
+        assert_eq!(state.profile_session.as_deref(), Some("new-page"));
+        assert_eq!(state.profile_connection.as_deref(), Some("new-socket"));
+    }
+
+    #[test]
+    fn a_world_status_without_socket_identity_cannot_confirm_login_ownership() {
+        let mut state = LoginState::default();
+        state.queue(profile());
+        state.claim("test-page".into());
+        state.observe("test-page", None, true, true, "complete", "Signed in.");
+        assert!(!state.reconnect_available());
+    }
+
+    #[test]
+    fn expired_retry_handoff_keeps_previous_successful_profile_until_manual_login() {
+        let mut state = LoginState::default();
+        state.queue(profile());
+        state.claim("old-page".into());
+        state.observe(
+            "old-page",
+            Some("test-connection"),
+            true,
+            true,
+            "complete",
+            "Signed in.",
+        );
+        state.observe(
+            "old-page",
+            Some("test-connection"),
+            false,
+            false,
+            "complete",
+            "Disconnected.",
+        );
+        state.queue(state.reconnect_profile().unwrap().unwrap());
+        state.pending.as_mut().unwrap().expires_at = Instant::now() - Duration::from_secs(1);
+        assert!(state.claim("slow-page".into()).profile.is_none());
+        assert!(state.reconnect_profile().unwrap().is_some());
+        state.observe(
+            "slow-page",
+            Some("test-connection"),
+            true,
+            true,
+            "idle",
+            "Manual login.",
+        );
+        assert!(state.session_profile.is_none());
+    }
+
+    #[test]
+    fn manual_new_page_has_no_automatic_credential_owner_and_close_invalidates_generation() {
+        let mut state = LoginState::default();
+        let generation = state.queue(profile());
+        state.claim("old-page".into());
+        state.observe(
+            "old-page",
+            Some("test-connection"),
+            true,
+            true,
+            "complete",
+            "Signed in.",
+        );
+        assert!(state.session_profile.is_some());
+        state.claim("manual-page".into());
+        state.observe(
+            "manual-page",
+            Some("test-connection"),
+            true,
+            true,
+            "idle",
+            "",
+        );
+        state.observe(
+            "manual-page",
+            Some("test-connection"),
+            false,
+            false,
+            "idle",
+            "",
+        );
+        assert!(state.reconnect_profile().unwrap().is_none());
+        state.close();
+        assert_ne!(state.generation, generation);
+        assert!(state.pending.is_none());
     }
 
     #[test]

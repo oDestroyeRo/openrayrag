@@ -1,5 +1,8 @@
-import { BotEngine, type Settings, type Snapshot } from './engine';
-import { command, walkCommand, decode, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
+import { type Settings } from './engine';
+import { command, walkCommand, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
+import { featureCommand, validateExpandedAction } from './protocol-feature';
+import { worldCommand, validateWorldAction } from './world-protocol';
+import { CompanionController, type CompanionSnapshot } from './controller';
 import { LoginController, loginDriver, loginReady, type LoginProfile, type LoginStatus, type UnityClient } from './login';
 import { currentMapInfo, loadMapCatalog, type MapCatalog } from './map-data';
 
@@ -9,7 +12,8 @@ interface BridgeWindow extends Window {
   __TAURI_INTERNALS__?: { invoke: (name: string, args: unknown) => Promise<unknown> };
   __RAYRAG__?: {
     control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings) => void;
-    snapshot: () => Snapshot;
+    perform: (action: 'command' | 'workflow' | 'routine', request: unknown) => void;
+    snapshot: () => CompanionSnapshot;
   };
 }
 
@@ -18,28 +22,39 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   const sessionId = crypto.randomUUID();
   const NativeSocket = window.WebSocket;
   let active: WebSocket | undefined;
+  let connectionId: string | null = null;
   let heartbeat = 0;
   let publishing = false;
+  let lastPublished = 0;
   let login: LoginController | undefined;
   let loginStatus: LoginStatus = { phase: 'idle', message: '' };
   let loginCancelled = false;
+  let enteredWorld = false;
   let capturedUnity = false;
   let claimStarted = false;
   let unityClient: UnityClient | undefined;
   let catalog: MapCatalog | null = null;
   let catalogLoading = true;
-  const engine = new BotEngine(action => {
+  const controller = new CompanionController(action => {
     if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
-    NativeSocket.prototype.send.call(active, action.type === 'walk' ? walkCommand(action.destination) : command(action.type, 'id' in action ? action.id : undefined));
+    const packet = action.type === 'walk' ? walkCommand(action.destination)
+      : action.type === 'attack' || action.type === 'pickup' || action.type === 'stop'
+        ? command(action.type, 'id' in action ? action.id : undefined)
+        : (() => {
+          try { return featureCommand(validateExpandedAction(action)); }
+          catch { return worldCommand(validateWorldAction(action)); }
+        })();
+    NativeSocket.prototype.send.call(active, Uint8Array.from(packet));
   });
+  const engine = controller.engine;
   const publish = () => {
     if (!page.__TAURI_INTERNALS__ || publishing) return;
     publishing = true;
     page.__TAURI_INTERNALS__.invoke('bridge_status', { status: {
-      ...engine.snapshot(), sessionId, login: login?.status ?? loginStatus,
+      ...controller.snapshot(), sessionId, connectionId, login: login?.status ?? loginStatus,
       mapInfo: currentMapInfo(engine.map, engine.entities.values(), catalog, catalogLoading),
     } })
-      .catch(() => { if (engine.running) engine.stop('Controller connection lost.'); })
+      .catch(() => { if (controller.active) controller.heartbeat(false); })
       .finally(() => { publishing = false; });
   };
   // Fixed, public, same-origin assets. Failures fall back to live observations;
@@ -47,7 +62,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   void loadMapCatalog().then(value => { catalog = value; }).catch(() => {})
     .finally(() => { catalogLoading = false; publish(); });
   const stop = (reason: string) => {
-    try { engine.stop(reason); } catch { engine.disconnect(); }
+    try { controller.stop(reason); } catch { controller.disconnect(); }
     publish();
   };
   const cancelLogin = () => {
@@ -78,7 +93,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
     if (!loginReady(unityClient)) return;
     claimStarted = true;
     const client = unityClient;
-    void page.__TAURI_INTERNALS__.invoke('take_pending_login', { build: page.buildUrl ?? '' }).then(value => {
+    void page.__TAURI_INTERNALS__.invoke('take_pending_login', { build: page.buildUrl ?? '', sessionId }).then(value => {
       const { profile, cancelled } = value as { profile: LoginProfile | null; cancelled: boolean };
       if (cancelled) {
         loginStatus = { phase: 'cancelled', message: 'Automatic sign-in cancelled. Continue manually or reopen the game.' };
@@ -104,15 +119,18 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
     constructor(url: string | URL, protocols?: string | string[]) {
       super(url, protocols);
       if (String(url) !== SOCKET_URL) return;
-      // One session at a time. A new connection never resumes an old bot run.
-      stop('Opening game session.');
+      connectionId = crypto.randomUUID();
+      // Retain the requested run while a new verified connection prepares its state.
+      controller.pause('Opening game session.');
       active = this;
       let failed = false;
       let opcode = -1;
+      let connectionGeneration = -1;
       let queue = Promise.resolve();
       this.addEventListener('open', () => {
         if (active !== this) return;
-        engine.connect(page.buildUrl === VERIFIED_BUILD); publish();
+        controller.connect(page.buildUrl === VERIFIED_BUILD);
+        connectionGeneration = controller.connectionGeneration; publish();
       });
       this.addEventListener('message', event => {
         if (active !== this || failed) return;
@@ -121,43 +139,52 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
           const value: unknown = event.data;
           const data = value instanceof ArrayBuffer ? new Uint8Array(value)
             : value instanceof Blob ? new Uint8Array(await value.arrayBuffer()) : null;
-          if (!data) return;
+          if (!data || active !== this || failed) return;
           opcode = data[0] ?? -1;
           // Authentication contents are never logged. Only populated character slots
           // are read while an explicitly requested sign-in is active.
           login?.receive(data);
-          engine.receive(decode(data));
-          if (engine.player) login?.complete();
+          controller.receive(data, connectionGeneration);
+          if (engine.player) { enteredWorld = true; login?.complete(); }
         }).catch(error => {
+          if (active !== this) return;
           failed = true;
           const detail = error instanceof Error ? error.message.slice(0,80) : 'Decode error';
-          engine.fail(`Packet ${opcode}: ${detail}. Reopen the game after updating Companion.`); publish();
+          controller.fail(`Packet ${opcode}: ${detail}. Reopen the game after updating Companion.`); publish();
         });
       });
       this.addEventListener('close', () => {
-        if (active === this) { active = undefined; login?.disconnect(); engine.disconnect(); publish(); }
+        if (active === this) { active = undefined; login?.disconnect(); controller.disconnect(); publish(); }
       });
-      this.addEventListener('error', () => { if (active === this) stop('Game connection error.'); });
+      this.addEventListener('error', () => { if (active === this) { controller.pause('Waiting for the game connection.'); publish(); } });
     }
   };
 
   page.__RAYRAG__ = {
     control(action, settings) {
-      if (action === 'heartbeat') { heartbeat = Date.now(); return; }
+      if (action === 'heartbeat') { heartbeat = Date.now(); controller.heartbeat(true); return; }
       if (action === 'stop') { cancelLogin(); stop('Stopped by you.'); return; }
       try {
         if (page.buildUrl !== VERIFIED_BUILD) throw new Error('This game build is not verified.');
         if (!settings) throw new Error('Choose combat settings first.');
-        engine.start(settings); heartbeat = Date.now();
-      } catch (error) { stop(error instanceof Error ? error.message : 'Could not start.'); }
+        controller.heartbeat(true); controller.start(settings); heartbeat = Date.now();
+      } catch (error) { controller.engine.reason = error instanceof Error ? error.message : 'Could not start.'; }
       publish();
     },
-    snapshot: () => engine.snapshot(),
+    perform(action, request) {
+      try {
+        if (page.buildUrl !== VERIFIED_BUILD) throw new Error('This game build is not verified.');
+        controller.perform(action, request); heartbeat = Date.now();
+      } catch (error) { controller.engine.reason = error instanceof Error ? error.message : 'Could not perform this action.'; }
+      publish();
+    },
+    snapshot: () => controller.snapshot(),
   };
   const manualInput = (event: Event) => {
     if (!event.isTrusted) return;
-    cancelLogin();
-    if (engine.running) stop('Paused for manual game input.');
+    // A map refresh briefly removes the player; it is not a new login attempt.
+    if (!enteredWorld) cancelLogin();
+    if (controller.active) { controller.pause('Yielding briefly to manual game input.', 2_000); publish(); }
   };
   document.addEventListener('pointerdown', manualInput, true);
   document.addEventListener('keydown', manualInput, true);
@@ -166,9 +193,9 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
     try {
       claimLogin();
       login?.tick();
-      if (engine.running && Date.now() - heartbeat > 6000) engine.stop('Controller heartbeat lost.');
-      engine.tick();
-    } catch { stop('Automation stopped after a connection error.'); }
-    publish();
-  }, 500);
+      if (controller.active && Date.now() - heartbeat > 6000) controller.heartbeat(false);
+      controller.tick();
+    } catch { controller.pause('Waiting after a connection error.'); }
+    if (Date.now() - lastPublished >= 500) { lastPublished = Date.now(); publish(); }
+  }, 100);
 }

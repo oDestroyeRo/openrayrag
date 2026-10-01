@@ -6,12 +6,31 @@ const bytes = (base64: string) => Uint8Array.from(atob(base64), c => c.charCodeA
 const poring = bytes('BgA8AAAAD2YGAACgDwAAAAAAAPn///8GAAAAUG9yaW5nAQMBQAEAAJkAAAABMwAAADMAAAAAAAAAAAAAAP////8AQQGYAEJ/oEN7ARlDzczMPkMkjz4JMzMiIgA=');
 describe('deployed Rebuild V8 protocol', () => {
   it('decodes the observed MemoryPack monster schema', () => {
-    expect(decode(poring)[0]).toEqual({ type:'spawn', entity: { id:1638, classId:4000, name:'Poring', kind:1, x:320,y:153,level:1,hp:51,maxHp:51,dead:false } });
+    expect(decode(poring)[0]).toEqual({ type:'spawn', entity: { id:1638, classId:4000, name:'Poring', kind:1, x:320,y:153,level:1,hp:51,maxHp:51,sp:0,maxSp:0,sitting:false,statuses:[],dead:false } });
     expect(decode(poring)[1]).toMatchObject({type:'walk', id:1638, walk:{cells:[{x:321,y:152},{x:320,y:153},{x:319,y:154},{x:318,y:155},{x:317,y:156},{x:316,y:156},{x:315,y:156},{x:314,y:156},{x:313,y:156}]}});
   });
   it('handles subarrays without reading another packet', () => {
     const padded = new Uint8Array(poring.length+8); padded.set(poring,4);
     expect(decode(padded.subarray(4,-4))).toEqual(decode(poring));
+  });
+  it('omits placeholder player SP from nearby-entity broadcasts', () => {
+    const packet = poring.slice();
+    // MemoryPack header, three i32 IDs, two string lengths and six UTF-8 bytes.
+    const kindOffset = 6 + 1 + 12 + 8 + 6;
+    packet[kindOffset] = 0;
+    packet[kindOffset + 2] = 0;
+    const event = decode(packet)[0];
+    expect(event).toMatchObject({ type: 'spawn', entity: { kind: 0, hp: 51 } });
+    if (event?.type !== 'spawn') throw new Error('Expected spawn');
+    expect(event.entity.sp).toBeUndefined();
+    expect(event.entity.maxSp).toBeUndefined();
+  });
+  it('accepts the full positive int32 range for authoritative spawn HP and SP', () => {
+    const packet=poring.slice();const view=new DataView(packet.buffer);
+    const entityEnd=6+view.getInt32(2,true);
+    // This fixture has a null status dictionary and terminal main-character byte.
+    for(const beforeEnd of [21,17,13,9])view.setInt32(entityEnd-beforeEnd,0x7fffffff,true);
+    expect(decode(packet)[0]).toMatchObject({type:'spawn',entity:{hp:0x7fffffff,maxHp:0x7fffffff,sp:0x7fffffff,maxSp:0x7fffffff}});
   });
   it('fails closed on a changed schema or truncated spawn', () => {
     const changed = poring.slice(); changed[6] = 16;
@@ -19,7 +38,7 @@ describe('deployed Rebuild V8 protocol', () => {
     for (let i=1;i<66;i++) expect(() => decode(poring.slice(0,i))).toThrow();
   });
   it('decodes padded unmanaged status pairs and rejects malformed status payloads', () => {
-    const withStatuses = (count: number) => {
+    const withStatuses = (count: number, seconds?: number) => {
       const originalSize = new DataView(poring.buffer).getInt32(2, true);
       const result = new Uint8Array(poring.length + count * 8);
       const view = new DataView(result.buffer);
@@ -28,12 +47,19 @@ describe('deployed Rebuild V8 protocol', () => {
       view.setInt32(6 + originalSize - 5, count, true);
       for (let i=0;i<count;i++) {
         const at=6+originalSize-1+i*8;
-        result.set([i+1, 231, 87, 142], at); view.setFloat32(at+4, 60+i, true);
+        result.set([i+1, 231, 87, 142], at); view.setFloat32(at+4, seconds ?? 60+i, true);
       }
       result.set(poring.subarray(6+originalSize-1), 6+originalSize-1+count*8);
       return result;
     };
-    for (const count of [0,1,2]) expect(decode(withStatuses(count))).toEqual(decode(poring));
+    for (const count of [0,1,2]) {
+      expect(decode(withStatuses(count))[0]).toMatchObject({type:'spawn',entity:{statuses:Array.from({length:count},(_,i)=>({id:i+1,seconds:60+i}))}});
+      expect(decode(withStatuses(count))[1]).toEqual(decode(poring)[1]);
+    }
+    // CloakingHandler uses float.MaxValue for its permanent status duration.
+    const permanent=3.4028234663852886e38;
+    expect(decode(withStatuses(1,permanent))[0]).toMatchObject({type:'spawn',entity:{statuses:[{id:1,seconds:permanent}]}});
+    expect(()=>decode(withStatuses(1,Infinity))).toThrow('float');
     const truncated=withStatuses(2);new DataView(truncated.buffer).setInt32(2,67,true);
     expect(()=>decode(truncated)).toThrow();
     const trailer=withStatuses(1);new DataView(trailer.buffer).setInt32(2,69,true);
