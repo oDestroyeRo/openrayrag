@@ -7,7 +7,8 @@ import { ReconnectPolicy, PersistentFieldRun } from './reconnect';
 import type { EscapeSnapshot } from './escape';
 import { type LoginStatus } from './login';
 import { validMapInfo, type MapInfo } from './map-data';
-import { GridNavigator, MAX_MAP_DIMENSION, NAVIGATION_MAPS, searchGrid } from './navigation';
+import { GridNavigator, NAVIGATION_MAPS, searchGrid } from './navigation';
+import { validNavigationStatus } from './navigation-status';
 import { MapTargets } from './targets';
 import { normalAttackProfile } from './combat';
 import './style.css';
@@ -411,15 +412,7 @@ function validStatus(value: unknown): value is GameStatus {
     const e = v as Record<string, unknown>;
     return ['id','classId','kind','level','hp','maxHp','x','y'].every(k => finite(e[k])) && typeof e.name === 'string' && e.name.length <= 512;
   };
-  const n = s.navigation as Snapshot['navigation'];
-  const position = (p: unknown): boolean => !!p && typeof p === 'object' && ['x','y'].every(k => {
-    const value = (p as Record<string, unknown>)[k]; return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < MAX_MAP_DIMENSION;
-  });
-  if (n !== null && (!n || typeof n.ready !== 'boolean' || !['idle','search','attack','pickup','follow','waypoint','recover','travel'].includes(n.mode)
-    || !['width','height','walkable','blocked','excluded','reachable','routeLength'].every(k => {
-      const value = (n as unknown as Record<string, unknown>)[k]; return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_MAP_DIMENSION ** 2;
-    }) || (n.goal !== null && !position(n.goal)) || !Array.isArray(n.route) || n.route.length > 512 || !n.route.every(position)
-    || !Array.isArray(n.leg) || n.leg.length > 21 || !n.leg.every(position))) return false;
+  if (!validNavigationStatus(s.navigation)) return false;
   if ((s.runRequested !== undefined && typeof s.runRequested !== 'boolean') || (s.state !== undefined && !['running','waiting','idle'].includes(s.state as string))) return false;
   return ['connected','compatible','running'].every(k => typeof s[k] === 'boolean')
     && ['reason','map','target'].every(k => typeof s[k] === 'string' && (s[k] as string).length <= 1024)
