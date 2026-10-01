@@ -39,8 +39,8 @@ The six sections keep the common Start and Stop controls available:
 | Section | Controls |
 | --- | --- |
 | **Combat** | Selected targets, retaliation, combat off, level difference, species ignore/attack rules and priority. Ignore rules take precedence. |
-| **Recovery** | HP/SP rest thresholds with separate resume thresholds, emergency HP threshold, optional respawn and death allowance. Sitting requires the game's skill prerequisites. |
-| **Travel & follow** | Verified portal destination, optional return to the start map after respawn, current-map waypoints, repeat route, named-player follow and routing limits. |
+| **Recovery** | HP/SP rest thresholds, optional wing/skill escape with stock and cooldown guards, emergency HP threshold, respawn and death allowance. Sitting requires the game's skill prerequisites. |
+| **Travel & follow** | Verified portal destination, optional return to the start map after respawn or escape, current-map waypoints, repeat route, named-player follow and routing limits. |
 | **Inventory & skills** | Own-kill or all-drop pickup policy, item filters and priority, recovery consumables with retained quantities, self/enemy skills, conditional equipment and ordered stat/skill allocation. |
 | **Workflows & social** | NPC dialogue, shop buy/sell, storage/cart, item exchange, party and vending controls, bounded NPC workflows and condition routines. Daily hours and session/kill/pickup/weight limits are also configured here. |
 | **Profiles & features** | Save, apply, remove, import and export named settings profiles; view the 39-family OpenKore coverage inventory. |
@@ -84,6 +84,12 @@ The original routing controls retain these OpenKore names:
 
 These follow [OpenKore's pinned config](https://github.com/openkore/openkore/blob/51de1ddfc4449ae5217f6886de702f87ca934030/control/config.txt), except opt-in random walking. The app does not import OpenKore configuration files or offer complete setting compatibility.
 
+Emergency escape is disabled by default. In **Recovery**, enable it and choose an HP trigger (1–95%), random location or save point, wings or skills, a wing stock reserve (0–9,999) and a cooldown (1–3,600 seconds; default 60). Random uses **Fly Wing 601** or learned/granted **Teleport 53** (30 SP); save point uses **Butterfly Wing 602** or **Return 54** (10 SP). It never substitutes another method. Existing profiles import with escape disabled.
+
+One danger episode permits one escape request. The app stops field movement, lets input settle for 250 ms, and waits for a world refresh followed by your alive character arrival. Consumption or SP loss alone cannot confirm escape. Stop cancels preparation; a sent request retains its receipt until arrival or verified reconnect reconciliation. An uncertain result fences further actions and is never retried automatically. Reconnect retains the cooldown and disarms escape until fresh character resources and HP reconcile.
+
+After arrival, the field run stays requested and waits for HP recovery above the ordinary stop floor and escape hysteresis (trigger + 10 points, capped at 100%, or the configured recovery end if higher). Returning to a save point does not heal you. The episode rearms only after a real self HP recovery update and the cooldown; continuously low HP cannot spend wings repeatedly. Known map collision and the configured return-to-start-map policy still apply. Map teleport restrictions and other server action gates remain authoritative; a rejected escape is reported without a fallback.
+
 ## Accounts and compatibility
 
 Credentials are session-only by default. **Save in macOS Keychain** explicitly enables persistent account storage. **Sign in when app opens** restores that saved account and character slot at launch. **Forget saved login** removes the Keychain entry and its launch preference. The local controller never retrieves the saved password or writes credentials into configuration, profile exports, browser storage or logs. Leave the game's own Remember Password option off.
@@ -94,7 +100,7 @@ Authentication rejection or an absent character requires a new explicit sign-in 
 
 The adapter is restricted to `https://websea01.rayrag.com/`, `wss://gamesea01.rayrag.com/ws` and **`Build_2569-09-01-01-55`**. Changed or malformed supported protocols prevent commands until a valid state is available. The remote game window can report bounded status and claim or cancel an explicitly queued login; it cannot read Keychain credentials. Controller commands belong to the bundled local window. No shell or filesystem plugin is exposed to the game.
 
-See [protocol evidence](docs/PROTOCOL.md) and the [OpenKore feature inventory](docs/OPENKORE_FEATURES.md). The inventory describes implemented portions and remaining gaps across 39 families; it does not claim full OpenKore parity. RO-specific transports, XKore/Poseidon and privileged GM/debug actions are outside this client's player-automation scope. Chat, refining/socketing, random teleport, full crafting, direct player trade, richer skill range and kiting, and third-party plugins still need implementation or a matching verified game contract.
+See [protocol evidence](docs/PROTOCOL.md) and the [OpenKore feature inventory](docs/OPENKORE_FEATURES.md). The inventory describes implemented portions and remaining gaps across 39 families; it does not claim full OpenKore parity. RO-specific transports, XKore/Poseidon and privileged GM/debug actions are outside this client's player-automation scope. Chat, refining/socketing, memo and warp management, full crafting, direct player trade, richer skill range and kiting, and third-party plugins still need implementation or a matching verified game contract.
 
 ## Verification
 
@@ -117,6 +123,8 @@ node scripts/benchmark-routing.mjs 9f7ee0e
 ```
 
 The benchmark compares the engine/navigation revisions with identical deterministic fixtures and shared dependencies, excluding map setup. It checks matching outcomes and reports searches, cell checks and median local timings. Published Field 8 acquisition and synthetic wall/detour cases are separate from live game or network latency.
+
+**2026-10-02 emergency escape:** integrated checks passed 784 TypeScript tests and 27 Rust tests, build/typechecking, Clippy and formatting; one Keychain test remained intentionally ignored. Independent architecture/native reviews and a combined ranged-to-escape replay passed. Native testing confirmed a single Fly Wing use (15 to 14), same-map refreshed arrival, HP recovery and resumed combat, then client Stop. The saved profile was reapplied with escape disabled. A stale recovery label observed after resuming was corrected and covered by the checks. Cross-map Butterfly Wing, learned escape skills and live network-loss recovery remain source/synthetic proof. Native ARM64 packaging and strict ad-hoc signature verification passed.
 
 **2026-10-02 weapon range and visibility:** integrated checks passed 748 TypeScript tests and 25 Rust tests, build/typechecking, Clippy, formatting and two weapon-catalog regeneration tests. Native ARM64 packaging and signature verification passed. Independent combined review passed 2,400 route comparisons, 2,400 cache-copy checks and 240 target rankings; the nine routing benchmark fixtures retained their exact outcomes and search counts against `88e7878`. A fresh native sign-in displayed Cutter range 1, and a 30-second Field 8 run confirmed 3 defeats and 2 pickups before Stop returned ready. This establishes melee regression proof; live bow behavior, ammunition selection and kiting remain unverified or separate work. One Keychain test remains intentionally ignored.
 

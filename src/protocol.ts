@@ -26,7 +26,7 @@ export interface Drop extends Position { id: number; itemId: number; count: numb
 export type GameEvent = FeatureEvent
   | { type: 'enter'; id: number; map: string }
   | { type: 'map'; map: string }
-  | { type: 'spawn'; entity: Entity }
+  | { type: 'spawn'; entity: Entity; entryType?: number }
   | { type: 'remove'; id: number; dead: boolean }
   | { type: 'clear' }
   | { type: 'stop'; id: number }
@@ -126,7 +126,7 @@ function spawn(r: Reader): GameEvent[] {
   // Non-self player broadcasts can reach the owner with placeholder SP. Match
   // the official client: only a positive maximum establishes a player SP value.
   const resources = kind === 0 && maxSp === 0 ? {} : { sp, maxSp };
-  const events: GameEvent[] = [{ type: 'spawn', entity: { id, classId, name, kind, level, ...pos, hp, maxHp, ...resources, sitting: state === 2, statuses, dead: state === 3 } }];
+  const events: GameEvent[] = [{ type: 'spawn', entryType: event, entity: { id, classId, name, kind, level, ...pos, hp, maxHp, ...resources, sitting: state === 2, statuses, dead: state === 3 } }];
   // Only the player and monsters are retained. Appearance blocks are skipped.
   if (state === 1 && (kind === 0 || kind === 1)) {
     if (kind === 0) {

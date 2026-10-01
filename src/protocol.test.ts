@@ -6,7 +6,7 @@ const bytes = (base64: string) => Uint8Array.from(atob(base64), c => c.charCodeA
 const poring = bytes('BgA8AAAAD2YGAACgDwAAAAAAAPn///8GAAAAUG9yaW5nAQMBQAEAAJkAAAABMwAAADMAAAAAAAAAAAAAAP////8AQQGYAEJ/oEN7ARlDzczMPkMkjz4JMzMiIgA=');
 describe('deployed Rebuild V8 protocol', () => {
   it('decodes the observed MemoryPack monster schema', () => {
-    expect(decode(poring)[0]).toEqual({ type:'spawn', entity: { id:1638, classId:4000, name:'Poring', kind:1, x:320,y:153,level:1,hp:51,maxHp:51,sp:0,maxSp:0,sitting:false,statuses:[],dead:false } });
+    expect(decode(poring)[0]).toEqual({ type:'spawn', entryType:0, entity: { id:1638, classId:4000, name:'Poring', kind:1, x:320,y:153,level:1,hp:51,maxHp:51,sp:0,maxSp:0,sitting:false,statuses:[],dead:false } });
     expect(decode(poring)[1]).toMatchObject({type:'walk', id:1638, walk:{cells:[{x:321,y:152},{x:320,y:153},{x:319,y:154},{x:318,y:155},{x:317,y:156},{x:316,y:156},{x:315,y:156},{x:314,y:156},{x:313,y:156}]}});
   });
   it('handles subarrays without reading another packet', () => {

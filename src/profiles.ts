@@ -15,7 +15,9 @@ function checkedSettings(value: unknown): Settings {
   const expected = [...Object.keys(DEFAULT_SETTINGS), ...(record(value) && Object.hasOwn(value, 'automation') ? ['automation'] : [])];
   if (!record(value) || !keys(value, expected)) throw new Error('Profile contains unknown or missing settings.');
   if (Object.hasOwn(value, 'automation')) {
-    const a = value.automation;
+    // Version-one profiles predate emergency escape. Only that optional section
+    // gets a default; unknown fields and missing older sections still fail closed.
+    const a = record(value.automation) ? { escape: DEFAULT_AUTOMATION.escape, ...value.automation } : value.automation;
     if (!record(a) || !keys(a, Object.keys(DEFAULT_AUTOMATION))) throw new Error('Profile contains unknown automation settings.');
     const arrayKeys: Record<string, string[]> = {
       items: ['itemId','resource','belowPercent','minStock','cooldownSeconds'],

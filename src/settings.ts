@@ -6,10 +6,16 @@ export interface LootRule { itemId: number; action: 'pickup' | 'ignore'; priorit
 export interface ItemRule { itemId: number; resource: 'hp' | 'sp'; belowPercent: number; minStock: number; cooldownSeconds: number }
 export interface SkillRule { skillId: number; level: number; target: 'self' | 'enemy'; hpBelowPercent: number; spAbovePercent: number; cooldownSeconds: number }
 export interface EquipmentRule { itemId: number; hpBelowPercent: number; monsterClassId: number }
+export interface EscapeSettings {
+  enabled: boolean; hpBelowPercent: number; mode: 'random' | 'save'; method: 'item' | 'skill';
+  minStock: number; cooldownSeconds: number;
+}
+export const DEFAULT_ESCAPE: EscapeSettings = { enabled: false, hpBelowPercent: 20, mode: 'random', method: 'item', minStock: 0, cooldownSeconds: 60 };
 export interface AutomationSettings {
   combat: { mode: 'off' | 'selected' | 'retaliate' | 'both'; levelDifference: number; rules: MonsterRule[] };
   loot: { ownership: 'own' | 'all'; defaultAction: 'pickup' | 'ignore'; rules: LootRule[] };
   recovery: { enabled: boolean; hpStart: number; hpEnd: number; spStart: number; spEnd: number; timeoutSeconds: number };
+  escape?: EscapeSettings;
   items: ItemRule[];
   skills: SkillRule[];
   equipment: EquipmentRule[];
@@ -30,6 +36,7 @@ export const DEFAULT_AUTOMATION: AutomationSettings = {
   combat: { mode: 'selected', levelDifference: 1, rules: [] },
   loot: { ownership: 'own', defaultAction: 'pickup', rules: [] },
   recovery: { enabled: false, hpStart: 60, hpEnd: 85, spStart: 10, spEnd: 80, timeoutSeconds: 300 },
+  escape: { ...DEFAULT_ESCAPE },
   items: [], skills: [], equipment: [], allocation: { stats: [], skills: [] },
   follow: { name: '', distance: 4, lostSeconds: 10 },
   travel: { destinationMap: '', returnToLockMap: false, waypoints: [], loop: false },
@@ -50,9 +57,14 @@ function strictKeys(v: unknown, keys: string[]): void {
   if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).some(k=>!keys.includes(k))) throw new Error('Unknown settings field.');
 }
 export function automationSettings(settings: Settings): AutomationSettings { return settings.automation ?? DEFAULT_AUTOMATION; }
+export function escapeSettings(settings: Settings): EscapeSettings { return automationSettings(settings).escape ?? DEFAULT_ESCAPE; }
 export function validateAutomation(a: AutomationSettings): AutomationSettings {
   try {
-    strictKeys(a,['combat','loot','recovery','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule']);
+    strictKeys(a,['combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule']);
+    const escape = a.escape === undefined ? DEFAULT_ESCAPE : a.escape;
+    strictKeys(escape,['enabled','hpBelowPercent','mode','method','minStock','cooldownSeconds']);
+    if (typeof escape.enabled !== 'boolean' || !bounded(escape.hpBelowPercent,1,95) || !['random','save'].includes(escape.mode)
+      || !['item','skill'].includes(escape.method) || !bounded(escape.minStock,0,9999) || !bounded(escape.cooldownSeconds,1,3600)) throw new Error();
     strictKeys(a.combat,['mode','levelDifference','rules']); strictKeys(a.loot,['ownership','defaultAction','rules']);
     strictKeys(a.recovery,['enabled','hpStart','hpEnd','spStart','spEnd','timeoutSeconds']); strictKeys(a.allocation,['stats','skills']);
     strictKeys(a.follow,['name','distance','lostSeconds']); strictKeys(a.travel,['destinationMap','returnToLockMap','waypoints','loop']);
@@ -84,7 +96,7 @@ export function validateAutomation(a: AutomationSettings): AutomationSettings {
       || !bounded(a.limits.weightPercent,0,100) || typeof a.respawn.enabled !== 'boolean' || !bounded(a.respawn.maxDeaths,0,100)
       || typeof a.schedule.enabled !== 'boolean' || !bounded(a.schedule.startHour,0,23) || !bounded(a.schedule.endHour,0,23)) throw new Error();
   } catch { throw new Error('Invalid automation settings. Check rules, recovery thresholds and session limits.'); }
-  return structuredClone(a);
+  return structuredClone({ ...a, escape: a.escape ?? DEFAULT_ESCAPE });
 }
 export function validateSettings(value: Settings): Settings {
   strictKeys(value,['map','targets','radius','minHpPercent','loot','route_randomWalk','route_step','route_avoidWalls','route_randomWalk_maxRouteTime','attackRouteMaxPathDistance','attackMaxRouteTime','automation']);

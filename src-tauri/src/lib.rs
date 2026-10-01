@@ -59,8 +59,15 @@ fn control_bot(
     action: String,
     settings: Option<Settings>,
     request: Option<serde_json::Value>,
+    escape_guard: Option<automation::EscapeResumeGuard>,
 ) -> Result<(), String> {
     require_window(&window, "main")?;
+    if let Some(guard) = &escape_guard {
+        if action != "start" {
+            return Err("Escape resume state is only accepted by start.".into());
+        }
+        guard.validate()?;
+    }
     if !matches!(
         action.as_str(),
         "start" | "stop" | "heartbeat" | "command" | "workflow" | "routine"
@@ -95,7 +102,9 @@ fn control_bot(
     } else {
         let action_json = serde_json::to_string(&action).map_err(|_| "Invalid action.")?;
         let settings_json = serde_json::to_string(&settings).map_err(|_| "Invalid settings.")?;
-        format!("window.__RAYRAG__?.control({action_json},{settings_json})")
+        let escape_json =
+            serde_json::to_string(&escape_guard).map_err(|_| "Invalid escape resume state.")?;
+        format!("window.__RAYRAG__?.control({action_json},{settings_json},{escape_json})")
     };
     game.eval(script)
         .map_err(|_| "Could not reach the game controller.".into())

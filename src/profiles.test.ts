@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, DEFAULT_ESCAPE } from './settings';
 import { MAX_PROFILES, PROFILE_STORAGE_KEY, ProfileStore } from './profiles';
 
 const settings = () => ({ ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [1002] });
@@ -65,5 +65,14 @@ describe('named profiles', () => {
     expect(f.store.forMap(profile.id,'prt_fild08').settings.automation).toEqual(DEFAULT_AUTOMATION);
     const document=JSON.parse(f.store.export(profile.id));document.profiles[0].settings.automation.follow.password='excluded';
     const before=f.data.get(PROFILE_STORAGE_KEY);expect(()=>f.store.import(JSON.stringify(document))).toThrow('unknown automation');expect(f.data.get(PROFILE_STORAGE_KEY)).toBe(before);
+  });
+  it('imports older automation profiles with escape disabled and round-trips explicit escape controls',()=>{
+    const f=fixture();const profile=f.store.save('Escape','Test',{...settings(),automation:structuredClone(DEFAULT_AUTOMATION)});
+    const document=JSON.parse(f.store.export(profile.id));delete document.profiles[0].settings.automation.escape;
+    expect(f.store.import(JSON.stringify(document))[0]!.settings.automation!.escape).toEqual(DEFAULT_ESCAPE);
+    document.profiles[0].settings.automation.escape={...DEFAULT_ESCAPE,enabled:true,mode:'save',method:'skill',minStock:2,cooldownSeconds:120};
+    const imported=f.store.import(JSON.stringify(document))[0]!;
+    expect(f.store.forMap(imported.id,'prt_fild08').settings.automation!.escape).toEqual(document.profiles[0].settings.automation.escape);
+    expect(f.store.export(imported.id)).not.toContain('latched');expect(f.store.export(imported.id)).not.toContain('escapeGuard');
   });
 });

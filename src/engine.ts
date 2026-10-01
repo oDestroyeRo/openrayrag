@@ -592,6 +592,8 @@ export class BotEngine {
     } else this.stop(a.respawn.enabled?'Death limit reached. Recover manually before restarting.':'Character died. Recover manually before restarting.');
   }
   get pendingFeatureAction(): ExpandedAction | null { return this.automation.pendingAction; }
+  /** Emergency escape may preempt walking/combat, but never an unresolved resource or cast. */
+  get featureActionsSettled(): boolean { return !this.automation.busy; }
   get actionResult(): ActionResult { return {...this.automation.result}; }
   idleForActions(): boolean { this.advanceMovement(); return !this.running&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.motions.has(this.playerId); }
   manualAction(action: ExpandedAction): void {

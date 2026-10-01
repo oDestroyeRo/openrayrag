@@ -11,12 +11,14 @@ import { inSchedule, actionConfirmationTimeout } from './automation';
 import { searchGrid, type WalkGrid } from './navigation';
 import type { InventoryItem } from './protocol-feature';
 import { ITEM_CATALOG } from './game-catalog';
+import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type EscapeSnapshot, type EscapeResumeGuard } from './escape';
 
 
 export type ControllerAction = ExpandedAction | WorldAction;
 export interface CompanionSnapshot extends Snapshot {
   runRequested: boolean; state: 'running' | 'waiting' | 'idle';
   world: WorldSnapshot; workflow: WorkflowSnapshot; routine: RoutineSnapshot; travel: TravelSnapshot;
+  escape: EscapeSnapshot;
 }
 function expanded(value: unknown): value is ExpandedAction {
   try { validateExpandedAction(value); return true; } catch { return false; }
@@ -40,6 +42,7 @@ export class CompanionController {
   readonly workflow: NpcWorkflow;
   readonly routine: RoutineRuntime<ControllerAction>;
   readonly travel: TravelController;
+  readonly escape: EmergencyEscape;
   private pending: Pending | null = null;
   private lastFrame = 0;
   private lastTick = 0;
@@ -76,20 +79,23 @@ export class CompanionController {
     this.workflow = new NpcWorkflow(now);
     this.routine = new RoutineRuntime(validControllerAction, now, { actionTimeoutSeconds: actionConfirmationTimeout({ type: 'skill' }) / 1000 });
     this.travel = new TravelController(send, now);
+    this.escape = new EmergencyEscape(now);
   }
   get runRequested(): boolean { return this.requestedSettings !== null; }
   get connectionGeneration(): number { return this.connectionEpoch; }
   private get executing(): boolean {
-    return this.engine.running || this.returning || this.travel.active || this.workflow.snapshot().running || !!this.pending
+    return this.engine.running || this.returning || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
       || ['running','waiting'].includes(this.routine.snapshot().state);
   }
   get active(): boolean { return this.runRequested || this.executing; }
   connect(compatible: boolean): void {
+    this.escape.connectionChanged();
     this.connectionEpoch++; this.cancelOwners('Connection changed.'); this.fencedUntil = 0; this.unresolvedWorld = null;
     this.world.reset(); this.engine.connect(compatible); this.lastFrame = this.now();
     this.waitingReason = this.engine.reason; this.retryAt = 0;
   }
   disconnect(): void {
+    this.escape.connectionChanged();
     this.connectionEpoch++;
     try { this.pause('Waiting for the game to reconnect.'); }
     finally { this.world.reset(); this.engine.disconnect(); this.waitingReason = 'Waiting for the game to reconnect.'; }
@@ -125,8 +131,9 @@ export class CompanionController {
   }
   /** Retain the requested field run while yielding ownership of commands. */
   pause(reason: string, durationMs = 0): void {
-    const externalActive = this.travel.active || this.workflow.snapshot().running || !!this.pending;
+    const externalActive = this.travel.active || this.workflow.snapshot().running || !!this.pending || this.escape.sent;
     const engineStops = this.engine.running || this.engine.pendingFeatureAction?.type === 'skill';
+    this.escape.cancel(reason);
     this.captureActionFailure(); this.cancelOwners(reason); this.engine.stop(reason); this.captureActionFailure();
     this.yieldUntil = Math.max(this.yieldUntil, this.now() + durationMs);
     this.waitingReason = reason;
@@ -181,10 +188,11 @@ export class CompanionController {
   }
   private requireIdle(): void {
     this.requireReady();
-    if (this.active || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
+    if (this.active || this.escape.busy || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
   }
-  start(input: Settings): void {
+  start(input: Settings, escapeGuard?: EscapeResumeGuard): void {
     const settings = validateSettings(input);
+    if (escapeGuard) validateEscapeResumeGuard(escapeGuard);
     if (this.active || this.engine.pendingFeatureAction)
       throw new Error('Stop the current automation or manual action before requesting a new run.');
     this.requestedSettings = settings; this.runInitialized = false; this.characterName = this.engine.player?.name ?? null; this.featureReceipt = null;
@@ -192,6 +200,7 @@ export class CompanionController {
     this.blockedReason = ''; this.waitingReason = 'Preparing the requested run.';
     this.seenActionKey = `${this.engine.actionResult.sequence}:${this.engine.actionResult.status}`;
     this.runKills = this.engine.kills; this.runPickups = this.engine.looted;
+    if (escapeGuard) this.escape.restoreOnReconnect(settings, escapeGuard, this.escapeContext());
     this.tick();
   }
 
@@ -223,6 +232,7 @@ export class CompanionController {
     }
   }
   private dispatch(input: ControllerAction, routineId: number | null): void {
+    if (this.escape.busy) throw new Error('Waiting for emergency escape to settle.');
     if (this.now() < this.fencedUntil) throw new Error('Waiting for the previous action deadline.');
     const binding = { generation: this.generation, worldGeneration: this.world.generation,
       map: this.engine.map, npcId: this.world.npc.id };
@@ -295,6 +305,11 @@ export class CompanionController {
       }
     }
     this.engine.receive(events);
+    const escaped = this.escape.observe(events, this.escapeContext());
+    if (escaped && this.runRequested && automationSettings(this.requestedSettings!).travel.returnToLockMap
+      && this.engine.map !== this.requestedSettings!.map) {
+      this.returnSettings = structuredClone(this.requestedSettings!); this.returning = true;
+    }
     if ((respawning || this.respawnRefresh) && this.returnSettings && events.some(event => event.type === 'map'
       || event.type === 'resurrection' && event.id === this.engine.playerId
       || event.type === 'spawn' && event.entity.id === this.engine.playerId && !event.entity.dead)) {
@@ -390,11 +405,45 @@ export class CompanionController {
     this.waitingReason = reason; this.engine.reason = reason;
     if (this.engine.running || this.travel.active) this.pause(reason);
   }
+  private escapeContext(): EscapeContext {
+    const blocker = this.blockedReason || (this.featureReceipt ? 'Waiting for the previous resource action to settle.' : '')
+      || (this.pending || this.workflow.snapshot().running || this.unresolvedWorld || ['running','waiting'].includes(this.routine.snapshot().state)
+        ? 'Waiting for the current action owner before emergency escape.' : '')
+      || (this.now() < this.fencedUntil || !this.engine.featureActionsSettled ? 'Waiting for the previous action and cast to settle.' : '')
+      || (this.world.npc.mode !== 'idle' || this.world.npc.id !== null || this.world.vending ? 'Finish the NPC or vending interaction before escape.' : '')
+      || (this.characterName && this.engine.player?.name !== this.characterName ? 'Waiting for the originally selected character.' : '')
+      || (!this.gridFor(this.engine.map) ? `Verified walkability is not available for ${this.engine.map}.` : '');
+    return { connected: this.engine.connected, compatible: this.engine.compatible, fresh: this.now() - this.lastFrame <= 15_000,
+      map: this.engine.map, playerId: this.engine.playerId, player: this.engine.player, character: this.engine.character,
+      connection: this.connectionEpoch, ready: !blocker && this.heartbeatHealthy && this.now() >= this.yieldUntil, blocker };
+  }
+  private escapeTick(): boolean {
+    const context = this.escapeContext(); this.escape.update(context);
+    if (this.requestedSettings && this.escape.wants(this.requestedSettings, context)) {
+      // Stop/cancel movement first, then wait 250ms before the wing/skill. The
+      // normal HP guard may already have sent Stop in this incoming packet.
+      this.pause('Preparing emergency escape.'); this.escape.begin(this.requestedSettings, this.escapeContext());
+    }
+    if (this.escape.busy) {
+      if (this.runRequested) {
+        const action = this.escape.takeAction(this.escapeContext());
+        if (action) {
+          try { this.send(action); }
+          catch { this.escape.cancel('Connection failed while sending escape.'); }
+        }
+      }
+      this.waitingReason = this.escape.snapshot().reason; this.engine.reason = this.waitingReason;
+      return true;
+    }
+    if (this.runRequested && this.escape.blocked) { this.waitingReason = this.escape.snapshot().reason || 'Waiting for HP recovery after escape.'; this.engine.reason = this.waitingReason; return true; }
+    return false;
+  }
   private resumeRun(): void {
     const settings = this.requestedSettings;
     if (!settings || this.engine.running || this.travel.active || this.pending || this.workflow.snapshot().running
       || ['running','waiting'].includes(this.routine.snapshot().state)) return;
     const now = this.now(); const policy = automationSettings(settings); const player = this.engine.player;
+    if (this.escape.blocked) { this.waitingReason = this.escape.snapshot().reason; return; }
     if (this.blockedReason) { this.wait(this.blockedReason); return; }
     if (!this.heartbeatHealthy) { this.wait('Waiting for the client connection.'); return; }
     if (now < this.yieldUntil) { this.wait('Yielding briefly to manual game input.'); return; }
@@ -436,7 +485,7 @@ export class CompanionController {
         const bound = { ...settings, map: this.engine.map };
         if (this.runInitialized) this.engine.resumeRequested(bound);
         else { this.engine.start(bound, true); this.runInitialized = true; }
-        this.returnSettings = policy.travel.returnToLockMap && policy.respawn.enabled ? structuredClone(settings) : null;
+        this.returnSettings = policy.travel.returnToLockMap && (policy.respawn.enabled || policy.escape?.enabled) ? structuredClone(settings) : null;
         this.returning = false; this.travelSettings = null; this.waitingReason = ''; this.retries = 0;
       }
     } catch (error) {
@@ -447,6 +496,7 @@ export class CompanionController {
   }
   tick(): void {
     const now = this.now();
+    this.escape.update(this.escapeContext());
     if (this.active && this.lastTick && now - this.lastTick > 5_000) {
       this.lastTick = now; this.pause('Waiting for fresh state after the Mac or game paused.', 1_000); return;
     }
@@ -473,6 +523,9 @@ export class CompanionController {
           ? 'Waiting for a verified game build and protocol.' : 'Waiting for a fresh server update.'); return;
       }
     }
+    // Escape owns its own receipt rather than the scheduler's cost-only ACK.
+    // It must run while a requested field run is already waiting below its HP floor.
+    if (this.escapeTick()) return;
     const wasRunning = this.engine.running;
     this.engine.tick(); this.captureActionFailure();
     if (this.runRequested && wasRunning && !this.engine.running && !this.engine.player?.dead
@@ -537,11 +590,11 @@ export class CompanionController {
     else if (workflow.running) snapshot.reason = workflow.reason;
     else if (routine.state === 'running' || routine.state === 'waiting') snapshot.reason = routine.reason;
     const executing = this.executing && (this.engine.running || this.travel.active || workflow.running || !!this.pending
-      || ['running','waiting'].includes(routine.state));
+      || this.escape.inFlight || ['running','waiting'].includes(routine.state));
     if (this.runRequested && !executing) snapshot.reason = this.blockedReason || this.waitingReason || snapshot.reason;
     return { ...snapshot, running: executing, runRequested: this.runRequested,
       state: executing ? 'running' : this.runRequested ? 'waiting' : 'idle',
       runIntent: this.runRequested, elapsedSeconds: this.runRequested ? Math.max(0, Math.floor((this.now() - this.started) / 1000)) : snapshot.elapsedSeconds,
-      world: this.world.snapshot(), workflow, routine, travel };
+      world: this.world.snapshot(), workflow, routine, travel, escape: this.escape.snapshot() };
   }
 }

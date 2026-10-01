@@ -36,10 +36,16 @@ const fields: Record<Section, Field[]> = {
     { path:'recovery.hpStart', label:'Rest below HP %', min:1,max:95 }, { path:'recovery.hpEnd',label:'Resume above HP %',min:2,max:100 },
     { path:'recovery.spStart',label:'Rest below SP %',min:0,max:95 }, { path:'recovery.spEnd',label:'Resume above SP %',min:1,max:100 },
     { path:'recovery.timeoutSeconds',label:'Maximum rest seconds',min:1,max:3600 },
+    { path:'escape.enabled',label:'Emergency escape at low HP',kind:'checkbox' },
+    { path:'escape.hpBelowPercent',label:'Escape at or below HP %',min:1,max:95 },
+    { path:'escape.mode',label:'Escape destination',options:[['random','Random location on current map'],['save','Return to save point']] },
+    { path:'escape.method',label:'Escape action',options:[['item','Fly Wing / Butterfly Wing'],['skill','Teleport / Return skill']] },
+    { path:'escape.minStock',label:'Wings to keep in reserve',min:0,max:9999 },
+    { path:'escape.cooldownSeconds',label:'Minimum escape interval, seconds',min:1,max:3600 },
     { path:'respawn.enabled',label:'Respawn after death',kind:'checkbox' }, { path:'respawn.maxDeaths',label:'Wait after deaths',min:1,max:100 },
   ],
   travel: [
-    { path:'travel.destinationMap',label:'Destination map code',kind:'text' }, { path:'travel.returnToLockMap',label:'Return to start map after respawn',kind:'checkbox' },
+    { path:'travel.destinationMap',label:'Destination map code',kind:'text' }, { path:'travel.returnToLockMap',label:'Return to start map after respawn or escape',kind:'checkbox' },
     { path:'travel.loop',label:'Repeat waypoint route',kind:'checkbox' },
     { path:'follow.name',label:'Follow player name',kind:'text' }, { path:'follow.distance',label:'Follow distance, cells',min:1,max:20 },
     { path:'follow.lostSeconds',label:'Wait when player lost, seconds',min:1,max:120 },
@@ -126,7 +132,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     if (v && typeof v === 'object') return Object.keys(v).length <= 256 && Object.values(v).every(entry => bounded(entry,depth+1));
     return false;
   }
-  if (!['character','world','workflow','routine','task','actionResult','travel','elapsedSeconds','deaths','lootStats','actors'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if (!['character','world','workflow','routine','task','actionResult','travel','escape','elapsedSeconds','deaths','lootStats','actors'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
   const barter = object(value.world).barter;
   return barter === undefined || Array.isArray(barter) && barter.every(entry => {
     const row = object(entry);
@@ -177,6 +183,7 @@ export class FeatureUi {
     this.editor('combat','combat.rules','Monster policies & priority',[idColumn('classId','Monster class ID'),{key:'action',label:'Action',options:[['attack','Attack'],['ignore','Ignore']]},priority],{classId:1002,action:'attack',priority:0},64);
     this.note('combat','Ignore rules take precedence. Higher priority wins among eligible targets. Use monster class IDs from the map list.');
     this.note('recovery','Rest starts above the emergency HP threshold. Resume needs both configured HP and SP targets. Recovery timeouts keep the run waiting.');
+    this.note('recovery','Emergency escape is opt-in: random uses Fly Wing or Teleport; save point uses Butterfly Wing or Return. It waits for your refreshed character, then for HP recovery. Stock reserve applies to wings. A rejected or uncertain attempt never falls back to another action.');
     this.editor('travel','travel.waypoints','Waypoints',[{key:'map',label:'Map code',kind:'text'},{key:'x',label:'X',min:0,max:511},{key:'y',label:'Y',min:0,max:511}],{map:'prt_fild08',x:150,y:150},64);
     this.note('travel','Travel uses verified portal routes. NPC or conditional portals may require a manual action. A blank player name disables follow.');
     this.editor('inventory','loot.rules','Pickup filters & priority',[idColumn('itemId','Item ID'),{key:'action',label:'Action',options:[['pickup','Pick up'],['ignore','Ignore']]},priority],{itemId:501,action:'pickup',priority:0},128);
@@ -238,6 +245,7 @@ export class FeatureUi {
     return validateAutomation(automation as unknown as AutomationSettings);
   }
   write(automation: AutomationSettings): void {
+    automation = validateAutomation(automation);
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
       const value = getPath(automation,field.path);
@@ -348,7 +356,7 @@ export class FeatureUi {
     const help=document.createElement('p');help.className='hint';help.textContent='Reference inventory covers 39 feature families. Local implementation, source-only capability and unavailable systems are distinct; this checklist does not claim full OpenKore parity.';coverage.append(help);
     const table=document.createElement('div');table.className='coverage-list';coverage.append(table);
     const ready=new Set(['login','profiles','combat','monsterRules','navigation','follow','recovery','death','conditionRules','loot','shops','progression','scheduler','reconnect','commands','macros']);
-    const partial=new Set(['antiKs','combatMovement','travel','skills','equipment','inventory','storage','npc','crafting','party','trade','avoidance','observability']);
+    const partial=new Set(['antiKs','combatMovement','travel','teleport','skills','equipment','inventory','storage','npc','crafting','party','trade','avoidance','observability']);
     const unverified=new Set(['companions','quests','mailBank','repair']);
     const excluded=new Set(['roTransport','xkorePoseidon','gmDebug']);
     const rows:Array<[string,string]>=[['login','Login & character selection'],['profiles','Profiles & import/export'],['combat','Combat & retaliation'],['monsterRules','Monster policies & priority'],['antiKs','Engagement ownership'],['combatMovement','Ranged combat, LOS & kiting'],['navigation','Map navigation & unstuck'],['travel','Travel & lock map'],['teleport','Teleport & escape'],['follow','Follow player'],['recovery','HP/SP & item recovery'],['death','Death & respawn'],['skills','Skills & support'],['conditionRules','Conditional rules'],['equipment','Equipment conditions'],['loot','Pickup filters & priority'],['inventory','Inventory & weight'],['storage','Storage & cart'],['shops','NPC shops'],['npc','NPC workflows'],['repair','Equipment repair'],['crafting','Crafting & exchanges'],['progression','Stat & skill allocation'],['party','Party controls'],['social','Guild, friends & chat'],['trade','Trade & vending'],['quests','Quests & achievements'],['mailBank','Mail, bank & auction'],['companions','Pets & companions'],['scheduler','Hours & session limits'],['reconnect','Reconnect backoff'],['avoidance','Map & actor avoidance'],['observability','Logs & session statistics'],['commands','Typed manual commands'],['macros','Condition routines & macros'],['plugins','Extensions & hooks'],['roTransport','RO server transport adapters'],['xkorePoseidon','XKore & Poseidon'],['gmDebug','GM, raw packets & eval']];
@@ -368,7 +376,7 @@ export class FeatureUi {
   }
   render(value: unknown): void {
     this.status=object(value);const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
-    const experience=object(character.experience);const task=object(s.task);this.host.querySelector<HTMLElement>('#session-details')!.textContent=`${Math.floor((number(s.elapsedSeconds)??0)/60)}m ${(number(s.elapsedSeconds)??0)%60}s · ${number(s.deaths)??0} deaths · Base EXP +${number(experience.baseGained)??'—'} · Job EXP +${number(experience.jobGained)??'—'}${task.label?' · '+text(task.label):''}`;
+    const experience=object(character.experience);const task=object(s.task);const escape=object(s.escape);this.host.querySelector<HTMLElement>('#session-details')!.textContent=`${Math.floor((number(s.elapsedSeconds)??0)/60)}m ${(number(s.elapsedSeconds)??0)%60}s · ${number(s.deaths)??0} deaths · Base EXP +${number(experience.baseGained)??'—'} · Job EXP +${number(experience.jobGained)??'—'}${task.label?' · '+text(task.label):''}${escape.state&&escape.state!=='idle'?' · '+text(escape.reason):''}`;
     const npcChoice=this.host.querySelector<HTMLSelectElement>('#visible-npcs')!;const actors=Array.isArray(s.actors)?s.actors.map(object).filter(actor=>actor.kind===2||actor.kind===4):[];const actorKey=actors.map(actor=>`${actor.id}:${text(actor.name)}`).join('|');
     if(npcChoice.dataset.actors!==actorKey){const selected=npcChoice.value;npcChoice.dataset.actors=actorKey;npcChoice.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='Choose a visible NPC';npcChoice.append(empty);for(const actor of actors){const option=document.createElement('option');option.value=String(actor.id);option.textContent=`${text(actor.name)||'NPC'} · #${actor.id}`;npcChoice.append(option);}npcChoice.value=actors.some(actor=>String(actor.id)===selected)?selected:'';}
     const inventory=Array.isArray(character.inventory)?character.inventory:[];const skills=Array.isArray(character.learned)?character.learned:[];
