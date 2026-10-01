@@ -3,7 +3,7 @@ import { type Action } from './engine';
 import { walkDuration } from './movement';
 import { decode, OP, type Entity, type Position, type Walk } from './protocol';
 import { BitWriter } from './binary';
-import { searchGrid } from './navigation';
+import { searchGrid, type WalkGrid } from './navigation';
 import { TravelController } from './travel-controller';
 import { CompanionController } from './controller';
 
@@ -415,4 +415,95 @@ it('does not turn a portal correction into an inferred arrival or extend its tra
   expect(controller.snapshot().state).toBe('failed');
   expect(controller.snapshot().reason).toContain('transition was not confirmed');
   expect(actions.map(action => action.type)).toEqual(['walk','stop']);
+});
+
+function approachFixture(grid: WalkGrid = { width: 12, height: 12, walkable: () => true }) {
+  let clock = 100_000;
+  const actions: Action[] = [];
+  const controller = new TravelController(action => actions.push(action), () => clock, map => map === 'fixture' ? grid : null);
+  const advance = (ms: number) => { clock += ms; };
+  const acknowledge = () => {
+    const cells = controller.snapshot().leg;
+    controller.observe([{ type: 'walk', id: 321, walk: { origin: cells[0]!, cells, secondsPerCell: 0.1, firstSeconds: 0.1, locked: false } }]);
+    return cells.at(-1)!;
+  };
+  const nudge = (from: Position, to: Position) => controller.observe([{ type: 'walk', id: 321, walk: adjacentWalk(from, to) }]);
+  return { controller, actions, advance, acknowledge, nudge };
+}
+
+it('replans an NPC approach from a settled nudge to its copied original target', () => {
+  const { controller, actions, advance, acknowledge, nudge } = approachFixture();
+  const target = { x: 8, y: 5 }, start = player({ x: 3, y: 5 });
+  controller.startApproach('fixture', start, target, 1);
+  target.x = 1;
+  controller.tick('fixture', start);
+  const end = acknowledge(), shifted = { x: end.x, y: end.y + 1 };
+  nudge(end, shifted);
+  expect(controller.snapshot().state).toBe('walking');
+  advance(301); controller.tick('fixture', player(shifted));
+  expect(controller.snapshot().state).toBe('walking');
+  expect(controller.snapshot().route.at(-1)).toEqual({ x: 8, y: 5 });
+  expect(actions.map(action => action.type)).toEqual(['walk', 'walk']);
+  expect(controller.snapshot().reason).toContain('Approaching the NPC');
+  let current = player(shifted);
+  for (let i = 0; i < 20 && controller.active; i++) {
+    current = player(acknowledge()); advance(301); controller.tick('fixture', current);
+  }
+  expect(current).toMatchObject({ x: 8, y: 5 });
+  expect(controller.snapshot().state).toBe('complete');
+  expect(controller.snapshot().reason).toBe('Final NPC approach confirmed.');
+});
+
+it('rejects NPC approach nudges into injected blocked corners or portal cells', () => {
+  for (const restriction of ['corner', 'portal'] as const) {
+    const { controller, actions, acknowledge, nudge } = approachFixture({ width: 12, height: 12,
+      walkable: p => restriction !== 'corner' || p.x !== 4 || p.y !== 6,
+      portals: restriction === 'portal' ? [{ x: 4, y: 6, halfWidth: 0, halfHeight: 0 }] : [] });
+    const start = player({ x: 3, y: 5 });
+    controller.startApproach('fixture', start, { x: 4, y: 5 }, 20); controller.tick('fixture', start);
+    const end = acknowledge(); expect(end).toEqual({ x: 4, y: 5 });
+    nudge(end, restriction === 'corner' ? { x: 5, y: 6 } : { x: 4, y: 6 });
+    expect(controller.snapshot().state, restriction).toBe('failed');
+    expect(actions.map(action => action.type)).toEqual(['walk', 'stop']);
+  }
+});
+
+it('resets the nudge allowance when a new NPC approach is explicitly started', () => {
+  const { controller, advance, acknowledge, nudge } = approachFixture();
+  const start = player({ x: 3, y: 5 });
+  controller.startApproach('fixture', start, { x: 8, y: 5 }, 1); controller.tick('fixture', start);
+  for (let i = 0; i < 4; i++) {
+    const end = acknowledge(); nudge(end, start); advance(301); controller.tick('fixture', start);
+    expect(controller.snapshot().state).toBe('walking');
+  }
+  controller.cancel();
+  controller.startApproach('fixture', start, { x: 8, y: 5 }, 1); controller.tick('fixture', start);
+  nudge(acknowledge(), start); advance(301); controller.tick('fixture', start);
+  expect(controller.snapshot().state).toBe('walking');
+});
+
+it('retains the original five-minute deadline after an NPC approach nudge', () => {
+  const { controller, advance, acknowledge, nudge } = approachFixture();
+  const start = player({ x: 3, y: 5 });
+  controller.startApproach('fixture', start, { x: 8, y: 5 }, 1);
+  advance(299_000); controller.tick('fixture', start);
+  nudge(acknowledge(), start); advance(301); controller.tick('fixture', start);
+  expect(controller.snapshot().state).toBe('walking');
+  advance(700); controller.tick('fixture', start);
+  expect(controller.snapshot().state).toBe('failed');
+  expect(controller.snapshot().reason).toContain('five-minute');
+});
+
+it('enforces the original 512-cell approach bound after an off-corridor nudge', () => {
+  const { controller, advance, acknowledge, nudge } = approachFixture({ width: 512, height: 3,
+    walkable: p => p.y === 0 || p.y === 1 && p.x <= 1 || p.x === 0 && p.y === 2 });
+  const start = player({ x: 0, y: 0 });
+  controller.startApproach('fixture', start, { x: 511, y: 0 }, 1); controller.tick('fixture', start);
+  expect(acknowledge()).toEqual({ x: 1, y: 0 });
+  nudge({ x: 1, y: 0 }, { x: 1, y: 1 });
+  nudge({ x: 1, y: 1 }, { x: 0, y: 1 });
+  nudge({ x: 0, y: 1 }, { x: 0, y: 2 });
+  advance(301); controller.tick('fixture', player({ x: 0, y: 2 }));
+  expect(controller.snapshot().state).toBe('failed');
+  expect(controller.snapshot().reason).toContain('512 cells');
 });

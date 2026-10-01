@@ -4,8 +4,8 @@ import { WorldState } from './world-state';
 
 export type WorkflowStep =
   | { type: 'talk'; expectedCost?: number }
-  | { type: 'advance'; expectedText?: string; expectedCost?: number }
-  | { type: 'option'; index: number; expectedLabel: string; expectedCost?: number }
+  | { type: 'advance'; expectedText?: string; exactDialogue?: { name: string; text: string }; expectedCost?: number }
+  | { type: 'option'; index: number; expectedLabel: string; expectedOptions?: string[][]; expectedCost?: number }
   | { type: 'buy' | 'sell'; rows: ItemRow[] }
   | { type: 'deposit' | 'withdraw'; bagId: number; count: number }
   | { type: 'closeShop' | 'closeStorage' | 'cancelBarter' }
@@ -56,16 +56,26 @@ export function validateWorkflowSpec(input: unknown): WorkflowSpec {
   if (new Set(minStock.map(item => item.itemId)).size !== minStock.length) throw new Error('Duplicate stock rules');
   if (!Array.isArray(value.steps) || value.steps.length < 1 || value.steps.length > 32) throw new Error('Invalid workflow steps');
   const steps = value.steps.map((inputStep): WorkflowStep => {
-    const step = record(inputStep, ['type', 'expectedText', 'expectedCost', 'index', 'expectedLabel', 'rows', 'bagId', 'count', 'choice', 'bagIds']);
+    const step = record(inputStep, ['type', 'expectedText', 'exactDialogue', 'expectedOptions', 'expectedCost', 'index', 'expectedLabel', 'rows', 'bagId', 'count', 'choice', 'bagIds']);
     const exact = (keys: string[]) => record(step, ['type', ...keys]);
     const fee = () => step.expectedCost === undefined ? {} : { expectedCost: integer(step.expectedCost, 0, 2_000_000_000) };
     switch (step.type) {
       case 'talk': exact(['expectedCost']); return { type: 'talk', ...fee() };
       case 'closeShop': case 'closeStorage': case 'cancelBarter': exact([]); return { type: step.type };
       case 'advance':
-        exact(['expectedText', 'expectedCost']); return { type: 'advance', ...fee(), ...(step.expectedText === undefined ? {} : { expectedText: text(step.expectedText, 1024) }) };
+        exact(['expectedText', 'exactDialogue', 'expectedCost']);
+        return { type: 'advance', ...fee(), ...(step.expectedText === undefined ? {} : { expectedText: text(step.expectedText, 1024) }),
+          ...(step.exactDialogue === undefined ? {} : { exactDialogue: (() => { const dialog = record(step.exactDialogue, ['name','text']); return { name: text(dialog.name, 128), text: text(dialog.text, 1024) }; })() }) };
       case 'option':
-        exact(['index', 'expectedLabel', 'expectedCost']); return { type: 'option', index: integer(step.index, 0, 31), expectedLabel: text(step.expectedLabel, 1024), ...fee() };
+        exact(['index', 'expectedLabel', 'expectedOptions', 'expectedCost']);
+        return { type: 'option', index: integer(step.index, 0, 31), expectedLabel: text(step.expectedLabel, 1024), ...fee(),
+          ...(step.expectedOptions === undefined ? {} : { expectedOptions: (() => {
+            if (!Array.isArray(step.expectedOptions) || !step.expectedOptions.length || step.expectedOptions.length > 4) throw new Error('Invalid expected menus');
+            return step.expectedOptions.map(menu => {
+              if (!Array.isArray(menu) || !menu.length || menu.length > 32) throw new Error('Invalid expected menu');
+              return menu.map(label => text(label, 1024, true));
+            });
+          })() }) };
       case 'buy': case 'sell': {
         exact(['rows']); const action = validateWorldAction({ type: 'shop', mode: step.type, rows: step.rows });
         if (action.type !== 'shop' || !action.rows.length) throw new Error('Empty workflow purchase/sale');
@@ -89,7 +99,6 @@ export function validateWorkflowSpec(input: unknown): WorkflowSpec {
 }
 
 function itemCount(items: InventoryItem[], itemId: number): number { return items.reduce((sum, item) => sum + (item.itemId === itemId ? item.count : 0), 0); }
-function bagCount(items: InventoryItem[], bagId: number): number { return items.find(item => item.bagId === bagId)?.count ?? 0; }
 function stock(items: InventoryItem[]): Map<number, number> {
   const result = new Map<number, number>();
   for (const item of items) result.set(item.itemId, (result.get(item.itemId) ?? 0) + item.count);
@@ -317,13 +326,27 @@ export function dryRunWorkflow(input: unknown, context: WorkflowContext): Workfl
   return { ok: !reasons.length, reasons, estimatedSpend, unpriced };
 }
 
-interface Pending {
+export interface WorkflowReceipt {
+  zeny: number; cost: number; credit: number; items: Map<number, number>; bags: Map<number, number>;
+  itemChanges: Map<number, number>; bagChanges: Map<number, number>; strictStock: boolean;
+}
+interface Pending extends WorkflowReceipt {
   action: WorldAction; sentAt: number; acknowledged: boolean;
-  zeny: number; cost: number; budget: number; credit: number; items: Map<number, number>; bags: Map<number, number>;
-  itemChanges: Map<number, number>; bagChanges: Map<number, number>;
+  budget: number;
   storageItemId?: number;
 }
 const npcResponses = new Set<WorldEvent['type']>(['npcDialog', 'npcOptions', 'npcEnd', 'npcRefine', 'shopOpened', 'storageOpened', 'barterOpened']);
+
+/** Shared authoritative accounting for workflows and canceled service requests. */
+export function confirmWorkflowReceipt(pending: WorkflowReceipt, context: WorkflowContext): boolean {
+  if (context.zeny !== pending.zeny - pending.cost + pending.credit) return false;
+  const items = stock(context.inventory); const bags = new Map(context.inventory.map(item => [item.bagId,item.count]));
+  const itemIds = pending.strictStock ? new Set([...pending.items.keys(), ...items.keys()]) : pending.itemChanges.keys();
+  const bagIds = pending.strictStock ? new Set([...pending.bags.keys(), ...bags.keys()]) : pending.bagChanges.keys();
+  for (const id of itemIds) if ((items.get(id) ?? 0) !== (pending.items.get(id) ?? 0) + (pending.itemChanges.get(id) ?? 0)) return false;
+  for (const id of bagIds) if ((bags.get(id) ?? 0) !== (pending.bags.get(id) ?? 0) + (pending.bagChanges.get(id) ?? 0)) return false;
+  return true;
+}
 
 /** A bounded script of normal actions, each confirmed before the next is sent. */
 export class NpcWorkflow {
@@ -331,13 +354,15 @@ export class NpcWorkflow {
   private generation = 0; private step = 0; private pending: Pending | null = null;
   private running = false; private reason = 'No workflow running.'; private spent = 0;
   private state: WorkflowSnapshot['state'] = 'idle';
+  private terminal = false; private strictStock = false;
   constructor(private readonly now: () => number = () => Date.now()) {}
 
-  start(input: unknown, context: WorkflowContext): WorkflowPreview {
+  start(input: unknown, context: WorkflowContext, policy: { terminal?: boolean; strictStock?: boolean } = {}): WorkflowPreview {
     if (this.running) return { ok: false, reasons: ['A workflow is already running.'], estimatedSpend: 0, unpriced: false };
     const preview = dryRunWorkflow(input, context);
     if (!preview.ok) { this.state = 'failed'; this.reason = preview.reasons.join(' '); return preview; }
     this.spec = validateWorkflowSpec(input); this.generation = context.world.generation;
+    this.terminal = policy.terminal ?? false; this.strictStock = policy.strictStock ?? false;
     this.step = 0; this.pending = null; this.spent = 0; this.running = true; this.state = 'running'; this.reason = 'Ready.';
     return preview;
   }
@@ -382,7 +407,8 @@ export class NpcWorkflow {
     if (!this.running || !this.spec || !this.bound(context)) return null;
     if (this.pending) {
       const pending = this.pending;
-      if (pending.acknowledged && this.confirmed(pending, context)) {
+      if (this.terminal && this.step === this.spec.steps.length - 1) return null;
+      if (pending.acknowledged && confirmWorkflowReceipt(pending, context)) {
         this.spent += Math.max(0, pending.zeny - context.zeny); this.pending = null; this.step++;
         if (this.spent > this.spec.maxSpend) { this.fail('Observed spending exceeded the budget.'); return null; }
         this.reason = 'Step confirmed.';
@@ -397,6 +423,12 @@ export class NpcWorkflow {
     if (step.type !== 'talk' && context.world.npc.id !== this.spec.npcId) { this.cancel('Workflow NPC is no longer active.'); return null; }
     if (step.type === 'advance' && step.expectedText !== undefined && !context.world.npc.dialog?.text.includes(step.expectedText)) {
       this.fail('NPC dialog did not match the expected text.'); return null;
+    }
+    if (step.type === 'advance' && step.exactDialogue && (context.world.npc.dialog?.name !== step.exactDialogue.name || context.world.npc.dialog?.text !== step.exactDialogue.text)) {
+      this.fail('NPC speaker or complete dialogue changed.'); return null;
+    }
+    if (step.type === 'option' && step.expectedOptions && !step.expectedOptions.some(menu => menu.length === context.world.npc.options.length && menu.every((label,index) => label === context.world.npc.options[index]))) {
+      this.fail('Complete NPC menu changed.'); return null;
     }
     if (step.type === 'option' && context.world.npc.options[step.index] !== step.expectedLabel) {
       this.fail('NPC option label changed; workflow stopped.'); return null;
@@ -421,7 +453,7 @@ export class NpcWorkflow {
     const pending: Pending = {
       action, sentAt: this.now(), acknowledged: false, zeny: context.zeny, cost: 0, budget: 0, credit: 0,
       items: stock(context.inventory), bags: new Map(context.inventory.map(item => [item.bagId, item.count])),
-      itemChanges: new Map(), bagChanges: new Map(),
+      itemChanges: new Map(), bagChanges: new Map(), strictStock: this.strictStock,
     };
     const change = (itemId: number, count: number) => pending.itemChanges.set(itemId, (pending.itemChanges.get(itemId) ?? 0) + count);
     if (action.type === 'shop') {
@@ -450,12 +482,17 @@ export class NpcWorkflow {
     return pending;
   }
 
-  private confirmed(pending: Pending, context: WorkflowContext): boolean {
-    if (context.zeny !== pending.zeny - pending.cost + pending.credit) return false;
-    const matches = (current: number, before: number, difference: number) => current === before + difference;
-    for (const [itemId, difference] of pending.itemChanges) if (!matches(itemCount(context.inventory, itemId), pending.items.get(itemId) ?? 0, difference)) return false;
-    for (const [bagId, difference] of pending.bagChanges) if (!matches(bagCount(context.inventory, bagId), pending.bags.get(bagId) ?? 0, difference)) return false;
-    return true;
+  receipt(): WorkflowReceipt | null {
+    const p = this.pending;
+    return p ? { zeny:p.zeny, cost:p.cost, credit:p.credit, strictStock:p.strictStock,
+      items:new Map(p.items), bags:new Map(p.bags), itemChanges:new Map(p.itemChanges), bagChanges:new Map(p.bagChanges) } : null;
+  }
+  /** Only a service's verified terminal outcome can settle its final pending step. */
+  settleTerminal(context: WorkflowContext): boolean {
+    if (!this.running || !this.spec || !this.terminal || this.step !== this.spec.steps.length - 1 || !this.pending
+      || !confirmWorkflowReceipt(this.pending, context)) return false;
+    this.spent += Math.max(0, this.pending.zeny - context.zeny); this.step++;
+    this.finish('complete', 'Service outcome and resource receipt confirmed.'); return true;
   }
 
   snapshot(): WorkflowSnapshot {

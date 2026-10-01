@@ -70,14 +70,18 @@ fn control_bot(
     }
     if !matches!(
         action.as_str(),
-        "start" | "stop" | "heartbeat" | "command" | "workflow" | "routine"
+        "start" | "stop" | "heartbeat" | "command" | "workflow" | "routine" | "service"
     ) {
         return Err("Unknown bot action.".into());
     }
     if matches!(action.as_str(), "start" | "stop" | "heartbeat") && request.is_some() {
         return Err("This control does not accept an automation request.".into());
     }
-    if matches!(action.as_str(), "command" | "workflow" | "routine") && settings.is_some() {
+    if matches!(
+        action.as_str(),
+        "command" | "workflow" | "routine" | "service"
+    ) && settings.is_some()
+    {
         return Err("Use start to apply automation settings.".into());
     }
     if action == "stop" {
@@ -94,7 +98,10 @@ fn control_bot(
     let game = app
         .get_webview_window("game")
         .ok_or("Open the game first.")?;
-    let script = if matches!(action.as_str(), "command" | "workflow" | "routine") {
+    let script = if matches!(
+        action.as_str(),
+        "command" | "workflow" | "routine" | "service"
+    ) {
         control::request_script(
             &action,
             request.as_ref().ok_or("Automation request is required.")?,

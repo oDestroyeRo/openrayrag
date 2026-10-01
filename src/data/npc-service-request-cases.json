@@ -1,0 +1,2438 @@
+[
+  {
+    "name": "valid preset 0",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": true
+  },
+  {
+    "name": "valid preset 1",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 2,
+            "expectedLabel": "Teleport Service",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Please choose your destination."
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 0,
+            "expectedLabel": "Izlude",
+            "expectedOptions": [
+              [
+                "Izlude",
+                "Geffen",
+                "Payon",
+                "Morroc",
+                "Orc Dungeon",
+                "Alberta",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-izlude",
+      "name": "Prontera South · Transport to Izlude",
+      "contractId": "kafra.prontera-south.transport.izlude.v1",
+      "outcome": {
+        "type": "arrival",
+        "map": "izlude",
+        "position": {
+          "x": 91,
+          "y": 105
+        },
+        "timeoutMs": 20000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": true
+  },
+  {
+    "name": "valid preset 2",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 2,
+            "expectedLabel": "Teleport Service",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Please choose your destination."
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Geffen",
+            "expectedOptions": [
+              [
+                "Izlude",
+                "Geffen",
+                "Payon",
+                "Morroc",
+                "Orc Dungeon",
+                "Alberta",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-geffen",
+      "name": "Prontera South · Transport to Geffen",
+      "contractId": "kafra.prontera-south.transport.geffen.v1",
+      "outcome": {
+        "type": "arrival",
+        "map": "geffen",
+        "position": {
+          "x": 120,
+          "y": 39
+        },
+        "timeoutMs": 20000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": true
+  },
+  {
+    "name": "valid preset 3",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 2,
+            "expectedLabel": "Teleport Service",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Please choose your destination."
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 2,
+            "expectedLabel": "Payon",
+            "expectedOptions": [
+              [
+                "Izlude",
+                "Geffen",
+                "Payon",
+                "Morroc",
+                "Orc Dungeon",
+                "Alberta",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-payon",
+      "name": "Prontera South · Transport to Payon",
+      "contractId": "kafra.prontera-south.transport.payon.v1",
+      "outcome": {
+        "type": "arrival",
+        "map": "payon",
+        "position": {
+          "x": 161,
+          "y": 58
+        },
+        "timeoutMs": 20000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": true
+  },
+  {
+    "name": "valid preset 4",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 2,
+            "expectedLabel": "Teleport Service",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Please choose your destination."
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 3,
+            "expectedLabel": "Morroc",
+            "expectedOptions": [
+              [
+                "Izlude",
+                "Geffen",
+                "Payon",
+                "Morroc",
+                "Orc Dungeon",
+                "Alberta",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-morocc",
+      "name": "Prontera South · Transport to Morroc",
+      "contractId": "kafra.prontera-south.transport.morocc.v1",
+      "outcome": {
+        "type": "arrival",
+        "map": "morocc",
+        "position": {
+          "x": 156,
+          "y": 46
+        },
+        "timeoutMs": 20000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": true
+  },
+  {
+    "name": "valid preset 5",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 2,
+            "expectedLabel": "Teleport Service",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Please choose your destination."
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 4,
+            "expectedLabel": "Orc Dungeon",
+            "expectedOptions": [
+              [
+                "Izlude",
+                "Geffen",
+                "Payon",
+                "Morroc",
+                "Orc Dungeon",
+                "Alberta",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-gef_fild10",
+      "name": "Prontera South · Transport to Orc Dungeon",
+      "contractId": "kafra.prontera-south.transport.gef_fild10.v1",
+      "outcome": {
+        "type": "arrival",
+        "map": "gef_fild10",
+        "position": {
+          "x": 52,
+          "y": 326
+        },
+        "timeoutMs": 20000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": true
+  },
+  {
+    "name": "valid preset 6",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 2,
+            "expectedLabel": "Teleport Service",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Please choose your destination."
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 5,
+            "expectedLabel": "Alberta",
+            "expectedOptions": [
+              [
+                "Izlude",
+                "Geffen",
+                "Payon",
+                "Morroc",
+                "Orc Dungeon",
+                "Alberta",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-alberta",
+      "name": "Prontera South · Transport to Alberta",
+      "contractId": "kafra.prontera-south.transport.alberta.v1",
+      "outcome": {
+        "type": "arrival",
+        "map": "alberta",
+        "position": {
+          "x": 117,
+          "y": 56
+        },
+        "timeoutMs": 20000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": true
+  },
+  {
+    "name": "editable policy",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 2000,
+        "minStock": [
+          {
+            "itemId": 501,
+            "count": 2
+          }
+        ],
+        "timeoutMs": 20000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "custom",
+      "name": "My visit",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": true
+  },
+  {
+    "name": "runtime actor",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "npcId": 50,
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "runtime receipt",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "receipt": {},
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown contract",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "unknown",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong pin",
+    "request": {
+      "version": 1,
+      "sourcePin": "0000000000000000000000000000000000000000",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong map",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "izlude",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "battle NPC",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 4,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "identity extra",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0,
+        "id": 50
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "moved anchor",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 152,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "blocked approach",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 26,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "guessed fee",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 600
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong dialogue",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong speaker",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "filtered placeholders",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "bag transfer",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "deposit",
+            "bagId": 10,
+            "count": 1
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "fractional budget",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0.5,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "missing timeout",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": null,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Recover Old Cart Items",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "storageOpened",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown outcome",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 5,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Use Storage",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-storage",
+      "name": "Prontera South · Open storage",
+      "contractId": "kafra.prontera-south.storage.v1",
+      "outcome": {
+        "type": "dialogEnd",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong arrival",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Kafra Staff",
+        "anchor": {
+          "x": 151,
+          "y": 29
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 150,
+        "y": 28,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Welcome to the Kafra Corporation~ The Kafra Services are always here to support you. So how can I be of service today?"
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 2,
+            "expectedLabel": "Teleport Service",
+            "expectedOptions": [
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "",
+                "Cancel"
+              ],
+              [
+                "Save",
+                "Use Storage",
+                "Teleport Service",
+                "Rent Push Cart",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          },
+          {
+            "type": "advance",
+            "exactDialogue": {
+              "name": "Kafra Sorin - Kafra Employee",
+              "text": "Please choose your destination."
+            },
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 0,
+            "expectedLabel": "Izlude",
+            "expectedOptions": [
+              [
+                "Izlude",
+                "Geffen",
+                "Payon",
+                "Morroc",
+                "Orc Dungeon",
+                "Alberta",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "kafra-south-izlude",
+      "name": "Prontera South · Transport to Izlude",
+      "contractId": "kafra.prontera-south.transport.izlude.v1",
+      "outcome": {
+        "type": "arrival",
+        "map": "izlude",
+        "position": {
+          "x": 92,
+          "y": 105
+        },
+        "timeoutMs": 20000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt"
+    },
+    "valid": false
+  },
+  {
+    "name": "valid tool-dealer-buy",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prt_fild05",
+      "identity": {
+        "kind": 2,
+        "name": "Tool Dealer",
+        "anchor": {
+          "x": 290,
+          "y": 221
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 289,
+        "y": 220,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 0,
+            "expectedLabel": "Buy",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "tool-dealer-buy",
+      "name": "Prontera Field05 · Open buy shop",
+      "contractId": "trader.prt-fild05.tool-dealer.buy.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "buy",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt"
+    },
+    "valid": true
+  },
+  {
+    "name": "valid tool-dealer-sell",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prt_fild05",
+      "identity": {
+        "kind": 2,
+        "name": "Tool Dealer",
+        "anchor": {
+          "x": 290,
+          "y": 221
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 289,
+        "y": 220,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "tool-dealer-sell",
+      "name": "Prontera Field05 · Open sell shop",
+      "contractId": "trader.prt-fild05.tool-dealer.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt"
+    },
+    "valid": true
+  },
+  {
+    "name": "wrong shop mode",
+    "request": {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prt_fild05",
+      "identity": {
+        "kind": 2,
+        "name": "Tool Dealer",
+        "anchor": {
+          "x": 290,
+          "y": 221
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 289,
+        "y": 220,
+        "halfWidth": 1,
+        "halfHeight": 1,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 0,
+            "expectedLabel": "Buy",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "tool-dealer-buy",
+      "name": "Prontera Field05 · Open buy shop",
+      "contractId": "trader.prt-fild05.tool-dealer.buy.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt"
+    },
+    "valid": false
+  }
+]

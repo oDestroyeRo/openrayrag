@@ -105,6 +105,7 @@ const fieldRun = new PersistentFieldRun();
 let sessionLoginAvailable = false;
 let runGeneration = 0;
 let loginGeneration = 0;
+let pendingService: Promise<unknown> | null = null;
 let pendingResume: Promise<unknown> | null = null;
 let pendingLogin: Promise<unknown> | null = null;
 let stopping = false;
@@ -152,18 +153,27 @@ const targetRows = new Map<number, { label: HTMLLabelElement; input: HTMLInputEl
 let targetOrder = '';
 const features = new FeatureUi(document.querySelector<HTMLElement>('main')!, {
   settings, apply: applySettings, map: () => targets.map, character: () => latest?.player?.name ?? '',
-  command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request),
+  command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), service: request => featureRequest('service',request),
   notify: message, changed: () => { targets.setLevelDifference(features.levelDifference()); renderTargets(); updateButtons(); },
 });
 const configHelp = document.createElement('p'); configHelp.id = 'config-help'; configHelp.className = 'hint'; document.querySelector('.run-controls')!.append(configHelp);
 const monsterCatalog = document.createElement('datalist'); monsterCatalog.id = 'classId-catalog'; document.querySelector('main')!.append(monsterCatalog);
 
 async function featureRequest(action: string, request: unknown): Promise<unknown> {
-  if (!native || busy || stopping || loginBusy || !latest?.connected || !latest.compatible || !latest.player || runActive() || Date.now()-receivedAt >= 7000) {
+  if (!native || busy || stopping || loginBusy || !latest?.connected || !latest.compatible || !latest.player || (action==='service'?features.serviceBlocked():runActive()) || Date.now()-receivedAt >= 7000) {
     throw new Error('Stop automation and connect a verified character before sending a manual command.');
   }
   busy=true;updateButtons();
-  try { return await invoke('control_bot',{action,request}); } finally { busy=false;updateButtons(); }
+  try {
+    if(action==='service') {
+      const generation=++runGeneration;fieldRun.stop();reconnect.cancel();limitHeld=false;
+      const pending=pendingResume;if(pending)await pending.catch(()=>{});
+      if(generation!==runGeneration||stopping)throw new Error('Service request canceled by Stop.');
+      const task=invoke('control_bot',{action,request});pendingService=task;
+      try{return await task;}finally{if(pendingService===task)pendingService=null;}
+    }
+    return await invoke('control_bot',{action,request});
+  } finally { busy=false;updateButtons(); }
 }
 
 function applySettings(value: Settings): void {
@@ -219,7 +229,7 @@ function updateButtons(): void {
   element<HTMLButtonElement>('select-targets').disabled = locked || !targets.options.some(m => targets.eligible(m.classId));
   element<HTMLButtonElement>('clear-targets').disabled = locked || !targets.options.some(m => targets.checked(m.classId));
   for (const [id, row] of targetRows) row.input.disabled = locked || !targets.eligible(id) || (!targets.checked(id) && targets.ids.length >= MAX_TARGETS);
-  features.lock(busy || stopping || loginBusy || runActive(),busy || stopping || loginBusy || !ready || runActive());
+  features.lock(busy || stopping || loginBusy || runActive(),busy || stopping || loginBusy || !ready || runActive(),busy || stopping || loginBusy || !ready || features.serviceBlocked());
 }
 
 function renderTargets(): void {
@@ -364,7 +374,7 @@ stopButton.addEventListener('click', () => {
   if (stopping) return;
   const generation = ++runGeneration; ++loginGeneration;
   fieldRun.stop(); reconnect.cancel(); limitHeld = false; loginBusy = false; previousSession = undefined;
-  const pending = [pendingResume, pendingLogin, pendingLimitStop].filter((task): task is Promise<unknown> => task !== null);
+  const pending = [pendingResume, pendingLogin, pendingLimitStop, pendingService].filter((task): task is Promise<unknown> => task !== null);
   stopping = true; updateButtons();
   void (async () => {
     try {

@@ -337,16 +337,53 @@ fn validate_workflow(value: &Value) -> Validation {
                 object(value, &["type"])?;
             }
             "advance" => {
-                let step = object(value, &["type", "expectedText", "expectedCost"])?;
+                let step = object(
+                    value,
+                    &["type", "expectedText", "exactDialogue", "expectedCost"],
+                )?;
                 if let Some(expected) = step.get("expectedText") {
                     text(expected.as_str().ok_or_else(invalid)?, 1024)?;
+                }
+                if let Some(dialog) = step.get("exactDialogue") {
+                    let dialog = object(dialog, &["name", "text"])?;
+                    text(string(dialog, "name")?, 128)?;
+                    text(string(dialog, "text")?, 1024)?;
                 }
                 expected_cost(step)?;
             }
             "option" => {
-                let step = object(value, &["type", "index", "expectedLabel", "expectedCost"])?;
+                let step = object(
+                    value,
+                    &[
+                        "type",
+                        "index",
+                        "expectedLabel",
+                        "expectedOptions",
+                        "expectedCost",
+                    ],
+                )?;
                 integer(step, "index", 0, 31)?;
                 text(string(step, "expectedLabel")?, 1024)?;
+                if let Some(menus) = step.get("expectedOptions") {
+                    let menus = array(menus, 4)?;
+                    if menus.is_empty() {
+                        return Err(invalid());
+                    }
+                    for menu in menus {
+                        let labels = array(menu, 32)?;
+                        if labels.is_empty() {
+                            return Err(invalid());
+                        }
+                        for label in labels {
+                            let label = label.as_str().ok_or_else(invalid)?;
+                            if label.encode_utf16().count() > 1024
+                                || label.chars().any(|c| c <= '\u{001f}' || c == '\u{007f}')
+                            {
+                                return Err(invalid());
+                            }
+                        }
+                    }
+                }
                 expected_cost(step)?;
             }
             "buy" | "sell" => {
@@ -373,6 +410,69 @@ fn validate_workflow(value: &Value) -> Validation {
             }
             _ => return Err("Unknown workflow step.".into()),
         }
+    }
+    Ok(())
+}
+
+/// Only source-verified immutable contracts cross the native boundary.
+/// Saved drafts are validated separately in the UI and remain unavailable.
+fn validate_service(value: &Value) -> Validation {
+    let service = object(
+        value,
+        &[
+            "version",
+            "id",
+            "name",
+            "contractId",
+            "sourcePin",
+            "sourcePath",
+            "map",
+            "identity",
+            "approach",
+            "basicSkillLevel",
+            "workflow",
+            "outcome",
+        ],
+    )?;
+    integer(service, "version", 1, 1)?;
+    map_code(string(service, "id")?)?;
+    text(string(service, "name")?, 64)?;
+    text(string(service, "contractId")?, 128)?;
+    let workflow = object(
+        field(service, "workflow")?,
+        &["maxSpend", "minStock", "timeoutMs", "steps"],
+    )?;
+    let mut bound_workflow = workflow.clone();
+    bound_workflow.insert("name".into(), field(service, "name")?.clone());
+    bound_workflow.insert("map".into(), field(service, "map")?.clone());
+    bound_workflow.insert("npcId".into(), Value::from(1));
+    validate_workflow(&Value::Object(bound_workflow))?;
+    integer(workflow, "timeoutMs", 1000, 60_000)?;
+    let catalog: Value = serde_json::from_str(include_str!("../../src/data/npc-services.json"))
+        .map_err(|_| invalid())?;
+    let known = catalog["contracts"]
+        .as_array()
+        .ok_or_else(invalid)?
+        .iter()
+        .find(|known| known["contractId"] == value["contractId"])
+        .ok_or("No verified adapter for this service contract.")?;
+    for key in [
+        "version",
+        "contractId",
+        "sourcePin",
+        "sourcePath",
+        "map",
+        "identity",
+        "approach",
+        "basicSkillLevel",
+        "outcome",
+    ] {
+        if field(service, key)? != &known[key] {
+            return Err("Service differs from the verified contract.".into());
+        }
+    }
+    if field(workflow, "steps")? != &known["workflow"]["steps"] {
+        return Err("Service steps differ from the verified contract.".into());
     }
     Ok(())
 }
@@ -547,6 +647,7 @@ pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
         "command" => validate_action(request),
         "workflow" => validate_workflow(request),
         "routine" => validate_routine(request),
+        "service" => validate_service(request),
         _ => Err("Unknown bot action.".into()),
     }
 }
@@ -564,6 +665,22 @@ pub(crate) fn request_script(action: &str, request: &Value) -> Result<String, St
 mod tests {
     use super::{validate_action, validate_request};
     use serde_json::json;
+
+    #[test]
+    fn service_contract_shared_corpus() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../src/data/npc-service-request-cases.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            assert_eq!(
+                validate_request("service", &case["request"]).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+    }
 
     #[test]
     fn accepts_representative_feature_and_world_commands() {

@@ -6,6 +6,9 @@ import { ITEM_CATALOG, SKILL_CATALOG, itemName, skillName } from './game-catalog
 import { validateExpandedAction } from './protocol-feature';
 import { validateWorldAction } from './world-protocol';
 import { validateWorkflowSpec } from './workflows';
+import { NpcServiceStore } from './npc-service-store';
+import { BUILTIN_SERVICES, previewService, validateServiceRequest } from './npc-services';
+import type { Entity } from './protocol';
 import { dryRunRoutine, validateRoutineSpec, type RoutineObservation } from './routines';
 import { DEFAULT_DISPOSITION, dispositionPreviewIsCurrent, planDisposition, type DispositionPlan } from './disposition';
 import { dispositionContextFromStatus, dispositionPreviewText, dispositionStockFloors } from './disposition-ui';
@@ -14,7 +17,7 @@ type Section = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows' | 'p
 interface Hooks {
   settings(): Settings; apply(settings: Settings): void; map(): string; character(): string;
   command(action: Record<string, unknown>): Promise<unknown>;
-  workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>;
+  workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>;
   notify(text: string, error?: boolean): void; changed(): void;
 }
 type Field = { path: string; label: string; kind?: 'text' | 'checkbox'; min?: number; max?: number; options?: Array<[string,string]> };
@@ -143,7 +146,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     if (v && typeof v === 'object') return Object.keys(v).length <= 256 && Object.values(v).every(entry => bounded(entry,depth+1));
     return false;
   }
-  if (!['character','world','workflow','routine','task','actionResult','travel','escape','elapsedSeconds','deaths','lootStats','actors','loadout'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','elapsedSeconds','deaths','lootStats','actors','loadout'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
   if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
   if(value.ruleConditions!==undefined&&!bounded(value.ruleConditions,0))return false;
   const barter = object(value.world).barter;
@@ -156,14 +159,14 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
 
 export class FeatureUi {
   private readonly panels = new Map<Section, HTMLElement>(); private readonly editors = new Map<string,RuleEditor>();
-  private readonly profiles: ProfileStore; private locked = false; private manualLocked = true;
+  private readonly profiles: ProfileStore; private readonly services: NpcServiceStore; private locked = false; private manualLocked = true; private serviceLocked = true;
   private status: Record<string, unknown> = {};
   private dispositionEditor!: RuleEditor;
   private dispositionPlan: DispositionPlan | null = null;
   constructor(private readonly host: HTMLElement, private readonly hooks: Hooks) {
     let storage: Pick<Storage,'getItem'|'setItem'>;
     try { storage = localStorage; } catch { storage = {getItem:()=>null,setItem:()=>{throw new Error('Profile storage is unavailable.');}}; }
-    this.profiles = new ProfileStore(storage);
+    this.profiles = new ProfileStore(storage); this.services = new NpcServiceStore(storage);
     const combat = host.querySelector<HTMLElement>('.settings')!; combat.dataset.section = 'combat'; this.panels.set('combat',combat);
     for (const [id,title] of [['recovery','Recovery'],['travel','Travel & follow'],['inventory','Inventory & skills'],['workflows','Workflows & social'],['profiles','Profiles & features']] as Array<[Section,string]>) {
       const panel = document.createElement('section'); panel.className = 'panel settings feature-panel'; panel.dataset.section = id; panel.hidden = true;
@@ -181,7 +184,7 @@ export class FeatureUi {
     const sessionDetails=document.createElement('p');sessionDetails.id='session-details';sessionDetails.className='session-details';sessionDetails.textContent='Session time, experience and task state appear after connection.';host.querySelector('.session-card')!.append(sessionDetails);
     const footnote = combat.querySelector('.footnote')!; footnote.textContent = 'Game input yields briefly. Temporary interruptions wait and resume; Stop cancels the run. Profiles never start automation.'; actions.append(footnote);
     combat.querySelector('.routing-settings .hint')?.remove();
-    this.rules(); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.profilePanel(); this.navigation();
+    this.rules(); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.servicePanel(); this.profilePanel(); this.navigation();
     this.dispositionPanel();
     for (const [id,catalog] of [['itemId',ITEM_CATALOG],['skillId',SKILL_CATALOG]] as const) {
       const list=document.createElement('datalist');list.id=`${id}-catalog`;
@@ -297,9 +300,9 @@ export class FeatureUi {
     this.dispositionPlan=null;this.dispositionOutput().textContent='No preview generated. No items will be moved or sold.';
   }
   levelDifference(): number { return Number(this.host.querySelector<HTMLInputElement>('[data-setting="combat.levelDifference"]')!.value); }
-  private async operation(action: () => Promise<unknown>): Promise<void> {
-    if (this.manualLocked) return;
-    try { const result = await action(); this.hooks.notify(typeof result === 'string' ? result : 'Request sent. Waiting for the game to confirm.'); }
+  private async operation(action: () => Promise<unknown>, locked=this.manualLocked, request=true): Promise<void> {
+    if (locked) return;
+    try { const result = await action(); if(typeof result==='string')this.hooks.notify(result);else if(request)this.hooks.notify('Request sent. Waiting for the game to confirm.'); }
     catch (error) { this.hooks.notify(error instanceof Error ? error.message : typeof error === 'string' ? error : 'The game could not accept this request.',true); }
   }
   private manualButton(label: string, action: () => Record<string, unknown>, parent: HTMLElement): void {
@@ -380,6 +383,35 @@ export class FeatureUi {
     const dryRun=document.createElement('button');dryRun.type='button';dryRun.className='secondary compact';dryRun.textContent='Validate / dry run';dryRun.dataset.config='true';dryRun.addEventListener('click',()=>{try{const checked=validateRoutineSpec(JSON.parse(routineText.value),isAction);const trace=dryRunRoutine(checked,this.observation(),isAction);routinePreview.hidden=false;routinePreview.textContent=trace.rules.map(rule=>`${rule.name}: ${rule.state} · ${rule.reason}${rule.conditions.map(c=>'\n  '+c.state+' · '+c.reason).join('')}`).join('\n');this.hooks.notify('Routine validated. Dry run sends no commands.');}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid routine.',true);}});routineButtons.append(dryRun);
     const routineState=document.createElement('p');routineState.id='routine-state';routineState.className='telemetry-summary';routine.append(routineState);
   }
+  private servicePanel(): void {
+    const panel=this.detail('Reusable NPC services');
+    const help=document.createElement('p');help.className='hint';help.textContent='Save a named visit using a verified contract. Every visit resolves the NPC again, travels and approaches, checks complete dialogues and fees, then waits for the server outcome. Run service stops combat intent. Edited or unknown contracts remain unavailable drafts.';panel.append(help);
+    const select=document.createElement('select');select.setAttribute('aria-label','Saved service or verified preset');panel.append(select);
+    const editor=document.createElement('textarea');editor.className='routine-document';editor.rows=14;editor.maxLength=65536;editor.setAttribute('aria-label','Service definition JSON');panel.append(editor);
+    const preview=document.createElement('p');preview.className='telemetry-summary';panel.append(preview);
+    const state=document.createElement('p');state.id='service-state';state.className='telemetry-summary';state.textContent='No service running.';panel.append(state);
+    const buttons=document.createElement('div');buttons.className='button-row';panel.append(buttons);
+    const documents=document.createElement('textarea');documents.className='routine-document';documents.rows=5;documents.maxLength=256000;documents.setAttribute('aria-label','Import or export service document');
+    const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Import & export services';details.append(summary,documents);panel.append(details);
+    const refresh=(selected?:string)=>{select.replaceChildren();for(const service of BUILTIN_SERVICES){const option=document.createElement('option');option.value='preset:'+service.id;option.textContent='Preset · '+service.name;select.append(option);}for(const service of this.services.list()){const option=document.createElement('option');option.value='saved:'+service.id;option.textContent='Saved · '+service.name;select.append(option);}if(selected)select.value=selected;};
+    const show=()=>{const [kind,id]=select.value.split(':');const service=(kind==='saved'?this.services.list():BUILTIN_SERVICES).find(s=>s.id===id);if(service)editor.value=JSON.stringify(service,null,2);preview.textContent='Choose Preview to inspect this visit.';};
+    const button=(name:string,action:()=>unknown,manual=false)=>{const b=document.createElement('button');b.type='button';b.className=manual?'primary compact':'secondary compact';b.textContent=name;if(manual)b.dataset.service='true';else b.dataset.config='true';b.addEventListener('click',()=>void this.operation(async()=>action(),manual?this.serviceLocked:this.locked,manual));buttons.append(b);};
+    button('Preview',()=>{
+      const status=this.status,c=object(status.character),p=object(status.player),stats=object(c.stats);const stock:Record<string,number>={};
+      if(Array.isArray(c.inventory))for(const raw of c.inventory){const row=object(raw);if(typeof row.itemId==='number'&&typeof row.count==='number')stock[row.itemId]=(stock[row.itemId]??0)+row.count;}
+      const actors:Entity[]=Array.isArray(status.actors)?status.actors.map(object).filter(a=>typeof a.id==='number'&&typeof a.x==='number'&&typeof a.y==='number'&&typeof a.kind==='number'&&typeof a.name==='string').map(a=>({id:Number(a.id),x:Number(a.x),y:Number(a.y),kind:Number(a.kind),name:text(a.name),classId:Number(a.classId),level:Number(a.level),hp:Number(a.hp),maxHp:Number(a.maxHp),dead:a.dead===true})):[];
+      const skill=Array.isArray(c.learned)?c.learned.map(object).find(skill=>skill.skillId===1):undefined;
+      const result=previewService(JSON.parse(editor.value),{map:this.hooks.map(),player:typeof p.x==='number'&&typeof p.y==='number'?{x:p.x,y:p.y}:null,actors,inventoryKnown:c.inventoryKnown===true,zeny:number(stats.zeny),basicSkillLevel:c.skillsKnown===true?number(skill?.level)??0:null,stock});
+      preview.textContent=[result.available?'Verified contract':'Unavailable draft',result.summary,...result.reasons].filter(Boolean).join('\n');
+    });
+    button('Save / update',()=>{const existing=select.value.startsWith('saved:')?select.value.slice(6):undefined;const saved=this.services.save(JSON.parse(editor.value),existing);refresh('saved:'+saved.id);show();return 'NPC service saved on this Mac.';});
+    button('Delete saved',()=>{if(!select.value.startsWith('saved:'))throw new Error('Choose a saved service.');this.services.remove(select.value.slice(6));refresh();show();return 'Saved NPC service deleted.';});
+    button('Export saved',()=>{if(!select.value.startsWith('saved:'))throw new Error('Choose a saved service.');documents.value=this.services.export(select.value.slice(6));details.open=true;});
+    button('Import document',()=>{const imported=this.services.import(documents.value);refresh('saved:'+imported[0]!.id);show();return 'NPC services imported on this Mac.';});
+    button('Run service',()=>this.hooks.service(validateServiceRequest(JSON.parse(editor.value))),true);
+    select.addEventListener('change',show);refresh();show();
+  }
+
   private profilePanel(): void {
     const panel=this.panel('profiles');const controls=document.createElement('div');controls.className='form-grid';panel.append(controls);
     const name=this.input(controls,'profile-name','Profile name','text','');name.maxLength=48;
@@ -407,14 +439,16 @@ export class FeatureUi {
     const rows:Array<[string,string]>=[['login','Login & character selection'],['profiles','Profiles & import/export'],['combat','Combat & retaliation'],['monsterRules','Monster policies & priority'],['antiKs','Engagement ownership'],['combatMovement','Ranged combat, LOS & kiting'],['navigation','Map navigation & unstuck'],['travel','Travel & lock map'],['teleport','Teleport & escape'],['follow','Follow player'],['recovery','HP/SP & item recovery'],['death','Death & respawn'],['skills','Skills & support'],['conditionRules','Conditional rules'],['equipment','Equipment conditions'],['loot','Pickup filters & priority'],['inventory','Inventory & weight'],['storage','Storage & cart'],['shops','NPC shops'],['npc','NPC workflows'],['repair','Equipment repair'],['crafting','Crafting & exchanges'],['progression','Stat & skill allocation'],['party','Party controls'],['social','Guild, friends & chat'],['trade','Trade & vending'],['quests','Quests & achievements'],['mailBank','Mail, bank & auction'],['companions','Pets & companions'],['scheduler','Hours & session limits'],['reconnect','Reconnect backoff'],['avoidance','Map & actor avoidance'],['observability','Logs & session statistics'],['commands','Typed manual commands'],['macros','Condition routines & macros'],['plugins','Extensions & hooks'],['roTransport','RO server transport adapters'],['xkorePoseidon','XKore & Poseidon'],['gmDebug','GM, raw packets & eval']];
     for(const[id,label]of rows){const row=document.createElement('div');const name=document.createElement('span');name.textContent=label;const state=document.createElement('span');state.className='coverage-state';state.textContent=ready.has(id)?'Local implementation':partial.has(id)?'Partial implementation':unverified.has(id)?'No verified game adapter':excluded.has(id)?'Not applicable':'Not implemented';row.append(name,state);table.append(row);}
   }
-  lock(config: boolean, manual: boolean): void {
-    this.locked=config;this.manualLocked=manual;
+  lock(config: boolean, manual: boolean, service=manual): void {
+    this.locked=config;this.manualLocked=manual;this.serviceLocked=service;
     for(const input of this.host.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('[data-setting], [data-config], .feature-panel input, .feature-panel select, .feature-panel textarea, .rule-editor button')) input.disabled=config;
     for(const editor of this.editors.values())editor.lock(config);
     this.dispositionEditor.lock(config);
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-manual]'))button.disabled=manual;
+    for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-service]'))button.disabled=service;
   }
-  active(): boolean { return object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
+  serviceBlocked(): boolean { return object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
+  active(): boolean { return object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
   private observation(): RoutineObservation {
     const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:this.hooks.map(),elapsedSeconds:0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;
@@ -437,6 +471,7 @@ export class FeatureUi {
     const party=object(world.party);const invite=object(world.invite);this.host.querySelector<HTMLElement>('#party-state')!.textContent=`${party.name?`${text(party.name)} · ${Array.isArray(party.members)?party.members.map(member=>text(object(member).name)).join(', '):''}`:'No party state observed.'}${invite.partyId?'\nInvite '+text(invite.name)+' · party #'+invite.partyId+' · from '+text(invite.sender):''}`;
     this.host.querySelector<HTMLElement>('#barter-state')!.textContent=Array.isArray(world.barter)&&world.barter.length?world.barter.slice(0,30).map((entry,index)=>{const row=object(entry);return `${index}: ${itemName(number(object(row.item).itemId)??0)} · ${JSON.stringify(row.required ?? []).slice(0,300)}`;}).join('\n'):'No NPC exchange open.';
     const workflow=object(s.workflow);this.host.querySelector<HTMLElement>('#workflow-state')!.textContent=workflow.running===true?`${text(workflow.name)} · step ${number(workflow.step)??0} / ${number(workflow.total)??0} · ${text(workflow.reason)}`:text(workflow.reason)||'No workflow running.';
+    const service=object(s.service);this.host.querySelector<HTMLElement>('#service-state')!.textContent=service.active===true?`${text(service.name)} · ${text(service.state)} · ${text(service.reason)}`:text(service.reason)||'No service running.';
     const routine=object(s.routine);this.host.querySelector<HTMLElement>('#routine-state')!.textContent=text(routine.reason)||'No routine running.';
   }
 }
