@@ -1,7 +1,7 @@
 import { type Drop, type Entity, type GameEvent, type Position, type Walk } from './protocol';
 
 import { walkDuration, walkPosition } from './movement';
-import { GridNavigator, routeSegment, searchGrid, distance, type NavigationSummary, type WalkGrid } from './navigation';
+import { GridNavigator, routeSegment, searchGrid, distance, minimumRouteCost, type NavigationSummary, type WalkGrid } from './navigation';
 
 import { automationSettings, DEFAULT_SETTINGS, validateSettings, type Settings } from './settings';
 import { acceptsMonster, acceptsLoot, inSchedule, monsterRule, lootRule, effectiveSkillLevel, AutomationScheduler, type AutomationTask, type ActionResult } from './automation';
@@ -347,8 +347,13 @@ export class BotEngine {
       this.reason=this.automation.task().label;if(this.automation.recovering||this.automation.busy)return;
     }
     if(this.character.sitting===true) {if(!this.motions.has(this.playerId))this.automation.submit({type:'sit',sitting:false},this.character);return;}
+    let monsterChoice: { target: Entity; cells: Position[] } | null | undefined;
+    const chooseMonster = () => {
+      if (monsterChoice === undefined) monsterChoice = this.bestRoute(p, [...this.entities.values()].filter(e => this.eligible(e, now)), e => monsterRule(a, e.classId)?.priority ?? 0);
+      return monsterChoice;
+    };
     const needsEnemy = a.skills.some(rule => rule.target === 'enemy') || a.equipment.some(rule => rule.monsterClassId > 0);
-    const enemy=this.pending?.type==='attack'?this.entities.get(this.pending.id)??null:this.route?.type==='attack'?this.entities.get(this.route.id!)??null:needsEnemy?this.bestRoute(p,[...this.entities.values()].filter(e=>this.eligible(e,now)),e=>monsterRule(a,e.classId)?.priority??0)?.target??null:null;
+    const enemy=this.pending?.type==='attack'?this.entities.get(this.pending.id)??null:this.route?.type==='attack'?this.entities.get(this.route.id!)??null:needsEnemy?chooseMonster()?.target??null:null;
     const next=this.automation.next(a,p,this.character,enemy);
     if(next.failure) {this.stop(next.failure);return;}
     if(next.action) {
@@ -402,7 +407,7 @@ export class BotEngine {
       const choice = this.bestRoute(p, candidates, d=>lootRule(a,d.itemId)?.priority ?? 0);
       if (choice) { this.pursue('pickup', choice.target.id, cell(choice.target), choice.cells); this.routeTick(p, now); return; }
     }
-    const choice = this.bestRoute(p, [...this.entities.values()].filter(e => this.eligible(e, now)),e=>monsterRule(a,e.classId)?.priority ?? 0);
+    const choice = chooseMonster();
     if (choice) { this.pursue('attack', choice.target.id, cell(choice.target), choice.cells); this.routeTick(p, now); }
     else if (a.follow.name) { this.followTick(p,now); }
     else if (a.travel.waypoints.length) { this.waypointTick(p,now); }
@@ -433,11 +438,15 @@ export class BotEngine {
   }
   private bestRoute<T extends Position & { id: number }>(from: Position, candidates: T[], priority: (target: T) => number = () => 0): { target: T; cells: Position[] } | null {
     let best: { target: T; cells: Position[]; cost: number; priority: number } | null = null;
+    const origin = cell(from);
     for (const target of candidates) {
+      const rank = priority(target);
+      // Iterate in original order: later equal-cost candidates never replace the
+      // current winner. The bound omits walls and cannot overstate route cost.
+      if (best && (rank < best.priority || (rank === best.priority && minimumRouteCost(origin, cell(target), 1) >= best.cost))) continue;
       const cells = this.plan(from, target, 1);
       if (!cells) continue;
       const cost = cells.reduce((sum, p, i) => sum + (i ? (p.x !== cells[i - 1]!.x && p.y !== cells[i - 1]!.y ? 14 : 10) : 0), 0);
-      const rank = priority(target);
       if (!best || rank > best.priority || (rank === best.priority && cost < best.cost)) best = { target, cells, cost, priority: rank };
     }
     return best;

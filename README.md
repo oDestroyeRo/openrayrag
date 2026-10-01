@@ -65,6 +65,8 @@ The travel graph contains **1,360 directed fixed portal edges** from the pinned 
 
 Target acquisition matches monster class IDs to live entity IDs. It plans a reachable melee approach and skips targets observed being attacked by another actor. Along a verified clear walking corridor, it sends the normal monster Attack request immediately so the server approaches and attacks. Walls, diagonal corners and portal exclusions fall back to collision-aware routing. This walking check does not claim projectile line of sight. Current-map exploration samples goals within the character's connected area; it is not exhaustive coverage or a guarantee that a monster will spawn. Server cooldowns, actual movement and pickup eligibility remain authoritative.
 
+Acquisition skips route searches that cannot improve the current target's priority and distance, while preserving equal-cost ties. Unchanged route results are reused. Nearby obstructed approaches first receive a bounded reachability check, so a monster across a long wall can be rejected without searching the entire map. Collision, temporary failed cells and your approach limits still apply.
+
 Own-kill loot is the default. It considers new drops near a confirmed defeated monster for 30 seconds. This proximity/time policy is not proof of server ownership; the server enforces loot priority. **All available drops** is an explicit broader policy. Item rules can ignore or prioritize individual IDs. The bundled catalog provides **2,579 items, 221 skills and 13 skill trees**, with source hashes and build identity.
 
 A route is followed in straight segments, with at most one movement leg outstanding. The protocol has no movement request IDs, so changing targets waits for the accepted leg to finish. Every returned route is checked against collision and the applicable portal policy. Timed positions follow the server's accepted movement; sent walk destinations do not become confirmed positions. Temporary failed endpoints affect avoidance, never the physical grid.
@@ -107,6 +109,16 @@ npm run app:build
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml keychain_round_trip -- --ignored
 ```
+
+Compare route work and local decision time against the version before the targeting optimization:
+
+```sh
+node scripts/benchmark-routing.mjs 9f7ee0e
+```
+
+The benchmark compares the engine/navigation revisions with identical deterministic fixtures and shared dependencies, excluding map setup. It checks matching outcomes and reports searches, cell checks and median local timings. Published Field 8 acquisition and synthetic wall/detour cases are separate from live game or network latency.
+
+**2026-10-02 routing optimization:** `npm run check` passed 721 TypeScript tests and 25 Rust tests, plus build, typechecking and Clippy. Independent review passed 8,509 exact baseline comparisons. Native ARM64 packaging and strict ad-hoc signature verification passed. A fresh session-only sign-in, character selection and saved-profile application led to a 40-second Field 8 run with 3 defeats and 4 confirmed pickups; Stop returned the app to ready. One Keychain integration test remains intentionally ignored. Search scratch retains up to 6 MiB per navigator, and reachable obstructed queries can perform extra bounded preflight work.
 
 **2026-10-02 expanded release:** `npm run check` passed 708 TypeScript tests and 25 Rust tests, plus frontend/bridge build, typechecking and Clippy. Formatting, native ARM64 packaging and strict ad-hoc signature verification passed; one Keychain integration test remained intentionally ignored. Independent reviews covered protocol, world workflows, native credentials, controller ownership and route equivalence. Native checks confirmed session-only login/character selection, six settings sections, inventory/skill/SP telemetry, Field 7 combat and pickup, Stop, death waiting, manual respawn to Field 8 and automatic sitting recovery followed by resumed combat (2 defeats and 7 pickups in Field 8). A placeholder-SP overwrite found during this check was fixed and the corrected login displayed authoritative SP. Further source-backed fixes preserve negative support-skill delays and wait for the actual character-selection controls; three consecutive fresh native sign-ins and character selections succeeded after those corrections. The final direct-target build confirmed one Lunatic defeat and two pickups, then Stop returned idle. Network reconnect, live economy/party/vending/point spending and traversal of every map remain synthetic/source proof rather than live validation. No remote CI is configured.
 
