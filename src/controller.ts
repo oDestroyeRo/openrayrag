@@ -195,6 +195,7 @@ export class CompanionController {
     if (escapeGuard) validateEscapeResumeGuard(escapeGuard);
     if (this.active || this.engine.pendingFeatureAction)
       throw new Error('Stop the current automation or manual action before requesting a new run.');
+    this.engine.acknowledgeLoadoutOverride();
     this.requestedSettings = settings; this.runInitialized = false; this.characterName = this.engine.player?.name ?? null; this.featureReceipt = null;
     this.started = this.now(); this.lastTick = this.now(); this.retryAt = 0; this.retries = 0;
     this.blockedReason = ''; this.waitingReason = 'Preparing the requested run.';

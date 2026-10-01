@@ -12,7 +12,9 @@ export interface EscapeSettings {
   minStock: number; cooldownSeconds: number;
 }
 export const DEFAULT_ESCAPE: EscapeSettings = { enabled: false, hpBelowPercent: 20, mode: 'random', method: 'item', minStock: 0, cooldownSeconds: 60 };
+export interface LoadoutSettings { enabled: boolean; autoAmmo: boolean; minAmmoStock: number; ammoPreferences: Array<{itemId:number}>; restore: 'conditionEnd' | 'never'; cooldownSeconds: number }
 export interface AutomationSettings {
+  loadout: LoadoutSettings;
   combat: { mode: 'off' | 'selected' | 'retaliate' | 'both'; levelDifference: number; rules: MonsterRule[] };
   loot: { ownership: 'own' | 'all'; defaultAction: 'pickup' | 'ignore'; rules: LootRule[] };
   recovery: { enabled: boolean; hpStart: number; hpEnd: number; spStart: number; spEnd: number; timeoutSeconds: number };
@@ -34,7 +36,9 @@ export interface Settings {
   route_randomWalk_maxRouteTime: number; attackRouteMaxPathDistance: number; attackMaxRouteTime: number;
   automation?: AutomationSettings;
 }
+export const DEFAULT_LOADOUT: LoadoutSettings = { enabled:false, autoAmmo:true, minAmmoStock:0, ammoPreferences:[], restore:'conditionEnd', cooldownSeconds:3 };
 export const DEFAULT_AUTOMATION: AutomationSettings = {
+  loadout: DEFAULT_LOADOUT,
   combat: { mode: 'selected', levelDifference: 1, rules: [] },
   loot: { ownership: 'own', defaultAction: 'pickup', rules: [] },
   recovery: { enabled: false, hpStart: 60, hpEnd: 85, spStart: 10, spEnd: 80, timeoutSeconds: 300 },
@@ -62,12 +66,15 @@ export function automationSettings(settings: Settings): AutomationSettings { ret
 export function escapeSettings(settings: Settings): EscapeSettings { return automationSettings(settings).escape ?? DEFAULT_ESCAPE; }
 export function validateAutomation(a: AutomationSettings): AutomationSettings {
   try {
-    strictKeys(a,['combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition']);
+    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition']);
     const escape = a.escape === undefined ? DEFAULT_ESCAPE : a.escape;
     strictKeys(escape,['enabled','hpBelowPercent','mode','method','minStock','cooldownSeconds']);
     if (typeof escape.enabled !== 'boolean' || !bounded(escape.hpBelowPercent,1,95) || !['random','save'].includes(escape.mode)
       || !['item','skill'].includes(escape.method) || !bounded(escape.minStock,0,9999) || !bounded(escape.cooldownSeconds,1,3600)) throw new Error();
     if (Object.hasOwn(a,'disposition')) validateDispositionPolicy(a.disposition);
+    if (a.loadout === undefined) a = {...a,loadout:structuredClone(DEFAULT_LOADOUT)};
+    strictKeys(a.loadout,['enabled','autoAmmo','minAmmoStock','ammoPreferences','restore','cooldownSeconds']);
+    for(const r of a.loadout.ammoPreferences) strictKeys(r,['itemId']);
     strictKeys(a.combat,['mode','levelDifference','rules']); strictKeys(a.loot,['ownership','defaultAction','rules']);
     strictKeys(a.recovery,['enabled','hpStart','hpEnd','spStart','spEnd','timeoutSeconds']); strictKeys(a.allocation,['stats','skills']);
     strictKeys(a.follow,['name','distance','lostSeconds']); strictKeys(a.travel,['destinationMap','returnToLockMap','waypoints','loop']);
@@ -78,7 +85,10 @@ export function validateAutomation(a: AutomationSettings): AutomationSettings {
     for(const r of a.equipment) strictKeys(r,['itemId','hpBelowPercent','monsterClassId']);
     for(const r of a.allocation.stats) strictKeys(r,['stat','target']); for(const r of a.allocation.skills) strictKeys(r,['skillId','target']);
     for(const r of a.travel.waypoints) strictKeys(r,['map','x','y']);
-    if (!['off','selected','retaliate','both'].includes(a.combat.mode) || !bounded(a.combat.levelDifference,-100,100)
+    if (typeof a.loadout.enabled !== 'boolean' || typeof a.loadout.autoAmmo !== 'boolean'
+      || !bounded(a.loadout.minAmmoStock,0,9999) || !bounded(a.loadout.cooldownSeconds,1,3600)
+      || !['conditionEnd','never'].includes(a.loadout.restore) || !list(a.loadout.ammoPreferences,40,r=>id(r.itemId),r=>r.itemId)
+      || !['off','selected','retaliate','both'].includes(a.combat.mode) || !bounded(a.combat.levelDifference,-100,100)
       || !list(a.combat.rules,64,r=>id(r.classId)&&['attack','ignore'].includes(r.action)&&bounded(r.priority,-100,100),r=>r.classId)
       || !['own','all'].includes(a.loot.ownership) || !['pickup','ignore'].includes(a.loot.defaultAction)
       || !list(a.loot.rules,128,r=>id(r.itemId)&&['pickup','ignore'].includes(r.action)&&bounded(r.priority,-100,100),r=>r.itemId)

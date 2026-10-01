@@ -72,6 +72,8 @@ impl Settings {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AutomationSettings {
+    #[serde(default)]
+    loadout: LoadoutSettings,
     combat: Combat,
     loot: Loot,
     recovery: Recovery,
@@ -217,6 +219,51 @@ impl EscapeResumeGuard {
             Ok(())
         } else {
             Err("Invalid escape resume guard.".into())
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LoadoutSettings {
+    enabled: bool,
+    auto_ammo: bool,
+    min_ammo_stock: u16,
+    ammo_preferences: Vec<AmmoPreference>,
+    restore: RestorePolicy,
+    cooldown_seconds: u16,
+}
+impl Default for LoadoutSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auto_ammo: true,
+            min_ammo_stock: 0,
+            ammo_preferences: vec![],
+            restore: RestorePolicy::ConditionEnd,
+            cooldown_seconds: 3,
+        }
+    }
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AmmoPreference {
+    item_id: u32,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum RestorePolicy {
+    ConditionEnd,
+    Never,
+}
+impl<'de> Deserialize<'de> for RestorePolicy {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "conditionEnd" => Ok(Self::ConditionEnd),
+            "never" => Ok(Self::Never),
+            _ => Err(serde::de::Error::custom(
+                "Invalid loadout restoration policy.",
+            )),
         }
     }
 }
@@ -470,6 +517,15 @@ impl AutomationSettings {
                     && r.sp_above_percent <= 100
                     && (1..=3600).contains(&r.cooldown_seconds)
             })
+            && self.loadout.min_ammo_stock <= 9999
+            && (1..=3600).contains(&self.loadout.cooldown_seconds)
+            && self.loadout.ammo_preferences.len() <= 40
+            && unique_by(&self.loadout.ammo_preferences, |r| r.item_id)
+            && self
+                .loadout
+                .ammo_preferences
+                .iter()
+                .all(|r| positive_id(r.item_id))
             && self.equipment.len() <= 32
             && unique_by(&self.equipment, |r| r.item_id)
             && self.equipment.iter().all(|r| {
@@ -542,6 +598,7 @@ mod tests {
             "combat": {"mode": "selected", "levelDifference": 1, "rules": []},
             "loot": {"ownership": "own", "defaultAction": "pickup", "rules": []},
             "recovery": {"enabled": false, "hpStart": 60, "hpEnd": 85, "spStart": 10, "spEnd": 80, "timeoutSeconds": 300},
+            "loadout": {"enabled":false,"autoAmmo":true,"minAmmoStock":0,"ammoPreferences":[],"restore":"conditionEnd","cooldownSeconds":3},
             "items": [], "skills": [], "equipment": [],
             "allocation": {"stats": [], "skills": []},
             "follow": {"name": "", "distance": 4, "lostSeconds": 10},
@@ -695,6 +752,55 @@ mod tests {
             json!({"cooldownSeconds":1,"latched":true,"opcode":21}),
         ] {
             assert!(serde_json::from_value::<EscapeResumeGuard>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn migrates_old_loadouts_and_preserves_opt_in_preferences() {
+        let mut value = settings();
+        value["automation"] = automation();
+        value["automation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("loadout");
+        let parsed: Settings = serde_json::from_value(value).unwrap();
+        assert!(parsed.validate().is_ok());
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["automation"]["loadout"],
+            automation()["loadout"]
+        );
+        let mut current = settings();
+        current["automation"] = automation();
+        current["automation"]["loadout"]["enabled"] = json!(true);
+        current["automation"]["loadout"]["ammoPreferences"] =
+            json!([{ "itemId":1751 },{ "itemId":1750 }]);
+        let parsed: Settings = serde_json::from_value(current.clone()).unwrap();
+        assert!(parsed.validate().is_ok());
+        assert_eq!(serde_json::to_value(parsed).unwrap(), current);
+    }
+    #[test]
+    fn rejects_invalid_loadout_bounds_and_unknown_owned_state() {
+        for (field, bad) in [
+            ("minAmmoStock", json!(10000)),
+            ("cooldownSeconds", json!(0)),
+            ("restore", json!("always")),
+            ("restore", json!({"conditionEnd":null})),
+            ("restore", json!({"never":null})),
+            ("enabled", json!("yes")),
+            ("prior", json!({"guid":"excluded"})),
+            (
+                "ammoPreferences",
+                json!([{ "itemId":1750 },{ "itemId":1750 }]),
+            ),
+            (
+                "ammoPreferences",
+                json!([{ "itemId":1750,"guid":"excluded" }]),
+            ),
+        ] {
+            let mut value = settings();
+            value["automation"] = automation();
+            value["automation"]["loadout"][field] = bad;
+            assert!(!valid(value));
         }
     }
 

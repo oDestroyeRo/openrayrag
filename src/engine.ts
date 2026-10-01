@@ -9,6 +9,7 @@ import { CharacterState, type CharacterSnapshot, type StatefulEntity } from './c
 import { validateExpandedAction, type ExpandedAction, type FeatureEvent } from './protocol-feature';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost, skillPrerequisites } from './game-catalog';
 import { normalAttackProfile } from './combat';
+import { AMMO_CATALOG, LoadoutPolicy, type LoadoutSnapshot } from './loadout';
 export { MAX_TARGETS, DEFAULT_SETTINGS, DEFAULT_AUTOMATION, validateSettings, validateAutomation } from './settings';
 export type { Settings, AutomationSettings } from './settings';
 
@@ -21,7 +22,7 @@ export interface Snapshot {
   connected: boolean; compatible: boolean; running: boolean; reason: string;
   map: string; player: Entity | null; monsters: Entity[]; drops: Drop[];
   attacks: number; kills: number; looted: number; target: string; log: LogEntry[]; navigation: NavigationStatus | null;
-  character: CharacterSnapshot; actors: Entity[]; task: AutomationTask; elapsedSeconds: number; deaths: number; runIntent: boolean; lootStats: Array<{itemId:number;count:number}>; actionResult: ActionResult;
+  loadout: LoadoutSnapshot; character: CharacterSnapshot; actors: Entity[]; task: AutomationTask; elapsedSeconds: number; deaths: number; runIntent: boolean; lootStats: Array<{itemId:number;count:number}>; actionResult: ActionResult;
 }
 export type Action = { type: 'attack' | 'pickup'; id: number } | { type: 'stop' } | { type: 'walk'; destination: Position } | ExpandedAction;
 const ACTION_DELAY = 100;
@@ -65,6 +66,7 @@ export class BotEngine {
   runIntent = false;
   readonly character = new CharacterState();
   private readonly automation: AutomationScheduler;
+  private readonly loadout: LoadoutPolicy;
   private stoppedAt = 0;
   private excluded = new Map<number, number>();
   private lastAction = 0;
@@ -76,7 +78,7 @@ export class BotEngine {
   private dropCreatedAt = new Map<number, number>();
 
   constructor(private readonly send: (action: Action) => void, private readonly now = Date.now,
-    private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) { this.automation = new AutomationScheduler(a=>this.send(a),this.now); }
+    private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) { this.automation = new AutomationScheduler(a=>this.send(a),this.now); this.loadout=new LoadoutPolicy(this.now); }
   private navigation(): GridNavigator | null {
     if (this.navigationMap !== this.map) {
       const grid = this.gridFor(this.map);
@@ -108,9 +110,11 @@ export class BotEngine {
   fail(reason: string): void { this.stop(reason); this.compatible = false; }
   stop(reason = 'Stopped by you.'): void {
     const wasRunning = this.running;
+    const reserveStop = automationSettings(this.settings).loadout.enabled && this.loadout.requestStop(reason);
+    this.loadout.cancel();
     const pendingSkill = this.automation.pendingAction?.type === 'skill';
     this.running = false; this.runIntent = false; this.automation.reset(); this.stoppedAt = this.now(); this.pending = null; this.route = null; this.leg = null; this.reason = reason;
-    if ((wasRunning || pendingSkill) && this.connected) {
+    if ((wasRunning || pendingSkill || reserveStop) && this.connected) {
       try { this.send({ type: 'stop' }); }
       catch { this.connected = false; this.compatible = false; this.reason = 'Connection lost while stopping.'; }
     }
@@ -118,8 +122,9 @@ export class BotEngine {
   }
   start(settings: Settings, continuing = false): void {
     const validated = validateSettings(settings);
+    if(!continuing)this.acknowledgeLoadoutOverride();
     const p = this.player;
-    if(this.automation.busy||this.awaitsImplicitWalk())throw new Error('Wait for the current action and movement to finish.');
+    if(this.automation.busy||this.awaitsImplicitWalk()||this.loadout.startBlocked)throw new Error('Wait for the current action and movement to finish.');
     if (!inSchedule(automationSettings(validated),this.now())) throw new Error('Outside the configured daily schedule.');
     if (!this.connected || !this.compatible || !p || p.kind !== 0 || !this.map) throw new Error('Enter a character in the verified game build first.');
     if (validated.map !== this.map) throw new Error('Map changed. Choose monsters on the current map before starting.');
@@ -130,7 +135,7 @@ export class BotEngine {
     if (!navigation) throw new Error(`Verified walkability is not available for ${this.map}.`);
     if (!navigation.safe(p)) throw new Error('Move onto open ground away from portals before starting.');
     this.route = null; this.leg = null; this.routeFailures = 0; this.routeStep = validated.route_step;
-    this.settings = validated; this.automation.reset();
+    this.settings = validated; this.automation.reset(); this.loadout.newRun();
     this.pending = null; this.excluded.clear();
     this.killedAt = []; this.dropCreatedAt.clear(); this.skillKills.clear(); this.skillTargets.clear(); this.lootAfter = 0;
     this.deaths=0; this.runIntent = true; this.followLostAt = null; this.waypointIndex = 0; this.runKills = this.kills; this.runPickups = this.looted;
@@ -143,6 +148,7 @@ export class BotEngine {
     for (const event of events) this.apply(event);
   }
   private resetWorld(preserveCharacter=false): void {
+    this.loadout.reset(preserveCharacter);
     if(!preserveCharacter)this.respawnRefreshPending=false;
     if(preserveCharacter)this.character.resetField();else {this.character.reset();this.automation.reset(true);this.runIntent=false;} this.implicitWalk = null; this.motions.clear(); this.navigator = null; this.navigationMap = ''; this.route = null; this.leg = null; this.routeFailures = 0;
     this.entities.clear(); this.actors.clear(); this.aggressors.clear(); this.drops.clear(); this.foreignTargets.clear(); this.excluded.clear();
@@ -169,6 +175,7 @@ export class BotEngine {
   private apply(e: GameEvent | FeatureEvent): void {
     if (!['enter','map','spawn','remove','clear','stop','position','tracking','walk','attack','hit','death','resurrection','heal','drop','pickup'].includes(e.type)) {
       this.character.apply(e as FeatureEvent,this.playerId);
+      const loadoutFailure=this.loadout.observe(e as FeatureEvent,this.character,automationSettings(this.settings).loadout.enabled);
       const pendingSkill = this.automation.pendingAction;
       const result = this.automation.observe(e as FeatureEvent,this.character,this.playerId);
       if (result.confirmed && this.running && e.type === 'skillResult' && e.mode === 'target'
@@ -186,7 +193,12 @@ export class BotEngine {
         } else if (e.type === 'skillImpact' && this.skillTargets.get(e.target)?.skillId === e.skillId
           && this.skillTargets.get(e.target)!.until >= this.now()) this.skillKills.set(e.target, this.now() + 30_000);
       }
+      if(result.confirmed&&pendingSkill?.type==='equip')this.loadout.confirmed(this.character);
+      if(loadoutFailure&&this.running&&automationSettings(this.settings).loadout.enabled)this.stop(loadoutFailure);
       if (result.failure) this.stop(result.failure);
+      if(this.running&&automationSettings(this.settings).loadout.enabled&&['inventory','inventoryDelta','equipment'].includes(e.type)&&this.pending?.type==='attack'){
+        const failure=this.player?this.loadout.attackGuard(automationSettings(this.settings),this.player,this.character):null;if(failure){this.loadout.stockFault(failure,this.character);this.stop(failure);}
+      }
     }
     switch (e.type) {
       case 'enter':
@@ -312,7 +324,7 @@ export class BotEngine {
   }
   tick(): void {
     const now = this.now();
-    this.advanceMovement();
+    this.advanceMovement(); this.loadout.tick();
     const manualSkill = !this.running && this.automation.pendingAction?.type === 'skill';
     const actionTimeout = this.automation.timeout();
     if (actionTimeout) { if (manualSkill && this.connected) this.send({ type: 'stop' }); this.stop(actionTimeout); return; }
@@ -352,14 +364,32 @@ export class BotEngine {
       if (monsterChoice === undefined) monsterChoice = this.bestRoute(p, [...this.entities.values()].filter(e => this.eligible(e, now)), e => monsterRule(a, e.classId)?.priority ?? 0, true);
       return monsterChoice;
     };
-    const needsEnemy = a.skills.some(rule => rule.target === 'enemy') || a.equipment.some(rule => rule.monsterClassId > 0);
+    const needsEnemy = a.loadout.enabled || a.skills.some(rule => rule.target === 'enemy') || a.equipment.some(rule => rule.monsterClassId > 0);
     const enemy=this.pending?.type==='attack'?this.entities.get(this.pending.id)??null:this.route?.type==='attack'?this.entities.get(this.route.id!)??null:needsEnemy?chooseMonster()?.target??null:null;
-    const next=this.automation.next(a,p,this.character,enemy);
+    const next=this.automation.next(a.loadout.enabled?{...a,equipment:[]}:a,p,this.character,enemy);
     if(next.failure) {this.stop(next.failure);return;}
     if(next.action) {
       if(this.pending||this.route||this.leg) {this.pending=null;const stoppingLeg=!!this.leg;this.cancelRoute();if(!stoppingLeg)this.send({type:'stop'});this.lastAction=now;return;}
       if(this.motions.has(this.playerId)||now-this.lastAction<ACTION_DELAY)return;
       this.automation.submit(next.action,this.character);this.reason=this.automation.task().label;return;
+    }
+    if(a.loadout.enabled) {
+      if(this.loadout.blocked){this.reason=this.loadout.snapshot(a,this.character).reason;return;}
+      const planned=this.loadout.next(a,p,this.character,enemy);
+      if(planned.failure){this.stop(planned.failure);return;}
+      if(planned.change){
+        if(this.pending||this.route||this.leg||this.loadout.needsStop){
+          if(this.leg?.acceptedUntil===null)this.implicitWalk??={targetId:this.pending?.id??0,until:now+4000};
+          this.pending=null;this.route=null;this.leg=null;
+          this.loadout.requestStop('Waiting for target clear before changing equipment.');
+          this.send({type:'stop'});this.lastAction=now;return;
+        }
+        if(this.motions.has(this.playerId)||now-this.lastAction<ACTION_DELAY)return;
+        this.loadout.begin(planned.change,this.character);
+        this.automation.submit(planned.change.action,this.character,state=>this.loadout.receipt(state));
+        this.reason=this.automation.task().label;return;
+      }
+      if(enemy){const guard=this.loadout.attackGuard(a,p,this.character);if(guard){this.stop(guard);return;}}
     }
     if (this.pending) {
       const target = this.entities.get(this.pending.id);
@@ -467,6 +497,7 @@ export class BotEngine {
   private act(type: 'attack' | 'pickup', id: number, direct = false): void {
     const approachStarted = this.route?.since ?? this.now();
     this.route = null; this.leg = null;
+    if(type==='attack'&&this.player){const failure=this.loadout.attackGuard(automationSettings(this.settings),this.player,this.character);if(failure){this.stop(failure);return;}if(automationSettings(this.settings).loadout.enabled)this.loadout.attackDispatched();}
     this.send({ type, id }); this.lastAction = this.now();
     this.pending = { type, id, since: this.now(), progress: this.now(), approachSince: direct ? approachStarted : null, direct,
       ...(type === 'attack' ? { attackRange: normalAttackProfile(this.character).range } : {}) };
@@ -584,18 +615,19 @@ export class BotEngine {
     this.reason='Returned to the lock map; resumed the requested run.';this.note(this.reason);
   }
   private onDeath(): void {
-    this.implicitWalk = null;
+    this.implicitWalk = null; this.loadout.reset(true);
     this.deaths++;
     const a=automationSettings(this.settings);
     if(this.running&&a.respawn.enabled&&this.deaths<=a.respawn.maxDeaths) {
       this.pending=null;this.route=null;this.leg=null;this.automation.reset();this.reason='Character died; automatic respawn is enabled.';this.note(this.reason);
     } else this.stop(a.respawn.enabled?'Death limit reached. Recover manually before restarting.':'Character died. Recover manually before restarting.');
   }
+  acknowledgeLoadoutOverride():void {this.loadout.acknowledgeOverride();}
   get pendingFeatureAction(): ExpandedAction | null { return this.automation.pendingAction; }
   /** Emergency escape may preempt walking/combat, but never an unresolved resource or cast. */
-  get featureActionsSettled(): boolean { return !this.automation.busy; }
+  get featureActionsSettled(): boolean { return !this.automation.busy && this.loadout.equipmentSettled; }
   get actionResult(): ActionResult { return {...this.automation.result}; }
-  idleForActions(): boolean { this.advanceMovement(); return !this.running&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.motions.has(this.playerId); }
+  idleForActions(): boolean { this.advanceMovement(); return !this.running&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.motions.has(this.playerId)&&!this.loadout.blocked; }
   manualAction(action: ExpandedAction): void {
     action=validateExpandedAction(action);
     if(!this.idleForActions())throw new Error('Stop automation and wait for movement and action confirmation first.');
@@ -610,7 +642,7 @@ export class BotEngine {
       if(action.target&&!this.entities.has(action.target)&&!this.actors.has(action.target))throw new Error('Item target is not visible.');
       if(item.useType===2&&!action.target)throw new Error('This item requires a target.');
     }
-    if(action.type==='equip') {const item=this.character.inventory.get(action.bagId),info=item?ITEM_CATALOG[item.itemId]:undefined;if(!this.character.inventoryKnown||!item||!info||![2,3,4].includes(info.itemClass)||!info.position)throw new Error('Equipment is not present in a verified inventory.');}
+    if(action.type==='equip') {const item=this.character.inventory.get(action.bagId),info=item?ITEM_CATALOG[item.itemId]:undefined;if(!this.character.inventoryKnown||!item||!info||![2,3,4].includes(info.itemClass)||(!info.position&&!AMMO_CATALOG[item!.itemId]))throw new Error('Equipment is not present in a verified inventory.');}
     if(action.type==='allocateSkill') {
       const skill=SKILL_CATALOG[action.skillId],requirements=skillPrerequisites(p.classId,action.skillId),learned=this.character.learned.get(action.skillId)??0;
       if(!this.character.skillsKnown||!this.character.stats?.skillPoints||!skill||learned>=skill.maxLevel||requirements===null||requirements.some(r=>(this.character.learned.get(r.skillId)??0)<r.level))throw new Error('Skill points, class prerequisites and a learnable skill are required.');
@@ -638,6 +670,7 @@ export class BotEngine {
           throw new Error('Move next to the skill target on verified open ground first.');
       }
     }
+    this.loadout.acknowledgeOverride();
     this.automation.submit(action,this.character);this.reason=this.automation.task().label;
   }
   private followTick(p: Entity, now: number): void {
@@ -676,7 +709,7 @@ export class BotEngine {
       monsters: [...this.entities.values()].filter(e => e.kind === 1).slice(0,150),
       drops: [...this.drops.values()].slice(0,150), attacks: this.attacks, kills: this.kills,
       looted: this.looted, target: this.pending?.type === 'attack' ? this.entities.get(this.pending.id)?.name ?? '' : this.route?.type === 'attack' ? this.entities.get(this.route.id!)?.name ?? '' : '',
-      log: this.log.slice(), navigation, character:this.character.snapshot(), actors:[...this.actors.values()].slice(0,100),
+      log: this.log.slice(), navigation, loadout:this.loadout.snapshot(automationSettings(this.settings),this.character), character:this.character.snapshot(), actors:[...this.actors.values()].slice(0,100),
       task:this.automation.busy||this.automation.recovering?this.automation.task():{kind:this.pending?.type??this.route?.type??'idle',label:this.reason,pending:!!this.pending||!!this.leg,since:this.pending?.since??this.route?.since??null},
       elapsedSeconds:this.runStarted?Math.max(0,Math.floor(((this.running?this.now():this.stoppedAt)-this.runStarted)/1000)):0,deaths:this.deaths,runIntent:this.runIntent,lootStats:[...this.lootStats].slice(0,128).map(([itemId,count])=>({itemId,count})),actionResult:{...this.automation.result},
     };

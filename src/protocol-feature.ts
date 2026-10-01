@@ -3,8 +3,9 @@ import type { Position } from './protocol';
 
 // Source: Rebuild pin 4099e2c000c3c550516760b9c1241595aac9aceb.
 export const FEATURE_OP = {
+  changeTarget: 33,
   sit: 14, skill: 29, skillImpact: 30, skillFailure: 31, featureError: 32, experience: 34, sp: 39,
-  currency: 40, respawn: 41, requestFailure: 42, targeted: 43, useItem: 47,
+  serverEvent: 91, currency: 40, respawn: 41, requestFailure: 42, targeted: 43, useItem: 47,
   equipment: 48, inventoryDelta: 50, stats: 56, learnedSkill: 57,
   allocateStats: 58, status: 61, removeStatus: 62, grantedSkills: 98, maskedSkill: 104,
 } as const;
@@ -29,6 +30,8 @@ export interface SkillResult {
   result?: number; hits?: number; damageSeconds?: number; indirect?: boolean;
 }
 export type FeatureEvent =
+  | { type:'serverEvent'; event:number; value:number; text:string }
+  | { type: 'changeTarget'; id: number }
   | ({ type: 'stats' } & PlayerStats)
   | { type: 'sp'; sp: number; maxSp: number }
   | { type: 'sit'; id: number; sitting: boolean }
@@ -172,6 +175,7 @@ function readSkillResult(r: BitReader): SkillResult {
 function parseFeatures(data: Uint8Array): FeatureEvent[] | null {
   const r = new BitReader(data); const opcode = r.u8(); let events: FeatureEvent[];
   switch (opcode) {
+    case FEATURE_OP.changeTarget: events=[{type:'changeTarget',id:bounded(r.i32(),0,0x7fffffff,'current target')}];break;
     case FEATURE_OP.stats: return readStats(r, data.length === 145);
     case FEATURE_OP.sit: events = [{ type: 'sit', id: positive(r.i32()), sitting: r.bool() }]; break;
     case FEATURE_OP.sp: { const sp = r.i32(); const maxSp = r.i32(); health(sp, maxSp, 'SP'); events = [{ type: 'sp', sp, maxSp }]; break; }
@@ -193,6 +197,7 @@ function parseFeatures(data: Uint8Array): FeatureEvent[] | null {
     case FEATURE_OP.equipment: events = [{ type: 'equipment', bagId: positive(r.i32(), 'bag ID'), slot: bounded(r.u8(), 0, 13, 'equipment slot'), equipped: r.bool() }]; break;
     case FEATURE_OP.targeted: events = [{ type: 'targeted', id: positive(r.i32()) }]; break;
     case FEATURE_OP.experience: events = [{ type: 'experience', baseTotal: resource(r.i32(), 'experience'), baseGained: r.i32(), jobTotal: resource(r.i32(), 'job experience'), jobGained: r.i32() }]; break;
+    case FEATURE_OP.serverEvent: { const event=r.u8(),value=r.i32(),text=r.string(); events=[{type:'serverEvent',event,value,text}]; break; }
     case FEATURE_OP.currency: events = [{ type: 'currency', zeny: resource(r.i32(), 'zeny') }]; break;
     case FEATURE_OP.skill: return [readSkillResult(r)];
     case FEATURE_OP.skillImpact: {

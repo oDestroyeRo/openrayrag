@@ -3,6 +3,8 @@ import { validFeatureStatus } from './feature-ui';
 describe('extended controller telemetry',()=>{
   it('accepts bounded character and workflow state without requiring unavailable fields',()=>{
     expect(validFeatureStatus({})).toBe(true);
+    expect(validFeatureStatus({loadout:{state:'holding',reason:'Waiting for target clear.',stock:3}})).toBe(true);
+    expect(validFeatureStatus({loadout:{stock:Infinity}})).toBe(false);
     expect(validFeatureStatus({character:{inventoryKnown:true,inventory:[{bagId:1,itemId:501,count:3}],stats:{sp:20,maxSp:30}},workflow:{running:false,reason:'Stopped'}})).toBe(true);
   });
   it('rejects non-finite values, oversized arrays, long strings and deep trees',()=>{

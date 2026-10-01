@@ -3,6 +3,7 @@ import type { InventoryItem } from './protocol-feature';
 import { WorldState } from './world-state';
 import type { ShopEntry } from './world-protocol';
 import type { AutomationSettings } from './settings';
+import { AMMO_CATALOG } from './loadout';
 import { type DispositionContext, type DispositionItemInfo, type DispositionPlan } from './disposition';
 
 const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
@@ -37,11 +38,14 @@ export function publishedDispositionMetadata(): Readonly<Record<string, Disposit
   }));
 }
 const metadata = publishedDispositionMetadata();
+const compatibleAmmoIds = Object.entries(AMMO_CATALOG).filter(([, info]) => info.ammoType === 0).map(([id]) => Number(id));
 
 export function dispositionStockFloors(settings: AutomationSettings): { itemId: number; count: number }[] {
   const floors = settings.items.map(row => ({ itemId: row.itemId, count: row.minStock }));
   const escape = settings.escape;
   if (escape?.enabled && escape.method === 'item') floors.push({ itemId: escape.mode === 'random' ? 601 : 602, count: escape.minStock });
+  if (settings.loadout.enabled && settings.loadout.minAmmoStock > 0)
+    floors.push(...compatibleAmmoIds.map(itemId => ({ itemId, count: settings.loadout.minAmmoStock })));
   return floors;
 }
 
@@ -75,6 +79,7 @@ export function dispositionContextFromStatus(status: Record<string, unknown>): D
   const ready = status.connected === true && status.compatible === true && number(player.id) !== null && player.dead === false;
   const idle = status.running === false && status.runRequested !== true && object(status.task).pending === false
     && object(status.escape).pending !== true
+    && !['switching', 'restoring', 'holding', 'fault'].includes(String(object(status.loadout).state))
     && object(status.actionResult).status !== 'pending' && object(status.workflow).running !== true
     && !['running', 'waiting'].includes(String(object(status.routine).state))
     && (!Array.isArray(object(status.navigation).leg) || (object(status.navigation).leg as unknown[]).length === 0);

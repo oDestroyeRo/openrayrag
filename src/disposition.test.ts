@@ -48,6 +48,22 @@ describe('disposition policy boundaries', () => {
   });
 });
 describe('protected and deterministic disposition plans', () => {
+  it('preserves each compatible arrow reserve when loadout policy is enabled', () => {
+    const settings = structuredClone(DEFAULT_AUTOMATION);
+    settings.loadout.enabled = true; settings.loadout.minAmmoStock = 5;
+    const ctx = context(); setItems(ctx, 'inventory', [stack(1750, 20)]);
+    ctx.minimumStock = dispositionStockFloors(settings);
+    expect(ctx.minimumStock).toContainEqual({ itemId: 1750, count: 5 });
+    expect(ctx.minimumStock).toContainEqual({ itemId: 1751, count: 5 });
+    expect(ctx.minimumStock.some(row => row.itemId === 13200)).toBe(false);
+    const configured = policy({ itemId: 1750, keep: 0, minimum: 0, desired: 0, maximum: 0, sell: true });
+    const plan = planDisposition(configured, ctx);
+    expect(plan.actions).toMatchObject([{ itemId: 1750, count: 15 }]);
+    settings.loadout.minAmmoStock = 10; ctx.minimumStock = dispositionStockFloors(settings);
+    expect(dispositionPreviewIsCurrent(plan, configured, ctx)).toBe(false);
+    expect(planDisposition(configured, ctx).actions[0]?.count).toBe(10);
+    settings.loadout.enabled = false; expect(dispositionStockFloors(settings)).toEqual([]);
+  });
   it.each(['random', 'save'] as const)('retains the selected %s escape wing reserve and invalidates changed protection', mode => {
     const itemId = mode === 'random' ? 601 : 602;
     const settings = structuredClone(DEFAULT_AUTOMATION);
@@ -206,6 +222,9 @@ describe('revision-bound preview and future execution boundary', () => {
     expect(pendingEscape.workflow.idle).toBe(false);
     expect(planDisposition(policy({ itemId: 512, sell: true }), pendingEscape).actions).toEqual([]);
     expect(revalidateDisposition(result, policy({ itemId: 512, sell: true }), pendingEscape).ok).toBe(false);
+    const pendingLoadout = dispositionContextFromStatus({ ...status, loadout: { state: 'fault' } });
+    expect(pendingLoadout.workflow.idle).toBe(false);
+    expect(planDisposition(policy({ itemId: 512, sell: true }), pendingLoadout).actions).toEqual([]);
   });
   it('retains omitted unique identity/cards and disconnected telemetry as unknown', () => {
     const ctx = dispositionContextFromStatus({}); expect(ctx.containers.inventory.items).toBeNull(); expect(ctx.equipment).toBeNull(); expect(ctx.workflow.alive).toBe(false);

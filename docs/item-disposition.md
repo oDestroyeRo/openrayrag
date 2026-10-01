@@ -12,6 +12,8 @@ that quantity before any excess can move. Recovery-item `minStock` and the selec
 wing reserve for enabled item-based emergency escape take
 precedence when higher than the disposition maximum. An overlap is reported as
 an unmet excess target rather than consuming protected stock.
+Enabled loadout policy also preserves its configured reserve for every verified
+compatible arrow stack, including unselected alternatives.
 
 Restocking starts only below minimum and uses the explicitly chosen source:
 observed storage, observed cart, or the currently open buy shop. Excess uses
