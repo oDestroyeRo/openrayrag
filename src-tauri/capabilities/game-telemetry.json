@@ -1,0 +1,8 @@
+{
+  "identifier": "game-telemetry",
+  "description": "The fixed game window can report status and claim one explicitly queued login. It cannot read saved Keychain credentials or access the filesystem or shell.",
+  "windows": ["game"],
+  "local": false,
+  "remote": { "urls": ["https://websea01.rayrag.com/"] },
+  "permissions": ["allow-bridge-status", "allow-take-pending-login", "allow-cancel-pending-login"]
+}

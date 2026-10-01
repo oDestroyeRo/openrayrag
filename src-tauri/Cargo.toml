@@ -1,0 +1,23 @@
+[package]
+name = "rayrag-companion"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "rayrag_companion_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+security-framework = "=3.7.0"
+
+# Avoid malformed Mach-O proc macros from Rust 1.98's --strip-debug on macOS.
+# This affects build dependencies only, not the final application binary.
+[profile.release.build-override]
+strip = "none"
