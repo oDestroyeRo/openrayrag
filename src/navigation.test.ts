@@ -301,3 +301,30 @@ it('excludes hidden and conditional NPC touch warps omitted from ordinary Warp d
     expect(new GridNavigator(grid).tileState(point)).toBe('portal');
   }
 });
+
+it('verifies unobstructed straight walking corridors without confusing them with detours', () => {
+  const clear = new GridNavigator(openGrid(8, 8), []);
+  for (const to of [{ x: 6, y: 1 }, { x: 6, y: 6 }, { x: 6, y: 3 }, { x: 1, y: 1 }]) {
+    expect(clear.clearWalkCorridor({ x: 1, y: 1 }, to)).toBe(true);
+  }
+  const blocked = new GridNavigator(openGrid(8, 8, p => p.x === 3 && p.y === 1), []);
+  expect(blocked.clearWalkCorridor({ x: 1, y: 1 }, { x: 6, y: 1 })).toBe(false);
+  expect(blocked.plan({ x: 1, y: 1 }, { x: 6, y: 1 })).not.toBeNull();
+  for (const to of [{ x: -1, y: 1 }, { x: 8, y: 1 }, { x: 1.5, y: 1 }]) {
+    expect(clear.clearWalkCorridor({ x: 1, y: 1 }, to)).toBe(false);
+  }
+});
+
+it('rejects straight-corridor diagonal corner cuts, portals and temporary failed cells', () => {
+  const corner = new GridNavigator(openGrid(8, 8, p => p.x === 2 && p.y === 1), []);
+  expect(corner.clearWalkCorridor({ x: 1, y: 1 }, { x: 5, y: 5 })).toBe(false);
+  expect(corner.plan({ x: 1, y: 1 }, { x: 5, y: 5 })).not.toBeNull();
+  const portal = new GridNavigator(openGrid(8, 8), [{ x: 3, y: 1, halfWidth: 0, halfHeight: 0 }]);
+  expect(portal.clearWalkCorridor({ x: 1, y: 1 }, { x: 6, y: 1 })).toBe(false);
+  expect(portal.clearWalkCorridor({ x: 1, y: 1 }, { x: 3, y: 1 })).toBe(false);
+  const temporary = new GridNavigator(openGrid(8, 8), []);
+  temporary.time(1000); temporary.temporaryBlocked({ x: 3, y: 1 }, 2000);
+  expect(temporary.clearWalkCorridor({ x: 1, y: 1 }, { x: 6, y: 1 })).toBe(false);
+  temporary.time(2000);
+  expect(temporary.clearWalkCorridor({ x: 1, y: 1 }, { x: 6, y: 1 })).toBe(true);
+});
