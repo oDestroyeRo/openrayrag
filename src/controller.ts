@@ -13,6 +13,12 @@ import { searchGrid, type WalkGrid } from './navigation';
 import type { InventoryItem } from './protocol-feature';
 import { NpcServiceRuntime, validateServiceRequest, observeServiceReceipt, confirmServiceReceipt, type ServiceContext, type ServiceReceipt, type ServiceSnapshot } from './npc-services';
 import { ITEM_CATALOG } from './game-catalog';
+import { SupplyTripRuntime, validateSupplyResumeGuard, type SupplyContext, type SupplyIntent, type SupplySnapshot, type SupplyResumeGuard } from './supply-trip';
+import { nextSupplyAction, type SupplyPhaseEvidence } from './supply-plan';
+import { createSupplyReceipt, observeSupplyReceipt, confirmSupplyReceipt, type SupplyReceipt } from './supply-receipt';
+import { dispositionStockFloors, publishedDispositionMetadata } from './disposition-ui';
+import { serviceByContractId,resolveServiceNpc } from './npc-services';
+import type { WorkflowReceipt } from './workflows';
 import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type EscapeSnapshot, type EscapeResumeGuard } from './escape';
 
 
@@ -20,7 +26,7 @@ export type ControllerAction = ExpandedAction | WorldAction;
 export interface CompanionSnapshot extends Snapshot {
   runRequested: boolean; state: 'running' | 'waiting' | 'idle';
   world: WorldSnapshot; workflow: WorkflowSnapshot; routine: RoutineSnapshot; travel: TravelSnapshot; service: ServiceSnapshot;
-  escape: EscapeSnapshot;
+  escape: EscapeSnapshot; supply: SupplySnapshot; supplyGuard?: SupplyResumeGuard;
 }
 function expanded(value: unknown): value is ExpandedAction {
   try { validateExpandedAction(value); return true; } catch { return false; }
@@ -46,6 +52,13 @@ export class CompanionController {
   readonly travel: TravelController;
   readonly escape: EmergencyEscape;
   readonly service: NpcServiceRuntime;
+  readonly supply: SupplyTripRuntime<SupplyReceipt>;
+  private supplyIntent: SupplyIntent | null = null;
+  private supplyReceipt: SupplyReceipt | null = null;
+  private supplyInventoryRevision=0; private supplyCurrencyRevision=0;
+  private supplyInventoryFresh=false; private supplyCurrencyFresh=false;
+  private supplyCloseSent=false; private supplyReturnApproach=false;private supplyServiceStarted=false;private supplyServiceContract:string|null=null;private supplyStorageFull:SupplyPhaseEvidence['storageFull']=null;private sendingSupply=false;
+  private readonly dispositionMetadata=publishedDispositionMetadata();
   private pending: Pending | null = null;
   private lastFrame = 0;
   private lastTick = 0;
@@ -76,14 +89,19 @@ export class CompanionController {
   private unresolvedWorld: Pending | null = null;
   private workflowOutstanding: Pending | null = null;
 
-  constructor(private readonly send: (action: Action | WorldAction) => void, private readonly now = Date.now,
+  constructor(private readonly transport: (action: Action | WorldAction) => void, private readonly now = Date.now,
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) {
-    this.engine = new BotEngine(send, now, gridFor);
+    this.engine = new BotEngine(action=>this.send(action), now, gridFor);
     this.workflow = new NpcWorkflow(now);
     this.routine = new RoutineRuntime(validControllerAction, now, { actionTimeoutSeconds: actionConfirmationTimeout({ type: 'skill' }) / 1000 });
-    this.travel = new TravelController(send, now, gridFor);
+    this.travel = new TravelController(action=>this.send(action), now, gridFor);
     this.service = new NpcServiceRuntime(this.travel, now, gridFor);
     this.escape = new EmergencyEscape(now);
+    this.supply = new SupplyTripRuntime({next:(context,goals,policy)=>nextSupplyAction(context,goals,policy,this.requestedSettings?.automation?.supply!,{storageFull:this.supplyStorageFull}),confirm:confirmSupplyReceipt},now);
+  }
+  private send(action:Action|WorldAction):void {
+    if(action.type!=='stop'&&this.sendingSupply&&this.supply?.ownsField&&!this.supply.commandAllowed())throw new Error('Supply command allowance exhausted.');
+    this.transport(action);
   }
   get runRequested(): boolean { return this.requestedSettings !== null; }
   get connectionGeneration(): number { return this.connectionEpoch; }
@@ -94,12 +112,14 @@ export class CompanionController {
   get active(): boolean { return this.runRequested || this.executing; }
   connect(compatible: boolean): void {
     this.escape.connectionChanged();
+    this.supply.interrupt('Supply trip interrupted by reconnect.'); this.supplyInventoryFresh=false; this.supplyCurrencyFresh=false;
     this.connectionEpoch++; this.cancelOwners('Connection changed.'); this.fencedUntil = 0; this.unresolvedWorld = null;
     this.world.reset(); this.engine.connect(compatible); this.lastFrame = this.now();
     this.waitingReason = this.engine.reason; this.retryAt = 0;
   }
   disconnect(): void {
     this.escape.connectionChanged();
+    this.supply.interrupt('Supply trip interrupted by disconnect.');this.supplyInventoryFresh=false;this.supplyCurrencyFresh=false;
     this.connectionEpoch++;
     try { this.pause('Waiting for the game to reconnect.'); }
     finally { this.world.reset(); this.engine.disconnect(); this.waitingReason = 'Waiting for the game to reconnect.'; }
@@ -127,6 +147,7 @@ export class CompanionController {
     } else if (!state.running) this.retireWorld(null);
   }
   private cancelOwners(reason: string): void {
+    this.supplyStorageFull=null;
     this.retireWorld();
     this.generation++; this.pending = null; this.routine.cancel(reason); this.workflow.cancel(reason); this.service.cancel(reason);
     this.travel.cancel(reason); this.travelSettings = null;
@@ -134,12 +155,14 @@ export class CompanionController {
     this.respawnRefresh = false;
   }
   stop(reason = 'Stopped by you.'): void {
+    this.supply.stop(reason);this.supplyIntent=null;
     this.requestedSettings = null; this.blockedReason = ''; this.waitingReason = '';
     this.yieldUntil = 0; this.retryAt = 0; this.retries = 0;
     this.pause(reason);
   }
   /** Retain the requested field run while yielding ownership of commands. */
   pause(reason: string, durationMs = 0): void {
+    this.supply.interrupt(reason);this.supplyIntent=null;
     const externalActive = this.service.active || this.travel.active || this.workflow.snapshot().running || !!this.pending || this.escape.sent;
     const engineStops = this.engine.running || this.engine.pendingFeatureAction?.type === 'skill';
     this.escape.cancel(reason);
@@ -197,19 +220,24 @@ export class CompanionController {
   }
   private requireIdle(): void {
     this.requireReady();
-    if (this.active || this.escape.busy || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
+    if (this.active || this.escape.busy || this.supply.uncertain || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
   }
-  start(input: Settings, escapeGuard?: EscapeResumeGuard): void {
+  start(input: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard): void {
     const settings = validateSettings(input);
     if (escapeGuard) validateEscapeResumeGuard(escapeGuard);
+    const context=this.supplyContext();
+    if(supplyGuard){supplyGuard=validateSupplyResumeGuard(supplyGuard);if(supplyGuard.character!==context.character)throw new Error('Supply resume state belongs to a different character.');}
+    if(this.supply.uncertain)throw new Error('Waiting for the previous supply transaction to reconcile.');
     if (this.active || this.engine.pendingFeatureAction)
       throw new Error('Stop the current automation or manual action before requesting a new run.');
+    this.supply.configure(settings,context,supplyGuard);
     this.engine.acknowledgeLoadoutOverride();
     this.requestedSettings = settings; this.runInitialized = false; this.characterName = this.engine.player?.name ?? null; this.featureReceipt = null;
     this.started = this.now(); this.lastTick = this.now(); this.retryAt = 0; this.retries = 0;
     this.blockedReason = ''; this.waitingReason = 'Preparing the requested run.';
     this.seenActionKey = `${this.engine.actionResult.sequence}:${this.engine.actionResult.status}`;
     this.runKills = this.engine.kills; this.runPickups = this.engine.looted;
+    this.supplyStorageFull=null;this.supplyIntent=null;this.supplyCloseSent=false;this.supplyReturnApproach=false;
     if (escapeGuard) this.escape.restoreOnReconnect(settings, escapeGuard, this.escapeContext());
     this.tick();
   }
@@ -232,7 +260,7 @@ export class CompanionController {
       const definition = validateServiceRequest(input); this.requireReady();
       if (this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
         || ['running','waiting'].includes(this.routine.snapshot().state) || this.unresolvedWorld || this.now() < this.fencedUntil
-        || this.engine.pendingFeatureAction || this.featureReceipt)
+        || this.engine.pendingFeatureAction || this.featureReceipt || this.supply.uncertain)
         throw new Error('Wait for the current transaction or unresolved escape/action before running a service.');
       // Explicit service visits replace field intent; they never install a supply-trip policy.
       this.requestedSettings = null; this.returnSettings = null; this.returning = false; this.travelSettings = null;
@@ -314,6 +342,10 @@ export class CompanionController {
     if (connectionGeneration !== this.connectionEpoch) return;
     // Decode both owners before applying either so malformed packets cannot leak partial state.
     const events = decode(data); const worldEvents = decodeWorld(data) ?? [];
+    for(const event of events){
+      if(event.type==='inventory'||event.type==='inventoryDelta'){this.supplyInventoryRevision++;this.supplyInventoryFresh=true;}
+      if(event.type==='currency'||event.type==='stats'&&event.zeny!==undefined){this.supplyCurrencyRevision++;this.supplyCurrencyFresh=true;}
+    }
     this.captureActionFailure();
     const respawning = this.engine.snapshot().task.kind === 'respawn' && this.engine.actionResult.status === 'pending';
     this.lastFrame = this.now();
@@ -346,7 +378,12 @@ export class CompanionController {
       this.world.apply(event, this.engine.playerId);
       if (event.type === 'cartMoved') this.engine.character.applyCartWeights(event.cartWeight, event.currentWeight);
     }
+    if(this.supplyReceipt)observeSupplyReceipt(this.supplyReceipt,worldEvents,this.supplyContext());
+    this.supply.observe(this.supplyContext());
     this.service.observe(events, worldEvents, this.serviceContext());
+    if(this.supply.ownsField&&events.some(event=>event.type==='map'||event.type==='clear')&&!this.service.active&&!this.travel.active){
+      this.supplyStorageFull=null;this.supply.interrupt('Unexpected world transition interrupted the supply trip.');
+    }
     this.workflow.observe(worldEvents, this.context()); this.syncWorkflowOwner();
     if (this.pending) this.observeCart(this.pending, worldEvents);
     if (this.unresolvedWorld) {
@@ -373,7 +410,7 @@ export class CompanionController {
         : this.pending.cart ? this.cartConfirmed(this.pending) : this.worldConfirmed(this.pending.action, worldEvents)))
       this.completePending(true, 'Game response confirmed.');
     if (events.some(event => event.type === 'death' && event.id === this.engine.playerId)) {
-      this.retireWorld();
+      this.supplyStorageFull=null;this.retireWorld();
       this.generation++; this.workflow.cancel('Character died.'); this.routine.cancel('Character died.'); this.pending = null;
     }
     this.captureActionFailure();
@@ -422,6 +459,115 @@ export class CompanionController {
       }
     });
   }
+  private supplyContext():SupplyContext {
+    const c=this.engine.character,p=this.engine.player,w=this.context();
+    const noOwner=!this.pending&&!this.workflow.snapshot().running&&!this.service.active&&!this.travel.active&&!this.unresolvedWorld&&!this.featureReceipt&&this.now()>=this.fencedUntil;
+    const settled=this.engine.idleForActions()&&noOwner;
+    return {character:p?.name??this.characterName??'',epoch:String(this.connectionEpoch),map:this.engine.map,position:p?{x:Math.floor(p.x),y:Math.floor(p.y)}:null,
+      connected:this.engine.connected&&this.engine.compatible,alive:!!p&&!p.dead,loading:this.travel.active&&this.travel.snapshot().state==='transition',fresh:this.now()-this.lastFrame<=15000&&this.supplyInventoryFresh&&this.supplyCurrencyFresh,
+      settled,canPrepare:noOwner&&this.engine.featureActionsSettled,fieldRequested:this.runRequested,inventoryRevision:this.supplyInventoryRevision,currencyRevision:this.supplyCurrencyRevision,
+      economicUncertain:!!this.unresolvedWorld||!!this.featureReceipt,
+      disposition:{revision:`${this.connectionEpoch}:${this.world.generation}:${this.world.revision}:${c.inventoryRevision}:${c.statsRevision}:${c.equipmentRevision}`,
+        containers:{inventory:{items:c.inventoryKnown?[...c.inventory.values()]:null,slots:200,weight:c.stats?.weight??null,maxWeight:c.stats?.maxWeight??null},
+          storage:{items:this.world.storageReady?[...this.world.storage.values()]:null,slots:600,weight:null,maxWeight:'unlimited'},
+          cart:{items:this.world.cartReady?[...this.world.cart.values()]:null,slots:100,weight:c.stats?.cartWeight??null,maxWeight:80000}},
+        equipment:c.inventoryKnown?[...c.equipment]:null,ammoId:c.inventoryKnown?c.ammoId:null,metadata:this.dispositionMetadata,
+        minimumStock:this.requestedSettings?dispositionStockFloors(automationSettings(this.requestedSettings)):[],workflow:{...w,idle:this.engine.idleForActions()}}};
+  }
+  private supplyFailure(reason:string):void {
+    this.supplyStorageFull=null;
+    this.supply.interrupt(reason);this.supplyIntent=null;
+    this.service.cancel(reason);this.workflow.cancel(reason);this.travel.cancel(reason);this.engine.stop(reason);
+    this.waitingReason=reason;
+  }
+  /** Internal ownership handoff preserves the field intent and counters. */
+  private supplyTick():boolean {
+    const context=this.supplyContext();this.supply.observe(context);
+    if(!this.supply.uncertain)this.supplyReceipt=null;
+    if(this.supplyIntent?.type==='action'&&!this.supply.uncertain&&this.supply.snapshot().state==='closing'){this.supplyIntent=null;this.workflow.cancel('Supply transaction confirmed.');}
+    if(this.supplyIntent&&!this.supply.accepts(this.supplyIntent.id)){
+      this.supplyFailure(this.supply.snapshot().reason);return this.supply.ownsField||this.supply.uncertain;
+    }
+    this.sendingSupply=true;
+    try{
+      if(this.world.storageReady)this.supplyStorageFull=this.world.storage.size>=600?{character:context.character,epoch:context.epoch,revision:context.disposition.revision}:null;
+      const player=this.engine.player;
+      if(this.supply.ownsField&&player&&!player.dead&&(!player.maxHp||player.hp/player.maxHp*100<=this.requestedSettings!.minHpPercent)){
+        this.supplyFailure('Supply interrupted for HP recovery; check stock and the return destination before restarting.');return true;
+      }
+      let intent=this.supplyIntent;
+      if(!intent){intent=this.supply.resumeIntent(context)??this.supply.next(context);this.supplyIntent=intent;this.supplyCloseSent=false;this.supplyReturnApproach=false;this.supplyServiceStarted=false;}
+      if(!intent){if(this.supply.ownsField||this.supply.uncertain){this.waitingReason=this.supply.snapshot().reason;return true;}return false;}
+      if(intent.type==='prepare'){
+        this.supplyStorageFull=null;this.engine.stop('Preparing the bounded supply trip.');this.supply.acknowledge(intent.id,'confirmed',this.supplyContext());this.supplyIntent=null;return true;
+      }
+      if(intent.type==='service'){
+        const state=this.service.snapshot();
+        if(this.supplyServiceStarted&&state.state==='complete'){
+          this.supplyServiceContract=intent.contractId;this.supply.acknowledge(intent.id,'confirmed',this.supplyContext(),state.spent);this.supplyIntent=null;return true;
+        }
+        if(!this.supplyServiceStarted){
+          const definition=serviceByContractId(intent.contractId);if(!definition)throw new Error('Verified supply service is unavailable.');
+          this.service.start(definition,this.serviceContext());this.supplyServiceStarted=true;
+        }
+        const action=this.service.tick(this.serviceContext());if(action)this.send(action);
+        if(['failed','cancelled'].includes(this.service.snapshot().state))throw new Error(this.service.snapshot().reason);
+        return true;
+      }
+      if(intent.type==='action'){
+        if(this.supply.uncertain)return true;
+        const action=intent.action.command;
+        // Recompute immediately before creating a workflow or transport receipt.
+        const next=nextSupplyAction(context,this.supply.snapshot().goals,{...this.requestedSettings!.automation!.disposition!,maxSpend:Math.min(this.requestedSettings!.automation!.disposition!.maxSpend,Math.max(0,this.requestedSettings!.automation!.supply!.maxSpend-this.supply.snapshot().reserved+intent.action.reservedSpend)),
+          rules:this.requestedSettings!.automation!.disposition!.rules.map(rule=>{const goal=this.supply.snapshot().goals.find(goal=>goal.itemId===rule.itemId);return goal?{...rule,minimum:goal.desired,desired:goal.desired}:rule;})},this.requestedSettings!.automation!.supply!,{storageFull:this.supplyStorageFull});
+        if(next.type!=='action'||JSON.stringify(next.action)!==JSON.stringify(intent.action))throw new Error('Supply stock, price or prerequisites changed before dispatch.');
+        let economic:WorkflowReceipt;
+        if(action.type==='cart'){
+          const source=(action.direction===1?this.engine.character.inventory:this.world.cart).get(action.bagId);if(!source)throw new Error('Supply source bag changed.');
+          const w=this.context();const items=new Map<number,number>();for(const row of w.inventory)items.set(row.itemId,(items.get(row.itemId)??0)+row.count);
+          economic={zeny:w.zeny,cost:0,credit:0,items,bags:new Map(w.inventory.map(item=>[item.bagId,item.count])),itemChanges:new Map([[source.itemId,(action.direction===1?-1:1)*action.count]]),bagChanges:new Map(action.direction===1?[[action.bagId,-action.count]]:[]),strictStock:false};
+        }else{
+          const definition=this.supplyServiceContract?serviceByContractId(this.supplyServiceContract):null;
+          const resolved=definition?resolveServiceNpc(definition,context.map,[...this.engine.actors.values()]):null;
+          if(!resolved||resolved.state!=='resolved'||resolved.actor.id!==this.world.npc.id)throw new Error('The supply NPC is missing, ambiguous or changed before dispatch.');
+          const step=this.resourceStep(action);if(!step||this.world.npc.id===null)throw new Error('Supply transaction requires a confirmed NPC.');
+          const result=this.workflow.start({name:'Bounded supply transaction',map:context.map,npcId:this.world.npc.id,maxSpend:intent.action.reservedSpend,
+            minStock:context.disposition.minimumStock??[],steps:[step]},this.context());
+          if(!result.ok)throw new Error(result.reasons.join(' '));
+          const created=this.workflow.tick(this.context());if(!created||JSON.stringify(created)!==JSON.stringify(action))throw new Error('Supply workflow did not create the revalidated action.');
+          economic=this.workflow.receipt()!;
+        }
+        this.supplyReceipt=createSupplyReceipt(intent.action,economic,context);this.supply.attachReceipt(intent.id,this.supplyReceipt,context);
+        // Reservation and receipt ownership precede the sole sender, including throw.
+        if(!this.supply.commandAllowed())throw new Error('Supply command allowance exhausted before dispatch.');
+        this.supply.markSent(intent.id);this.transport(action);return true;
+      }
+      if(intent.type==='close'){
+        if(this.world.npc.id===null&&this.world.npc.mode==='idle'){
+          this.workflow.cancel('Supply batch completed.');this.supply.acknowledge(intent.id,'confirmed',this.supplyContext());this.supplyIntent=null;return true;
+        }
+        if(!this.supplyCloseSent){
+          const action:WorldAction=this.world.npc.mode==='storage'?{type:'storage',operation:'close'}:this.world.npc.mode==='shop'?{type:'shop',mode:this.world.shop!.mode,rows:[]}: (()=>{throw new Error('Supply cannot safely close the changed NPC interaction.');})();
+          this.supplyCloseSent=true;this.send(action);
+        }
+        return true;
+      }
+      if(intent.type==='return'){
+        const p=this.engine.player;
+        if(this.travel.active){this.travel.tick(this.engine.map,p);if(this.travel.snapshot().state==='failed')throw new Error(this.travel.snapshot().reason);return true;}
+        if(this.travel.snapshot().state==='failed')throw new Error(this.travel.snapshot().reason);
+        if(!p)throw new Error('Return character is unavailable.');
+        if(this.engine.map!==intent.map){this.travel.start(this.engine.map,p,intent.map,this.requestedSettings!.route_step,this.requestedSettings!.route_avoidWalls);return true;}
+        if(Math.floor(p.x)!==intent.position.x||Math.floor(p.y)!==intent.position.y){
+          if(this.supplyReturnApproach)throw new Error('Supply return did not reach the captured work cell.');
+          this.supplyReturnApproach=true;this.travel.startApproach(intent.map,p,intent.position,this.requestedSettings!.route_step);return true;
+        }
+        this.supply.acknowledge(intent.id,'confirmed',this.supplyContext());if(this.supply.snapshot().state==='complete')this.supplyIntent=null;return true;
+      }
+      this.supply.acknowledge(intent.id,'confirmed',context);this.supplyIntent=null;
+      this.engine.resumeRequested({...intent.settings,map:context.map});this.runInitialized=true;this.waitingReason='';return true;
+    }catch(error){this.supplyFailure(error instanceof Error?error.message:'Supply stage failed without confirmation.');return true;}finally{this.sendingSupply=false;}
+  }
   private observation(): RoutineObservation {
     const p = this.engine.player; const c = this.engine.character;
     const inventory: Record<number, number> = {};
@@ -439,8 +585,8 @@ export class CompanionController {
     if (this.engine.running || this.travel.active) this.pause(reason);
   }
   private escapeContext(): EscapeContext {
-    const blocker = this.blockedReason || (this.featureReceipt ? 'Waiting for the previous resource action to settle.' : '')
-      || (this.service.active || this.pending || this.workflow.snapshot().running || this.unresolvedWorld || ['running','waiting'].includes(this.routine.snapshot().state)
+    const blocker = (this.supply.uncertain ? 'Waiting for the exact supply transaction receipt before escape.' : '') || this.blockedReason || (this.featureReceipt ? 'Waiting for the previous resource action to settle.' : '')
+      || (this.service.active&&!['travel','approach'].includes(this.service.snapshot().state) || this.pending || this.workflow.snapshot().running || this.unresolvedWorld || ['running','waiting'].includes(this.routine.snapshot().state)
         ? 'Waiting for the current action owner before emergency escape.' : '')
       || (this.now() < this.fencedUntil || !this.engine.featureActionsSettled ? 'Waiting for the previous action and cast to settle.' : '')
       || (this.world.npc.mode !== 'idle' || this.world.npc.id !== null || this.world.vending ? 'Finish the NPC or vending interaction before escape.' : '')
@@ -473,7 +619,7 @@ export class CompanionController {
   }
   private resumeRun(): void {
     const settings = this.requestedSettings;
-    if (!settings || this.engine.running || this.travel.active || this.pending || this.workflow.snapshot().running
+    if (!settings || this.supply.ownsField || this.supply.uncertain || this.engine.running || this.travel.active || this.pending || this.workflow.snapshot().running
       || ['running','waiting'].includes(this.routine.snapshot().state)) return;
     const now = this.now(); const policy = automationSettings(settings); const player = this.engine.player;
     if (this.escape.blocked) { this.waitingReason = this.escape.snapshot().reason; return; }
@@ -559,6 +705,7 @@ export class CompanionController {
     // Escape owns its own receipt rather than the scheduler's cost-only ACK.
     // It must run while a requested field run is already waiting below its HP floor.
     if (this.escapeTick()) return;
+    if(this.supplyTick())return;
     const wasRunning = this.engine.running;
     this.engine.tick(); this.captureActionFailure();
     if (this.runRequested && wasRunning && !this.engine.running && !this.engine.player?.dead
@@ -630,7 +777,8 @@ export class CompanionController {
   snapshot(): CompanionSnapshot {
     const snapshot = this.engine.snapshot();
     const workflow = this.workflow.snapshot(); const routine = this.routine.snapshot(); const travel = this.travel.snapshot(); const service = this.service.snapshot();
-    if (service.active) snapshot.reason = service.reason;
+    if(this.supply.ownsField||this.supply.uncertain)snapshot.reason=this.supply.snapshot().reason;
+    else if (service.active) snapshot.reason = service.reason;
     else if (this.travel.active || travel.state === 'complete' && this.travelSettings) snapshot.reason = travel.reason;
     else if (workflow.running) snapshot.reason = workflow.reason;
     else if (routine.state === 'running' || routine.state === 'waiting') snapshot.reason = routine.reason;
@@ -640,6 +788,6 @@ export class CompanionController {
     return { ...snapshot, running: executing, runRequested: this.runRequested,
       state: executing ? 'running' : this.runRequested ? 'waiting' : 'idle',
       runIntent: this.runRequested, elapsedSeconds: this.runRequested ? Math.max(0, Math.floor((this.now() - this.started) / 1000)) : snapshot.elapsedSeconds,
-      world: this.world.snapshot(), workflow, routine, travel, service, escape: this.escape.snapshot() };
+      world: this.world.snapshot(), workflow, routine, travel, service, escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard() };
   }
 }

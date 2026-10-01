@@ -21,7 +21,7 @@ function checkedSettings(value: unknown): Settings {
     // Older profiles predate escape and loadout controls. Only these sections
     // get defaults; unknown fields and missing older sections still fail closed.
     const a = record(value.automation) ? { escape: DEFAULT_AUTOMATION.escape, loadout: structuredClone(DEFAULT_AUTOMATION.loadout), ...value.automation } : value.automation;
-    if (!record(a) || !keys(a, [...Object.keys(DEFAULT_AUTOMATION), ...(Object.hasOwn(a, 'disposition') ? ['disposition'] : [])])) throw new Error('Profile contains unknown automation settings.');
+    if (!record(a) || !keys(a, [...Object.keys(DEFAULT_AUTOMATION), ...(Object.hasOwn(a, 'disposition') ? ['disposition'] : []), ...(Object.hasOwn(a, 'supply') ? ['supply'] : [])])) throw new Error('Profile contains unknown automation settings.');
     const arrayKeys: Record<string, string[]> = {
       items: ['itemId','resource','belowPercent','minStock','cooldownSeconds'],
       skills: ['skillId','level','target','hpBelowPercent','spAbovePercent','cooldownSeconds'],

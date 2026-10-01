@@ -10,6 +10,8 @@ import { NpcServiceStore } from './npc-service-store';
 import { BUILTIN_SERVICES, previewService, validateServiceRequest } from './npc-services';
 import type { Entity } from './protocol';
 import { dryRunRoutine, validateRoutineSpec, type RoutineObservation } from './routines';
+import { DEFAULT_SUPPLY } from './supply-trip';
+import { previewSupplyTrip } from './supply-plan';
 import { DEFAULT_DISPOSITION, dispositionPreviewIsCurrent, planDisposition, type DispositionPlan } from './disposition';
 import { dispositionContextFromStatus, dispositionPreviewText, dispositionStockFloors } from './disposition-ui';
 
@@ -52,6 +54,14 @@ const fields: Record<Section, Field[]> = {
     { path:'respawn.enabled',label:'Respawn after death',kind:'checkbox' }, { path:'respawn.maxDeaths',label:'Wait after deaths',min:1,max:100 },
   ],
   travel: [
+    {path:'supply.enabled',label:'Enable bounded supply trips',kind:'checkbox'},
+    {path:'supply.stockEnabled',label:'Trigger below protected stock minimum',kind:'checkbox'},
+    {path:'supply.weightEnabled',label:'Trigger at carried weight',kind:'checkbox'},
+    {path:'supply.weightStartPercent',label:'Supply above weight %',min:1,max:100},{path:'supply.weightEndPercent',label:'Return below weight %',min:1,max:99},
+    {path:'supply.minimumIntervalSeconds',label:'Minimum seconds between trips',min:1,max:86400},
+    {path:'supply.maxTrips',label:'Maximum supply trips',min:1,max:100},{path:'supply.maxActions',label:'Commands per trip',min:1,max:100},
+    {path:'supply.maxDurationSeconds',label:'Trip deadline, seconds',min:30,max:3600},{path:'supply.maxSpend',label:'Whole-trip reserved spending, zeny',min:0,max:2000000000},
+    ...(['storage','buy','sell'] as const).map(kind=>({path:`supply.${kind}Service`,label:`Supply ${kind} service`,options:[['','Select a verified service'],...BUILTIN_SERVICES.filter(def=>kind==='storage'?def.outcome.type==='storageOpened':def.outcome.type==='shopOpened'&&def.outcome.mode===kind).map(def=>[def.contractId,def.name] as [string,string])] as Array<[string,string]>})),
     { path:'travel.destinationMap',label:'Destination map code',kind:'text' }, { path:'travel.returnToLockMap',label:'Return to start map after respawn or escape',kind:'checkbox' },
     { path:'travel.loop',label:'Repeat waypoint route',kind:'checkbox' },
     { path:'follow.name',label:'Follow player name',kind:'text' }, { path:'follow.distance',label:'Follow distance, cells',min:1,max:20 },
@@ -146,7 +156,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     if (v && typeof v === 'object') return Object.keys(v).length <= 256 && Object.values(v).every(entry => bounded(entry,depth+1));
     return false;
   }
-  if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','elapsedSeconds','deaths','lootStats','actors','loadout'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','supply','supplyGuard','elapsedSeconds','deaths','lootStats','actors','loadout'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
   if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
   if(value.ruleConditions!==undefined&&!bounded(value.ruleConditions,0))return false;
   const barter = object(value.world).barter;
@@ -185,7 +195,7 @@ export class FeatureUi {
     const footnote = combat.querySelector('.footnote')!; footnote.textContent = 'Game input yields briefly. Temporary interruptions wait and resume; Stop cancels the run. Profiles never start automation.'; actions.append(footnote);
     combat.querySelector('.routing-settings .hint')?.remove();
     this.rules(); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.servicePanel(); this.profilePanel(); this.navigation();
-    this.dispositionPanel();
+    this.dispositionPanel();this.supplyPanel();
     for (const [id,catalog] of [['itemId',ITEM_CATALOG],['skillId',SKILL_CATALOG]] as const) {
       const list=document.createElement('datalist');list.id=`${id}-catalog`;
       for(const [value,entry]of Object.entries(catalog)){const option=document.createElement('option');option.value=value;option.label=entry.name;list.append(option);}this.host.append(list);
@@ -210,6 +220,16 @@ export class FeatureUi {
     const button=document.createElement('button');button.type='button';button.className='secondary compact';button.textContent='Preview item disposition';
     button.addEventListener('click',()=>{try{const settings=this.read();const policy=settings.disposition??DEFAULT_DISPOSITION;this.dispositionPlan=planDisposition(policy,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)});this.dispositionOutput().textContent=dispositionPreviewText(this.dispositionPlan);}catch(error){this.dispositionPlan=null;this.dispositionOutput().textContent=error instanceof Error?error.message:'Invalid disposition rules.';}});
     panel.append(button);const output=document.createElement('div');output.id='disposition-preview';output.className='telemetry-summary';output.setAttribute('role','status');output.textContent='No preview generated. No items will be moved or sold.';panel.append(output);
+  }
+  private supplyPanel():void {
+    const panel=this.panel('travel'),button=document.createElement('button');button.type='button';button.className='secondary compact';button.textContent='Preview supply trip';
+    const output=document.createElement('div');output.id='supply-preview';output.className='telemetry-summary';output.setAttribute('role','status');output.textContent='Supply trips are off by default. Choose protected stock rules and verified services.';
+    button.addEventListener('click',()=>{try{
+      const a=this.read(),disposition={...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(a)},p=object(this.status.player);
+      output.textContent=previewSupplyTrip({...this.hooks.settings(),automation:a},{character:text(p.name),epoch:text(this.status.sessionId),map:text(this.status.map),position:typeof p.x==='number'&&typeof p.y==='number'?{x:Math.floor(p.x),y:Math.floor(p.y)}:null,
+        connected:this.status.connected===true,alive:p.dead===false,fresh:true,settled:disposition.workflow.idle,canPrepare:false,fieldRequested:false,inventoryRevision:0,currencyRevision:0,economicUncertain:false,disposition});
+    }catch(error){output.textContent=error instanceof Error?error.message:'Invalid supply settings.';}});
+    panel.append(button,output);this.note('travel','Supply trips use your protected stock rules. Each shop batch opens a fresh verified service. Stop, manual input, death or an uncertain transaction pauses the trip and prevents automatic field resume. The captured return map and cell appear in status.');
   }
   private dispositionOutput(): HTMLElement { return this.host.querySelector<HTMLElement>('#disposition-preview')!; }
   private note(section: Section, message: string): void { const p = document.createElement('p'); p.className = 'hint'; p.textContent = message; this.panel(section).append(p); }
@@ -272,7 +292,7 @@ export class FeatureUi {
   }
   read(): AutomationSettings {
     const automation = structuredClone(DEFAULT_AUTOMATION) as unknown as Record<string,unknown>;
-    automation.disposition=structuredClone(DEFAULT_DISPOSITION);
+    automation.disposition=structuredClone(DEFAULT_DISPOSITION);automation.supply=structuredClone(DEFAULT_SUPPLY);
     object(automation.disposition).maxSpend=Number(this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!.value);
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
@@ -287,7 +307,7 @@ export class FeatureUi {
     return validateAutomation(automation as unknown as AutomationSettings);
   }
   write(automation: AutomationSettings): void {
-    automation = validateAutomation(automation);
+    automation = validateAutomation(automation);automation={...automation,supply:automation.supply??structuredClone(DEFAULT_SUPPLY)};
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
       const value = getPath(automation,field.path);
@@ -447,7 +467,7 @@ export class FeatureUi {
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-manual]'))button.disabled=manual;
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-service]'))button.disabled=service;
   }
-  serviceBlocked(): boolean { return object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
+  serviceBlocked(): boolean { return object(this.status.supply).uncertain===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
   active(): boolean { return object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
   private observation(): RoutineObservation {
     const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:this.hooks.map(),elapsedSeconds:0};
@@ -458,6 +478,13 @@ export class FeatureUi {
     this.status=object(value);const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
     const conditionState=this.host.querySelector<HTMLElement>('#actor-condition-state')!;const traces=Array.isArray(s.ruleConditions)?s.ruleConditions:[];conditionState.hidden=traces.length===0;conditionState.textContent=traces.slice(0,32).map(entry=>{const rule=object(entry);const conditions=Array.isArray(rule.conditions)?rule.conditions:[];return text(rule.rule)+(rule.truncated===true?' · additional evidence omitted':'')+conditions.map(condition=>{const trace=object(condition);return '\n  '+text(trace.state)+' · '+text(trace.reason);}).join('');}).join('\n');
     if(this.dispositionPlan){try{const settings=this.read();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
+    const supply=object(s.supply),supplyOutput=this.host.querySelector<HTMLElement>('#supply-preview')!;
+    const supplyText=`${text(supply.state)} · ${text(supply.reason)} · ${number(supply.actions)??0} commands · ${number(supply.spent)??0}z spent / ${number(supply.reserved)??0}z reserved · ${number(supply.remainingTrips)??0} trips left`;
+    if(supply.active===true||supply.uncertain===true||(number(supply.actions)??0)>0||supply.returnDestination){
+      // Publish terminal transitions too; an unchanged snapshot must not erase a fresh preview.
+      if(supplyOutput.dataset.supply!==supplyText)supplyOutput.textContent=supplyText;
+      supplyOutput.dataset.supply=supplyText;
+    }
     const experience=object(character.experience);const task=object(s.task);const escape=object(s.escape);this.host.querySelector<HTMLElement>('#session-details')!.textContent=`${Math.floor((number(s.elapsedSeconds)??0)/60)}m ${(number(s.elapsedSeconds)??0)%60}s · ${number(s.deaths)??0} deaths · Base EXP +${number(experience.baseGained)??'—'} · Job EXP +${number(experience.jobGained)??'—'}${task.label?' · '+text(task.label):''}${escape.state&&escape.state!=='idle'?' · '+text(escape.reason):''}`;
     const npcChoice=this.host.querySelector<HTMLSelectElement>('#visible-npcs')!;const actors=Array.isArray(s.actors)?s.actors.map(object).filter(actor=>actor.kind===2||actor.kind===4):[];const actorKey=actors.map(actor=>`${actor.id}:${text(actor.name)}`).join('|');
     if(npcChoice.dataset.actors!==actorKey){const selected=npcChoice.value;npcChoice.dataset.actors=actorKey;npcChoice.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='Choose a visible NPC';npcChoice.append(empty);for(const actor of actors){const option=document.createElement('option');option.value=String(actor.id);option.textContent=`${text(actor.name)||'NPC'} · #${actor.id}`;npcChoice.append(option);}npcChoice.value=actors.some(actor=>String(actor.id)===selected)?selected:'';}
