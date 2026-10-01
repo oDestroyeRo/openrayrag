@@ -1,12 +1,27 @@
 import { expect, it } from 'vitest';
 import { type Action } from './engine';
 import { walkDuration } from './movement';
-import { type Entity, type Position, type Walk } from './protocol';
+import { decode, OP, type Entity, type Position, type Walk } from './protocol';
+import { BitWriter } from './binary';
 import { searchGrid } from './navigation';
 import { TravelController } from './travel-controller';
+import { CompanionController } from './controller';
 
 const player = (p: Position): Entity => ({ ...p,id: 321,classId: 0,name: 'Fixture',kind: 0,
   hp: 100,maxHp: 100,level: 9,dead: false });
+function adjacentWalkPacket(from: Position, to: Position): Uint8Array {
+  const directions = [[0,-1],[-1,-1],[-1,0],[-1,1],[0,1],[1,1],[1,0],[1,-1]];
+  const direction = directions.findIndex(([x,y]) => to.x - from.x === x && to.y - from.y === y);
+  expect(direction).toBeGreaterThanOrEqual(0);
+  const seconds = from.x !== to.x && from.y !== to.y ? 0.15 * 1.4142 : 0.15;
+  return new BitWriter().u8(OP.walk).i32(321).position(from).f32(from.x).f32(from.y)
+    .f32(0.15).f32(seconds).u8(2).u8(direction << 4).u8(0).finish();
+}
+function adjacentWalk(from: Position, to: Position): Walk {
+  const event = decode(adjacentWalkPacket(from,to))[0]!;
+  if (event.type !== 'walk') throw new Error('Expected walk fixture.');
+  return event.walk;
+}
 function fixture() {
   let clock = 100_000;
   const actions: Action[] = [];
@@ -186,4 +201,218 @@ it('requires a confirmed character spawn before the transition timeout expires',
   expect(controller.snapshot().state).toBe('failed');
   expect(controller.snapshot().reason).toContain('transition was not confirmed');
   expect(actions.map(a => a.type)).toEqual(['walk','stop']);
+});
+
+it('waits for a source-shaped occupancy nudge before replanning the same portal approach', () => {
+  const { controller,actions,advance } = fixture();
+  const p = player({ x: 166,y: 353 });
+  controller.start('prt_fild08',p,'prontera',1,false); controller.tick('prt_fild08',p);
+  expect(controller.snapshot().leg).toEqual([{ x: 166,y: 353 },{ x: 167,y: 354 }]);
+  const accepted = adjacentWalk(p,{ x: 167,y: 354 });
+  controller.observe([{ type: 'walk',id: p.id,walk: accepted }]);
+  advance(walkDuration(accepted) + 50);
+  const nudge = adjacentWalk({ x: 167,y: 354 },p);
+  controller.observe([{ type: 'walk',id: p.id,walk: nudge }]);
+  expect(controller.snapshot().state).toBe('walking');
+  expect(controller.snapshot().leg).toEqual(nudge.cells);
+  controller.tick('prt_fild08',p);
+  expect(actions).toHaveLength(1);
+  advance(walkDuration(nudge) + 101); controller.tick('prt_fild08',p);
+  expect(controller.snapshot().state).toBe('walking');
+  expect(controller.snapshot().remainingMaps).toEqual(['prontera']);
+  expect(controller.snapshot().leg[0]).toEqual({ x: p.x,y: p.y });
+  expect(actions.map(action => action.type)).toEqual(['walk','walk']);
+});
+
+it('accepts an occupancy nudge at the settlement boundary before dispatching another leg', () => {
+  const { controller,actions,advance } = fixture();
+  const p = player({ x: 166,y: 353 });
+  controller.start('prt_fild08',p,'prontera',1,false); controller.tick('prt_fild08',p);
+  const accepted = adjacentWalk(p,{ x: 167,y: 354 });
+  controller.observe([{ type: 'walk',id: p.id,walk: accepted }]);
+  advance(walkDuration(accepted) + 100);
+  const nudge = adjacentWalk({ x: 167,y: 354 },{ x: 168,y: 354 });
+  controller.observe([{ type: 'walk',id: p.id,walk: nudge }]);
+  controller.tick('prt_fild08',player(nudge.cells[0]!));
+  expect(controller.snapshot().state).toBe('walking');
+  expect(actions).toHaveLength(1);
+  advance(walkDuration(nudge) + 101); controller.tick('prt_fild08',player(nudge.cells[1]!));
+  expect(controller.snapshot().leg[0]).toEqual({ x: 168,y: 354 });
+  expect(actions.map(action => action.type)).toEqual(['walk','walk']);
+});
+
+it('handles decoded occupancy walks through the owning controller and its movement estimates', () => {
+  let clock = 100_000;
+  const actions: Action[] = [];
+  const controller = new CompanionController(action => actions.push(action as Action),() => clock);
+  const p = player({ x: 166,y: 353 });
+  const end = { x: 167,y: 354 };
+  controller.connect(true);
+  controller.engine.receive([{ type: 'enter',id: p.id,map: 'prt_fild08' },{ type: 'spawn',entity: p }]);
+  controller.travel.start('prt_fild08',p,'prontera',1,false); controller.tick();
+  controller.receive(adjacentWalkPacket(p,end));
+  clock += walkDuration(adjacentWalk(p,end)) + 50; controller.tick();
+  controller.receive(adjacentWalkPacket(end,{ x: 168,y: 354 })); controller.tick();
+  expect(controller.travel.snapshot().state).toBe('walking');
+  expect(actions).toHaveLength(1);
+  clock += walkDuration(adjacentWalk(end,{ x: 168,y: 354 })) + 101; controller.tick();
+  expect(controller.engine.player).toMatchObject({ x: 168,y: 354 });
+  expect(controller.travel.snapshot().leg[0]).toEqual({ x: 168,y: 354 });
+  expect(actions.map(action => action.type)).toEqual(['walk','walk']);
+});
+
+it('waits for the expected map after the portal script corrects an accepted final leg', () => {
+  const { controller,actions } = fixture();
+  const p = player({ x: 170,y: 370 });
+  controller.start('prt_fild08',p,'prontera',10,false); controller.tick('prt_fild08',p);
+  const cells = controller.snapshot().leg;
+  controller.observe([{ type: 'walk',id: p.id,walk: { origin: p,cells,secondsPerCell: 0.15,firstSeconds: 0.15,locked: false } }]);
+  controller.observe(decode(new BitWriter().u8(OP.stopImmediate).i32(p.id).position(cells.at(-1)!).finish()));
+  controller.tick('prt_fild08',player(cells.at(-1)!));
+  expect(controller.snapshot().state).toBe('transition');
+  expect(actions.map(action => action.type)).toEqual(['walk']);
+  controller.observe([{ type: 'map',map: 'prontera' },{ type: 'spawn',entity: player({ x: 156,y: 26 }) }]);
+  controller.tick('prontera',player({ x: 156,y: 26 }));
+  expect(controller.snapshot().state).toBe('complete');
+  expect(actions.map(action => action.type)).toEqual(['walk']);
+});
+
+it('rejects a reversed nudge as the first acknowledgement and after a new leg was dispatched', () => {
+  for (const afterDispatch of [false,true]) {
+    const { controller,actions,advance } = fixture();
+    const p = player({ x: 166,y: 353 });
+    controller.start('prt_fild08',p,'prontera',1,false); controller.tick('prt_fild08',p);
+    const accepted = adjacentWalk(p,{ x: 167,y: 354 });
+    if (afterDispatch) {
+      controller.observe([{ type: 'walk',id: p.id,walk: accepted }]);
+      advance(walkDuration(accepted) + 101); controller.tick('prt_fild08',player({ x: 167,y: 354 }));
+      expect(actions).toHaveLength(2);
+    }
+    controller.observe([{ type: 'walk',id: p.id,walk: adjacentWalk({ x: 167,y: 354 },p) }]);
+    expect(controller.snapshot().state).toBe('failed');
+    expect(actions.at(-1)).toEqual({ type: 'stop' });
+  }
+});
+
+it('rejects unrelated, locked, long, expired or malformed occupancy routes', () => {
+  for (const change of ['start','origin','locked','count','duration','zero','expired'] as const) {
+    const { controller,actions,advance } = fixture();
+    const p = player({ x: 166,y: 353 });
+    controller.start('prt_fild08',p,'prontera',1,false); controller.tick('prt_fild08',p);
+    const accepted = adjacentWalk(p,{ x: 167,y: 354 });
+    controller.observe([{ type: 'walk',id: p.id,walk: accepted }]);
+    const nudge = adjacentWalk({ x: 167,y: 354 },p);
+    if (change === 'start') nudge.cells = [p,{ x: 165,y: 353 }];
+    if (change === 'origin') nudge.origin = { x: 170,y: 354 };
+    if (change === 'locked') nudge.locked = true;
+    if (change === 'count') nudge.cells.push({ x: 165,y: 353 });
+    if (change === 'duration') nudge.firstSeconds = 16;
+    if (change === 'zero') nudge.firstSeconds = 0;
+    if (change === 'expired') advance(walkDuration(accepted) + 101);
+    controller.observe([{ type: 'walk',id: p.id,walk: nudge }]);
+    expect(controller.snapshot().state,change).toBe('failed');
+    expect(actions.map(action => action.type),change).toEqual(['walk','stop']);
+  }
+});
+
+it('rejects occupancy routes through blocked cells or blocked diagonal corners on the real map', () => {
+  for (const blocked of [{ x: 152,y: 299 },{ x: 151,y: 299 }]) {
+    const { controller,actions } = fixture();
+    const p = player({ x: 151,y: 300 });
+    controller.start('prt_fild08',p,'prontera',1,false); controller.tick('prt_fild08',p);
+    expect(controller.snapshot().leg).toEqual([{ x: 151,y: 300 },{ x: 152,y: 301 }]);
+    controller.observe([{ type: 'walk',id: p.id,walk: adjacentWalk(p,{ x: 152,y: 301 }) }]);
+    controller.observe([{ type: 'walk',id: p.id,walk: adjacentWalk({ x: 152,y: 301 },{ x: 152,y: 300 }) }]);
+    expect(controller.snapshot().state).toBe('walking');
+    expect(searchGrid('prt_fild08')!.walkable({ x: 152,y: 299 })).toBe(false);
+    if (blocked.x === 151) expect(searchGrid('prt_fild08')!.walkable(blocked)).toBe(true);
+    controller.observe([{ type: 'walk',id: p.id,walk: adjacentWalk({ x: 152,y: 300 },blocked) }]);
+    expect(controller.snapshot().state).toBe('failed');
+    expect(actions.map(action => action.type)).toEqual(['walk','stop']);
+  }
+});
+
+it('rejects an occupancy nudge into or out of a portal even on an otherwise verified corridor', () => {
+  for (const y of [374,375]) {
+    const { controller,actions } = fixture();
+    const p = player({ x: 170,y });
+    controller.start('prt_fild08',p,'prontera',1,false); controller.tick('prt_fild08',p);
+    const end = { x: 170,y: y + 1 };
+    controller.observe([{ type: 'walk',id: p.id,walk: adjacentWalk(p,end) }]);
+    controller.observe([{ type: 'walk',id: p.id,walk: adjacentWalk(end,y === 374 ? { x: 170,y: 376 } : p) }]);
+    expect(controller.snapshot().state).toBe('failed');
+    expect(actions.map(action => action.type)).toEqual(['walk','stop']);
+  }
+});
+
+it('bounds consecutive occupancy nudges across replanned requests', () => {
+  const { controller,actions,advance } = fixture();
+  const p = player({ x: 166,y: 353 });
+  controller.start('prt_fild08',p,'prontera',1,false); controller.tick('prt_fild08',p);
+  for (let i = 0; i < 5; i++) {
+    const accepted = adjacentWalk(p,{ x: 167,y: 354 });
+    controller.observe([{ type: 'walk',id: p.id,walk: accepted }]);
+    advance(walkDuration(accepted) + 50);
+    const nudge = adjacentWalk({ x: 167,y: 354 },p);
+    controller.observe([{ type: 'walk',id: p.id,walk: nudge }]);
+    if (i < 4) {
+      expect(controller.snapshot().state).toBe('walking');
+      advance(walkDuration(nudge) + 101); controller.tick('prt_fild08',p);
+    }
+  }
+  expect(controller.snapshot().state).toBe('failed');
+  expect(actions.filter(action => action.type === 'walk')).toHaveLength(5);
+  expect(actions.at(-1)).toEqual({ type: 'stop' });
+});
+
+it('retains the original movement deadline and requires the nudged endpoint to settle', () => {
+  for (const failure of ['deadline','endpoint'] as const) {
+    const { controller,actions,advance } = fixture();
+    const p = player({ x: 166,y: 353 });
+    controller.start('prt_fild08',p,'prontera',1,false); controller.tick('prt_fild08',p);
+    const accepted = adjacentWalk(p,{ x: 167,y: 354 });
+    if (failure === 'deadline') { accepted.secondsPerCell = 10; accepted.firstSeconds = 14; }
+    controller.observe([{ type: 'walk',id: p.id,walk: accepted }]);
+    advance(walkDuration(accepted));
+    const nudge = adjacentWalk({ x: 167,y: 354 },p);
+    if (failure === 'deadline') { nudge.secondsPerCell = 5; nudge.firstSeconds = 5; }
+    controller.observe([{ type: 'walk',id: p.id,walk: nudge }]);
+    expect(controller.snapshot().state).toBe('walking');
+    advance(walkDuration(nudge) + 101); controller.tick('prt_fild08',player({ x: 167,y: 354 }));
+    expect(controller.snapshot().state).toBe('failed');
+    expect(controller.snapshot().reason).toContain(failure === 'deadline' ? 'timed out' : 'did not finish');
+    expect(actions.map(action => action.type)).toEqual(['walk','stop']);
+  }
+});
+
+it('keeps first-ACK, corridor and explicit-position guards on portal corrections', () => {
+  for (const invalid of ['unacknowledged','outside','unrelated','stop','expired'] as const) {
+    const { controller,actions,advance } = fixture();
+    const p = player({ x: 170,y: 370 });
+    controller.start('prt_fild08',p,'prontera',10,false); controller.tick('prt_fild08',p);
+    const cells = controller.snapshot().leg;
+    if (invalid !== 'unacknowledged') controller.observe([{ type: 'walk',id: p.id,
+      walk: { origin: p,cells,secondsPerCell: 0.15,firstSeconds: 0.15,locked: false } }]);
+    if (invalid === 'expired') advance(19_001);
+    controller.observe([invalid === 'stop' ? { type: 'stop',id: p.id } : { type: 'position',id: p.id,
+      position: invalid === 'outside' ? p : invalid === 'unrelated' ? { x: 171,y: 376 } : cells.at(-1)! }]);
+    expect(controller.snapshot().state,invalid).toBe('failed');
+    expect(actions.map(action => action.type),invalid).toEqual(['walk','stop']);
+  }
+});
+
+it('does not turn a portal correction into an inferred arrival or extend its transition wait', () => {
+  const { controller,actions,advance } = fixture();
+  const p = player({ x: 170,y: 370 });
+  controller.start('prt_fild08',p,'prontera',10,false); controller.tick('prt_fild08',p);
+  const cells = controller.snapshot().leg;
+  controller.observe([{ type: 'walk',id: p.id,walk: { origin: p,cells,secondsPerCell: 0.15,firstSeconds: 0.15,locked: false } },
+    { type: 'position',id: p.id,position: cells.at(-1)! }]);
+  advance(19_900); controller.tick('prt_fild08',player(cells.at(-1)!));
+  expect(controller.snapshot().state).toBe('transition');
+  controller.observe([{ type: 'position',id: p.id,position: cells.at(-1)! }]);
+  advance(101); controller.tick('prt_fild08',player(cells.at(-1)!));
+  expect(controller.snapshot().state).toBe('failed');
+  expect(controller.snapshot().reason).toContain('transition was not confirmed');
+  expect(actions.map(action => action.type)).toEqual(['walk','stop']);
 });
