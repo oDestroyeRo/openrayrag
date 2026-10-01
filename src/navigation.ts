@@ -1,11 +1,14 @@
 import gridData from './data/navigation-maps.json';
 import { type Position } from './protocol';
+import { attackDistance, projectileLineOfSight } from './combat';
 
 export const NAVIGATION_MAPS = Object.keys(gridData);
 // Includes the 416-cell Payon fields; shared with status validation and extraction.
 export const MAX_MAP_DIMENSION = 512;
 export const distance = (a: Position, b: Position): number => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
-/** An admissible movement-cost bound to a square goal range, without wall penalties. */
+/** A square goal is a superset of rounded Euclidean attack goals, so this
+ * movement-cost bound remains admissible for both modes without wall penalties.
+ */
 export function minimumRouteCost(from: Position, to: Position, range = 0): number {
   const dx = Math.max(0, Math.abs(from.x - to.x) - range);
   const dy = Math.max(0, Math.abs(from.y - to.y) - range);
@@ -15,10 +18,11 @@ const directions = [[0,1],[1,1],[1,0],[1,-1],[0,-1],[-1,-1],[-1,0],[-1,1]] as co
 const cardinalDirections = [[0,1],[1,0],[0,-1],[-1,0]] as const;
 const wallPenalties = [0, 60, 50, 20, 10, 0] as const;
 export interface PortalArea extends Position { halfWidth: number; halfHeight: number }
-interface GridData { width: number; height: number; walkableBitsBase64: string; portals: PortalArea[] }
+interface GridData { width: number; height: number; walkableBitsBase64: string; snipableOnlyBitsBase64: string; portals: PortalArea[] }
 const maps: Record<string, GridData> = gridData;
 export interface WalkGrid {
   width: number; height: number; walkable: (p: Position) => boolean;
+  seeThrough?: (p: Position) => boolean;
   portals?: readonly PortalArea[];
 }
 const cachedGrids = new Map<string, WalkGrid>();
@@ -28,11 +32,13 @@ export function searchGrid(map: string): WalkGrid | null {
   if (cached) return cached;
   const data = maps[map]!;
   const bytes = Uint8Array.from(atob(data.walkableBitsBase64), c => c.charCodeAt(0));
+  const snipable = Uint8Array.from(atob(data.snipableOnlyBitsBase64), c => c.charCodeAt(0));
+  const inBounds = ({ x, y }: Position) => Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < data.width && y < data.height;
+  const bit = (bits: Uint8Array, { x, y }: Position) => (bits[(x + y * data.width) >> 3]! & (1 << ((x + y * data.width) & 7))) !== 0;
   const grid: WalkGrid = {
     width: data.width, height: data.height, portals: data.portals,
-    walkable: ({ x, y }) => Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0
-      && x < data.width && y < data.height
-      && (bytes[(x + y * data.width) >> 3]! & (1 << ((x + y * data.width) & 7))) !== 0,
+    walkable: p => inBounds(p) && bit(bytes, p),
+    seeThrough: p => inBounds(p) && (bit(bytes, p) || bit(snipable, p)),
   };
   cachedGrids.set(map, grid);
   return grid;
@@ -48,7 +54,7 @@ export interface NavigationSummary {
   reachable: number;
 }
 
-export interface RouteOptions { range?: number; maxDistance?: number; avoidWalls?: boolean }
+export interface RouteOptions { range?: number; maxDistance?: number; avoidWalls?: boolean; goal?: 'walk' | 'attack' }
 type TileState = 'blocked' | 'portal' | 'walkable';
 interface OpenCell { cell: number; cost: number; priority: number }
 interface SearchScratch { costs: Float64Array; parents: Int32Array; seen: Uint32Array; closed: Uint32Array; stamp: number; queue?: Int32Array }
@@ -94,6 +100,7 @@ export class GridNavigator {
   private readonly height: number;
   private readonly count: number;
   private readonly tiles: Uint8Array;
+  private readonly sight: Uint8Array;
   private readonly clearance: Uint8Array;
   private readonly components: Uint32Array;
   private readonly members: number[][] = [[]];
@@ -113,12 +120,14 @@ export class GridNavigator {
     this.height = grid.height;
     this.count = grid.width * grid.height;
     this.tiles = new Uint8Array(this.count);
+    this.sight = new Uint8Array(this.count);
     this.clearance = new Uint8Array(this.count);
     this.components = new Uint32Array(this.count);
     let walkable = 0;
     let excluded = 0;
     for (let cell = 0; cell < this.count; cell++) {
       const p = this.position(cell);
+      this.sight[cell] = (grid.seeThrough ?? grid.walkable)(p) ? 1 : 0;
       if (!grid.walkable(p)) continue;
       walkable++;
       if (excludedAreas.some(portal => Math.abs(p.x - portal.x) <= portal.halfWidth
@@ -238,6 +247,15 @@ export class GridNavigator {
     return this.safe(from) && this.available(to) && this.clearApproach(from, to);
   }
 
+  /** Portals and failed movement remain excluded as firing positions. Melee
+   * retains the existing clear adjacent walking/no-corner-cut guarantee.
+   */
+  canAttack(from: Position, to: Position, range: number): boolean {
+    return this.safe(from) && this.available(to) && attackDistance(from, to) <= range
+      && projectileLineOfSight(from, to, p => this.sight[this.index(p)] === 1)
+      && (range > 1 || this.clearApproach(from, to));
+  }
+
   private clearApproach(from: Position, to: Position): boolean {
     let current = from;
     let error = Math.abs(to.x - from.x) - Math.abs(to.y - from.y);
@@ -284,21 +302,25 @@ export class GridNavigator {
       || maxDistance < 0 || !this.safe(from) || (!this.available(to) && distance(from, to) !== 0)) return null;
     const start = this.index(from);
     const target = this.index(to);
-    if (this.components[start] !== this.components[target] || Math.max(0, distance(from, to) - range) > maxDistance) return null;
+    const goalMode = options.goal === 'attack' ? 'attack' : 'walk';
+    // One-cell melee also requires a clear walking approach. Longer attacks may
+    // fire across a visible barrier into another walking component.
+    if (((goalMode !== 'attack' || range <= 1) && this.components[start] !== this.components[target]) || Math.max(0, distance(from, to) - range) > maxDistance) return null;
     // Geometry is immutable. Only the effective temporary-block set invalidates
     // exact results; extend this key whenever a new route option is introduced.
-    const key = `${start}:${target}:${range}:${maxDistance}:${options.avoidWalls === false ? 0 : 1}`;
+    const key = `${start}:${target}:${range}:${maxDistance}:${options.avoidWalls === false ? 0 : 1}:${goalMode}`;
     if (this.routeCache.has(key)) {
       const cached = this.routeCache.get(key)!;
       this.routeCache.delete(key); this.routeCache.set(key, cached);
       return cached?.map(p => ({ ...p })) ?? null;
     }
-    const cells = this.findRoute(from, to, range, maxDistance, options.avoidWalls !== false);
+    const cells = this.findRoute(from, to, range, maxDistance, options.avoidWalls !== false, goalMode);
     this.cacheRoute(key, cells);
     return cells;
   }
-  private findRoute(from: Position, to: Position, range: number, maxDistance: number, avoidWalls: boolean): Position[] | null {
-    const goal = (p: Position) => distance(p, to) <= range && this.clearApproach(p, to);
+  private findRoute(from: Position, to: Position, range: number, maxDistance: number, avoidWalls: boolean, goalMode: 'walk' | 'attack'): Position[] | null {
+    const goal = goalMode === 'attack' ? (p: Position) => this.canAttack(p, to, range)
+      : (p: Position) => distance(p, to) <= range && this.clearApproach(p, to);
     // Prove capped local failures before exploring the whole component. This
     // square bounds every cell BFS can reach within the cap; successful queries
     // still use the original weighted search and its exact tie ordering.
