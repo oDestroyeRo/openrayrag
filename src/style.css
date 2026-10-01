@@ -13,3 +13,4 @@ main{padding-top:24px}header{margin-bottom:18px}.session-card{padding:13px 16px 
 @media(max-width:420px){.form-grid,.rule-row{grid-template-columns:1fr}.coverage-list>div{flex-direction:column;gap:4px}.coverage-state{flex-basis:auto;text-align:left}.signin-fields{grid-template-columns:1fr}}
 
 .rule-row>.actor-conditions{grid-column:1/-1}.actor-conditions>.hint{margin-top:10px}.actor-conditions .form-grid>.hint{grid-column:1/-1}
+.social-panel>.compact{margin:8px 0 14px}.social-panel>.form-field{margin-top:10px}.social-panel .form-field select{max-width:100%}.social-history{margin-bottom:8px}

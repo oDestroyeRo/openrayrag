@@ -18,12 +18,16 @@ The [OpenKore packet table](https://github.com/openkore/openkore/blob/51de1ddfc4
 | Stop | 19 | outgoing no payload; incoming i32 actor ID |
 | Hit | 23 | i32 ID, i32 damage, i16 x/y, should-stop bit; decrements HP |
 | Death / heal / revive | 36 / 37 / 46 | actor ID followed by position or health |
+| Say | 44 | outgoing u16 UTF8 text, u8 channel 0..2; incoming i32 actor (-1 server or nonnegative), u16 UTF8 text/name, u8 channel 0..3 |
+| Emote | 54 | outgoing i32 whitelisted player ID; incoming nonnegative i32 actor and signed i32 result |
 | Player stats | 56 | Validated full or legacy UpdatePlayerData layout; HP/SP, level/job level, zeny, attributes/points, weight, learned/granted skills, inventory/equipment |
 | Minimap tracking | 60 | u16 count; i32 ID, i16 x/y, u8 kind; effect kind 8 adds a string |
 | Ground drop | 81 | i32 ground ID, f32 x/y, i32 item ID, i16 count, new-drop bit |
 | Pickup | 82 | outgoing i32 ground ID; incoming i32 picker and ground ID |
 
 Integer and float fields are little-endian. Ordinary booleans occupy **one bit**, including booleans followed by other fields; subsequent values are not implicitly byte-aligned. Unused final bits can contain pooled-buffer data and are ignored, while an extra complete trailing byte is rejected. For example, the drop decoder reads the first bit at byte 19 to distinguish a new drop from an existing item entering view. MemoryPack entity strings use their own encoding: negative complemented UTF8 byte count plus UTF16 character count, or a nonnegative UTF16 character count. The entity's Position uses i32 fields, unlike packet positions.
+
+Say/Emote numeric fields and layouts above are pinned source contracts, not a deployed send/echo capture. The separate manual adapter decodes each complete incoming u16 UTF8 string (up to 65,535 bytes), then caps display and history. Outgoing chat uses 140 UTF-16 units, channels 0..2 and opaque text; Notice is receive-only. The generated 59-ID player emote catalog offers canonical dice 58, while unknown incoming results remain inert. Social sends are excluded from routines, workflows, services and imported action documents. See [manual social contracts and evidence](SOCIAL.md) for prerequisites, app cooldowns, correlation ambiguity, cancellation and bounds.
 
 The public Poring spawn fixture decoded as ID 1638, class 4000, position 320/153, level 1, HP 51/51. No account handshake or token is saved in fixtures. The live Enter packet had a shorter suffix than upstream's 16-byte GUID. That suffix is deliberately not interpreted or stored. This illustrates why sharing a version number does not establish complete compatibility.
 

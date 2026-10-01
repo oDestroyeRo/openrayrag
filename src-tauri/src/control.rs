@@ -1,5 +1,6 @@
 use serde_json::{Map, Value};
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 const MAX_REQUEST_BYTES: usize = 65_536;
 const MAX_ID: i64 = i32::MAX as i64;
@@ -639,6 +640,50 @@ fn validate_routine(value: &Value) -> Validation {
     Ok(())
 }
 
+fn validate_social(value: &Value) -> Validation {
+    let kind = value
+        .as_object()
+        .and_then(|value| value.get("type"))
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    match kind {
+        "chat" => {
+            let action = object(value, &["type", "channel", "text"])?;
+            integer(action, "channel", 0, 2)?;
+            let value = string(action, "text")?;
+            // Rust White_Space and TS Unicode White_Space deliberately match.
+            // Never trim or normalize accepted content; serde rejects lone surrogates.
+            if value.is_empty()
+                || value.chars().all(char::is_whitespace)
+                || value.encode_utf16().count() > 140
+            {
+                return Err(invalid());
+            }
+        }
+        "emote" => {
+            let action = object(value, &["type", "id"])?;
+            let id = integer(action, "id", 0, 100)?;
+            static IDS: OnceLock<HashSet<i64>> = OnceLock::new();
+            let ids = IDS.get_or_init(|| {
+                let catalog: Value =
+                    serde_json::from_str(include_str!("../../src/data/emote-catalog.json"))
+                        .expect("Emote catalog must be valid");
+                catalog["items"]
+                    .as_array()
+                    .expect("Emote catalog items")
+                    .iter()
+                    .map(|item| item["id"].as_i64().expect("Emote ID"))
+                    .collect()
+            });
+            if !ids.contains(&id) {
+                return Err(invalid());
+            }
+        }
+        _ => return Err(invalid()),
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
     if serde_json::to_vec(request).map_err(|_| invalid())?.len() > MAX_REQUEST_BYTES {
         return Err("Automation request exceeds its limit.".into());
@@ -648,6 +693,7 @@ pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
         "workflow" => validate_workflow(request),
         "routine" => validate_routine(request),
         "service" => validate_service(request),
+        "social" => validate_social(request),
         _ => Err("Unknown bot action.".into()),
     }
 }
@@ -665,6 +711,29 @@ pub(crate) fn request_script(action: &str, request: &Value) -> Result<String, St
 mod tests {
     use super::{validate_action, validate_request};
     use serde_json::json;
+
+    #[test]
+    fn manual_social_shared_corpus_and_routine_exclusion() {
+        let cases: serde_json::Value =
+            serde_json::from_str(include_str!("../../src/data/social-request-cases.json")).unwrap();
+        for case in cases.as_array().unwrap() {
+            assert_eq!(
+                validate_request("social", &case["request"]).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            assert!(validate_request("command", &case["request"]).is_err());
+            assert!(validate_request("workflow", &case["request"]).is_err());
+            assert!(validate_request("service", &case["request"]).is_err());
+            let routine = json!({"name":"No social automation","durationSeconds":10,"maxActions":1,"rules":[{"name":"Rejected","priority":0,"cooldownSeconds":1,"maxRuns":1,"conditions":[{"field":"hpPercent","operator":"lt","value":100}],"action":case["request"]}]});
+            assert!(validate_request("routine", &routine).is_err());
+        }
+        assert!(serde_json::from_str::<serde_json::Value>(
+            r#"{"type":"chat","channel":0,"text":"\ud800"}"#
+        )
+        .is_err());
+    }
 
     #[test]
     fn service_contract_shared_corpus() {
@@ -1004,6 +1073,11 @@ mod automation_request_tests {
             ("command", action),
             ("workflow", workflow()),
             ("routine", routine()),
+            (
+                "social",
+                json!({"type":"chat","channel":0,"text":"\"</script>\\\nwindow.alert(1); /literal %\u{2028}"}),
+            ),
+            ("social", json!({"type":"emote","id":58})),
         ] {
             let encoded = serde_json::to_string(&value).unwrap();
             assert_eq!(

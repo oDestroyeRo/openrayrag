@@ -1,5 +1,6 @@
 import { decodeFeatures, FEATURE_OP } from './protocol-feature';
 import type { FeatureEvent } from './protocol-feature';
+import { decodeSocial, type SocialEvent } from './social-protocol';
 export { featureCommand, validateExpandedAction, decodeFeatures, FEATURE_OP, FeatureProtocolError } from './protocol-feature';
 export type { ExpandedAction, FeatureEvent, InventoryItem, SkillLevel, PlayerStats, Attributes } from './protocol-feature';
 
@@ -23,7 +24,7 @@ export interface Entity extends Position {
 }
 export interface Walk { origin: Position; cells: Position[]; secondsPerCell: number; firstSeconds: number; locked: boolean }
 export interface Drop extends Position { id: number; itemId: number; count: number; isNew: boolean }
-export type GameEvent = FeatureEvent
+export type GameEvent = FeatureEvent | SocialEvent
   | { type: 'enter'; id: number; map: string }
   | { type: 'map'; map: string }
   | { type: 'spawn'; entity: Entity; entryType?: number }
@@ -169,6 +170,8 @@ export function decode(data: Uint8Array): GameEvent[] {
   const opcode = r.u8();
   const features = decodeFeatures(data);
   if (features !== null) return features;
+  const social = decodeSocial(data);
+  if (social !== null) return social;
   switch (opcode) {
     case OP.enter: return [{ type: 'enter', id: r.i32(), map: mapName(r.string()) }];
     case OP.map: return [{ type: 'map', map: mapName(r.string()) }];
@@ -225,7 +228,7 @@ export function decode(data: Uint8Array): GameEvent[] {
       return [{ type: 'drop', drop: { id, ...pos, itemId, count, isNew } }];
     }
     case OP.pickup: return [{ type: 'pickup', picker: r.i32(), id: r.i32() }];
-    // Login responses, chat, inventory, trade and unknown packet payloads are ignored.
+    // Unsupported login/other packet payloads are ignored.
     default: return [];
   }
 }
