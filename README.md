@@ -55,6 +55,8 @@ Condition routines use HP %, SP %, zeny, elapsed time, map and inventory quantit
 
 Profiles contain validated settings, a map binding and optional character name. Up to 20 profiles are saved locally; applying one requires the matching map/character and never starts automation. Imports receive fresh IDs and cannot silently overwrite saved profiles. Credentials, login preferences and running state are excluded.
 
+In **Inventory & skills**, [protected item disposition](docs/item-disposition.md) previews keep/store/cart/sell and restock rules from observed stock and capacity. It preserves equipped, selected ammunition, refined, carded and unknown unique items; it shows costs, protected quantities and blocked targets. Previewing sends no commands. Rules travel with profiles; automatic supply trips remain a separate feature.
+
 ## Navigation, targets and loot
 
 Companion bundles collision grids for **all 231 map scenes published by the official client**. Each uses its own dimensions and static teleport rectangles. Eight-direction A* prevents diagonal corner cutting, computes connected areas, avoids unreachable monsters and optionally penalizes paths near walls. Turning off wall avoidance never permits blocked cells.

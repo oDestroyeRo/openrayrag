@@ -7,6 +7,8 @@ import { type FeatureEvent, FEATURE_OP } from './protocol-feature';
 import { BitWriter } from './binary';
 import { WORLD_OP } from './world-protocol';
 import type { WalkGrid } from './navigation';
+import { dispositionContextFromStatus } from './disposition-ui';
+import { planDisposition } from './disposition';
 
 const player: Entity = { id: 1, classId: 0, name: 'Test', kind: 0, level: 7, hp: 100, maxHp: 100, x: 100, y: 100, dead: false };
 const monster: Entity = { id: 2, classId: 4000, name: 'Poring', kind: 1, level: 1, hp: 10, maxHp: 10, x: 101, y: 100, dead: false };
@@ -30,6 +32,21 @@ const routine = (action: ControllerAction, durationSeconds = 20) => ({ name: 'Te
   rules: [{ name: 'Act', priority: 1, maxRuns: 2, cooldownSeconds: 0, conditions: [{ field: 'hpPercent', operator: 'gte', value: 0 }], action }] });
 
 describe('persistent field run ownership', () => {
+  it('uses cart receipt weights in the authoritative snapshot and disposition preview', () => {
+    const { controller, receive, packet, sent }=setup();
+    receive({type:'stats',level:7,hp:100,maxHp:100,zeny:1000,weight:210,maxWeight:10000,cartWeight:79900},
+      {type:'inventory',items:[{bagId:501,itemId:501,type:1,count:3}],equipment:[],ammoId:-1},
+      {type:'skills',learned:[{skillId:73,level:1}]});
+    controller.world.replaceCart([{bagId:501,itemId:501,type:1,count:1140},{bagId:512,itemId:512,type:1,count:5}]);
+    const policy={maxSpend:0,rules:[{itemId:501,keep:0,minimum:0,desired:0,maximum:1,store:false,sell:false,cart:true,restock:'off' as const,allowUnique:false}]};
+    const context=()=>dispositionContextFromStatus({...controller.snapshot(),sessionId:'test',connectionId:1});
+    expect(planDisposition(policy,context()).actions[0]?.count).toBe(1);
+    packet(new BitWriter().u8(WORLD_OP.cart).u8(1).i32(501).u8(1).i32(501).i16(1141).i16(1).i32(79970).i32(140));
+    receive({type:'inventoryDelta',add:false,bagId:501,change:1,weight:140});
+    expect(controller.snapshot().character.stats).toMatchObject({cartWeight:79970,weight:140});
+    const result=planDisposition(policy,context());expect(result.actions).toEqual([]);expect(result.unmet[0]?.count).toBe(1);
+    expect(sent).toEqual([]);
+  });
   it('keeps a low HP run waiting and resumes only after authoritative recovery', () => {
     const { controller, sent, receive, step } = setup(); controller.start(settings); step();
     receive({ type: 'hit', id: 1, damage: 80, position: { x: 100, y: 100 } });

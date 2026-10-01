@@ -26,6 +26,9 @@ export class CharacterState {
     this.statuses.clear(); this.experience = null; this.inventoryRevision = this.equipmentRevision = this.statsRevision = this.skillsRevision = 0;
   }
   resetField(): void { this.sitting=null;this.statuses.clear(); }
+  applyCartWeights(cartWeight: number, currentWeight: number): void {
+    if (this.stats) { this.stats = { ...this.stats, cartWeight, weight: currentWeight }; this.statsRevision++; }
+  }
   spawn(entity: StatefulEntity): void {
     this.sitting = entity.sitting ?? null;
     this.stats = { ...this.stats, level: entity.level, hp: entity.hp, maxHp: entity.maxHp,

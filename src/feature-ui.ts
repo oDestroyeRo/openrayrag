@@ -5,6 +5,8 @@ import { validateExpandedAction } from './protocol-feature';
 import { validateWorldAction } from './world-protocol';
 import { validateWorkflowSpec } from './workflows';
 import { dryRunRoutine, validateRoutineSpec, type RoutineObservation } from './routines';
+import { DEFAULT_DISPOSITION, dispositionPreviewIsCurrent, planDisposition, type DispositionPlan } from './disposition';
+import { dispositionContextFromStatus, dispositionPreviewText, dispositionStockFloors } from './disposition-ui';
 
 type Section = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows' | 'profiles';
 interface Hooks {
@@ -145,6 +147,8 @@ export class FeatureUi {
   private readonly panels = new Map<Section, HTMLElement>(); private readonly editors = new Map<string,RuleEditor>();
   private readonly profiles: ProfileStore; private locked = false; private manualLocked = true;
   private status: Record<string, unknown> = {};
+  private dispositionEditor!: RuleEditor;
+  private dispositionPlan: DispositionPlan | null = null;
   constructor(private readonly host: HTMLElement, private readonly hooks: Hooks) {
     let storage: Pick<Storage,'getItem'|'setItem'>;
     try { storage = localStorage; } catch { storage = {getItem:()=>null,setItem:()=>{throw new Error('Profile storage is unavailable.');}}; }
@@ -167,6 +171,7 @@ export class FeatureUi {
     const footnote = combat.querySelector('.footnote')!; footnote.textContent = 'Game input yields briefly. Temporary interruptions wait and resume; Stop cancels the run. Profiles never start automation.'; actions.append(footnote);
     combat.querySelector('.routing-settings .hint')?.remove();
     this.rules(); this.workflows(); this.profilePanel(); this.navigation();
+    this.dispositionPanel();
     for (const [id,catalog] of [['itemId',ITEM_CATALOG],['skillId',SKILL_CATALOG]] as const) {
       const list=document.createElement('datalist');list.id=`${id}-catalog`;
       for(const [value,entry]of Object.entries(catalog)){const option=document.createElement('option');option.value=value;option.label=entry.name;list.append(option);}this.host.append(list);
@@ -175,6 +180,24 @@ export class FeatureUi {
     this.write(DEFAULT_AUTOMATION);
   }
   private panel(section: Section): HTMLElement { return this.panels.get(section)!; }
+  private dispositionPanel(): void {
+    const panel = this.panel('inventory');
+    const binary: Array<[string,string]> = [['0','Preserve'],['1','Allow']];
+    this.dispositionEditor = new RuleEditor('Protected stock & disposition preview', [idColumn('itemId','Item ID'),
+      ...['keep','minimum','desired','maximum'].map(key => ({key,label:key[0]!.toUpperCase()+key.slice(1),min:0,max:32767})),
+      {key:'store',label:'Store excess',options:binary},{key:'cart',label:'Cart excess',options:binary},{key:'sell',label:'Sell excess',options:binary},
+      {key:'restock',label:'Restock source',options:[['off','Off'],['storage','Storage'],['cart','Cart'],['buy','Open shop']]},
+      {key:'allowUnique',label:'Unique items',options:[['0','Protect'],['1','Allow if fully observed']]}],
+      {itemId:501,keep:1,minimum:1,desired:1,maximum:1,store:'0',cart:'0',sell:'0',restock:'off',allowUnique:'0'},128,()=>{this.dispositionPlan=null;this.hooks.changed();this.dispositionOutput().textContent='Rules changed. Generate a new preview.';});
+    panel.append(this.dispositionEditor.root);
+    const grid=document.createElement('div');grid.className='form-grid';
+    const label=fieldElement({path:'disposition.maxSpend',label:'Preview maximum spending · zeny',min:0,max:2000000000});label.addEventListener('input',()=>{this.dispositionPlan=null;this.dispositionOutput().textContent='Spending changed. Generate a new preview.';});grid.append(label);panel.append(grid);
+    this.note('inventory','Keep ≤ minimum ≤ desired ≤ maximum. Below minimum, restock toward desired from the selected source. Above maximum, permitted excess goes to storage, then cart, then sale. Unlisted, equipped, selected ammo, refined and carded items stay protected. Preview sends no commands; rules are saved with profiles.');
+    const button=document.createElement('button');button.type='button';button.className='secondary compact';button.textContent='Preview item disposition';
+    button.addEventListener('click',()=>{try{const settings=this.read();const policy=settings.disposition??DEFAULT_DISPOSITION;this.dispositionPlan=planDisposition(policy,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)});this.dispositionOutput().textContent=dispositionPreviewText(this.dispositionPlan);}catch(error){this.dispositionPlan=null;this.dispositionOutput().textContent=error instanceof Error?error.message:'Invalid disposition rules.';}});
+    panel.append(button);const output=document.createElement('div');output.id='disposition-preview';output.className='telemetry-summary';output.setAttribute('role','status');output.textContent='No preview generated. No items will be moved or sold.';panel.append(output);
+  }
+  private dispositionOutput(): HTMLElement { return this.host.querySelector<HTMLElement>('#disposition-preview')!; }
   private note(section: Section, message: string): void { const p = document.createElement('p'); p.className = 'hint'; p.textContent = message; this.panel(section).append(p); }
   private editor(section: Section, path: string, title: string, columns: Column[], initial: Row, max: number): RuleEditor {
     const editor = new RuleEditor(title,columns,initial,max,this.hooks.changed); this.editors.set(path,editor); this.panel(section).append(editor.root); return editor;
@@ -233,6 +256,8 @@ export class FeatureUi {
   }
   read(): AutomationSettings {
     const automation = structuredClone(DEFAULT_AUTOMATION) as unknown as Record<string,unknown>;
+    automation.disposition=structuredClone(DEFAULT_DISPOSITION);
+    object(automation.disposition).maxSpend=Number(this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!.value);
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
       setPath(automation,field.path,field.kind === 'checkbox' ? (input as HTMLInputElement).checked : field.kind === 'text' || field.options ? input.value : Number(input.value));
@@ -242,6 +267,7 @@ export class FeatureUi {
       if (path === 'allocation.stats') for (const row of rows) row.stat = Number(row.stat);
       setPath(automation,path,rows);
     }
+    object(automation.disposition).rules=this.dispositionEditor.read().map(row=>({...row,store:row.store==='1',cart:row.cart==='1',sell:row.sell==='1',allowUnique:row.allowUnique==='1'}));
     return validateAutomation(automation as unknown as AutomationSettings);
   }
   write(automation: AutomationSettings): void {
@@ -252,6 +278,10 @@ export class FeatureUi {
       if (field.kind === 'checkbox') (input as HTMLInputElement).checked = value === true; else input.value = String(value ?? '');
     }
     for (const [path,editor] of this.editors) editor.write(getPath(automation,path) as Row[]);
+    const policy=automation.disposition??DEFAULT_DISPOSITION;
+    this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!.value=String(policy.maxSpend);
+    this.dispositionEditor.write(policy.rules.map(row=>({...row,store:row.store?'1':'0',cart:row.cart?'1':'0',sell:row.sell?'1':'0',allowUnique:row.allowUnique?'1':'0'})));
+    this.dispositionPlan=null;this.dispositionOutput().textContent='No preview generated. No items will be moved or sold.';
   }
   levelDifference(): number { return Number(this.host.querySelector<HTMLInputElement>('[data-setting="combat.levelDifference"]')!.value); }
   private async operation(action: () => Promise<unknown>): Promise<void> {
@@ -366,6 +396,7 @@ export class FeatureUi {
     this.locked=config;this.manualLocked=manual;
     for(const input of this.host.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('[data-setting], [data-config], .feature-panel input, .feature-panel select, .feature-panel textarea, .rule-editor button')) input.disabled=config;
     for(const editor of this.editors.values())editor.lock(config);
+    this.dispositionEditor.lock(config);
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-manual]'))button.disabled=manual;
   }
   active(): boolean { return object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
@@ -376,6 +407,7 @@ export class FeatureUi {
   }
   render(value: unknown): void {
     this.status=object(value);const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
+    if(this.dispositionPlan){try{const settings=this.read();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
     const experience=object(character.experience);const task=object(s.task);const escape=object(s.escape);this.host.querySelector<HTMLElement>('#session-details')!.textContent=`${Math.floor((number(s.elapsedSeconds)??0)/60)}m ${(number(s.elapsedSeconds)??0)%60}s · ${number(s.deaths)??0} deaths · Base EXP +${number(experience.baseGained)??'—'} · Job EXP +${number(experience.jobGained)??'—'}${task.label?' · '+text(task.label):''}${escape.state&&escape.state!=='idle'?' · '+text(escape.reason):''}`;
     const npcChoice=this.host.querySelector<HTMLSelectElement>('#visible-npcs')!;const actors=Array.isArray(s.actors)?s.actors.map(object).filter(actor=>actor.kind===2||actor.kind===4):[];const actorKey=actors.map(actor=>`${actor.id}:${text(actor.name)}`).join('|');
     if(npcChoice.dataset.actors!==actorKey){const selected=npcChoice.value;npcChoice.dataset.actors=actorKey;npcChoice.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='Choose a visible NPC';npcChoice.append(empty);for(const actor of actors){const option=document.createElement('option');option.value=String(actor.id);option.textContent=`${text(actor.name)||'NPC'} · #${actor.id}`;npcChoice.append(option);}npcChoice.value=actors.some(actor=>String(actor.id)===selected)?selected:'';}

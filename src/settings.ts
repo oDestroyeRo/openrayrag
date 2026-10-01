@@ -1,4 +1,5 @@
 import type { Position } from './protocol';
+import { validateDispositionPolicy, type DispositionPolicy } from './disposition';
 
 export const MAX_TARGETS = 64;
 export interface MonsterRule { classId: number; action: 'attack' | 'ignore'; priority: number }
@@ -25,6 +26,7 @@ export interface AutomationSettings {
   limits: { minutes: number; kills: number; pickups: number; weightPercent: number };
   respawn: { enabled: boolean; maxDeaths: number };
   schedule: { enabled: boolean; startHour: number; endHour: number };
+  disposition?: DispositionPolicy;
 }
 export interface Settings {
   map: string; targets: number[]; radius: number; minHpPercent: number; loot: boolean;
@@ -60,11 +62,12 @@ export function automationSettings(settings: Settings): AutomationSettings { ret
 export function escapeSettings(settings: Settings): EscapeSettings { return automationSettings(settings).escape ?? DEFAULT_ESCAPE; }
 export function validateAutomation(a: AutomationSettings): AutomationSettings {
   try {
-    strictKeys(a,['combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule']);
+    strictKeys(a,['combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition']);
     const escape = a.escape === undefined ? DEFAULT_ESCAPE : a.escape;
     strictKeys(escape,['enabled','hpBelowPercent','mode','method','minStock','cooldownSeconds']);
     if (typeof escape.enabled !== 'boolean' || !bounded(escape.hpBelowPercent,1,95) || !['random','save'].includes(escape.mode)
       || !['item','skill'].includes(escape.method) || !bounded(escape.minStock,0,9999) || !bounded(escape.cooldownSeconds,1,3600)) throw new Error();
+    if (Object.hasOwn(a,'disposition')) validateDispositionPolicy(a.disposition);
     strictKeys(a.combat,['mode','levelDifference','rules']); strictKeys(a.loot,['ownership','defaultAction','rules']);
     strictKeys(a.recovery,['enabled','hpStart','hpEnd','spStart','spEnd','timeoutSeconds']); strictKeys(a.allocation,['stats','skills']);
     strictKeys(a.follow,['name','distance','lostSeconds']); strictKeys(a.travel,['destinationMap','returnToLockMap','waypoints','loop']);
