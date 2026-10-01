@@ -1,10 +1,19 @@
 import type { AutomationSettings, LootRule, MonsterRule } from './settings';
 import type { Entity } from './protocol';
+import { evaluateActorPredicate, type ActorObservationSnapshot, type ActorPredicate, type PredicateTrace } from './actor-observations';
 
 export function monsterRule(a: AutomationSettings, classId: number): MonsterRule | undefined { return a.combat.rules.find(r=>r.classId===classId); }
 export function lootRule(a: AutomationSettings, itemId: number): LootRule | undefined { return a.loot.rules.find(r=>r.itemId===itemId); }
-export function acceptsMonster(a: AutomationSettings, e: Entity, player: Entity, selected: number[], aggressive: boolean): boolean {
-  const rule = monsterRule(a,e.classId);
+export function acceptsMonster(a: AutomationSettings, e: Entity, player: Entity, selected: number[], aggressive: boolean, observations?:ActorObservationSnapshot): boolean {
+  let rule = monsterRule(a,e.classId);
+  if(rule?.conditions?.length) {
+    const traces=rule.conditions.map(condition=>evaluateActorPredicate(condition,observations));
+    if(traces.some(trace=>trace.state==='unavailable'))return false;
+    if(traces.some(trace=>trace.state==='unmatched')) {
+      if(rule.action==='attack')return false;
+      rule=undefined; // A known-false ignore condition leaves ordinary selection in control.
+    }
+  }
   if (a.combat.mode === 'off' || rule?.action === 'ignore' || e.level > player.level + a.combat.levelDifference) return false;
   const matching = selected.includes(e.classId) || rule?.action === 'attack';
   return a.combat.mode === 'selected' ? matching : a.combat.mode === 'retaliate' ? aggressive : matching || aggressive;
@@ -36,6 +45,16 @@ export function effectiveSkillLevel(skillId: number, requested: number, state: C
   return SKILL_CATALOG[skillId]?.adjustableLevel || skillId===55 ? requested : state.skillLevel(skillId);
 }
 export class AutomationScheduler {
+  readonly ruleConditions: Array<{rule:string;conditions:PredicateTrace[]}>=[];
+  conditionState(rule:string,conditions:ActorPredicate[]|undefined,observations:ActorObservationSnapshot|undefined):PredicateTrace['state'] {
+    if(!conditions?.length)return 'matched';
+    const traces=conditions.map(condition=>evaluateActorPredicate(condition,observations));
+    if(this.ruleConditions.length<32)this.ruleConditions.push({rule,conditions:traces});
+    return traces.some(trace=>trace.state==='unavailable')?'unavailable':traces.some(trace=>trace.state==='unmatched')?'unmatched':'matched';
+  }
+  private matches(rule:string,conditions:ActorPredicate[]|undefined,observations:ActorObservationSnapshot|undefined):boolean {
+    return this.conditionState(rule,conditions,observations)==='matched';
+  }
   private pending: PendingFeature | null = null;
   private sequence = 0;
   private settlingUntil = 0;
@@ -48,7 +67,7 @@ export class AutomationScheduler {
   get busy(): boolean { return this.pending !== null || this.now()<this.settlingUntil || this.now()<this.canceledUntil; }
   get recovering(): boolean { return this.recoverySince !== null; }
   get pendingAction(): ExpandedAction | null { return this.pending?.action ?? null; }
-  reset(connection=false): void { if(connection){this.settlingUntil=0;this.canceledUntil=0;} else if(this.pending)this.canceledUntil=Math.max(this.canceledUntil,this.pending.deadline); if(this.pending)this.result={sequence:this.sequence,status:'failed',reason:'Action canceled.'}; this.pending = null; this.recoverySince = null; this.resting = false; this.cooldown.clear(); }
+  reset(connection=false): void { this.ruleConditions.length=0; if(connection){this.settlingUntil=0;this.canceledUntil=0;} else if(this.pending)this.canceledUntil=Math.max(this.canceledUntil,this.pending.deadline); if(this.pending)this.result={sequence:this.sequence,status:'failed',reason:'Action canceled.'}; this.pending = null; this.recoverySince = null; this.resting = false; this.cooldown.clear(); }
   task(): AutomationTask {
     return { kind:this.pending?.action.type ?? (this.now()<this.canceledUntil?'settling':this.now()<this.settlingUntil?'skill':this.recovering?'recover':'idle'),
       label:this.pending ? `Waiting for ${this.pending.action.type} confirmation.` : this.now()<this.canceledUntil?'Waiting for the canceled action deadline.':this.now()<this.settlingUntil?'Waiting for skill motion to finish.':this.recovering?'Resting until HP and SP recover.':'Ready.',
@@ -119,21 +138,24 @@ export class AutomationScheduler {
     if(state.sitting!==true)return {action:{type:'sit',sitting:true}};
     this.resting=true; return {};
   }
-  nextRecoveryItem(a: AutomationSettings, p: Entity, state: CharacterState): { action?: ExpandedAction; failure?: string } {
-    return this.next({...a,skills:[],equipment:[],allocation:{stats:[],skills:[]}},p,state,null);
+  nextRecoveryItem(a: AutomationSettings, p: Entity, state: CharacterState, observations?:ActorObservationSnapshot): { action?: ExpandedAction; failure?: string } {
+    return this.next({...a,skills:[],equipment:[],allocation:{stats:[],skills:[]}},p,state,null,observations);
   }
-  next(a: AutomationSettings, p: Entity, state: CharacterState, enemy: Entity | null): { action?: ExpandedAction; failure?: string } {
+  next(a: AutomationSettings, p: Entity, state: CharacterState, enemy: Entity | null, observations?:ActorObservationSnapshot): { action?: ExpandedAction; failure?: string } {
+    this.ruleConditions.length=0;
     if(this.busy)return {};
     const now=this.now(),hp=percent(p.hp,p.maxHp),sp=percent(state.stats?.sp,state.stats?.maxSp);
-    if(a.items.length&&!state.inventoryKnown)return {failure:'Inventory is unavailable; item rules need a full inventory update.'};
     for(const r of a.items) {
+      if(!this.matches(`Item ${r.itemId}`,r.conditions,observations))continue;
+      if(!state.inventoryKnown)return {failure:'Inventory is unavailable; item rules need a full inventory update.'};
       const resource=r.resource==='hp'?hp:sp;
       if(resource===null)return {failure:`${r.resource.toUpperCase()} is unavailable for item rules.`};
       if(resource<=r.belowPercent&&ITEM_CATALOG[r.itemId]?.useType!==1)return {failure:`Item ${r.itemId} is not an untargeted usable item.`};
       if(resource<=r.belowPercent&&state.count(r.itemId)>r.minStock&&now-(this.cooldown.get(`item:${r.itemId}`)??-Infinity)>=r.cooldownSeconds*1000)return {action:{type:'useItem',itemId:r.itemId}};
     }
-    if(a.skills.length&&!state.skillsKnown)return {failure:'Learned skills are unavailable; skill rules need a full skill update.'};
     for(const r of a.skills) {
+      if(!this.matches(`Skill ${r.skillId}`,r.conditions,observations))continue;
+      if(!state.skillsKnown)return {failure:'Learned skills are unavailable; skill rules need a full skill update.'};
       if(sp===null)return {failure:'SP is unavailable for skill rules.'};
       const catalog=SKILL_CATALOG[r.skillId],level=effectiveSkillLevel(r.skillId,r.level,state),cost=skillCost(r.skillId,level);
       if(!catalog||catalog.target===0||cost===null||(r.target==='enemy'&&![1,3].includes(catalog.target))||(r.target==='self'&&![2,3,5].includes(catalog.target)))return {failure:`Skill ${r.skillId} targeting or level is unavailable.`};
@@ -143,8 +165,9 @@ export class AutomationScheduler {
         if(enemy&&distanceBetween(p,enemy)<=1)return {action:{type:'skill',mode:'target',skillId:r.skillId,level,target:enemy.id}};
       }
     }
-    if(a.equipment.length&&!state.inventoryKnown)return {failure:'Inventory is unavailable for equipment rules.'};
     for(const r of a.equipment) {
+      if(!this.matches(`Equipment ${r.itemId}`,r.conditions,observations))continue;
+      if(!state.inventoryKnown)return {failure:'Inventory is unavailable for equipment rules.'};
       if(hp!==null&&hp<=r.hpBelowPercent&&(!r.monsterClassId||enemy?.classId===r.monsterClassId)) {
         const info=ITEM_CATALOG[r.itemId];
         if(!info||![2,3,4].includes(info.itemClass)||!info.position)return {failure:`Item ${r.itemId} is not verified equipment.`};

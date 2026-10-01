@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashSet;
 use std::hash::Hash;
 
@@ -295,6 +296,12 @@ enum MonsterAction {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MonsterRule {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_conditions"
+    )]
+    conditions: Option<Vec<Value>>,
     class_id: u32,
     action: MonsterAction,
     priority: i16,
@@ -344,6 +351,12 @@ struct Recovery {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ItemRule {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_conditions"
+    )]
+    conditions: Option<Vec<Value>>,
     item_id: u32,
     resource: Resource,
     below_percent: u8,
@@ -361,6 +374,12 @@ enum Resource {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SkillRule {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_conditions"
+    )]
+    conditions: Option<Vec<Value>>,
     skill_id: u16,
     level: u8,
     target: SkillTarget,
@@ -380,6 +399,12 @@ enum SkillTarget {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EquipmentRule {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_conditions"
+    )]
+    conditions: Option<Vec<Value>>,
     item_id: u32,
     hp_below_percent: u8,
     monster_class_id: u32,
@@ -455,6 +480,20 @@ struct Schedule {
     end_hour: u8,
 }
 
+fn deserialize_conditions<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<Value>>, D::Error> {
+    Vec::<Value>::deserialize(deserializer).map(Some)
+}
+fn conditions_valid(conditions: &Option<Vec<Value>>, allow_candidate: bool) -> bool {
+    conditions.as_ref().map_or(true, |values| {
+        values.len() <= 16
+            && values.iter().all(|value| {
+                crate::control::validate_actor_predicate_for(value, allow_candidate).is_ok()
+            })
+    })
+}
+
 fn positive_id(id: u32) -> bool {
     (1..=i32::MAX as u32).contains(&id)
 }
@@ -478,11 +517,11 @@ impl AutomationSettings {
         let valid = (-100..=100).contains(&self.combat.level_difference)
             && self.combat.rules.len() <= 64
             && unique_by(&self.combat.rules, |r| r.class_id)
-            && self
-                .combat
-                .rules
-                .iter()
-                .all(|r| positive_id(r.class_id) && (-100..=100).contains(&r.priority))
+            && self.combat.rules.iter().all(|r| {
+                positive_id(r.class_id)
+                    && (-100..=100).contains(&r.priority)
+                    && conditions_valid(&r.conditions, true)
+            })
             && self.loot.rules.len() <= 128
             && unique_by(&self.loot.rules, |r| r.item_id)
             && self
@@ -504,6 +543,7 @@ impl AutomationSettings {
             && unique_by(&self.items, |r| r.item_id)
             && self.items.iter().all(|r| {
                 positive_id(r.item_id)
+                    && conditions_valid(&r.conditions, false)
                     && (1..=100).contains(&r.below_percent)
                     && r.min_stock <= 9999
                     && (1..=3600).contains(&r.cooldown_seconds)
@@ -512,6 +552,7 @@ impl AutomationSettings {
             && unique_by(&self.skills, |r| r.skill_id)
             && self.skills.iter().all(|r| {
                 (1..=255).contains(&r.skill_id)
+                    && conditions_valid(&r.conditions, false)
                     && (1..=10).contains(&r.level)
                     && (1..=100).contains(&r.hp_below_percent)
                     && r.sp_above_percent <= 100
@@ -530,6 +571,7 @@ impl AutomationSettings {
             && unique_by(&self.equipment, |r| r.item_id)
             && self.equipment.iter().all(|r| {
                 positive_id(r.item_id)
+                    && conditions_valid(&r.conditions, false)
                     && (1..=100).contains(&r.hp_below_percent)
                     && r.monster_class_id <= i32::MAX as u32
             })
@@ -1014,5 +1056,29 @@ mod tests {
         }
         value["automation"]["follow"]["name"] = "😀".repeat(25).into();
         assert!(!valid(value));
+    }
+    #[test]
+    fn optional_actor_conditions_preserve_legacy_and_reject_invalid_imports() {
+        let plain = settings();
+        let parsed: Settings = serde_json::from_value(plain.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), plain);
+        let predicate = json!({"field":"actorStatus","actor":{"scope":"self"},"statusId":1,"operator":"eq","value":false});
+        let item = json!({"itemId":501,"resource":"hp","belowPercent":80,"minStock":0,"cooldownSeconds":1,"conditions":[predicate.clone()]});
+        let mut value = settings();
+        value["automation"] = automation();
+        value["automation"]["items"] = json!([item]);
+        assert!(valid(value.clone()));
+        for invalid in [
+            json!(null),
+            json!(vec![predicate.clone(); 17]),
+            json!([{"field":"actorStatus","actor":{"scope":"candidate"},"statusId":1,"operator":"eq","value":false}]),
+            json!([{"field":"actorStatus","actor":{"scope":"self"},"statusId":1,"operator":"eq","value":false,"unknown":true}]),
+        ] {
+            let mut malformed = value.clone();
+            malformed["automation"]["items"][0]["conditions"] = invalid;
+            assert!(!valid(malformed));
+        }
+        value["automation"]["combat"]["rules"] = json!([{"classId":4000,"action":"attack","priority":0,"conditions":[{"field":"actorStatus","actor":{"scope":"candidate"},"statusId":1,"operator":"eq","value":false}]}]);
+        assert!(valid(value));
     }
 }

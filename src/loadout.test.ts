@@ -4,6 +4,9 @@ import { AMMO_CATALOG, WEAPON_CATALOG, LoadoutPolicy, selectAmmo, type LoadoutCh
 import { DEFAULT_AUTOMATION } from './settings';
 import type { Entity } from './protocol';
 import type { FeatureEvent, InventoryItem } from './protocol-feature';
+import { ActorObservations, evaluateActorPredicate, type ActorPredicate } from './actor-observations';
+import { BitWriter } from './binary';
+import { decode } from './protocol';
 const player:Entity={id:1,classId:5,name:'Thief',kind:0,level:50,hp:70,maxHp:100,x:10,y:10,dead:false};
 const enemy:Entity={...player,id:2,classId:4000,kind:1};
 const sword:InventoryItem={bagId:1001,itemId:1101,count:1,type:2,guid:'sword'};
@@ -115,5 +118,48 @@ describe('displaced slots and canceled receipts',()=>{
   t.observe({type:'inventory',items:[...t.state.inventory.values()],equipment:t.state.equipment.slice(),ammoId:t.state.ammoId});expect(t.policy.blocked).toBe(true);
   for(const e of [{type:'equipment',bagId:1003,slot:5,equipped:false},{type:'equipment',bagId:1001,slot:4,equipped:false},{type:'equipment',bagId:1002,slot:4,equipped:true}] as FeatureEvent[])expect(t.observe(e)).toBe(null);
   expect(t.policy.blocked).toBe(false);expect(t.policy.snapshot(t.a,t.state).priorCaptured).toBe(false);
+ });
+});
+
+describe('typed loadout equipment conditions',()=>{
+ const condition:ActorPredicate={field:'actorStatus',actor:{scope:'self'},statusId:1,operator:'eq',value:false};
+ function observed(){
+  const t=setup();let at=1000;const observations=new ActorObservations(()=>at);
+  observations.spawn({...player,statuses:[]});observations.frame();
+  const evaluate=()=>evaluateActorPredicate(condition,observations.snapshot(1,null,true)).state;
+  const packet=(bytes:BitWriter)=>{for(const event of decode(bytes.finish()))observations.apply(event);observations.frame();};
+  return {...t,evaluate,packet,advance:(ms=1000)=>{at+=ms;t.advance(ms);observations.frame();}};
+ }
+ it('requires evidence for optional conditions and retains legacy empty conditions',()=>{
+  for(const conditions of [undefined,[],[condition]]){
+   const t=setup();t.a.equipment=[{itemId:1701,hpBelowPercent:80,monsterClassId:0,...(conditions===undefined?{}:{conditions})}];
+   expect(!!t.policy.next(t.a,player,t.state,null).change).toBe(!conditions?.length);
+  }
+ });
+ it('retains prior gear through status refresh and predicted expiry, then restores on known false',()=>{
+  const t=observed();t.a.equipment=[{itemId:1701,hpBelowPercent:80,monsterClassId:0,conditions:[condition]}];
+  t.confirm(t.policy.next(t.a,player,t.state,null,t.evaluate).change!);
+  t.packet(new BitWriter().u8(62).i32(1).u8(1).bool(true));
+  expect(t.evaluate()).toBe('unavailable');expect(t.policy.next(t.a,player,t.state,null,t.evaluate)).toEqual({});
+  expect(t.policy.snapshot(t.a,t.state).priorCaptured).toBe(true);expect(t.state.equipment.slice(4,6)).toEqual([1002,0]);
+  t.packet(new BitWriter().u8(61).i32(1).u8(1).f32(.5));t.advance(500);
+  expect(t.evaluate()).toBe('unavailable');expect(t.policy.next(t.a,player,t.state,null,t.evaluate)).toEqual({});
+  t.packet(new BitWriter().u8(61).i32(1).u8(1).f32(60));
+  expect(t.evaluate()).toBe('unmatched');expect(t.policy.next(t.a,player,t.state,null,t.evaluate).change).toMatchObject({restoring:true,action:{type:'equip',bagId:1002,equipped:false}});
+ });
+ it('preserves pending and uncertain receipt ownership when conditions become unavailable',()=>{
+  const t=observed();t.a.equipment=[{itemId:1701,hpBelowPercent:80,monsterClassId:0,conditions:[condition]}];
+  const change=t.policy.next(t.a,player,t.state,null,t.evaluate).change!;t.policy.begin(change,t.state);
+  t.packet(new BitWriter().u8(62).i32(1).u8(1).bool(true));
+  expect(t.policy.next(t.a,player,t.state,null,t.evaluate)).toEqual({});expect(t.policy.equipmentSettled).toBe(false);
+  t.observe({type:'equipment',bagId:1003,slot:5,equipped:false});expect(t.policy.receipt(t.state)).toBe(false);
+  t.policy.cancel();expect(t.policy.equipmentSettled).toBe(false);expect(t.policy.blocked).toBe(true);
+  t.advance(30_000);expect(t.policy.next(t.a,player,t.state,null,()=> 'matched')).toEqual({});
+  t.observe({type:'equipment',bagId:1001,slot:4,equipped:false});t.observe({type:'equipment',bagId:1002,slot:4,equipped:true});
+  expect(t.policy.equipmentSettled).toBe(true);expect(t.policy.next(t.a,player,t.state,null,t.evaluate)).toEqual({});
+ });
+ it('allows a later matched rule without inferring unknown conditions ended',()=>{
+  const t=setup();t.a.equipment=[{itemId:2101,hpBelowPercent:80,monsterClassId:0,conditions:[condition]},{itemId:1701,hpBelowPercent:80,monsterClassId:0,conditions:[]}];
+  expect(t.policy.next(t.a,player,t.state,null,rule=>rule.itemId===2101?'unavailable':'matched').change?.action).toEqual({type:'equip',bagId:1002,equipped:true});
  });
 });

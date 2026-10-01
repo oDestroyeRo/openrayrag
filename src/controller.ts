@@ -1,3 +1,4 @@
+import type { ActorPredicate } from './actor-observations';
 import { BotEngine, type Action, type Snapshot } from './engine';
 import { decode } from './protocol';
 import { validateExpandedAction, type ExpandedAction } from './protocol-feature';
@@ -401,7 +402,8 @@ export class CompanionController {
       for (const rule of this.routineSpec?.rules ?? []) for (const condition of rule.conditions)
         if (condition.field === 'inventory') inventory[condition.itemId] = c.count(condition.itemId);
     }
-    return { map: this.engine.map, ...(p?.maxHp ? { hpPercent: p.hp / p.maxHp * 100 } : {}),
+    const predicates=(this.routineSpec?.rules??[]).flatMap(rule=>rule.conditions.filter((condition):condition is ActorPredicate=>condition.field==='actorStatus'||condition.field==='actorCasting'));
+    return { actors:this.engine.actorObservation(predicates), map: this.engine.map, ...(p?.maxHp ? { hpPercent: p.hp / p.maxHp * 100 } : {}),
       ...(c.stats?.maxSp ? { spPercent: (c.stats.sp ?? 0) / c.stats.maxSp * 100 } : {}),
       ...(c.stats?.zeny !== undefined ? { zeny: c.stats.zeny } : {}), ...(c.inventoryKnown ? { inventory } : {}) };
   }

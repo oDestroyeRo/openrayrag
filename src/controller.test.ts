@@ -443,6 +443,18 @@ describe('world retirement and heartbeat deadline regressions', () => {
   });
 });
 
+describe('routine actor observations',()=>{
+ it('passes typed cast evidence into routine decisions and ignores a superseded socket',()=>{
+  const {controller,sent,receive,step,packet}=setup();
+  receive({type:'spawn',entity:{...player,statuses:[]}});
+  controller.perform('routine',{name:'Wait for idle cast',durationSeconds:30,maxActions:1,rules:[{name:'Stand',priority:0,cooldownSeconds:1,maxRuns:1,conditions:[{field:'actorCasting',actor:{scope:'self'},operator:'ne',value:true}],action:{type:'sit',sitting:false}}]});
+  step();expect(sent).toEqual([]);
+  packet(new BitWriter().u8(27).i32(1));step();expect(sent).toEqual([{type:'sit',sitting:false}]);
+  controller.disconnect();controller.connect(true);
+  controller.receive(new BitWriter().u8(27).i32(1).finish(),0);expect(controller.engine.snapshot().actorObservations.actors).toEqual([]);
+ });
+});
+
 describe('persistent ammo and loadout receipts',()=>{
   function loadoutFixture(){const t=setup(),automation=policy();automation.loadout.enabled=true;automation.loadout.cooldownSeconds=1;automation.loadout.minAmmoStock=3;
     t.controller.engine.player!.classId=5;t.controller.engine.player!.level=50;

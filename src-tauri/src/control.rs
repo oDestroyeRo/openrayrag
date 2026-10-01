@@ -388,10 +388,67 @@ fn finite(value: &Value, min: f64, max: f64) -> Validation {
     }
 }
 
+pub(crate) fn validate_actor_predicate(value: &Value) -> Validation {
+    validate_actor_predicate_for(value, false)
+}
+pub(crate) fn validate_actor_predicate_for(value: &Value, allow_candidate: bool) -> Validation {
+    let condition = value.as_object().ok_or_else(invalid)?;
+    let kind = string(condition, "field")?;
+    match kind {
+        "actorStatus" => {
+            object(value, &["field", "actor", "statusId", "operator", "value"])?;
+            integer(condition, "statusId", 1, 255)?;
+        }
+        "actorCasting" => {
+            object(value, &["field", "actor", "skillId", "operator", "value"])?;
+            if condition.contains_key("skillId") {
+                integer(condition, "skillId", 1, 255)?;
+            }
+        }
+        _ => return Err(invalid()),
+    }
+    if !matches!(string(condition, "operator")?, "eq" | "ne") {
+        return Err(invalid());
+    }
+    boolean(condition, "value")?;
+    let actor_value = field(condition, "actor")?;
+    let actor = actor_value.as_object().ok_or_else(invalid)?;
+    match string(actor, "scope")? {
+        "candidate" if allow_candidate => {
+            object(actor_value, &["scope"])?;
+        }
+        "self" | "target" => {
+            object(actor_value, &["scope"])?;
+        }
+        "actor" => {
+            object(actor_value, &["scope", "id", "world", "incarnation"])?;
+            integer(actor, "id", 1, MAX_ID)?;
+            integer(actor, "incarnation", 1, MAX_ID)?;
+            let world = string(actor, "world")?;
+            if world.len() != 36
+                || !world.bytes().enumerate().all(|(index, c)| {
+                    if [8, 13, 18, 23].contains(&index) {
+                        c == b'-'
+                    } else {
+                        c.is_ascii_digit() || (b'a'..=b'f').contains(&c)
+                    }
+                })
+            {
+                return Err(invalid());
+            }
+        }
+        _ => return Err(invalid()),
+    }
+    Ok(())
+}
+
 fn validate_condition(value: &Value) -> Validation {
     let condition = value.as_object().ok_or_else(invalid)?;
     let kind = string(condition, "field")?;
     let operator = string(condition, "operator")?;
+    if matches!(kind, "actorStatus" | "actorCasting") {
+        return validate_actor_predicate(value);
+    }
     if kind == "map" {
         object(value, &["field", "operator", "value"])?;
         if !matches!(operator, "eq" | "ne") {
@@ -619,7 +676,7 @@ mod tests {
 
 #[cfg(test)]
 mod automation_request_tests {
-    use super::{request_script, validate_action, validate_request};
+    use super::{request_script, validate_action, validate_actor_predicate, validate_request};
     use serde_json::{json, Value};
 
     fn workflow() -> Value {
@@ -841,5 +898,30 @@ mod automation_request_tests {
             );
         }
         assert!(request_script("window.alert(1)", &json!({"type":"respawn"})).is_err());
+    }
+    #[test]
+    fn actor_predicates_use_exact_typed_lifetime_bound_shapes() {
+        for predicate in [
+            json!({"field":"actorStatus","actor":{"scope":"self"},"statusId":1,"operator":"eq","value":false}),
+            json!({"field":"actorCasting","actor":{"scope":"target"},"operator":"ne","value":true}),
+            json!({"field":"actorCasting","actor":{"scope":"actor","id":2147483647,"incarnation":2147483647,"world":"00000000-0000-0000-0000-000000000001"},"skillId":255,"operator":"eq","value":true}),
+        ] {
+            assert!(validate_actor_predicate(&predicate).is_ok());
+            let mut value = routine();
+            value["rules"][0]["conditions"] = json!([predicate]);
+            assert!(validate_request("routine", &value).is_ok());
+        }
+        for invalid in [
+            json!({"field":"actorCasting","actor":{"scope":"candidate"},"operator":"eq","value":false}),
+            json!({"field":"actorCasting","actor":{"scope":"self","id":1},"operator":"eq","value":false}),
+            json!({"field":"actorCasting","actor":{"scope":"self"},"skillId":null,"operator":"eq","value":false}),
+            json!({"field":"actorStatus","actor":{"scope":"self"},"statusId":0,"operator":"eq","value":false}),
+            json!({"field":"actorCasting","actor":{"scope":"actor","id":1,"incarnation":1,"world":"bad"},"operator":"eq","value":false}),
+            json!({"field":"actorCasting","actor":{"scope":"self"},"operator":"lt","value":false}),
+            json!({"field":"actorCasting","actor":{"scope":"self"},"operator":"eq","value":0}),
+            json!({"field":"actorCasting","actor":{"scope":"self"},"operator":"eq","value":false,"script":"code"}),
+        ] {
+            assert!(validate_actor_predicate(&invalid).is_err());
+        }
     }
 }

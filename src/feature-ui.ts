@@ -1,3 +1,5 @@
+import { ActorPredicateEditor, actorSnapshotAt } from './actor-predicate-ui';
+import { validActorSnapshot, type ActorObservationSnapshot } from './actor-observations';
 import { DEFAULT_AUTOMATION, validateAutomation, type AutomationSettings, type Settings } from './settings';
 import { MAX_PROFILES, ProfileStore } from './profiles';
 import { ITEM_CATALOG, SKILL_CATALOG, itemName, skillName } from './game-catalog';
@@ -17,7 +19,7 @@ interface Hooks {
 }
 type Field = { path: string; label: string; kind?: 'text' | 'checkbox'; min?: number; max?: number; options?: Array<[string,string]> };
 type Column = { key: string; label: string; kind?: 'text'; min?: number; max?: number; options?: Array<[string,string]> };
-type Row = Record<string, string | number>;
+type Row = Record<string, unknown>;
 const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const text = (v: unknown): string => typeof v === 'string' ? v : '';
 const number = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -90,7 +92,8 @@ function setPath(value: Record<string, unknown>, path: string, input: unknown): 
 class RuleEditor {
   readonly root = document.createElement('details'); private readonly rows = document.createElement('div');
   private readonly add = document.createElement('button'); private locked = false;
-  constructor(title: string, private readonly columns: Column[], private readonly initial: Row, private readonly maximum: number, changed: () => void) {
+  private readonly conditions=new Map<Element,ActorPredicateEditor>();
+  constructor(title: string, private readonly columns: Column[], private readonly initial: Row, private readonly maximum: number, private readonly changed: () => void, private readonly observations?:()=>ActorObservationSnapshot|undefined, private readonly allowCandidate=false) {
     this.root.className = 'rule-editor';
     const summary = document.createElement('summary'); summary.textContent = title; this.root.append(summary,this.rows);
     this.add.type = 'button'; this.add.className = 'secondary compact'; this.add.textContent = '＋ Add rule';
@@ -98,13 +101,13 @@ class RuleEditor {
     this.root.addEventListener('input',changed); this.root.append(this.add); this.write([]);
   }
   read(): Row[] {
-    return [...this.rows.children].map(row => Object.fromEntries(this.columns.map(column => {
+    return [...this.rows.children].map(row => {const result:Row=Object.fromEntries(this.columns.map(column => {
       const input = row.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-column="${column.key}"]`)!;
       return [column.key,column.kind === 'text' || column.options ? input.value : Number(input.value)];
-    })));
+    }));const conditions=this.conditions.get(row)?.read();if(conditions!==undefined)result.conditions=conditions;return result;});
   }
   write(values: Row[]): void {
-    this.rows.replaceChildren();
+    this.rows.replaceChildren();this.conditions.clear();
     for (const value of values) {
       const row = document.createElement('div'); row.className = 'rule-row';
       for (const column of this.columns) {
@@ -114,8 +117,9 @@ class RuleEditor {
         if (input instanceof HTMLInputElement && ['itemId','skillId','classId'].includes(column.key)) input.setAttribute('list',`${column.key}-catalog`);
         row.append(label);
       }
+      if(this.observations){const editor=new ActorPredicateEditor(this.observations,this.changed,this.allowCandidate);editor.write(value.conditions as import('./actor-observations').ActorPredicate[]|undefined);this.conditions.set(row,editor);row.append(editor.root);}
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-button rule-remove'; remove.textContent = 'Remove';
-      remove.addEventListener('click', () => { row.remove(); this.add.disabled = this.locked || this.rows.childElementCount >= this.maximum; this.root.dispatchEvent(new Event('input',{bubbles:true})); });
+      remove.addEventListener('click', () => { this.conditions.delete(row);row.remove(); this.add.disabled = this.locked || this.rows.childElementCount >= this.maximum; this.root.dispatchEvent(new Event('input',{bubbles:true})); });
       row.append(remove); this.rows.append(row);
     }
     this.lock(this.locked);
@@ -140,6 +144,8 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     return false;
   }
   if (!['character','world','workflow','routine','task','actionResult','travel','escape','elapsedSeconds','deaths','lootStats','actors','loadout'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
+  if(value.ruleConditions!==undefined&&!bounded(value.ruleConditions,0))return false;
   const barter = object(value.world).barter;
   return barter === undefined || Array.isArray(barter) && barter.every(entry => {
     const row = object(entry);
@@ -175,7 +181,7 @@ export class FeatureUi {
     const sessionDetails=document.createElement('p');sessionDetails.id='session-details';sessionDetails.className='session-details';sessionDetails.textContent='Session time, experience and task state appear after connection.';host.querySelector('.session-card')!.append(sessionDetails);
     const footnote = combat.querySelector('.footnote')!; footnote.textContent = 'Game input yields briefly. Temporary interruptions wait and resume; Stop cancels the run. Profiles never start automation.'; actions.append(footnote);
     combat.querySelector('.routing-settings .hint')?.remove();
-    this.rules(); this.workflows(); this.profilePanel(); this.navigation();
+    this.rules(); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.profilePanel(); this.navigation();
     this.dispositionPanel();
     for (const [id,catalog] of [['itemId',ITEM_CATALOG],['skillId',SKILL_CATALOG]] as const) {
       const list=document.createElement('datalist');list.id=`${id}-catalog`;
@@ -205,11 +211,11 @@ export class FeatureUi {
   private dispositionOutput(): HTMLElement { return this.host.querySelector<HTMLElement>('#disposition-preview')!; }
   private note(section: Section, message: string): void { const p = document.createElement('p'); p.className = 'hint'; p.textContent = message; this.panel(section).append(p); }
   private editor(section: Section, path: string, title: string, columns: Column[], initial: Row, max: number): RuleEditor {
-    const editor = new RuleEditor(title,columns,initial,max,this.hooks.changed); this.editors.set(path,editor); this.panel(section).append(editor.root); return editor;
+    const editor = new RuleEditor(title,columns,initial,max,this.hooks.changed,['combat.rules','items','skills','equipment'].includes(path)?()=>actorSnapshotAt(this.status.actorObservations):undefined,path==='combat.rules'); this.editors.set(path,editor); this.panel(section).append(editor.root); return editor;
   }
   private rules(): void {
     this.editor('combat','combat.rules','Monster policies & priority',[idColumn('classId','Monster class ID'),{key:'action',label:'Action',options:[['attack','Attack'],['ignore','Ignore']]},priority],{classId:1002,action:'attack',priority:0},64);
-    this.note('combat','Ignore rules take precedence. Higher priority wins among eligible targets. Use monster class IDs from the map list.');
+    this.note('combat','Ignore rules apply when their conditions match; known-false ignores fall back to selected combat. Unknown conditions block that class. Attack conditions also guard selected species. Higher priority wins among eligible targets.');
     this.note('recovery','Rest starts above the emergency HP threshold. Resume needs both configured HP and SP targets. Recovery timeouts keep the run waiting.');
     this.note('recovery','Emergency escape is opt-in: random uses Fly Wing or Teleport; save point uses Butterfly Wing or Return. It waits for your refreshed character, then for HP recovery. Stock reserve applies to wings. A rejected or uncertain attempt never falls back to another action.');
     this.editor('travel','travel.waypoints','Waypoints',[{key:'map',label:'Map code',kind:'text'},{key:'x',label:'X',min:0,max:511},{key:'y',label:'Y',min:0,max:511}],{map:'prt_fild08',x:150,y:150},64);
@@ -364,12 +370,14 @@ export class FeatureUi {
     const startDocument=document.createElement('button');startDocument.type='button';startDocument.className='secondary compact';startDocument.textContent='Start document';startDocument.dataset.manual='true';startDocument.addEventListener('click',()=>void this.operation(()=>this.hooks.workflow(validateWorkflowSpec(JSON.parse(workflowText.value)))));workflowDocument.append(startDocument);
     const workflowHelp = document.createElement('p'); workflowHelp.className='hint'; workflowHelp.textContent='Choose exact option labels, observed NPC fees and a spending cap. Talk, continue and option fees count toward that cap. The workflow checks the map, NPC, stock and server acknowledgements before each step.'; workflow.append(workflowHelp);
     const workflowState=document.createElement('p');workflowState.id='workflow-state';workflowState.className='telemetry-summary';workflow.append(workflowState);
-    const routine=this.detail('Advanced condition routines'); const routineHelp=document.createElement('p');routineHelp.className='hint';routineHelp.textContent='Bounded rules use HP %, SP %, zeny, elapsed seconds, map or inventory quantity. An unknown observation never matches. Actions use the typed command names; raw packets, scripts and arbitrary code are unavailable.';routine.append(routineHelp);
+    const routine=this.detail('Advanced condition routines'); const routineHelp=document.createElement('p');routineHelp.className='hint';routineHelp.textContent='Bounded rules use HP %, SP %, zeny, elapsed seconds, map, inventory, actor status or casting evidence. An unknown observation never matches. Actions use the typed command names; raw packets, scripts and arbitrary code are unavailable.';routine.append(routineHelp);
     const routineText=document.createElement('textarea');routineText.id='routine-document';routineText.className='document-editor';routineText.spellcheck=false;routineText.maxLength=65000;routineText.rows=12;routineText.value=JSON.stringify({name:'Rest when hurt',durationSeconds:300,maxActions:1,rules:[{name:'Sit below 60% HP',priority:1,cooldownSeconds:30,maxRuns:1,conditions:[{field:'hpPercent',operator:'lt',value:60}],action:{type:'sit',sitting:true}}]},null,2);routine.append(routineText);
+    const routineConditions=new ActorPredicateEditor(()=>actorSnapshotAt(this.status.actorObservations),()=>undefined);routine.append(routineConditions.root);
+    const appendCondition=document.createElement('button');appendCondition.type='button';appendCondition.className='secondary compact';appendCondition.textContent='Append actor conditions to first routine rule';appendCondition.dataset.config='true';appendCondition.addEventListener('click',()=>{try{const checked=validateRoutineSpec(JSON.parse(routineText.value),isAction);checked.rules[0]!.conditions.push(...(routineConditions.read()??[]));routineText.value=JSON.stringify(validateRoutineSpec(checked,isAction),null,2);}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid routine.',true);}});routine.append(appendCondition);
     const routineButtons=document.createElement('div');routineButtons.className='button-row';routine.append(routineButtons);
     const routineStart=document.createElement('button');routineStart.type='button';routineStart.className='primary compact';routineStart.textContent='Start routine';routineStart.dataset.manual='true';routineStart.addEventListener('click',()=>void this.operation(()=>this.hooks.routine(validateRoutineSpec(JSON.parse(routineText.value),isAction))));routineButtons.append(routineStart);
     const routinePreview=document.createElement('p');routinePreview.className='telemetry-summary';routinePreview.hidden=true;routine.append(routinePreview);
-    const dryRun=document.createElement('button');dryRun.type='button';dryRun.className='secondary compact';dryRun.textContent='Validate / dry run';dryRun.dataset.config='true';dryRun.addEventListener('click',()=>{try{const checked=validateRoutineSpec(JSON.parse(routineText.value),isAction);const trace=dryRunRoutine(checked,this.observation(),isAction);routinePreview.hidden=false;routinePreview.textContent=trace.rules.map(rule=>`${rule.name}: ${rule.state} · ${rule.reason}`).join('\n');this.hooks.notify('Routine validated. Dry run sends no commands.');}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid routine.',true);}});routineButtons.append(dryRun);
+    const dryRun=document.createElement('button');dryRun.type='button';dryRun.className='secondary compact';dryRun.textContent='Validate / dry run';dryRun.dataset.config='true';dryRun.addEventListener('click',()=>{try{const checked=validateRoutineSpec(JSON.parse(routineText.value),isAction);const trace=dryRunRoutine(checked,this.observation(),isAction);routinePreview.hidden=false;routinePreview.textContent=trace.rules.map(rule=>`${rule.name}: ${rule.state} · ${rule.reason}${rule.conditions.map(c=>'\n  '+c.state+' · '+c.reason).join('')}`).join('\n');this.hooks.notify('Routine validated. Dry run sends no commands.');}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid routine.',true);}});routineButtons.append(dryRun);
     const routineState=document.createElement('p');routineState.id='routine-state';routineState.className='telemetry-summary';routine.append(routineState);
   }
   private profilePanel(): void {
@@ -408,12 +416,13 @@ export class FeatureUi {
   }
   active(): boolean { return object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
   private observation(): RoutineObservation {
-    const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={map:this.hooks.map(),elapsedSeconds:0};
+    const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:this.hooks.map(),elapsedSeconds:0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;
     const character=object(this.status.character);if(character.inventoryKnown===true&&Array.isArray(character.inventory)){const counts:Record<number,number>={};for(const entry of character.inventory){const row=object(entry);const id=number(row.itemId);const count=number(row.count);if(id!==null&&count!==null)counts[id]=(counts[id]??0)+count;}result.inventory=counts;}return result;
   }
   render(value: unknown): void {
     this.status=object(value);const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
+    const conditionState=this.host.querySelector<HTMLElement>('#actor-condition-state')!;const traces=Array.isArray(s.ruleConditions)?s.ruleConditions:[];conditionState.hidden=traces.length===0;conditionState.textContent=traces.slice(0,32).map(entry=>{const rule=object(entry);const conditions=Array.isArray(rule.conditions)?rule.conditions:[];return text(rule.rule)+(rule.truncated===true?' · additional evidence omitted':'')+conditions.map(condition=>{const trace=object(condition);return '\n  '+text(trace.state)+' · '+text(trace.reason);}).join('');}).join('\n');
     if(this.dispositionPlan){try{const settings=this.read();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
     const experience=object(character.experience);const task=object(s.task);const escape=object(s.escape);this.host.querySelector<HTMLElement>('#session-details')!.textContent=`${Math.floor((number(s.elapsedSeconds)??0)/60)}m ${(number(s.elapsedSeconds)??0)%60}s · ${number(s.deaths)??0} deaths · Base EXP +${number(experience.baseGained)??'—'} · Job EXP +${number(experience.jobGained)??'—'}${task.label?' · '+text(task.label):''}${escape.state&&escape.state!=='idle'?' · '+text(escape.reason):''}`;
     const npcChoice=this.host.querySelector<HTMLSelectElement>('#visible-npcs')!;const actors=Array.isArray(s.actors)?s.actors.map(object).filter(actor=>actor.kind===2||actor.kind===4):[];const actorKey=actors.map(actor=>`${actor.id}:${text(actor.name)}`).join('|');
