@@ -16,7 +16,8 @@ export interface LoginDriver {
   prepare(profile: LoginProfile, active: () => boolean): Promise<void>;
   submit(): void;
   selectionReady(): boolean;
-  select(slot: number): void;
+  // false means the enter request has not been dispatched yet.
+  select(slot: number): boolean | void;
 }
 
 const LOGIN = 'Canvas/Login Screen/LoginBoxWindow';
@@ -24,6 +25,9 @@ const USERNAME = `${LOGIN}/LoginBox/Login/Username/Title/InputField (TMP)`;
 const PASSWORD = `${LOGIN}/LoginBox/Login/Password/Title/InputField (TMP)`;
 const SERVER = `${LOGIN}/LoginBox/Server Settings/Username/Title/InputField (TMP)`;
 const CHARACTERS = 'Canvas/Login Screen/CharacterCreator';
+const SELECTION_PANE = `${CHARACTERS}/CharacterWindow/CharacterSelectPane`;
+const SELECTION_OK = `${SELECTION_PANE}/BottomBar/OkButton`;
+const SELECTION_SETTLE_MS = 200;
 const READY_PROBE = '__rayrag_login_ready_probe__';
 
 // Unity's WebGL SendMessage reports missing objects through its console, not a
@@ -61,7 +65,19 @@ export function loginReady(client: UnityClient): boolean {
   return objectReady(client, LOGIN);
 }
 
+class SelectionDispatchError extends Error {
+  constructor(stage: 'slot' | 'enter') {
+    super(stage === 'slot'
+      ? 'Could not select the requested slot. Choose your character in the game window.'
+      : 'Could not enter with the selected character. Continue in the game window.');
+  }
+}
+
 export function loginDriver(client: UnityClient): LoginDriver {
+  let selectedSlot: number | null = null;
+  let enterAttempted = false;
+  const selectionReady = () => objectReady(client, CHARACTERS)
+    && objectReady(client, SELECTION_PANE) && objectReady(client, SELECTION_OK);
   const message = (object: string, method: string, value?: string | number) => {
     if (!unityMessage(client, object, method, value)) throw new Error('Game interface unavailable');
   };
@@ -76,8 +92,23 @@ export function loginDriver(client: UnityClient): LoginDriver {
       message(PASSWORD, 'SetTextWithoutNotify', profile.password);
     },
     submit: () => message(LOGIN, 'AttemptLogin'),
-    selectionReady: () => objectReady(client, CHARACTERS),
-    select(slot) { message(CHARACTERS, 'SetCharacterInfo', slot); message(CHARACTERS, 'ClickOk'); },
+    selectionReady,
+    select(slot) {
+      if (enterAttempted) return true;
+      // Recheck immediately before either dispatch. A shared parent also hosts
+      // character creation, so its existence alone cannot prove selection ready.
+      if (!selectionReady()) return false;
+      if (selectedSlot === null) {
+        if (!unityMessage(client, CHARACTERS, 'SetCharacterInfo', slot)) throw new SelectionDispatchError('slot');
+        selectedSlot = slot;
+        // Let Unity finish applying the selected slot before the enter request.
+        return false;
+      }
+      if (selectedSlot !== slot) throw new SelectionDispatchError('slot');
+      enterAttempted = true;
+      if (!unityMessage(client, CHARACTERS, 'ClickOk')) throw new SelectionDispatchError('enter');
+      return true;
+    },
   };
 }
 
@@ -137,6 +168,7 @@ export class LoginController {
   status: LoginStatus = { phase: 'idle', message: '' };
   private slot = 0;
   private deadline = 0;
+  private selectionReadySince: number | null = null;
   constructor(private readonly driver: LoginDriver, private readonly now = Date.now) {}
   get active(): boolean {
     return ['signingIn', 'selecting', 'entering'].includes(this.status.phase);
@@ -168,6 +200,7 @@ export class LoginController {
           this.fail(`Character slot ${this.slot + 1} is empty. Choose an existing character.`);
           return;
         }
+        this.selectionReadySince = null;
         this.status = { phase: 'selecting', message: `Selecting character slot ${this.slot + 1}…` };
         this.deadline = this.now() + 30_000;
       } catch {
@@ -178,20 +211,28 @@ export class LoginController {
   tick(): void {
     if (!this.active) return;
     if (this.now() > this.deadline) {
-      this.fail('Sign-in timed out. Check the game window; no automatic retry will run.');
+      this.fail('Sign-in timed out. Check the game connection.');
       return;
     }
-    if (this.status.phase === 'selecting' && this.driver.selectionReady()) {
-      this.status = { phase: 'entering', message: 'Entering the field…' };
+    if (this.status.phase === 'selecting') {
+      let ready = false;
+      try { ready = this.driver.selectionReady(); } catch { /* Read-only preflight; wait until its bounded deadline. */ }
+      if (!ready) { this.selectionReadySince = null; return; }
+      this.selectionReadySince ??= this.now();
+      if (this.now() - this.selectionReadySince < SELECTION_SETTLE_MS) return;
       try {
-        this.driver.select(this.slot);
-      } catch { this.fail('Could not select the character. Continue in the game window.'); }
+        if (this.driver.select(this.slot) === false) return;
+        this.status = { phase: 'entering', message: 'Entering the field…' };
+        this.deadline = this.now() + 30_000;
+      } catch (error) {
+        this.fail(error instanceof SelectionDispatchError ? error.message : 'Could not select the character. Continue in the game window.');
+      }
     }
   }
   complete(): void {
-    if (this.active) this.status = { phase: 'complete', message: 'Signed in. Combat remains stopped until you press Start.' };
+    if (this.active) this.status = { phase: 'complete', message: 'Signed in. Your character is ready.' };
   }
-  disconnect(): void { if (this.active) this.fail('Game disconnected during sign-in. No automatic retry will run.'); }
+  disconnect(): void { if (this.active) this.fail('Game disconnected during sign-in.'); }
   cancel(): void {
     if (this.active || this.status.phase === 'idle') {
       this.status = { phase: 'cancelled', message: 'Automatic sign-in cancelled. Continue manually or reopen the game.' };

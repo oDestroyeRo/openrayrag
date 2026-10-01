@@ -1,0 +1,138 @@
+import type { Entity, GameEvent, Position } from './protocol';
+import type { Action } from './engine';
+import { distance, routeSegment } from './navigation';
+import { walkDuration } from './movement';
+import { planArrivalEscape, planPortalApproach, routeBetweenMaps, travelNavigator, type TravelStep } from './travel';
+
+export interface TravelSnapshot {
+  state: 'idle' | 'walking' | 'transition' | 'complete' | 'failed' | 'cancelled';
+  destination: string; reason: string; remainingMaps: string[]; route: Position[]; leg: Position[];
+}
+const cell = (p: Position): Position => ({ x: Math.floor(p.x), y: Math.floor(p.y) });
+
+/** Owns movement only while the field engine is stopped. Never infers a map transition from elapsed time. */
+export class TravelController {
+  private state: TravelSnapshot['state'] = 'idle';
+  private destination = '';
+  private reason = '';
+  private steps: TravelStep[] = [];
+  private route: Position[] = [];
+  private map = '';
+  private playerId = 0;
+  private since = 0;
+  private deadline = 0;
+  private lastAction = 0;
+  private awaitingSpawn = false;
+  private finalEscape = false;
+  private avoidWalls = true;
+  private stepSize = 10;
+  private leg: { cells: Position[]; since: number; acceptedUntil: number | null } | null = null;
+  constructor(private readonly send: (action: Action) => void, private readonly now = Date.now) {}
+  get active(): boolean { return this.state === 'walking' || this.state === 'transition'; }
+
+  start(map: string, player: Entity, destination: string, stepSize: number, avoidWalls: boolean): void {
+    if (this.active) throw new Error('Stop the current trip first.');
+    if (!Number.isInteger(stepSize) || stepSize < 1 || stepSize > 20) throw new Error('Invalid travel step size.');
+    const steps = routeBetweenMaps(map, cell(player), destination, avoidWalls);
+    if (!steps) throw new Error('No verified route connects this position to the destination.');
+    this.steps = steps; this.destination = destination; this.map = map; this.playerId = player.id;
+    this.stepSize = stepSize; this.avoidWalls = avoidWalls; this.since = this.now(); this.deadline = this.now() + 20_000;
+    this.leg = null; this.awaitingSpawn = false; this.finalEscape = false; this.lastAction = 0;
+    this.state = 'walking'; this.plan(player);
+  }
+
+  private plan(player: Entity): void {
+    const step = this.steps[0];
+    const route = step ? planPortalApproach(this.map, cell(player), step.portal, this.avoidWalls)
+      : planArrivalEscape(this.map, cell(player), this.avoidWalls);
+    if (!route?.length) { this.cancel('Arrival or next portal is unreachable on verified ground.', true); return; }
+    this.route = route; this.finalEscape = !step; this.leg = null;
+    this.state = 'walking';
+    this.reason = step ? `Travel to ${this.destination}: approaching the portal to ${step.portal.toMap}.`
+      : `Arrived in ${this.destination}; leaving the portal area.`;
+  }
+
+  observe(events: GameEvent[]): void {
+    for (const event of events) {
+      if (!this.active) return;
+      if (event.type === 'death' && event.id === this.playerId) { this.cancel('Travel stopped because the character died.', true); continue; }
+      if (event.type === 'enter') { this.cancel('Travel stopped because the game session changed.', true); continue; }
+      if (event.type === 'map') {
+        const step = this.steps[0];
+        if (!step || event.map !== step.portal.toMap || !this.leg && this.state !== 'transition') {
+          this.cancel('Travel stopped after an unexpected map transition.', true); continue;
+        }
+        // A map event is accepted only while approaching the final trigger tile,
+        // never during an unrelated leg elsewhere on the same source map.
+        const end = this.leg?.cells.at(-1) ?? this.route.at(-1);
+        if (!end || !this.inPortal(end, step)) { this.cancel('Map changed before the planned portal was reached.', true); continue; }
+        this.map = event.map; this.awaitingSpawn = true; this.leg = null; this.route = [];
+        this.state = 'transition'; this.deadline = this.now() + 20_000; this.reason = `Loading ${event.map}.`;
+      } else if (event.type === 'spawn' && event.entity.id === this.playerId && this.awaitingSpawn) {
+        const expected = this.steps[0]?.portal.arrival;
+        if (!expected || distance(expected, event.entity) > 6) { this.cancel('Portal arrival did not match its verified destination.', true); continue; }
+        this.awaitingSpawn = false; this.steps.shift(); this.plan(event.entity);
+      } else if (event.type === 'walk' && event.id === this.playerId) {
+        const nav = travelNavigator(this.map, this.route);
+        if (!this.leg || !nav || event.walk.locked || event.walk.cells.length < 1 || event.walk.cells.length > 21
+          || distance(cell(event.walk.origin), this.leg.cells[0]!) > 1
+          || distance(event.walk.cells[0]!, this.leg.cells[0]!) > 1
+          || distance(event.walk.cells.at(-1)!, this.leg.cells.at(-1)!) !== 0
+          || !nav.validRoute(event.walk.cells) || walkDuration(event.walk) > 15_000) {
+          this.cancel('Travel received an unverified or interrupted movement route.', true); continue;
+        }
+        this.leg.cells = event.walk.cells;
+        this.leg.acceptedUntil = this.now() + walkDuration(event.walk) + 100;
+      } else if ((event.type === 'position' || event.type === 'stop') && event.id === this.playerId && this.leg) {
+        this.cancel('Travel stopped after a movement correction. Choose the destination again.', true);
+      }
+    }
+  }
+
+  private inPortal(p: Position, step: TravelStep): boolean {
+    const a = step.portal.area;
+    return Math.abs(p.x - a.x) <= a.halfWidth && Math.abs(p.y - a.y) <= a.halfHeight;
+  }
+  tick(map: string, player: Entity | undefined): void {
+    if (!this.active) return;
+    const now = this.now();
+    if (now - this.since > 1_200_000) { this.cancel('Travel reached its twenty-minute limit.', true); return; }
+    if (this.state === 'transition') {
+      if (now > this.deadline) this.cancel('The planned map transition was not confirmed. No retry was sent.', true);
+      return;
+    }
+    if (!player || player.dead || map !== this.map) { this.cancel('Travel character or map state is unavailable.', true); return; }
+    if (this.leg) {
+      if (this.leg.acceptedUntil !== null && now >= this.leg.acceptedUntil) {
+        if (distance(cell(player), this.leg.cells.at(-1)!) !== 0) { this.cancel('Travel movement did not finish at its accepted destination.', true); return; }
+        this.leg = null;
+      } else {
+        if (now - this.leg.since > 19_000 || this.leg.acceptedUntil === null && now - this.leg.since > 4_000)
+          this.cancel('Travel movement confirmation timed out. No retry was sent.', true);
+        return;
+      }
+    }
+    const index = this.route.findIndex(p => distance(p, cell(player)) === 0);
+    if (index < 0) { this.cancel('Character left the planned travel corridor.', true); return; }
+    this.route = this.route.slice(index);
+    if (this.route.length === 1) {
+      if (this.finalEscape) { this.state = 'complete'; this.reason = `Arrived in ${this.destination}. Choose targets before starting combat.`; }
+      else { this.state = 'transition'; this.deadline = now + 20_000; this.reason = 'Waiting for the planned map transition.'; }
+      return;
+    }
+    if (now - this.lastAction < 300) return;
+    const cells = routeSegment(this.route, this.stepSize);
+    this.leg = { cells, since: now, acceptedUntil: null };
+    this.send({ type: 'walk', destination: cells.at(-1)! }); this.lastAction = now;
+  }
+  cancel(reason = 'Travel stopped by you.', failed = false): void {
+    const wasActive = this.active;
+    this.state = failed ? 'failed' : 'cancelled'; this.reason = reason;
+    this.leg = null; this.route = []; this.awaitingSpawn = false;
+    if (wasActive) this.send({ type: 'stop' });
+  }
+  snapshot(): TravelSnapshot {
+    return { state: this.state, destination: this.destination, reason: this.reason,
+      remainingMaps: this.steps.map(step => step.portal.toMap).slice(0,64), route: this.route.slice(0,512), leg: this.leg?.cells ?? [] };
+  }
+}

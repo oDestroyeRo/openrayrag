@@ -1,0 +1,845 @@
+use serde_json::{Map, Value};
+use std::collections::HashSet;
+
+const MAX_REQUEST_BYTES: usize = 65_536;
+const MAX_ID: i64 = i32::MAX as i64;
+
+type Validation = Result<(), String>;
+type Object = Map<String, Value>;
+
+fn invalid() -> String {
+    "Invalid automation request.".into()
+}
+
+fn object<'a>(value: &'a Value, keys: &[&str]) -> Result<&'a Object, String> {
+    let object = value.as_object().ok_or_else(invalid)?;
+    if object.keys().any(|key| !keys.contains(&key.as_str())) {
+        return Err(invalid());
+    }
+    Ok(object)
+}
+
+fn field<'a>(object: &'a Object, key: &str) -> Result<&'a Value, String> {
+    object.get(key).ok_or_else(invalid)
+}
+
+fn string<'a>(object: &'a Object, key: &str) -> Result<&'a str, String> {
+    field(object, key)?.as_str().ok_or_else(invalid)
+}
+
+fn number(value: &Value, min: i64, max: i64) -> Result<i64, String> {
+    value
+        .as_i64()
+        .filter(|value| (min..=max).contains(value))
+        .ok_or_else(invalid)
+}
+
+fn integer(object: &Object, key: &str, min: i64, max: i64) -> Result<i64, String> {
+    number(field(object, key)?, min, max)
+}
+
+fn boolean(object: &Object, key: &str) -> Validation {
+    field(object, key)?
+        .as_bool()
+        .map(|_| ())
+        .ok_or_else(invalid)
+}
+
+fn array(value: &Value, max: usize) -> Result<&[Value], String> {
+    value
+        .as_array()
+        .filter(|values| values.len() <= max)
+        .map(Vec::as_slice)
+        .ok_or_else(invalid)
+}
+
+fn text(value: &str, max: usize) -> Validation {
+    // Match JavaScript String.trim(), including its byte-order-mark whitespace.
+    if value
+        .trim_matches(|c| {
+            matches!(
+                c,
+                '\u{0009}'..='\u{000d}'
+                    | ' '
+                    | '\u{00a0}'
+                    | '\u{1680}'
+                    | '\u{2000}'..='\u{200a}'
+                    | '\u{2028}'
+                    | '\u{2029}'
+                    | '\u{202f}'
+                    | '\u{205f}'
+                    | '\u{3000}'
+                    | '\u{feff}'
+            )
+        })
+        .is_empty()
+        || value.encode_utf16().count() > max
+        || value.chars().any(|c| c <= '\u{001f}' || c == '\u{007f}')
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn name(value: &str) -> Validation {
+    text(value, 32)
+}
+
+fn map_code(value: &str) -> Validation {
+    if value.is_empty()
+        || value.len() > 64
+        || !value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn barter(action: &Object) -> Validation {
+    integer(action, "choice", 0, 63)?;
+    integer(action, "count", 1, 99)?;
+    let mut ids = HashSet::new();
+    for id in array(field(action, "bagIds")?, 10)? {
+        if !ids.insert(number(id, 1, MAX_ID)?) {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
+fn rows(value: &Value, max: usize, priced: bool) -> Validation {
+    let mut ids = HashSet::new();
+    for row in array(value, max)? {
+        let row = object(
+            row,
+            if priced {
+                &["id", "count", "price"]
+            } else {
+                &["id", "count"]
+            },
+        )?;
+        if !ids.insert(integer(row, "id", 1, MAX_ID)?) {
+            return Err(invalid());
+        }
+        integer(row, "count", 1, 32767)?;
+        if priced {
+            integer(row, "price", 0, 9_999_999)?;
+        }
+    }
+    Ok(())
+}
+
+fn position(value: &Value) -> Validation {
+    let position = object(value, &["x", "y"])?;
+    integer(position, "x", 0, 4096)?;
+    integer(position, "y", 0, 4096)?;
+    Ok(())
+}
+
+pub(crate) fn validate_action(value: &Value) -> Validation {
+    let kind = value
+        .as_object()
+        .and_then(|object| object.get("type"))
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    match kind {
+        "sit" => {
+            let action = object(value, &["type", "sitting"])?;
+            boolean(action, "sitting")?;
+        }
+        "useItem" => {
+            let action = object(value, &["type", "itemId", "target"])?;
+            integer(action, "itemId", 1, MAX_ID)?;
+            if let Some(target) = action.get("target") {
+                let target = number(target, -1, MAX_ID)?;
+                if target != -1 && target <= 0 {
+                    return Err(invalid());
+                }
+            }
+        }
+        "skill" => {
+            let action = value.as_object().ok_or_else(invalid)?;
+            match string(action, "mode")? {
+                "self" => {
+                    let action = object(value, &["type", "mode", "skillId", "level"])?;
+                    integer(action, "skillId", 1, 32767)?;
+                    integer(action, "level", 1, 255)?;
+                }
+                "target" => {
+                    let action = object(value, &["type", "mode", "skillId", "level", "target"])?;
+                    integer(action, "skillId", 1, 255)?;
+                    integer(action, "level", 1, 255)?;
+                    integer(action, "target", 1, MAX_ID)?;
+                }
+                "ground" => {
+                    let action = object(value, &["type", "mode", "skillId", "level", "position"])?;
+                    integer(action, "skillId", 1, 255)?;
+                    integer(action, "level", 1, 255)?;
+                    position(field(action, "position")?)?;
+                }
+                _ => return Err(invalid()),
+            }
+        }
+        "equip" => {
+            let action = object(value, &["type", "bagId", "equipped"])?;
+            integer(action, "bagId", 1, MAX_ID)?;
+            boolean(action, "equipped")?;
+        }
+        "respawn" | "npcAdvance" | "npcBarterCancel" | "partyLeave" | "partyDisband"
+        | "vendingStop" => {
+            object(value, &["type"])?;
+        }
+        "allocateSkill" => {
+            let action = object(value, &["type", "skillId"])?;
+            integer(action, "skillId", 1, 255)?;
+        }
+        "allocateStats" => {
+            let action = object(value, &["type", "attributes"])?;
+            let attributes = array(field(action, "attributes")?, 6)?;
+            if attributes.len() != 6 {
+                return Err(invalid());
+            }
+            let mut positive = false;
+            for value in attributes {
+                positive |= number(value, 0, 99)? > 0;
+            }
+            if !positive {
+                return Err(invalid());
+            }
+        }
+        "npcTalk" | "partyInviteId" | "vendingView" => {
+            let action = object(value, &["type", "id"])?;
+            integer(action, "id", 1, MAX_ID)?;
+        }
+        "npcOption" => {
+            let action = object(value, &["type", "index"])?;
+            integer(action, "index", 0, 31)?;
+        }
+        "shop" => {
+            let action = object(value, &["type", "mode", "rows"])?;
+            let max = match string(action, "mode")? {
+                "buy" => 20,
+                "sell" => 200,
+                _ => return Err(invalid()),
+            };
+            rows(field(action, "rows")?, max, false)?;
+        }
+        "storage" => {
+            let action = value.as_object().ok_or_else(invalid)?;
+            match string(action, "operation")? {
+                "close" => {
+                    object(value, &["type", "operation"])?;
+                }
+                "deposit" | "withdraw" => {
+                    let action = object(value, &["type", "operation", "bagId", "count"])?;
+                    integer(action, "bagId", 1, MAX_ID)?;
+                    integer(action, "count", 1, 32767)?;
+                }
+                _ => return Err(invalid()),
+            }
+        }
+        "npcBarter" => {
+            let action = object(value, &["type", "choice", "count", "bagIds"])?;
+            barter(action)?;
+        }
+        "cart" => {
+            let action = object(value, &["type", "direction", "bagId", "count"])?;
+            integer(action, "direction", 1, 2)?;
+            integer(action, "bagId", 1, MAX_ID)?;
+            integer(action, "count", 1, 32767)?;
+        }
+        "partyCreate" => {
+            let action = object(value, &["type", "name", "inviteId"])?;
+            name(string(action, "name")?)?;
+            if let Some(invite_id) = action.get("inviteId") {
+                number(invite_id, 1, MAX_ID)?;
+            }
+        }
+        "partyInviteName" => {
+            let action = object(value, &["type", "name"])?;
+            name(string(action, "name")?)?;
+        }
+        "partyAccept" => {
+            let action = object(value, &["type", "partyId"])?;
+            integer(action, "partyId", 1, MAX_ID)?;
+        }
+        "partyLeader" | "partyRemove" => {
+            let action = object(value, &["type", "memberId"])?;
+            integer(action, "memberId", 1, MAX_ID)?;
+        }
+        "vendingStart" => {
+            let action = object(value, &["type", "name", "rows"])?;
+            name(string(action, "name")?)?;
+            let entries = field(action, "rows")?;
+            if array(entries, 32)?.is_empty() {
+                return Err(invalid());
+            }
+            rows(entries, 32, true)?;
+        }
+        "vendingPurchase" => {
+            let action = object(value, &["type", "rows"])?;
+            rows(field(action, "rows")?, 32, false)?;
+        }
+        _ => return Err("Unknown automation action.".into()),
+    }
+    Ok(())
+}
+
+fn expected_cost(step: &Object) -> Validation {
+    if let Some(cost) = step.get("expectedCost") {
+        number(cost, 0, 2_000_000_000)?;
+    }
+    Ok(())
+}
+
+fn validate_workflow(value: &Value) -> Validation {
+    let workflow = object(
+        value,
+        &[
+            "name",
+            "map",
+            "npcId",
+            "maxSpend",
+            "minStock",
+            "steps",
+            "timeoutMs",
+        ],
+    )?;
+    text(string(workflow, "name")?, 64)?;
+    map_code(string(workflow, "map")?)?;
+    integer(workflow, "npcId", 1, MAX_ID)?;
+    integer(workflow, "maxSpend", 0, 2_000_000_000)?;
+    if let Some(timeout) = workflow.get("timeoutMs") {
+        number(timeout, 1000, 60_000)?;
+    }
+    let mut ids = HashSet::new();
+    for row in array(field(workflow, "minStock")?, 100)? {
+        let row = object(row, &["itemId", "count"])?;
+        if !ids.insert(integer(row, "itemId", 1, MAX_ID)?) {
+            return Err(invalid());
+        }
+        integer(row, "count", 0, 32767)?;
+    }
+    let steps = array(field(workflow, "steps")?, 32)?;
+    if steps.is_empty() {
+        return Err(invalid());
+    }
+    for value in steps {
+        let step = value.as_object().ok_or_else(invalid)?;
+        match string(step, "type")? {
+            "talk" => {
+                let step = object(value, &["type", "expectedCost"])?;
+                expected_cost(step)?;
+            }
+            "closeShop" | "closeStorage" | "cancelBarter" => {
+                object(value, &["type"])?;
+            }
+            "advance" => {
+                let step = object(value, &["type", "expectedText", "expectedCost"])?;
+                if let Some(expected) = step.get("expectedText") {
+                    text(expected.as_str().ok_or_else(invalid)?, 1024)?;
+                }
+                expected_cost(step)?;
+            }
+            "option" => {
+                let step = object(value, &["type", "index", "expectedLabel", "expectedCost"])?;
+                integer(step, "index", 0, 31)?;
+                text(string(step, "expectedLabel")?, 1024)?;
+                expected_cost(step)?;
+            }
+            "buy" | "sell" => {
+                let step = object(value, &["type", "rows"])?;
+                let max = if string(step, "type")? == "buy" {
+                    20
+                } else {
+                    200
+                };
+                let entries = field(step, "rows")?;
+                if array(entries, max)?.is_empty() {
+                    return Err(invalid());
+                }
+                rows(entries, max, false)?;
+            }
+            "deposit" | "withdraw" => {
+                let step = object(value, &["type", "bagId", "count"])?;
+                integer(step, "bagId", 1, MAX_ID)?;
+                integer(step, "count", 1, 32767)?;
+            }
+            "barter" => {
+                let step = object(value, &["type", "choice", "count", "bagIds"])?;
+                barter(step)?;
+            }
+            _ => return Err("Unknown workflow step.".into()),
+        }
+    }
+    Ok(())
+}
+
+fn finite(value: &Value, min: f64, max: f64) -> Validation {
+    if value
+        .as_f64()
+        .is_some_and(|value| value.is_finite() && value >= min && value <= max)
+    {
+        Ok(())
+    } else {
+        Err(invalid())
+    }
+}
+
+fn validate_condition(value: &Value) -> Validation {
+    let condition = value.as_object().ok_or_else(invalid)?;
+    let kind = string(condition, "field")?;
+    let operator = string(condition, "operator")?;
+    if kind == "map" {
+        object(value, &["field", "operator", "value"])?;
+        if !matches!(operator, "eq" | "ne") {
+            return Err(invalid());
+        }
+        return map_code(string(condition, "value")?);
+    }
+    if !matches!(operator, "lt" | "lte" | "eq" | "gte" | "gt") {
+        return Err(invalid());
+    }
+    if kind == "inventory" {
+        object(value, &["field", "itemId", "operator", "value"])?;
+        integer(condition, "itemId", 1, MAX_ID)?;
+        integer(condition, "value", 0, MAX_ID)?;
+        return Ok(());
+    }
+    object(value, &["field", "operator", "value"])?;
+    match kind {
+        "hpPercent" | "spPercent" => finite(field(condition, "value")?, 0.0, 100.0),
+        "elapsedSeconds" => finite(field(condition, "value")?, 0.0, 86_400.0),
+        "zeny" => integer(condition, "value", 0, MAX_ID).map(|_| ()),
+        _ => Err("Unknown routine condition.".into()),
+    }
+}
+
+fn bounded_json(value: &Value, depth: usize) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    match value {
+        Value::Null | Value::Bool(_) => true,
+        Value::Number(number) => number.as_f64().is_some_and(f64::is_finite),
+        Value::String(value) => value.encode_utf16().count() <= 4096,
+        Value::Array(values) => {
+            values.len() <= 64 && values.iter().all(|value| bounded_json(value, depth + 1))
+        }
+        Value::Object(values) => {
+            values.len() <= 64 && values.values().all(|value| bounded_json(value, depth + 1))
+        }
+    }
+}
+
+fn validate_routine(value: &Value) -> Validation {
+    let routine = object(value, &["name", "durationSeconds", "maxActions", "rules"])?;
+    text(string(routine, "name")?, 64)?;
+    integer(routine, "durationSeconds", 1, 86_400)?;
+    integer(routine, "maxActions", 1, 1000)?;
+    let rules = array(field(routine, "rules")?, 32)?;
+    if rules.is_empty() {
+        return Err(invalid());
+    }
+    let mut names = HashSet::new();
+    for value in rules {
+        let rule = object(
+            value,
+            &[
+                "name",
+                "priority",
+                "cooldownSeconds",
+                "maxRuns",
+                "conditions",
+                "action",
+            ],
+        )?;
+        let rule_name = string(rule, "name")?;
+        text(rule_name, 64)?;
+        if !names.insert(rule_name) {
+            return Err("Routine rule names must be unique.".into());
+        }
+        integer(rule, "priority", -1000, 1000)?;
+        integer(rule, "cooldownSeconds", 0, 86_400)?;
+        integer(rule, "maxRuns", 1, 1000)?;
+        let conditions = array(field(rule, "conditions")?, 16)?;
+        if conditions.is_empty() {
+            return Err(invalid());
+        }
+        for condition in conditions {
+            validate_condition(condition)?;
+        }
+        let action = field(rule, "action")?;
+        if !bounded_json(action, 0)
+            || serde_json::to_vec(action).map_err(|_| invalid())?.len() > 4096
+        {
+            return Err("Routine action exceeds its limit.".into());
+        }
+        validate_action(action)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
+    if serde_json::to_vec(request).map_err(|_| invalid())?.len() > MAX_REQUEST_BYTES {
+        return Err("Automation request exceeds its limit.".into());
+    }
+    match action {
+        "command" => validate_action(request),
+        "workflow" => validate_workflow(request),
+        "routine" => validate_routine(request),
+        _ => Err("Unknown bot action.".into()),
+    }
+}
+
+pub(crate) fn request_script(action: &str, request: &Value) -> Result<String, String> {
+    validate_request(action, request)?;
+    let action_json = serde_json::to_string(action).map_err(|_| invalid())?;
+    let request_json = serde_json::to_string(request).map_err(|_| invalid())?;
+    Ok(format!(
+        "window.__RAYRAG__?.perform({action_json},{request_json})"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_action, validate_request};
+    use serde_json::json;
+
+    #[test]
+    fn accepts_representative_feature_and_world_commands() {
+        for action in [
+            json!({"type":"sit","sitting":true}),
+            json!({"type":"useItem","itemId":501}),
+            json!({"type":"useItem","itemId":501,"target":-1}),
+            json!({"type":"skill","mode":"self","skillId":32767,"level":255}),
+            json!({"type":"skill","mode":"target","skillId":255,"level":255,"target":1}),
+            json!({"type":"skill","mode":"ground","skillId":1,"level":1,"position":{"x":4096,"y":0}}),
+            json!({"type":"equip","bagId":1,"equipped":false}),
+            json!({"type":"respawn"}),
+            json!({"type":"allocateSkill","skillId":255}),
+            json!({"type":"allocateStats","attributes":[99,0,0,0,0,0]}),
+            json!({"type":"npcTalk","id":1}),
+            json!({"type":"npcAdvance"}),
+            json!({"type":"npcOption","index":31}),
+            json!({"type":"shop","mode":"buy","rows":[{"id":501,"count":32767}]}),
+            json!({"type":"storage","operation":"close"}),
+            json!({"type":"storage","operation":"withdraw","bagId":1,"count":1}),
+            json!({"type":"npcBarter","choice":63,"count":1,"bagIds":[1,2]}),
+            json!({"type":"npcBarterCancel"}),
+            json!({"type":"cart","direction":2,"bagId":1,"count":1}),
+            json!({"type":"partyCreate","name":"Example","inviteId":1}),
+            json!({"type":"partyInviteId","id":1}),
+            json!({"type":"partyInviteName","name":"Example"}),
+            json!({"type":"partyAccept","partyId":1}),
+            json!({"type":"partyLeave"}),
+            json!({"type":"partyLeader","memberId":1}),
+            json!({"type":"partyRemove","memberId":1}),
+            json!({"type":"partyDisband"}),
+            json!({"type":"vendingStart","name":"Example","rows":[{"id":1,"count":1,"price":9_999_999}]}),
+            json!({"type":"vendingStop"}),
+            json!({"type":"vendingView","id":1}),
+            json!({"type":"vendingPurchase","rows":[{"id":1,"count":1}]}),
+        ] {
+            assert!(
+                validate_request("command", &action).is_ok(),
+                "rejected {action}"
+            );
+            let mut unknown = action;
+            unknown
+                .as_object_mut()
+                .unwrap()
+                .insert("script".into(), "alert(1)".into());
+            assert!(validate_action(&unknown).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_types_missing_fields_unknown_fields_and_invalid_ranges() {
+        for action in [
+            json!(null),
+            json!([]),
+            json!({"type":"chat","message":"hello"}),
+            json!({"type":"sit","sitting":1}),
+            json!({"type":"sit"}),
+            json!({"type":"useItem","itemId":0}),
+            json!({"type":"useItem","itemId":1,"target":0}),
+            json!({"type":"useItem","itemId":1,"target":null}),
+            json!({"type":"skill","mode":"self","skillId":1,"level":1,"target":1}),
+            json!({"type":"skill","mode":"target","skillId":256,"level":1,"target":1}),
+            json!({"type":"skill","mode":"ground","skillId":1,"level":1,"position":{"x":1,"y":1,"map":"x"}}),
+            json!({"type":"skill","mode":"ground","skillId":1,"level":1,"position":{"x":4097,"y":1}}),
+            json!({"type":"allocateStats","attributes":[0,0,0,0,0,0]}),
+            json!({"type":"allocateStats","attributes":[100,0,0,0,0,0]}),
+            json!({"type":"allocateStats","attributes":[1,0,0,0,0,0,0]}),
+            json!({"type":"npcOption","index":32}),
+            json!({"type":"shop","mode":"buy","rows":[{"id":1,"count":1,"price":1}]}),
+            json!({"type":"shop","mode":"buy","rows":[{"id":1,"count":1},{"id":1,"count":2}]}),
+            json!({"type":"storage","operation":"close","count":1}),
+            json!({"type":"storage","operation":"withdraw","bagId":1,"count":32768}),
+            json!({"type":"npcBarter","choice":0,"count":1,"bagIds":[1,1]}),
+            json!({"type":"npcBarter","choice":0,"count":100,"bagIds":[]}),
+            json!({"type":"npcBarter","choice":0,"count":1,"bagIds":(1..=11).collect::<Vec<_>>()}),
+            json!({"type":"cart","direction":3,"bagId":1,"count":1}),
+            json!({"type":"partyCreate","name":"Example","inviteId":null}),
+            json!({"type":"partyInviteName","name":"x\n"}),
+            json!({"type":"partyInviteName","name":"😀".repeat(17)}),
+            json!({"type":"vendingStart","name":"Example","rows":[]}),
+            json!({"type":"vendingStart","name":"Example","rows":[{"id":1,"count":1,"price":10_000_000}]}),
+        ] {
+            assert!(validate_action(&action).is_err(), "accepted {action}");
+        }
+    }
+
+    #[test]
+    fn enforces_size_and_array_bounds() {
+        for (kind, max) in [("buy", 20), ("sell", 200)] {
+            let rows = (1..=max)
+                .map(|id| json!({"id":id,"count":1}))
+                .collect::<Vec<_>>();
+            assert!(validate_action(&json!({"type":"shop","mode":kind,"rows":rows})).is_ok());
+            let rows = (1..=max + 1)
+                .map(|id| json!({"id":id,"count":1}))
+                .collect::<Vec<_>>();
+            assert!(validate_action(&json!({"type":"shop","mode":kind,"rows":rows})).is_err());
+        }
+        assert_eq!(
+            validate_request(
+                "command",
+                &json!({"type":"partyCreate","name":"x".repeat(65_537)})
+            )
+            .unwrap_err(),
+            "Automation request exceeds its limit."
+        );
+        assert!(validate_request("unknown", &json!({"type":"respawn"})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod automation_request_tests {
+    use super::{request_script, validate_action, validate_request};
+    use serde_json::{json, Value};
+
+    fn workflow() -> Value {
+        json!({
+            "name":"Restock", "map":"prontera", "npcId":1,
+            "maxSpend":2000, "minStock":[{"itemId":501,"count":2}],
+            "steps":[{"type":"talk"},{"type":"option","index":0,"expectedLabel":"Buy"},
+                {"type":"buy","rows":[{"id":501,"count":2}]},{"type":"closeShop"}],
+            "timeoutMs":60000
+        })
+    }
+
+    fn routine() -> Value {
+        json!({
+            "name":"HP recovery", "durationSeconds":86400, "maxActions":1000,
+            "rules":[{
+                "name":"Recover", "priority":-1000, "cooldownSeconds":0, "maxRuns":1000,
+                "conditions":[{"field":"hpPercent","operator":"lt","value":65.5},
+                    {"field":"spPercent","operator":"gte","value":10.25},
+                    {"field":"elapsedSeconds","operator":"gt","value":0.5},
+                    {"field":"map","operator":"eq","value":"prt_fild08"},
+                    {"field":"zeny","operator":"lte","value":2147483647},
+                    {"field":"inventory","itemId":501,"operator":"gt","value":0}],
+                "action":{"type":"useItem","itemId":501}
+            }]
+        })
+    }
+
+    #[test]
+    fn accepts_workflows_and_checks_step_fields_and_limits() {
+        assert!(validate_request("workflow", &workflow()).is_ok());
+        for step in [
+            json!({"type":"advance"}),
+            json!({"type":"advance","expectedText":"Hello"}),
+            json!({"type":"deposit","bagId":1,"count":32767}),
+            json!({"type":"withdraw","bagId":1,"count":1}),
+            json!({"type":"closeStorage"}),
+            json!({"type":"cancelBarter"}),
+            json!({"type":"barter","choice":63,"count":99,"bagIds":[]}),
+        ] {
+            let mut value = workflow();
+            value["steps"] = json!([step]);
+            assert!(
+                validate_request("workflow", &value).is_ok(),
+                "rejected {value}"
+            );
+            value["steps"][0]["unknown"] = true.into();
+            assert!(validate_request("workflow", &value).is_err());
+        }
+        for (path, invalid) in [
+            ("/map", json!("../map")),
+            ("/npcId", json!(0)),
+            ("/maxSpend", json!(2_000_000_001)),
+            ("/timeoutMs", json!(999)),
+            ("/timeoutMs", json!(null)),
+            (
+                "/minStock",
+                json!([{"itemId":1,"count":0},{"itemId":1,"count":1}]),
+            ),
+            ("/minStock", json!([{"itemId":1,"count":1,"unknown":true}])),
+            ("/steps", json!([])),
+            ("/steps", json!([{"type":"attack","id":1}])),
+            ("/steps", json!([{"type":"buy","rows":[]}])),
+            ("/steps", json!([{"type":"advance","expectedText":null}])),
+            (
+                "/steps",
+                json!([{"type":"option","index":0,"expectedLabel":""}]),
+            ),
+        ] {
+            let mut value = workflow();
+            *value.pointer_mut(path).unwrap() = invalid;
+            assert!(
+                validate_request("workflow", &value).is_err(),
+                "accepted {value}"
+            );
+        }
+        let mut value = workflow();
+        value["unknown"] = true.into();
+        assert!(validate_request("workflow", &value).is_err());
+        value.as_object_mut().unwrap().remove("unknown");
+        value["steps"] = json!(vec![json!({"type":"talk"}); 33]);
+        assert!(validate_request("workflow", &value).is_err());
+    }
+
+    #[test]
+    fn restricts_expected_npc_cost_to_dialog_steps_and_integer_bounds() {
+        for step in [
+            json!({"type":"talk"}),
+            json!({"type":"advance","expectedText":"Hello"}),
+            json!({"type":"option","index":0,"expectedLabel":"Open storage"}),
+        ] {
+            let mut value = workflow();
+            value["steps"] = json!([step]);
+            assert!(validate_request("workflow", &value).is_ok());
+            for cost in [json!(0), json!(40), json!(2_000_000_000)] {
+                value["steps"][0]["expectedCost"] = cost;
+                assert!(validate_request("workflow", &value).is_ok());
+            }
+            for cost in [
+                json!(-1),
+                json!(2_000_000_001),
+                json!(0.5),
+                json!(null),
+                json!("40"),
+            ] {
+                value["steps"][0]["expectedCost"] = cost;
+                assert!(validate_request("workflow", &value).is_err());
+            }
+        }
+        for step in [
+            json!({"type":"closeShop","expectedCost":0}),
+            json!({"type":"closeStorage","expectedCost":0}),
+            json!({"type":"cancelBarter","expectedCost":0}),
+            json!({"type":"buy","rows":[{"id":501,"count":1}],"expectedCost":0}),
+            json!({"type":"deposit","bagId":1,"count":1,"expectedCost":0}),
+            json!({"type":"barter","choice":0,"count":1,"bagIds":[],"expectedCost":0}),
+        ] {
+            let mut value = workflow();
+            value["steps"] = json!([step]);
+            assert!(validate_request("workflow", &value).is_err());
+        }
+    }
+
+    #[test]
+    fn accepts_routine_fractions_and_rejects_unknown_or_unbounded_conditions() {
+        assert!(validate_request("routine", &routine()).is_ok());
+        for (path, invalid) in [
+            ("/name", json!("")),
+            ("/durationSeconds", json!(86401)),
+            ("/maxActions", json!(0)),
+            ("/rules", json!([])),
+            ("/rules/0/priority", json!(-1001)),
+            ("/rules/0/cooldownSeconds", json!(86401)),
+            ("/rules/0/maxRuns", json!(1001)),
+            ("/rules/0/conditions", json!([])),
+            (
+                "/rules/0/conditions",
+                json!([{"field":"hpPercent","operator":"lt","value":100.1}]),
+            ),
+            (
+                "/rules/0/conditions",
+                json!([{"field":"zeny","operator":"eq","value":1.5}]),
+            ),
+            (
+                "/rules/0/conditions",
+                json!([{"field":"inventory","itemId":1,"operator":"eq","value":1.5}]),
+            ),
+            (
+                "/rules/0/conditions",
+                json!([{"field":"map","operator":"lt","value":"prontera"}]),
+            ),
+            (
+                "/rules/0/conditions",
+                json!([{"field":"map","operator":"eq","value":"prontera","itemId":1}]),
+            ),
+            (
+                "/rules/0/conditions",
+                json!([{"field":"elapsedSeconds","operator":"lte","value":86400.1}]),
+            ),
+            (
+                "/rules/0/conditions",
+                json!([{"field":"unknown","operator":"eq","value":1}]),
+            ),
+            ("/rules/0/action", json!({"type":"chat","message":"hello"})),
+        ] {
+            let mut value = routine();
+            *value.pointer_mut(path).unwrap() = invalid;
+            assert!(
+                validate_request("routine", &value).is_err(),
+                "accepted {value}"
+            );
+        }
+        for path in ["", "/rules/0", "/rules/0/conditions/0", "/rules/0/action"] {
+            let mut value = routine();
+            value
+                .pointer_mut(path)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert("unknown".into(), true.into());
+            assert!(validate_request("routine", &value).is_err());
+        }
+        let mut value = routine();
+        let rule = value["rules"][0].clone();
+        value["rules"] = json!([rule.clone(), rule]);
+        assert!(validate_request("routine", &value).is_err());
+    }
+
+    #[test]
+    fn routine_actions_have_smaller_json_and_byte_budgets() {
+        let mut value = routine();
+        value["rules"][0]["action"] = json!({"type":"shop","mode":"sell","rows":(1..=65).map(|id|json!({"id":id,"count":1})).collect::<Vec<_>>()});
+        assert!(validate_action(&value["rules"][0]["action"]).is_ok());
+        assert!(validate_request("routine", &value).is_err());
+        value["rules"][0]["action"] = json!({"type":"vendingStart","name":"Example","rows":(1..=32).map(|id|json!({"id":i32::MAX as i64-id,"count":32767,"price":9_999_999})).collect::<Vec<_>>()});
+        assert!(validate_request("routine", &value).is_ok());
+        value["rules"][0]["conditions"] = json!(vec![
+            json!({"field":"hpPercent","operator":"gt","value":0});
+            17
+        ]);
+        assert!(validate_request("routine", &value).is_err());
+    }
+
+    #[test]
+    fn serializes_data_into_fixed_controller_calls() {
+        let action = json!({"type":"partyCreate","name":"Example"});
+        for (kind, value) in [
+            ("command", action),
+            ("workflow", workflow()),
+            ("routine", routine()),
+        ] {
+            let encoded = serde_json::to_string(&value).unwrap();
+            assert_eq!(
+                request_script(kind, &value).unwrap(),
+                format!(
+                    "window.__RAYRAG__?.perform({},{encoded})",
+                    serde_json::to_string(kind).unwrap()
+                )
+            );
+        }
+        assert!(request_script("window.alert(1)", &json!({"type":"respawn"})).is_err());
+    }
+}

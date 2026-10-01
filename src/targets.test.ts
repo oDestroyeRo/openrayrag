@@ -37,4 +37,12 @@ describe('map monster selection', () => {
     targets.clear();expect(targets.ids).toEqual([]);
     targets.update('session',info,null);targets.selectEligible();expect(targets.ids).toEqual([]);
   });
+  it('uses the configured level difference without losing prior deliberate choices', () => {
+    const targets=new MapTargets();targets.update('session',info,7);targets.select(4007,true);
+    targets.setLevelDifference(0);expect(targets.ids).toEqual([]);expect(targets.checked(4007)).toBe(true);
+    targets.setLevelDifference(1);expect(targets.ids).toEqual([4007]);
+    targets.setLevelDifference(-7);targets.clear();targets.selectEligible();expect(targets.ids).toEqual([]);
+    targets.setLevelDifference(100);targets.selectEligible();expect(targets.ids).toEqual([4000,4007]);
+    targets.setLevelDifference(101);expect(targets.eligible(4007)).toBe(true);
+  });
 });

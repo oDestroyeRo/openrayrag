@@ -7,6 +7,11 @@ export class MapTargets {
   private monsters = new Map<number, MapMonster>();
   private selected = new Set<number>();
   private level: number | null = null;
+  private levelDifference = 1;
+
+  setLevelDifference(value: number): void {
+    if (Number.isInteger(value) && value >= -100 && value <= 100) this.levelDifference = value;
+  }
 
   update(session: string, info: MapInfo, level: number | null): void {
     if (session !== this.session || info.code !== this.map) {
@@ -23,7 +28,7 @@ export class MapTargets {
   }
   eligible(id: number): boolean {
     const monster = this.monsters.get(id);
-    return !!monster && this.level !== null && monster.level <= this.level + 1;
+    return !!monster && this.level !== null && monster.level <= this.level + this.levelDifference;
   }
   checked(id: number): boolean { return this.selected.has(id); }
   get ids(): number[] { return [...this.selected].filter(id => this.eligible(id)); }

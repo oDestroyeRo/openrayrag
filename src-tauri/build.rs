@@ -5,6 +5,7 @@ fn main() {
             "control_bot",
             "bridge_status",
             "login_game",
+            "reconnect_game",
             "saved_login",
             "forget_login",
             "cancel_pending_login",

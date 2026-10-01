@@ -1,10 +1,10 @@
 # Rayrag Companion
 
-A Tauri v2 macOS app for automatic sign-in, character selection, and basic combat and looting on [Ray Side Project SEA 01](https://websea01.rayrag.com/). The bundled controller opens the official Unity game in a separate, ephemeral WebKit window.
+A Tauri v2 macOS client for automatic sign-in, character selection, combat, looting and configurable game automation on [Ray Side Project SEA 01](https://websea01.rayrag.com/). It opens the official Unity game in a separate, ephemeral WebKit window. [OpenKore](https://github.com/openkore/openkore) supplies behavioral references; Companion uses its own TypeScript engine, interface and Rebuild protocol adapter.
 
 ## Run
 
-Requires Node.js 22.12+ (tested on 24), Rust, and Xcode command line tools. The application targets macOS 13+ and was tested on Apple Silicon. See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+Requires Node.js 22.12+ (tested on 24), Rust and Xcode command line tools. The application targets macOS 13+ and has been tested on Apple Silicon. See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```sh
 npm ci
@@ -17,84 +17,107 @@ Build a local macOS application:
 npm run app:build
 ```
 
-The app is created at `src-tauri/target/release/bundle/macos/Rayrag Companion.app`. This uses an [ad-hoc signature](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing) for local use and is not notarized. `npm run dev` is a browser preview of the controller; it cannot control the game.
+The output is `src-tauri/target/release/bundle/macos/Rayrag Companion.app`. It uses an [ad-hoc signature](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing) for local use and is not notarized. `npm run dev` previews the controller in a browser; native game control requires the Tauri app.
 
 The release profile leaves build dependencies unstripped to work around a macOS proc-macro loading failure in Homebrew Rust 1.98.1. Application optimization remains enabled.
 
-## Use
+## Start a run
 
-1. Enter your account under **Account & character**, choose an existing character slot (1–3), and select **Sign in & enter**. The app waits for the login screen, signs in through the official client, and enters that character. **Open game** still supports manual sign-in.
-2. Dismiss any game popups and position your character near the monsters you want to fight.
-3. Return to Companion. Check the monsters you want to attack in the current map's list, choose monster scan radius and HP stop limit, inspect the collision map, and optionally choose **Find monsters → Search the current map**, then select **Start bot**. **Select eligible** checks the listed monsters within the level limit; **Clear** removes your choices.
-4. Select **Stop** to cancel automation, including sign-in. Clicking or typing inside the game also cancels automatic sign-in and pauses combat.
+1. Under **Account & character**, enter your account, choose an existing character slot (1–3), and select **Sign in & enter**. **Open game** also permits manual sign-in. Empty slots do not open character creation.
+2. Under **Combat**, select monster types from the current map. The list combines the public spawn database with monsters observed by the game. Spawn counts are configured populations, while **in view** counts are live observations. No monster is selected automatically before the first run.
+3. Check **Travel & follow** for the collision map and routing settings. Enable **Find monsters → Search the current map** if the bot should walk to find targets. Set recovery and item rules as needed, then select **Start bot**.
+4. Select **Stop** to cancel the run and pending automatic sign-in. Closing the client ends its game session.
 
-Credentials are session-only by default. To remember the account, explicitly enable **Save in macOS Keychain** before signing in. **Sign in when app opens** additionally restores that saved account and character slot on launch. These choices are saved when you submit **Sign in & enter**. **Forget saved login** removes the Keychain entry and its launch preference. The controller never retrieves the saved password or writes credentials to configuration files or browser storage.
+After Start, the run request remains active until **Stop** or game-window close. The status distinguishes **RUNNING**, **WAITING** and idle. Low HP, map loading, missing navigation, interrupted routes, connection loss or controller pauses put the bot into waiting/recovery; valid state lets it resume. Game input yields briefly before automatic field behavior continues. The run retains its selected monster classes when it binds to a new map; it does not automatically add new targets.
 
-Automatic sign-in attempts once per request. Rejection, disconnect, timeout, or an empty slot stops it without retrying or opening character creation. Close the current game before switching characters. Entering the field never starts combat automatically; press **Start bot** when ready. Leave the game's own Remember Password option off.
+Configured hours and limits still govern actions. Outside the allowed hours, the run waits until the window opens. An exhausted session/kill/pickup allowance waits until Stop and a new run. If respawn is disabled or the death allowance is exhausted, it waits for revival. Unknown builds/maps and rejected or uncertain resource actions can require intervention; keeping run intent does not make those actions valid.
 
-The target picker uses the game's published map and monster database. It shows monster level, HP, configured **map spawns**, and the number currently **in view**. Configured spawns are not a live population count. Types observed by the game also appear, including event monsters absent from the database; if the database is unavailable, the picker uses observed types alone.
+## Configure automation
 
-No monster is selected automatically. Choices survive normal updates and monsters leaving view, but reset when the map or game session changes. Start requires at least one eligible choice and rejects selections from a previous map. The bot matches monster class IDs and attacks only live, nearby entities, up to one level above your character. Companion plans an approach to an adjacent melee tile before sending Attack. The server still controls actual movement, combat cooldowns and pickup eligibility. The bot waits for server responses; counters distinguish commands sent from confirmed monster deaths and pickups.
+The six sections keep the common Start and Stop controls available:
 
-It considers server-marked new drops that appear after and near its defeated monsters for 30 seconds. This is conservative proximity/time attribution, not proof of server ownership; the server still enforces loot priority. It skips targets observed being attacked by another actor. It does not use skills or potions, sell items, or respawn.
+| Section | Controls |
+| --- | --- |
+| **Combat** | Selected targets, retaliation, combat off, level difference, species ignore/attack rules and priority. Ignore rules take precedence. |
+| **Recovery** | HP/SP rest thresholds with separate resume thresholds, emergency HP threshold, optional respawn and death allowance. Sitting requires the game's skill prerequisites. |
+| **Travel & follow** | Verified portal destination, optional return to the start map after respawn, current-map waypoints, repeat route, named-player follow and routing limits. |
+| **Inventory & skills** | Own-kill or all-drop pickup policy, item filters and priority, recovery consumables with retained quantities, self/enemy skills, conditional equipment and ordered stat/skill allocation. |
+| **Workflows & social** | NPC dialogue, shop buy/sell, storage/cart, item exchange, party and vending controls, bounded NPC workflows and condition routines. Daily hours and session/kill/pickup/weight limits are also configured here. |
+| **Profiles & features** | Save, apply, remove, import and export named settings profiles; view the 39-family OpenKore coverage inventory. |
 
-**Walkability is checked before Start.** The client bundles collision data for **all 231 map scenes published by the official game client**: towns, interiors, fields and dungeons. Each map uses its own dimensions and static teleport trigger rectangles, including the two 416-cell Payon fields. The compact grids total about 4.1 MB; Unity scene bundles are not shipped or downloaded during gameplay. Field 8 has 70,001 physically blocked cells, 89,999 walkable cells and 333 walkable cells excluded by static teleport triggers. The collision view shows your character, visible monsters, drops, planned route and current waypoint.
+Recovery, consumables, skills, equipment, allocation, follow, travel, respawn, schedules and limits are opt-in. Missing inventory, SP, learned skills or other required observations prevents the corresponding action. Resource-consuming actions wait for game confirmation. A timeout is uncertain; the client does not automatically repeat that transaction.
 
-The official map-name database has three additional entries without published scene assets: **`payon_p`, `2009rwc_03`, and `pvp_n_1-5`**. No shared-scene aliases were verified, so Start stays disabled for those exact codes and for unknown maps. Changing maps clears the old route and target choices; choose current-map targets and press Start after arrival. If arrival is inside an actual teleport trigger, move onto open ground first.
+Skill rules currently support your character and the current enemy. Enemy skill rules use the conservative adjacent approach. The action catalog also supports explicit ground and actor targets, but ranged line of sight, kiting, combos and automatic party support are not implemented. Equipment rules do not automatically restore previous gear. Allocation spends real character points according to the configured plan.
 
-The planner uses eight-direction A* with diagonal corner prevention and optional wall-clearance penalties. It precomputes connected areas, skips unreachable monsters, ranks eligible targets by approach travel cost, and approaches an adjacent tile before attacking. The full route is followed in straight segments within the server's 20-step limit. Monster scan radius bounds target acquisition; it does not bound exploration around Start.
+Stop field automation before using manual controls, starting an NPC workflow or running an advanced condition routine. A workflow binds its visible NPC and map, checks dialogue/options, and applies maximum spend and minimum retained stock. Conversation steps can specify an expected zeny fee. Buy/sell, storage and barter steps inspect authoritative stock and results; equipped items are protected. Workflow JSON is data, not executable code.
 
-**Find monsters** is off by default. Mode **2** selects random destinations throughout the character's connected area on the current map. It switches to a selected visible monster or eligible loot after any outstanding movement leg; the old leg must finish because server replies do not identify their request. It does not travel through portals or automatically return from another map. Random walking is not exhaustive coverage or a guarantee that a particular monster will spawn.
+Condition routines use HP %, SP %, zeny, elapsed time, map and inventory quantities. Rules have priority, cooldown, maximum runs and overall duration/action budgets. **Validate / dry run** explains matching rules without sending commands. An unknown observation never matches. Routines execute only the same validated actions available to the controller; they cannot load scripts or send arbitrary packets.
 
-The supported OpenKore setting subset is:
+Profiles contain validated settings, a map binding and optional character name. Up to 20 profiles are saved locally; applying one requires the matching map/character and never starts automation. Imports receive fresh IDs and cannot silently overwrite saved profiles. Credentials, login preferences and running state are excluded.
+
+## Navigation, targets and loot
+
+Companion bundles collision grids for **all 231 map scenes published by the official client**. Each uses its own dimensions and static teleport rectangles. Eight-direction A* prevents diagonal corner cutting, computes connected areas, avoids unreachable monsters and optionally penalizes paths near walls. Turning off wall avoidance never permits blocked cells.
+
+The official map-name export also lists **`payon_p`, `2009rwc_03` and `pvp_n_1-5`**, which have no published scene assets. No shared-scene aliases were verified. The client waits for supported, safe ground on these codes and unknown maps. It does not substitute another map's grid.
+
+The travel graph contains **1,360 directed fixed portal edges** from the pinned server source: 879 cross-map and 481 same-map edges. Conditional NPC/event portals, random arrivals and edges without usable collision data are excluded. Inter-map travel uses verified fixed portals and validates the expected arrival. It cannot promise a route through every game teleport. Farming excludes portal trigger areas; intentional travel permits only its planned portal corridor.
+
+Target acquisition matches monster class IDs to live entity IDs. It plans a reachable melee approach and skips targets observed being attacked by another actor. Current-map exploration samples goals within the character's connected area; it is not exhaustive coverage or a guarantee that a monster will spawn. Server cooldowns, actual movement and pickup eligibility remain authoritative.
+
+Own-kill loot is the default. It considers new drops near a confirmed defeated monster for 30 seconds. This proximity/time policy is not proof of server ownership; the server enforces loot priority. **All available drops** is an explicit broader policy. Item rules can ignore or prioritize individual IDs. The bundled catalog provides **2,579 items, 221 skills and 13 skill trees**, with source hashes and build identity.
+
+A route is followed in straight segments, with at most one movement leg outstanding. The protocol has no movement request IDs, so changing targets waits for the accepted leg to finish. Every returned route is checked against collision and the applicable portal policy. Timed positions follow the server's accepted movement; sent walk destinations do not become confirmed positions. Temporary failed endpoints affect avoidance, never the physical grid.
+
+The original routing controls retain these OpenKore names:
 
 | Setting | Default | Accepted values / behavior |
 | --- | --- | --- |
-| `route_randomWalk` | 0 | 0: off; 2: current-map exploration. Upstream defaults to 1, which permits map routing and is not implemented here. |
+| `route_randomWalk` | 0 | 0: off; 2: explore the current connected map area. Inter-map travel has a separate destination control. |
 | `route_step` | 10 | 1–20 steps; bends can shorten a segment. |
-| `route_avoidWalls` | true | Apply upstream-style wall-distance penalties; never permits blocked cells when off. |
+| `route_avoidWalls` | true | Wall-clearance penalties; physical collision remains enforced. |
 | `route_randomWalk_maxRouteTime` | 75 | 1–600 seconds per search goal. |
-| `attackRouteMaxPathDistance` | 20 | 1–200 path cells for an approach, separate from visible scan radius. |
-| `attackMaxRouteTime` | 4 | 1–60 seconds from the first approach walk, excluding an inherited search leg; also bounds a server-initiated chase after Attack. |
+| `attackRouteMaxPathDistance` | 20 | 1–200 path cells for an approach, separate from the scan radius. |
+| `attackMaxRouteTime` | 4 | 1–60 seconds from the first pursuit walk, excluding an inherited search leg; also bounds a server-initiated chase. |
 
-These names/defaults follow [OpenKore's pinned config](https://github.com/openkore/openkore/blob/51de1ddfc4449ae5217f6886de702f87ca934030/control/config.txt), except the deliberately opt-in random walk. This is a routing subset, not full config compatibility. Melee approach range is fixed at 1; weapon range, skills, party policies, town rules, teleport and cross-map `lockMap` are not implemented.
+These follow [OpenKore's pinned config](https://github.com/openkore/openkore/blob/51de1ddfc4449ae5217f6886de702f87ca934030/control/config.txt), except opt-in random walking. The app does not import OpenKore configuration files or offer complete setting compatibility.
 
-Companion validates every server-returned player route against collision and portal exclusions, including combat-generated movement. Position displays follow the accepted route's timing; normal walking has no separate arrival acknowledgment. Corrections, stopping hits and replacement routes supersede the estimate. Failed legs are temporarily avoided, the next step is shortened, and three consecutive failures stop the run. Temporary failures never change the physical collision map. Approach timeouts cool down targets for 30 seconds; search timeouts select another goal.
+## Accounts and compatibility
 
-Low HP, death, map changes, manual input, stale traffic, computer sleep, controller heartbeat loss, and malformed supported packets stop automation. Resume explicitly. A stop cancels the character's action; it does not prevent nearby monsters from attacking. Closing Companion closes its game session.
+Credentials are session-only by default. **Save in macOS Keychain** explicitly enables persistent account storage. **Sign in when app opens** restores that saved account and character slot at launch. **Forget saved login** removes the Keychain entry and its launch preference. The local controller never retrieves the saved password or writes credentials into configuration, profile exports, browser storage or logs. Leave the game's own Remember Password option off.
 
-## OpenKore and protocol compatibility
+A successful sign-in through Companion retains the login profile only in native memory for that game session, allowing reconnection without enabling Keychain storage. A running field bot retries network loss with increasing delays and resumes the same character only after a new verified session is ready. A manually opened game without a Companion login has no session credentials to retry. The optional reconnect checkbox also permits reconnection while field combat is stopped; it does not create a run request.
 
-[OpenKore](https://github.com/OpenKore/openkore) is a behavioral reference, but its Ragnarok packet transport is incompatible with this custom Rebuild server. No OpenKore code or engine is bundled. This implementation observes the official client's existing WebSocket and sends the ordinary attack, pickup, walk, and stop commands on that session.
+Authentication rejection or an absent character requires a new explicit sign-in rather than repeated attempts. Stop cancels queued retries and automatic run resume. Closing the game clears the session profile and run request; Keychain entries remain until explicitly forgotten. An explicit sign-in starts with combat stopped unless an already requested field run is waiting for recovery. Close the current game before switching characters. Shop/storage/vending/workflow and point-spending requests with uncertain outcomes are never replayed on reconnect.
 
-The adapter is restricted to `https://websea01.rayrag.com/`, `wss://gamesea01.rayrag.com/ws`, and the observed build `Build_2569-09-01-01-55`. New builds require protocol validation. The remote game window can report bounded status and claim or cancel one explicitly queued login. It cannot read the Keychain. Controller commands belong to the bundled local window. No shell or filesystem plugin is exposed.
+The adapter is restricted to `https://websea01.rayrag.com/`, `wss://gamesea01.rayrag.com/ws` and **`Build_2569-09-01-01-55`**. Changed or malformed supported protocols prevent commands until a valid state is available. The remote game window can report bounded status and claim or cancel an explicitly queued login; it cannot read Keychain credentials. Controller commands belong to the bundled local window. No shell or filesystem plugin is exposed to the game.
 
-See [protocol evidence](docs/PROTOCOL.md) for the source pin and observed differences. Authentication responses, outgoing credentials, chat and raw packet contents are not recorded by Companion. In-memory status retains only your character, monsters, drops and bounded activity messages.
+See [protocol evidence](docs/PROTOCOL.md) and the [OpenKore feature inventory](docs/OPENKORE_FEATURES.md). The inventory describes implemented portions and remaining gaps across 39 families; it does not claim full OpenKore parity. RO-specific transports, XKore/Poseidon and privileged GM/debug actions are outside this client's player-automation scope. Chat, refining/socketing, random teleport, full crafting, direct player trade, ranged policies and third-party plugins still need implementation or a matching verified game contract.
 
-## Checks
+## Verification
 
 ```sh
 npm run check
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+npm run app:build
 ```
 
-This builds the frontend and injected bridge, typechecks TypeScript, runs behavioral/protocol/login tests and Rust boundary tests, and runs Clippy. Tests use synthetic game events and one public monster packet. The app does not contain an unattended account test. An optional local Keychain integration check creates and removes one synthetic entry:
+`check` builds the frontend and injected bridge, typechecks TypeScript, runs behavioral/protocol/login tests and Rust boundary tests, and runs Clippy. Tests use synthetic events and a public monster fixture; no unattended account test is bundled. An optional Keychain integration check creates and removes a synthetic entry:
 
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml keychain_round_trip -- --ignored
 ```
 
-Live validation on 2026-10-01 in the native game window confirmed 4 monster defeats and 8 loot pickups during one bounded run. Stop returned the controller to idle; manual game input also paused automation in a separate run. These checks establish basic combat and looting on the pinned build, not unattended reliability across all maps and monsters.
+**2026-10-02 expanded release:** `npm run check` passed 690 TypeScript tests and 25 Rust tests, plus frontend/bridge build, typechecking and Clippy. Formatting, native ARM64 packaging and strict ad-hoc signature verification passed; one Keychain integration test remained intentionally ignored. Independent reviews covered protocol, world workflows, native credentials, controller ownership and route equivalence. Native checks confirmed session-only login/character selection, six settings sections, inventory/skill/SP telemetry, Field 7 combat and pickup, Stop, death waiting, manual respawn to Field 8 and automatic sitting recovery followed by resumed combat (2 defeats and 7 pickups in Field 8). A placeholder-SP overwrite found during this check was fixed and the corrected login displayed authoritative SP. Further source-backed fixes preserve negative support-skill delays and wait for the actual character-selection controls; fresh native sign-in succeeded after those corrections. Network reconnect, live economy/party/vending/point spending and traversal of every map remain synthetic/source proof rather than live validation. No remote CI is configured.
 
-Automatic sign-in and entry of the existing character in slot 1 were also verified in the release app using session-only credentials. Combat remained stopped. An empty slot 2 produced the expected error and left the game on character selection without opening creation. Stop during initial loading cancelled sign-in and unlocked the account controls. Keychain storage was tested separately using a synthetic entry; the real account was not saved during validation.
+Earlier native releases established the following historical evidence, not live proof of every new feature:
 
-The map picker was verified live on Prontera Field 5: all seven database types loaded, configured spawn counts matched the public export, and in-view counts changed with live monsters. Class-ID attack matching, map mismatch rejection, selection retention and metadata failure handling are covered by automated tests.
+| Earlier validation | Established evidence |
+| --- | --- |
+| 2026-10-01 login | Session-only sign-in entered an existing slot; an empty slot stayed on character selection; Stop during loading cancelled the attempt. The real account was not saved. |
+| 2026-10-01 combat and pickup | A bounded native run confirmed 4 defeats and 8 pickups; Stop returned idle. |
+| 2026-10-01 targets and A* | Public map spawns loaded on Field 5; bounded routing/search runs confirmed combat and pickups. Movement failures and map transitions were also tested with synthetic fixtures. |
+| Earlier transition/pursuit fix | 99 TypeScript tests and 3 Rust tests passed, plus Clippy/formatting. A Field 8 run confirmed 4 defeats and 9 pickups using the four-second pursuit limit. |
+| 2026-10-02 all-map release | 334 TypeScript tests and 3 Rust tests passed, plus Clippy, formatting, packaging and signature verification. Independent extraction/hash review covered all 231 grids; native Field 8 combat and pickups worked. Other maps were asset/test evidence, not visits to every map. |
 
-Nearby search was verified live on Prontera Field 5 in the release app: multiple short walks stayed within the selected starting area, manual game input paused the first run, and the final build confirmed one monster defeat plus two pickups with search enabled before continuing to search. Stop returned it to Ready. The isolated search-to-new-target preemption and failed-walk paths are covered by automated tests; this was not an unattended endurance test. That earlier nearby-search build passed 71 TypeScript tests, three Rust tests, Clippy, formatting and app signature verification.
-
-The A* routing build was verified on 2026-10-01 with **91 TypeScript tests**, **three Rust tests**, Clippy, formatting, release packaging and signature verification. Independent review covered delayed replies, soft-block recovery and detours outside the acquisition radius. Native UI inspection confirmed collision counts and all six routing controls before Start. A bounded live run traversed the map; a later run with `attackMaxRouteTime=12` confirmed **two monster defeats and three pickups**, then resumed searching. Stop returned Ready, and the temporary Poring selection and timeout change were restored. Later diagnosis found that this build incorrectly charged the remainder of a search leg against the default four-second approach budget. The current fix starts that clock only on the first pursuit walk; subsequent replans retain the same deadline. Long actual approaches can still reach the configured limit. Obstacle fixtures and recovery races are automated proof, not an exhaustive live map or endurance test.
-
-The earlier 14-map transition and pursuit fix passed **99 TypeScript tests**, **three Rust tests**, Clippy and formatting. Regressions cover search-to-attack handoff at the default four seconds, bounded failed-walk recovery, Field 5 → Field 8 route reset and restart, attack on Field 8, all 14 collision grids, inclusive portal boundaries, valid arrival positions, and unsupported maps. The rebuilt native app was then checked on Field 8 at `(152,354)`: the verified collision view loaded and Start was available. With map search enabled and `attackMaxRouteTime=4`, a bounded run confirmed **four monster defeats and nine pickups**. Stop returned Ready; the temporary Poring selection was removed, preserving Drops, Lunatic and Pupa. Longer moving-target approaches still reached the configured four-second limit. The map-transition event sequence is automated proof; this run did not physically traverse or live-test all 14 maps. Release packaging and ad-hoc signature verification also passed.
-
-The all-map expansion passed **334 TypeScript tests**, **three Rust tests**, Clippy, formatting, release packaging and signature verification. Independent review matched all 231 generated grids to separate extraction outputs and verified every bundle hash. The catalog generator rejects altered bundles while preserving the existing catalog; the fetch command reuses all matching cached assets. Native inspection on 2026-10-02 confirmed the expanded catalog loads in the game session, Field 8 shows 333 static teleport exclusions, and resumed combat and pickups work. Coverage of the remaining maps is asset and automated-test proof, not a claim that every map was visited live.
-
-`src/protocol.ts` owns gameplay wire decoding, `src/engine.ts` owns combat and search decisions, `src/navigation.ts` owns collision analysis, connected areas, A* and straight route segments, `src/movement.ts` follows server-accepted walk timing, `src/map-data.ts` reads the public map catalog and aggregates visible monsters, `src/targets.ts` owns map-specific choices, `src/login.ts` owns sign-in and character selection, `src/bridge.ts` connects the official game session, and `src-tauri` owns native windows, Keychain storage and IPC capabilities. `src-tauri/generated/game-bridge.js` is rebuilt by the normal npm build; edit its TypeScript source instead.
+Implementation owners are `src/controller.ts` (single action ownership), `src/engine.ts` (field combat/search), `src/automation.ts` (rules/recovery/actions), `src/character-state.ts`, `src/world-state.ts`, `src/protocol.ts`, `src/protocol-feature.ts`, `src/world-protocol.ts`, `src/navigation.ts`, `src/movement.ts`, `src/travel.ts`, `src/travel-controller.ts`, `src/workflows.ts`, `src/routines.ts`, `src/profiles.ts`, `src/login.ts`, `src/bridge.ts` and `src-tauri` (native windows, credentials and IPC). `src-tauri/generated/game-bridge.js` is generated by the normal build; edit its TypeScript source.
