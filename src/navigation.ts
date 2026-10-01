@@ -218,6 +218,11 @@ export class GridNavigator {
     }
   }
 
+  /** Verify a straight walking corridor, including diagonal side cells and portals. */
+  clearWalkCorridor(from: Position, to: Position): boolean {
+    return this.safe(from) && this.available(to) && this.clearApproach(from, to);
+  }
+
   private clearApproach(from: Position, to: Position): boolean {
     let current = from;
     let error = Math.abs(to.x - from.x) - Math.abs(to.y - from.y);

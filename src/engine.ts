@@ -46,9 +46,10 @@ export class BotEngine {
   private navigationMap = '';
   private route: RouteTask | null = null;
   private leg: RouteLeg | null = null;
+  private implicitWalk: { targetId: number; until: number } | null = null;
   private routeFailures = 0;
   private routeStep = 10;
-  private pending: { type: 'attack' | 'pickup'; id: number; since: number; progress: number; approachSince: number | null } | null = null;
+  private pending: { type: 'attack' | 'pickup'; id: number; since: number; progress: number; approachSince: number | null; direct: boolean; movementAccepted: boolean } | null = null;
   private foreignTargets = new Set<number>();
   private respawnRefreshPending = false;
   private skillKills = new Map<number, number>();
@@ -85,6 +86,10 @@ export class BotEngine {
     return this.navigator;
   }
   get player(): Entity | undefined { return this.entities.get(this.playerId); }
+  private awaitsImplicitWalk(): boolean {
+    if (this.implicitWalk && this.now() >= this.implicitWalk.until) this.implicitWalk = null;
+    return this.implicitWalk !== null;
+  }
 
   note(text: string): void {
     this.log.unshift({ at: this.now(), text });
@@ -113,7 +118,7 @@ export class BotEngine {
   start(settings: Settings, continuing = false): void {
     const validated = validateSettings(settings);
     const p = this.player;
-    if(this.automation.busy)throw new Error('Wait for the current action and skill motion to finish.');
+    if(this.automation.busy||this.awaitsImplicitWalk())throw new Error('Wait for the current action and movement to finish.');
     if (!inSchedule(automationSettings(validated),this.now())) throw new Error('Outside the configured daily schedule.');
     if (!this.connected || !this.compatible || !p || p.kind !== 0 || !this.map) throw new Error('Enter a character in the verified game build first.');
     if (validated.map !== this.map) throw new Error('Map changed. Choose monsters on the current map before starting.');
@@ -138,7 +143,7 @@ export class BotEngine {
   }
   private resetWorld(preserveCharacter=false): void {
     if(!preserveCharacter)this.respawnRefreshPending=false;
-    if(preserveCharacter)this.character.resetField();else {this.character.reset();this.automation.reset(true);this.runIntent=false;} this.motions.clear(); this.navigator = null; this.navigationMap = ''; this.route = null; this.leg = null; this.routeFailures = 0;
+    if(preserveCharacter)this.character.resetField();else {this.character.reset();this.automation.reset(true);this.runIntent=false;} this.implicitWalk = null; this.motions.clear(); this.navigator = null; this.navigationMap = ''; this.route = null; this.leg = null; this.routeFailures = 0;
     this.entities.clear(); this.actors.clear(); this.aggressors.clear(); this.drops.clear(); this.foreignTargets.clear(); this.excluded.clear();
     this.killedAt = []; this.dropCreatedAt.clear(); this.skillKills.clear(); this.skillTargets.clear(); this.pending = null; this.map = ''; this.playerId = 0;
   }
@@ -151,7 +156,10 @@ export class BotEngine {
       this.lootAfter = this.now() + LOOT_DELAY;
       this.note(`Defeated ${entity.name}.`);
     }
-    if (this.pending?.id === id && this.pending.type === 'attack') this.pending = null;
+    if (this.pending?.id === id && this.pending.type === 'attack') {
+      if (!dead && this.pending.direct && this.pending.approachSince !== null) { this.send({ type: 'stop' }); this.lastAction = this.now(); }
+      this.pending = null;
+    }
     if (this.route?.id === id) this.cancelRoute();
     this.skillKills.delete(id); this.skillTargets.delete(id); this.foreignTargets.delete(id); this.aggressors.delete(id); this.actors.delete(id);
     if (id === this.playerId && dead && entity) { const alreadyDead=entity.dead;entity.dead=true;entity.hp=0;if(!alreadyDead)this.onDeath(); }
@@ -215,6 +223,7 @@ export class BotEngine {
         break;
       case 'tracking': break; // Minimap markers do not correct world movement.
       case 'stop':
+        if (e.id === this.playerId) this.implicitWalk = null;
         this.motions.delete(e.id); this.interrupted(e.id);
         break;
       case 'walk': {
@@ -226,6 +235,7 @@ export class BotEngine {
         if (e.id === this.playerId && !this.running && this.automation.pendingAction?.type === 'skill') {
           this.stop('Manual skill triggered movement; waiting for it to settle.'); break;
         }
+        if (e.id === this.playerId && !e.walk.locked) this.implicitWalk = null;
         if (e.id === this.playerId && this.running) {
           const nav = this.navigation();
           if (!nav || e.walk.cells.length > 21 || !nav.validRoute(e.walk.cells)) {
@@ -243,6 +253,7 @@ export class BotEngine {
             }
           }
           if (this.pending && this.pending.approachSince === null) this.pending.approachSince = this.now();
+          if (this.pending?.direct && !e.walk.locked) this.pending.movementAccepted = true;
         }
         break;
       }
@@ -264,6 +275,7 @@ export class BotEngine {
         break;
       }
       case 'attack': {
+        if (e.source === this.playerId && e.target === this.implicitWalk?.targetId) this.implicitWalk = null;
         this.motions.delete(e.source);
         const entity = this.entities.get(e.source) ?? this.actors.get(e.source); if (entity) Object.assign(entity, e.position);
         if (e.target === this.playerId && this.entities.get(e.source)?.kind === 1) this.aggressors.add(e.source);
@@ -271,7 +283,7 @@ export class BotEngine {
           this.foreignTargets.add(e.target);
           if ((this.pending?.type === 'attack' && this.pending.id === e.target) || (this.route?.type === 'attack' && this.route.id === e.target)) this.stop('Another character engaged this target.');
         }
-        if (e.source === this.playerId && this.pending?.type === 'attack' && this.pending.id === e.target) { this.pending.progress = this.now(); this.pending.approachSince = null; }
+        if (e.source === this.playerId && this.pending?.type === 'attack' && this.pending.id === e.target) { this.pending.progress = this.now(); this.pending.approachSince = null; this.pending.direct = false; }
         break;
       }
       case 'hit': {
@@ -318,6 +330,9 @@ export class BotEngine {
     if (a.limits.weightPercent) { const stats=this.character.stats; if(stats?.weight===undefined||!stats.maxWeight) { this.stop('Weight is unavailable for the configured weight limit.');return; } if(stats.weight/stats.maxWeight*100>=a.limits.weightPercent) { this.stop('Configured weight limit reached.');return; } }
     const nav = this.navigation();
     if (!nav || !nav.safe(p)) { this.stop('Character left verified walkable ground or entered a portal exclusion.'); return; }
+    if (this.awaitsImplicitWalk() && !this.pending?.direct) {
+      this.reason = 'Waiting for the previous monster approach to acknowledge before another action.'; return;
+    }
     this.killedAt = this.killedAt.filter(k => now - k.at < 30000);
     if (this.automation.busy) { this.reason=this.automation.task().label; return; }
     if (this.automation.wantsRecovery(a,p,this.character)) {
@@ -343,6 +358,26 @@ export class BotEngine {
     }
     if (this.pending) {
       const target = this.entities.get(this.pending.id);
+      if (this.pending.type === 'attack' && this.pending.direct && this.pending.approachSince !== null
+        && target && !nav.clearWalkCorridor(cell(p), cell(target))) {
+        const since = this.pending.approachSince;
+        // Attack may already have requested a walk whose reply is still in flight.
+        // Retain that owner until its reply or the existing bounded wait expires.
+        if (!this.pending.movementAccepted && !this.motions.has(this.playerId)) {
+          this.leg = {destination:cell(p),cells:[cell(p)],since:this.pending.since,acceptedUntil:null};
+        }
+        this.send({ type: 'stop' }); this.lastAction = now; this.pending = null;
+        const cells = this.plan(p, target, 1);
+        if (cells && this.eligible(target, now, false)) {
+          this.pursue('attack', target.id, cell(target), cells);
+          this.route!.since = since;
+          this.reason = 'Monster moved behind an obstacle; finishing the server walk before routing around it.';
+        } else {
+          this.excluded.set(target.id, now + 30000);
+          this.reason = 'Monster moved to unreachable ground; skipping it for 30 seconds.';
+        }
+        this.note(this.reason); return;
+      }
       const approachExpired = this.pending.approachSince !== null
         && (now - this.pending.approachSince >= this.settings.attackMaxRouteTime * 1000
           || (this.pending.type === 'attack' && (!target || !this.plan(p, target, 1))));
@@ -413,10 +448,12 @@ export class BotEngine {
     const target = type === 'attack' ? this.entities.get(id)?.name ?? 'monster' : 'loot';
     this.reason = `Selected ${target}; finishing the current walk before approaching.`;
   }
-  private act(type: 'attack' | 'pickup', id: number): void {
+  private act(type: 'attack' | 'pickup', id: number, direct = false): void {
+    const approachStarted = this.route?.since ?? this.now();
     this.route = null; this.leg = null;
     this.send({ type, id }); this.lastAction = this.now();
-    this.pending = { type, id, since: this.now(), progress: this.now(), approachSince: null };
+    this.pending = { type, id, since: this.now(), progress: this.now(), approachSince: direct ? approachStarted : null, direct, movementAccepted: !direct };
+    if (direct) this.implicitWalk = {targetId:id,until:this.now()+4000};
     this.reason = type === 'attack' ? `Attacking ${this.entities.get(id)?.name ?? 'selected monster'}.` : `Collecting item #${this.drops.get(id)?.itemId}.`;
     if (type === 'attack') this.attacks++;
     this.note(this.reason);
@@ -473,6 +510,13 @@ export class BotEngine {
         return;
       }
     }
+    // A normal monster click lets the server own both approach and attack. Never
+    // replace an unresolved leg; only skip our walk when its corridor is verified.
+    if (route.type === 'attack' && now - this.lastAction >= ACTION_DELAY
+      && Math.max(0, distance(cell(p), route.destination) - 1) <= this.settings.attackRouteMaxPathDistance
+      && nav.clearWalkCorridor(cell(p), route.destination)) {
+      this.act('attack', route.id!, distance(cell(p), route.destination) > 1); return;
+    }
     const range = route.type === 'follow' ? automationSettings(this.settings).follow.distance : navigationTask ? 0 : 1;
     const index = route.cells.findIndex(c => distance(c, p) === 0);
     if (index >= 0) route.cells = route.cells.slice(index);
@@ -518,6 +562,7 @@ export class BotEngine {
     this.reason='Returned to the lock map; resumed the requested run.';this.note(this.reason);
   }
   private onDeath(): void {
+    this.implicitWalk = null;
     this.deaths++;
     const a=automationSettings(this.settings);
     if(this.running&&a.respawn.enabled&&this.deaths<=a.respawn.maxDeaths) {
@@ -526,7 +571,7 @@ export class BotEngine {
   }
   get pendingFeatureAction(): ExpandedAction | null { return this.automation.pendingAction; }
   get actionResult(): ActionResult { return {...this.automation.result}; }
-  idleForActions(): boolean { this.advanceMovement(); return !this.running&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.motions.has(this.playerId); }
+  idleForActions(): boolean { this.advanceMovement(); return !this.running&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.motions.has(this.playerId); }
   manualAction(action: ExpandedAction): void {
     action=validateExpandedAction(action);
     if(!this.idleForActions())throw new Error('Stop automation and wait for movement and action confirmation first.');
@@ -594,10 +639,12 @@ export class BotEngine {
   }
   snapshot(): Snapshot {
     const nav = this.navigation();
+    const chase = this.pending?.type === 'attack' ? this.entities.get(this.pending.id) : null;
+    const chaseCells = chase ? this.motions.get(this.playerId)?.walk.cells ?? [] : [];
     const navigation: NavigationStatus | null = nav ? {
       ...nav.summary(this.player ?? { x: -1, y: -1 }), ready: !!this.player && nav.safe(this.player),
-      mode: this.automation.recovering ? 'recover' : this.route?.type ?? 'idle', goal: this.route?.destination ?? null,
-      route: this.route?.cells.slice(0, 512) ?? [], leg: this.leg?.cells ?? [], routeLength: Math.max(0, (this.route?.cells.length ?? 1) - 1),
+      mode: this.automation.recovering ? 'recover' : this.route?.type ?? (chase ? 'attack' : 'idle'), goal: this.route?.destination ?? (chase ? cell(chase) : null),
+      route: this.route?.cells.slice(0, 512) ?? chaseCells, leg: this.leg?.cells ?? chaseCells, routeLength: Math.max(0, (this.route?.cells.length ?? chaseCells.length) - 1),
     } : null;
     return {
       connected: this.connected, compatible: this.compatible, running: this.running, reason: this.reason,
