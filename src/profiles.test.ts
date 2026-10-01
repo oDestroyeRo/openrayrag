@@ -12,11 +12,13 @@ describe('named profiles', () => {
   it('round-trips protected disposition and rejects invalid imports atomically', () => {
     const f=fixture();const automation=structuredClone(DEFAULT_AUTOMATION);automation.disposition={maxSpend:0,rules:[{itemId:501,keep:1,minimum:2,desired:3,maximum:4,store:true,sell:false,cart:false,restock:'storage',allowUnique:false}]};
     automation.escape={...DEFAULT_ESCAPE,enabled:true,mode:'save',minStock:2};
+    automation.loadout.enabled=true;automation.loadout.minAmmoStock=5;
     const saved=f.store.save('Protected stock','Raon',{...settings(),automation});const exported=f.store.export(saved.id);
     expect(f.store.import(exported)[0]?.settings.automation?.disposition).toEqual(automation.disposition);
     expect(f.store.import(exported)[0]?.settings.automation?.escape).toEqual(automation.escape);
-    const legacy=JSON.parse(exported);delete legacy.profiles[0].settings.automation.escape;
-    expect(f.store.import(JSON.stringify(legacy))[0]?.settings.automation).toMatchObject({escape:DEFAULT_ESCAPE,disposition:automation.disposition});
+    expect(f.store.import(exported)[0]?.settings.automation?.loadout).toEqual(automation.loadout);
+    const legacy=JSON.parse(exported);delete legacy.profiles[0].settings.automation.escape;delete legacy.profiles[0].settings.automation.loadout;
+    expect(f.store.import(JSON.stringify(legacy))[0]?.settings.automation).toMatchObject({escape:DEFAULT_ESCAPE,loadout:DEFAULT_AUTOMATION.loadout,disposition:automation.disposition});
     const document=JSON.parse(exported);document.profiles[0].settings.automation.disposition.rules[0].maximum=2;
     const before=f.data.get(PROFILE_STORAGE_KEY);expect(()=>f.store.import(JSON.stringify(document))).toThrow();expect(f.data.get(PROFILE_STORAGE_KEY)).toBe(before);
     document.profiles[0].settings.automation.disposition.rules[0].maximum=4;document.profiles[0].settings.automation.disposition.rules[0].unknown=true;
@@ -88,4 +90,16 @@ describe('named profiles', () => {
     expect(f.store.forMap(imported.id,'prt_fild08').settings.automation!.escape).toEqual(document.profiles[0].settings.automation.escape);
     expect(f.store.export(imported.id)).not.toContain('latched');expect(f.store.export(imported.id)).not.toContain('escapeGuard');
   });
+});
+describe('loadout profile compatibility',()=>{
+ it('migrates stored v1 profiles and imported legacy automation to disabled loadout',()=>{
+  const f=fixture(),saved=f.store.save('Legacy','',{...settings(),automation:structuredClone(DEFAULT_AUTOMATION)}),doc=JSON.parse(f.store.export(saved.id));delete doc.profiles[0].settings.automation.loadout;
+  f.data.set(PROFILE_STORAGE_KEY,JSON.stringify(doc));expect(new ProfileStore(f.storage).list()[0]!.settings.automation!.loadout.enabled).toBe(false);
+  expect(f.store.import(JSON.stringify(doc))[0]!.settings.automation!.loadout.enabled).toBe(false);
+ });
+ it('preserves ordered ammo preferences and rejects captured prior identities',()=>{
+  const f=fixture(),automation=structuredClone(DEFAULT_AUTOMATION);automation.loadout.enabled=true;automation.loadout.ammoPreferences=[{itemId:1751},{itemId:1750}];
+  const saved=f.store.save('Arrows','',{...settings(),automation});expect(f.store.forMap(saved.id,'prt_fild08').settings.automation!.loadout).toEqual(automation.loadout);
+  const doc=JSON.parse(f.store.export(saved.id));doc.profiles[0].settings.automation.loadout.prior={guid:'excluded'};expect(()=>f.store.import(JSON.stringify(doc))).toThrow('unknown automation');
+ });
 });

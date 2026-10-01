@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CompanionController, type ControllerAction } from './controller';
 import { BotEngine, type Action } from './engine';
-import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_SETTINGS } from './settings';
 import { type Entity, type GameEvent, OP } from './protocol';
 import { type FeatureEvent, FEATURE_OP } from './protocol-feature';
 import { BitWriter } from './binary';
@@ -441,4 +441,95 @@ describe('world retirement and heartbeat deadline regressions', () => {
     controller.world.apply({ type: 'npcDialog', name: 'NPC', text: 'Hello', big: false }); controller.perform('command', { type: 'npcAdvance' });
     expect(() => controller.start(settings)).toThrow('Stop the current'); expect(controller.runRequested).toBe(false);
   });
+});
+
+describe('persistent ammo and loadout receipts',()=>{
+  function loadoutFixture(){const t=setup(),automation=policy();automation.loadout.enabled=true;automation.loadout.cooldownSeconds=1;automation.loadout.minAmmoStock=3;
+    t.controller.engine.player!.classId=5;t.controller.engine.player!.level=50;
+    const inventory:FeatureEvent={type:'inventory',items:[{bagId:1001,itemId:1701,type:2,count:1,guid:'bow'},{bagId:1750,itemId:1750,type:1,count:20}],equipment:[0,0,0,0,1001,0,0,0,0,0],ammoId:-1};
+    t.receive(inventory);return {...t,automation,inventory};
+  }
+  it('keeps emergency escape behind an uncertain equipment receipt until exact reconciliation',()=>{
+    const t=loadoutFixture();
+    t.automation.escape={...DEFAULT_ESCAPE,enabled:true};
+    t.receive({...t.inventory,items:[...t.inventory.items,{bagId:601,itemId:601,type:1,count:3}]});
+    t.controller.start({...settings,automation:t.automation});t.step();
+    expect(t.sent).toEqual([{type:'equip',bagId:1750,equipped:true}]);
+    t.advance(7000);t.receive({type:'heal',id:1,hp:10,maxHp:100});t.advance(400);
+    expect(t.controller.engine.featureActionsSettled).toBe(false);
+    expect(t.sent.some(action=>action.type==='useItem')).toBe(false);
+    t.receive({type:'equipment',bagId:1750,equipped:true,slot:13});t.advance(400);
+    expect(t.sent.filter(action=>action.type==='equip')).toHaveLength(1);
+    expect(t.sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:601}]);
+  });
+  it('never replays an unconfirmed automatic equip through persistent resume, deadlines, unchanged snapshots or map refresh',()=>{
+    const t=loadoutFixture();t.controller.start({...settings,automation:t.automation});t.step();expect(t.sent).toEqual([{type:'equip',bagId:1750,equipped:true}]);
+    t.advance(12000);expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);expect(t.controller.engine.snapshot().loadout.state).toBe('fault');
+    t.receive(t.inventory);t.advance(3000);expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);
+    t.receive({type:'map',map:'prt_fild05'},{type:'spawn',entity:{...player,classId:5,level:50}},{type:'spawn',entity:{...monster}});t.advance(3000);
+    expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);
+    t.packet(new BitWriter().u8(OP.equipment).i32(1750).u8(13).bool(true));t.step();t.step();expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);expect(t.sent.filter(a=>a.type==='attack')).toHaveLength(1);
+  });
+  it('keeps manual equipment overrides stopped until a new explicit Start',()=>{
+    const t=loadoutFixture();t.controller.start({...settings,automation:t.automation});t.step();t.receive({type:'equipment',bagId:1750,slot:13,equipped:true});t.step();
+    t.receive({type:'equipment',bagId:1750,slot:13,equipped:false});t.receive({type:'changeTarget',id:0});const count=t.sent.length;t.advance(6000);
+    expect(t.sent).toHaveLength(count);expect(t.controller.engine.running).toBe(false);
+    t.controller.stop();t.controller.start({...settings,automation:t.automation});t.step();expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(2);
+  });
+  it('does not admit unrelated ServerEvent ammo faults while loadout policy is disabled',()=>{
+    const t=setup();t.receive({type:'serverEvent',event:4,value:0,text:''});expect(t.controller.engine.idleForActions()).toBe(true);expect(t.controller.engine.snapshot().loadout.state).toBe('off');
+    t.controller.start(settings);t.step();expect(t.sent).toEqual([{type:'attack',id:2}]);
+  });
+  it('holds a fired reserve until both target clear and a new valid stock receipt, with no auto equip fallback',()=>{
+    const t=loadoutFixture();t.inventory={...t.inventory,type:'inventory',ammoId:1750} as Extract<FeatureEvent,{type:'inventory'}>;t.receive(t.inventory);t.controller.start({...settings,automation:t.automation});t.step();
+    t.receive({type:'inventoryDelta',add:false,bagId:1750,change:17,weight:0});t.receive({type:'changeTarget',id:0});t.advance(6000);
+    expect(t.sent.filter(a=>a.type==='attack')).toHaveLength(1);expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(0);
+    t.packet(new BitWriter().u8(OP.inventoryDelta).bool(true).u8(1).i32(1750).i16(17).i32(0).i32(1750).i16(20));t.step();
+    expect(t.sent.filter(a=>a.type==='attack')).toHaveLength(2);
+  });
+});
+describe('loadout manual-yield intent',()=>{
+ it('keeps an observation baseline during pointer yield, so manual equipment cancels automatic override until explicit Start',()=>{
+  const t=setup(),automation=policy();automation.loadout.enabled=true;automation.loadout.autoAmmo=false;automation.equipment=[{itemId:1701,hpBelowPercent:100,monsterClassId:0}];
+  t.controller.engine.player!.classId=5;t.controller.engine.player!.level=50;
+  t.receive({type:'inventory',items:[{bagId:1001,itemId:1101,type:2,count:1,guid:'sword'},{bagId:1002,itemId:1701,type:2,count:1,guid:'bow'},{bagId:1750,itemId:1750,type:1,count:20}],equipment:[0,0,0,0,1001,0,0,0,0,0],ammoId:1750});
+  t.controller.start({...settings,automation});t.step();t.receive({type:'equipment',bagId:1001,slot:4,equipped:false},{type:'equipment',bagId:1002,slot:4,equipped:true});
+  t.controller.pause('Yielding briefly to manual game input.',2000);
+  t.receive({type:'equipment',bagId:1002,slot:4,equipped:false},{type:'equipment',bagId:1001,slot:4,equipped:true},{type:'changeTarget',id:0});t.advance(7000);
+  expect(t.sent.filter(a=>a.type==='equip')).toEqual([{type:'equip',bagId:1002,equipped:true}]);expect(t.controller.engine.running).toBe(false);
+  t.controller.stop();t.controller.start({...settings,automation});t.step();expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(2);
+ });
+ it('selects a fresh compatible alternate stack only after target clear and waits for slot13 before a new attack',()=>{
+  const t=setup(),automation=policy();automation.loadout.enabled=true;automation.loadout.minAmmoStock=3;automation.loadout.cooldownSeconds=1;
+  t.controller.engine.player!.classId=5;t.controller.engine.player!.level=50;
+  const inventory:Extract<FeatureEvent,{type:'inventory'}>={type:'inventory',items:[{bagId:1001,itemId:1701,type:2,count:1,guid:'bow'},{bagId:1750,itemId:1750,type:1,count:4}],equipment:[0,0,0,0,1001,0,0,0,0,0],ammoId:1750};
+  t.receive(inventory);t.controller.start({...settings,automation});t.step();
+  t.receive({type:'inventoryDelta',add:false,bagId:1750,change:1,weight:0});t.advance(6000);expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(0);
+  t.packet(new BitWriter().u8(OP.inventoryDelta).bool(true).u8(1).i32(1751).i16(20).i32(0).i32(1751).i16(20));t.step();expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(0);
+  t.packet(new BitWriter().u8(FEATURE_OP.changeTarget).i32(0));t.step();expect(t.sent.filter(a=>a.type==='equip')).toEqual([{type:'equip',bagId:1751,equipped:true}]);expect(t.sent.filter(a=>a.type==='attack')).toHaveLength(1);
+  t.packet(new BitWriter().u8(OP.equipment).i32(1751).u8(13).bool(true));t.step();expect(t.sent.filter(a=>a.type==='attack')).toHaveLength(2);
+ });
+});
+describe('late manual equipment receipts',()=>{
+ it('retains the observation baseline through persistent resume when a manual gear ACK arrives after the input yield',()=>{
+  const t=setup(),automation=policy();automation.loadout.enabled=true;automation.loadout.autoAmmo=false;automation.equipment=[{itemId:1701,hpBelowPercent:100,monsterClassId:0}];
+  t.controller.engine.player!.classId=5;t.controller.engine.player!.level=50;
+  t.receive({type:'inventory',items:[{bagId:1001,itemId:1101,type:2,count:1,guid:'sword'},{bagId:1002,itemId:1701,type:2,count:1,guid:'bow'},{bagId:1750,itemId:1750,type:1,count:20}],equipment:[0,0,0,0,1001,0,0,0,0,0],ammoId:1750});
+  t.controller.start({...settings,automation});t.step();t.receive({type:'equipment',bagId:1001,slot:4,equipped:false},{type:'equipment',bagId:1002,slot:4,equipped:true});
+  t.controller.pause('Yielding briefly to manual game input.',2000);t.packet(new BitWriter().u8(FEATURE_OP.changeTarget).i32(0));t.advance(2500);
+  expect(t.controller.engine.running).toBe(true);
+  t.receive({type:'equipment',bagId:1002,slot:4,equipped:false},{type:'equipment',bagId:1001,slot:4,equipped:true},{type:'changeTarget',id:0});t.advance(7000);
+  expect(t.controller.engine.running).toBe(false);expect(t.sent.filter(a=>a.type==='equip')).toEqual([{type:'equip',bagId:1002,equipped:true}]);
+ });
+});
+describe('loadout receipt survival through external revival',()=>{
+ it('preserves an in-flight equip fence through death/resurrection until exact late readback, without resending',()=>{
+  const t=setup(),automation=policy();automation.loadout.enabled=true;automation.loadout.minAmmoStock=3;
+  t.controller.engine.player!.classId=5;t.controller.engine.player!.level=50;
+  t.receive({type:'inventory',items:[{bagId:1001,itemId:1701,type:2,count:1,guid:'bow'},{bagId:1750,itemId:1750,type:1,count:20}],equipment:[0,0,0,0,1001,0,0,0,0,0],ammoId:-1});
+  t.controller.start({...settings,automation});t.step();expect(t.sent.filter(a=>a.type==='equip')).toEqual([{type:'equip',bagId:1750,equipped:true}]);
+  t.receive({type:'death',id:1});t.receive({type:'resurrection',id:1,hp:100,position:{x:100,y:100}});t.advance(12000);
+  expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);expect(t.controller.engine.running).toBe(false);expect(t.controller.engine.snapshot().loadout.state).toBe('fault');
+  t.packet(new BitWriter().u8(OP.equipment).i32(1750).u8(13).bool(true));t.step();t.step();expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);expect(t.sent.filter(a=>a.type==='attack')).toHaveLength(1);
+ });
 });

@@ -25,3 +25,11 @@ describe('automation settings boundary',()=>{
     const input=settings();Object.assign(input.automation!,{escape:null});expect(()=>validateSettings(input)).toThrow();
   });
 });
+describe('loadout settings migration and bounds',()=>{
+ it('defaults missing legacy loadout to disabled without mutating the input',()=>{const value=settings();const legacy=JSON.parse(JSON.stringify(value));delete legacy.automation.loadout;expect(validateSettings(legacy).automation!.loadout.enabled).toBe(false);expect(legacy.automation.loadout).toBeUndefined();});
+ it('clones ordered preferences and rejects unknown keys, duplicates and out of bounds',()=>{
+  const value=settings();value.automation!.loadout={enabled:true,autoAmmo:true,minAmmoStock:10,ammoPreferences:[{itemId:1751},{itemId:1750}],restore:'conditionEnd',cooldownSeconds:2};
+  const checked=validateSettings(value);value.automation!.loadout.ammoPreferences[0]!.itemId=1752;expect(checked.automation!.loadout.ammoPreferences[0]!.itemId).toBe(1751);
+  for(const bad of [{minAmmoStock:10000},{minAmmoStock:-1},{cooldownSeconds:0},{restore:'always'},{enabled:'yes'},{password:'excluded'},{ammoPreferences:[{itemId:1750},{itemId:1750}]},{ammoPreferences:[{itemId:1750,guid:'forbidden'}]}])expect(()=>validateSettings({...value,automation:{...value.automation!,loadout:{...value.automation!.loadout,...bad}}} as Settings)).toThrow();
+ });
+});

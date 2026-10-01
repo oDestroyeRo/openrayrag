@@ -24,7 +24,7 @@ import type { CharacterState } from './character-state';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost, skillPrerequisites } from './game-catalog';
 import type { ExpandedAction, FeatureEvent, Attributes } from './protocol-feature';
 export interface AutomationTask { kind: string; label: string; pending: boolean; since: number | null }
-interface PendingFeature { action: ExpandedAction; since: number; deadline: number; inventory: number; equipment: number; stats: number; skills: number; count: number; skillLevel: number; attributes: Attributes | null }
+interface PendingFeature { action: ExpandedAction; since: number; deadline: number; inventory: number; equipment: number; stats: number; skills: number; count: number; skillLevel: number; attributes: Attributes | null; equipmentReceipt?: (state: CharacterState)=>boolean }
 export interface ActionResult { sequence: number; status: 'idle' | 'pending' | 'confirmed' | 'failed'; reason: string }
 // Pinned player spells include Magnus Exorcismus (12s), Storm Gust and Lord
 // of Vermilion (up to 15s). Allow a bounded cast and response margin. Equipment
@@ -54,12 +54,12 @@ export class AutomationScheduler {
       label:this.pending ? `Waiting for ${this.pending.action.type} confirmation.` : this.now()<this.canceledUntil?'Waiting for the canceled action deadline.':this.now()<this.settlingUntil?'Waiting for skill motion to finish.':this.recovering?'Resting until HP and SP recover.':'Ready.',
       pending:this.busy,since:this.pending?.since ?? this.recoverySince };
   }
-  submit(action: ExpandedAction, state: CharacterState): void {
+  submit(action: ExpandedAction, state: CharacterState, equipmentReceipt?: (state: CharacterState)=>boolean): void {
     if (this.busy) throw new Error('Wait for the current action confirmation.');
     const count = action.type === 'useItem' ? state.count(action.itemId) : 0;
     const skillLevel = action.type === 'allocateSkill' ? state.learned.get(action.skillId) ?? 0 : 0;
     const since=this.now();
-    this.pending = { action,since,deadline:since+actionConfirmationTimeout(action),inventory:state.inventoryRevision,equipment:state.equipmentRevision,
+    this.pending = { action,since,equipmentReceipt,deadline:since+actionConfirmationTimeout(action),inventory:state.inventoryRevision,equipment:state.equipmentRevision,
       stats:state.statsRevision,skills:state.skillsRevision,count,skillLevel,attributes:state.stats?.attributes?.slice() as Attributes ?? null };
     this.result={sequence:++this.sequence,status:'pending',reason:`Waiting for ${action.type} confirmation.`};
     try { this.send(action); } catch (error) { this.pending = null; this.result={sequence:this.sequence,status:'failed',reason:'Connection failed while sending action.'}; throw error; }
@@ -76,7 +76,7 @@ export class AutomationScheduler {
     switch(action.type) {
       case 'sit': confirmed = event.type==='sit'&&event.id===playerId&&event.sitting===action.sitting; break;
       case 'useItem': confirmed = event.type==='inventoryDelta'&&!event.add&&state.inventoryKnown&&state.inventoryRevision>pending.inventory&&state.count(action.itemId)<pending.count; break;
-      case 'equip': confirmed = event.type==='equipment'&&event.bagId===action.bagId&&event.equipped===action.equipped; break;
+      case 'equip': confirmed = pending.equipmentReceipt ? (event.type==='equipment'||event.type==='inventory')&&pending.equipmentReceipt(state) : event.type==='equipment'&&event.bagId===action.bagId&&event.equipped===action.equipped; break;
       case 'skill':
         confirmed = event.type==='skillResult'&&event.source===playerId&&event.skillId===action.skillId&&event.level===action.level
           && !event.indirect && (action.mode==='self'

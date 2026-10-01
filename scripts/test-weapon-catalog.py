@@ -30,12 +30,18 @@ class WeaponCatalogTest(unittest.TestCase):
             data = json.loads(output.read_bytes())
             self.assertEqual(len(data['items']), 493)
             self.assertEqual(len(data['unknown']), 10)
+            self.assertEqual(len(data['ammo']), 40)
+            self.assertEqual(data['ammo']['1750']['ammoType'], 0)
+            self.assertEqual(data['ammo']['13200']['ammoType'], 2)
+            self.assertEqual(data['items']['1701']['jobs'], [2,5,10,11,15,16,18])
+            self.assertTrue(data['items']['1701']['twoHanded'])
+            self.assertEqual(data['equipment']['2101']['position'], 'Shield')
 
     def test_rejects_code_and_subtype_mismatch_without_replacing_catalog(self):
-        for field, bad_value in [('Code', 'UnverifiedBow'), ('SubType', 13)]:
+        for item_id, field, bad_value in [(1701,'Code','UnverifiedBow'), (1701,'SubType',13), (1750,'Code','NotArrow'), (2101,'Code','NotGuard')]:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
                 document = json.loads(published.read_bytes())
-                next(item for item in document['Items'] if item['Id'] == 1701)[field] = bad_value
+                next(item for item in document['Items'] if item['Id'] == item_id)[field] = bad_value
                 input_path = Path(directory) / 'items.json'
                 input_path.write_text(json.dumps(document))
                 output = Path(directory) / 'weapons.json'

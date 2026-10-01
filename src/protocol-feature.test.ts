@@ -177,3 +177,17 @@ describe('normal expanded client commands', () => {
     expect(validateExpandedAction({type:'useItem',itemId:501,target:-1})).toEqual({type:'useItem',itemId:501,target:-1});
   });
 });
+
+describe('full ServerEvent91 wire layout',()=>{
+  it.each([2,3,4])('decodes ammo event%s with source default value and empty UTF8 string',event=>{
+    const bytes=new Fixture().u8(91).u8(event).i32(0).i16(0).finish();expect(bytes.length).toBe(8);
+    expect(decode(bytes)).toEqual([{type:'serverEvent',event,value:0,text:''}]);
+    for(let length=1;length<8;length++)expect(()=>decode(bytes.slice(0,length))).toThrow(FeatureProtocolError);
+    expect(()=>decode(Uint8Array.from([...bytes,0]))).toThrow(FeatureProtocolError);
+  });
+  it('keeps non-ammo subtype/value/text and validates UTF8/trailing bytes',()=>{
+    const text='Zeny ✓',body=new TextEncoder().encode(text);
+    expect(decode(new Fixture().u8(91).u8(5).i32(100).i16(body.length).raw(body).finish())).toEqual([{type:'serverEvent',event:5,value:100,text}]);
+    expect(()=>decode(new Fixture().u8(91).u8(4).i32(0).i16(1).raw(Uint8Array.of(255)).finish())).toThrow(FeatureProtocolError);
+  });
+});

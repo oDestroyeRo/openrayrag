@@ -57,6 +57,8 @@ Profiles contain validated settings, a map binding and optional character name. 
 
 In **Inventory & skills**, [protected item disposition](docs/item-disposition.md) previews keep/store/cart/sell and restock rules from observed stock and capacity. It preserves equipped, selected ammunition, refined, carded and unknown unique items; it shows costs, protected quantities and blocked targets. Previewing sends no commands. Rules travel with profiles; automatic supply trips remain a separate feature.
 
+Optional [ammunition and loadout controls](docs/LOADOUT.md) select verified arrows for bows, apply ordered ammo preferences, protect observed reserves and restore prior equipment after a condition ends. Exact equipment identity and slot confirmations govern switching. At the reserve the client sends Stop; shots already in flight may consume more before Stop arrives. Existing profiles keep this feature disabled.
+
 ## Navigation, targets and loot
 
 Companion bundles collision grids for **all 231 map scenes published by the official client**. Each uses its own dimensions and static teleport rectangles. Eight-direction A* prevents diagonal corner cutting, computes connected areas, avoids unreachable monsters and optionally penalizes paths near walls. Turning off wall avoidance never permits blocked cells.

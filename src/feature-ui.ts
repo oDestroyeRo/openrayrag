@@ -53,6 +53,11 @@ const fields: Record<Section, Field[]> = {
     { path:'follow.lostSeconds',label:'Wait when player lost, seconds',min:1,max:120 },
   ],
   inventory: [
+    {path:'loadout.enabled',label:'Own conditional loadouts and restore them',kind:'checkbox'},
+    {path:'loadout.autoAmmo',label:'Select compatible arrows for bow combat',kind:'checkbox'},
+    {path:'loadout.minAmmoStock',label:'Minimum observed ammo reserve',min:0,max:9999},
+    {path:'loadout.restore',label:'Restore prior equipment',options:[['conditionEnd','When the condition ends'],['never','Keep the new loadout']]},
+    {path:'loadout.cooldownSeconds',label:'Equipment cooldown, seconds',min:1,max:3600},
     { path:'loot.ownership',label:'Pickup ownership',options:[['own','Drops from your kills'],['all','All available drops']] },
     { path:'loot.defaultAction',label:'Unlisted item rule',options:[['pickup','Pick up'],['ignore','Ignore']] },
   ],
@@ -134,7 +139,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     if (v && typeof v === 'object') return Object.keys(v).length <= 256 && Object.values(v).every(entry => bounded(entry,depth+1));
     return false;
   }
-  if (!['character','world','workflow','routine','task','actionResult','travel','escape','elapsedSeconds','deaths','lootStats','actors'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if (!['character','world','workflow','routine','task','actionResult','travel','escape','elapsedSeconds','deaths','lootStats','actors','loadout'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
   const barter = object(value.world).barter;
   return barter === undefined || Array.isArray(barter) && barter.every(entry => {
     const row = object(entry);
@@ -212,6 +217,8 @@ export class FeatureUi {
     this.editor('inventory','loot.rules','Pickup filters & priority',[idColumn('itemId','Item ID'),{key:'action',label:'Action',options:[['pickup','Pick up'],['ignore','Ignore']]},priority],{itemId:501,action:'pickup',priority:0},128);
     this.editor('inventory','items','Recovery items',[idColumn('itemId','Item ID'),{key:'resource',label:'Resource',options:[['hp','HP'],['sp','SP']]},{key:'belowPercent',label:'Below %',min:1,max:100},{key:'minStock',label:'Keep quantity',min:0,max:9999},{key:'cooldownSeconds',label:'Cooldown seconds',min:1,max:3600}],{itemId:501,resource:'hp',belowPercent:60,minStock:0,cooldownSeconds:5},32);
     this.editor('inventory','skills','Skill rules',[idColumn('skillId','Skill ID',255),{key:'level',label:'Level',min:1,max:10},{key:'target',label:'Target',options:[['self','Your character'],['enemy','Current enemy']]},{key:'hpBelowPercent',label:'HP below %',min:1,max:100},{key:'spAbovePercent',label:'SP above %',min:0,max:100},{key:'cooldownSeconds',label:'Cooldown seconds',min:1,max:3600}],{skillId:1,level:1,target:'self',hpBelowPercent:100,spAbovePercent:0,cooldownSeconds:10},32);
+    this.editor('inventory','loadout.ammoPreferences','Ordered arrow preferences',[idColumn('itemId','Arrow item ID')],{itemId:1750},40);
+    this.note('inventory','At the ammo reserve we send Stop and block new attacks. Shots already in flight may consume more before Stop arrives. Restoration waits for exact equipment receipts and stops on manual changes.');
     this.editor('inventory','equipment','Equipment conditions',[idColumn('itemId','Item ID'),{key:'hpBelowPercent',label:'HP below %',min:1,max:100},{key:'monsterClassId',label:'Monster ID · 0 any',min:0,max:2147483647}],{itemId:1,hpBelowPercent:100,monsterClassId:0},32);
     this.editor('inventory','allocation.stats','Stat allocation targets',[{key:'stat',label:'Stat',options:[['0','STR'],['1','AGI'],['2','VIT'],['3','INT'],['4','DEX'],['5','LUK']]},{key:'target',label:'Target value',min:1,max:99}],{stat:0,target:10},6);
     this.editor('inventory','allocation.skills','Skill allocation targets',[idColumn('skillId','Skill ID',255),{key:'target',label:'Target level',min:1,max:10}],{skillId:1,target:1},64);
@@ -414,7 +421,7 @@ export class FeatureUi {
     const inventory=Array.isArray(character.inventory)?character.inventory:[];const skills=Array.isArray(character.learned)?character.learned:[];
     const inventoryText=inventory.slice(0,30).map(item=>{const row=object(item);return `Bag ${number(row.bagId)??'?'} · ${itemName(number(row.itemId)??0)} × ${number(row.count)??'?'}`;}).join('\n');
     const skillText=skills.slice(0,40).map(skill=>{const row=object(skill);return `${skillName(number(row.skillId)??0)} · Lv ${number(row.level)??'?'}`;}).join(', ');
-    const summary=this.host.querySelector<HTMLElement>('#character-data')!;summary.textContent=`SP ${number(stats.sp)??number(player.sp)??'—'} / ${number(stats.maxSp)??number(player.maxSp)??'—'} · Zeny ${number(stats.zeny)??'—'} · Weight ${number(stats.weight)??'—'} / ${number(stats.maxWeight)??'—'}\n${character.inventoryKnown===true?`${inventory.length} inventory entries`:'Inventory not observed'}${inventoryText?'\n'+inventoryText:''}\n${character.skillsKnown===true?`${skills.length} learned skills`:'Skills not observed'}${skillText?'\n'+skillText:''}`;
+    const summary=this.host.querySelector<HTMLElement>('#character-data')!;summary.textContent=`SP ${number(stats.sp)??number(player.sp)??'—'} / ${number(stats.maxSp)??number(player.maxSp)??'—'} · Zeny ${number(stats.zeny)??'—'} · Weight ${number(stats.weight)??'—'} / ${number(stats.maxWeight)??'—'}\n${character.inventoryKnown===true?`${inventory.length} inventory entries`:'Inventory not observed'}${inventoryText?'\n'+inventoryText:''}\n${character.skillsKnown===true?`${skills.length} learned skills`:'Skills not observed'}${skillText?'\n'+skillText:''}\nLoadout: ${text(object(s.loadout).state)||'off'}${text(object(s.loadout).reason)?' · '+text(object(s.loadout).reason):''}`;
     const world=object(s.world);const npc=object(world.npc);const dialog=object(npc.dialog);this.host.querySelector<HTMLElement>('#npc-dialogue')!.textContent=`${text(dialog.name)}${dialog.name?' · ':''}${text(dialog.text)||'No NPC dialogue open.'}${Array.isArray(npc.options)&&npc.options.length?'\n'+npc.options.map((label,index)=>`${index}: ${text(label)}`).join('\n'):''}`;
     const shop=object(world.shop);this.host.querySelector<HTMLElement>('#shop-state')!.textContent=Array.isArray(shop.entries)?`${text(shop.mode)} shop · ${shop.entries.length} entries\n${shop.entries.slice(0,30).map(entry=>{const row=object(entry);return `${itemName(number(row.itemId)??number(row.id)??0)} · #${number(row.id)??number(row.itemId)??'?'} · ${number(row.price)??'?'} zeny`;}).join('\n')}`:'Open a shop through an NPC first.';
     this.host.querySelector<HTMLElement>('#storage-state')!.textContent=`Storage: ${world.storageReady===true&&Array.isArray(world.storage)?world.storage.length:'not open'} entries · Cart: ${world.cartReady===true&&Array.isArray(world.cart)?world.cart.length:'unknown'} entries`;

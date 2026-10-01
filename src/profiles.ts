@@ -15,9 +15,9 @@ function checkedSettings(value: unknown): Settings {
   const expected = [...Object.keys(DEFAULT_SETTINGS), ...(record(value) && Object.hasOwn(value, 'automation') ? ['automation'] : [])];
   if (!record(value) || !keys(value, expected)) throw new Error('Profile contains unknown or missing settings.');
   if (Object.hasOwn(value, 'automation')) {
-    // Version-one profiles predate emergency escape. Only that optional section
-    // gets a default; unknown fields and missing older sections still fail closed.
-    const a = record(value.automation) ? { escape: DEFAULT_AUTOMATION.escape, ...value.automation } : value.automation;
+    // Older profiles predate escape and loadout controls. Only these sections
+    // get defaults; unknown fields and missing older sections still fail closed.
+    const a = record(value.automation) ? { escape: DEFAULT_AUTOMATION.escape, loadout: structuredClone(DEFAULT_AUTOMATION.loadout), ...value.automation } : value.automation;
     if (!record(a) || !keys(a, [...Object.keys(DEFAULT_AUTOMATION), ...(Object.hasOwn(a, 'disposition') ? ['disposition'] : [])])) throw new Error('Profile contains unknown automation settings.');
     const arrayKeys: Record<string, string[]> = {
       items: ['itemId','resource','belowPercent','minStock','cooldownSeconds'],
@@ -25,7 +25,7 @@ function checkedSettings(value: unknown): Settings {
       equipment: ['itemId','hpBelowPercent','monsterClassId'],
       'combat.rules': ['classId','action','priority'], 'loot.rules': ['itemId','action','priority'],
       'allocation.stats': ['stat','target'], 'allocation.skills': ['skillId','target'],
-      'travel.waypoints': ['map','x','y'],
+      'travel.waypoints': ['map','x','y'], 'loadout.ammoPreferences': ['itemId'],
     };
     for (const [key, template] of Object.entries(DEFAULT_AUTOMATION)) {
       const child = a[key];

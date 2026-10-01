@@ -571,3 +571,53 @@ describe('target acquisition route work',()=>{
     }
   });
 });
+
+describe('opt-in ammo ownership and reserve receipts',()=>{
+  function ammoSetup(ammoId=1750,count=10){
+    const t=setup(),automation=structuredClone(DEFAULT_AUTOMATION);
+    automation.loadout.enabled=true;automation.loadout.minAmmoStock=3;automation.loadout.cooldownSeconds=1;
+    t.engine.player!.classId=5;t.engine.player!.level=50;
+    t.engine.receive([{type:'inventory',items:[{bagId:1001,itemId:1701,type:2,count:1,guid:'bow'},
+      {bagId:1750,itemId:1750,type:1,count},{bagId:1751,itemId:1751,type:1,count:20}],equipment:[0,0,0,0,1001,0,0,0,0,0],ammoId}]);
+    t.engine.start({...settings,automation});return {...t,automation};
+  }
+  it('equips preferred arrows and waits for slot13 readback before attacking',()=>{
+    const t=ammoSetup();t.engine.settings.automation!.loadout.ammoPreferences=[{itemId:1751}];
+    t.step();expect(t.sent).toEqual([{type:'equip',bagId:1751,equipped:true}]);t.step();expect(t.sent).toHaveLength(1);
+    t.engine.receive([{type:'equipment',bagId:1751,slot:13,equipped:true}]);t.step();expect(t.sent.at(-1)).toEqual({type:'attack',id:2});
+    expect(t.engine.snapshot().loadout.stock).toBe(20);
+  });
+  it('sends one Stop immediately on authoritative reserve, blocks restart until target clear, and does not promise in-flight stock',()=>{
+    const t=ammoSetup();t.step();expect(t.sent).toEqual([{type:'attack',id:2}]);
+    t.engine.receive([{type:'attack',source:1,target:2,position:{x:100,y:100}},{type:'inventoryDelta',add:false,bagId:1750,change:7,weight:0}]);
+    expect(t.engine.running).toBe(false);expect(t.sent).toEqual([{type:'attack',id:2},{type:'stop'}]);expect(t.engine.snapshot().loadout.state).toBe('fault');
+    t.step(1000);t.step(7000);expect(t.sent).toHaveLength(2);expect(t.engine.snapshot().loadout.reason).toContain('reserve');
+    expect(()=>t.engine.start({...settings,automation:t.automation})).toThrow('Wait');
+    t.engine.receive([{type:'inventoryDelta',add:false,bagId:1750,change:1,weight:0}]);expect(t.engine.character.count(1750)).toBe(2);
+    t.engine.receive([{type:'changeTarget',id:0}]);expect(t.engine.snapshot().loadout.state).toBe('ready');expect(t.engine.running).toBe(false);
+  });
+  it('does not use a walk Stop as a firing confirmation or mistake another target change for clear',()=>{
+    const t=ammoSetup();t.step();t.engine.stop();t.engine.receive([{type:'stop',id:1},{type:'changeTarget',id:2}]);t.step(7000);
+    expect(t.engine.idleForActions()).toBe(false);expect(t.sent).toEqual([{type:'attack',id:2},{type:'stop'}]);
+    t.engine.receive([{type:'changeTarget',id:0}]);expect(t.engine.idleForActions()).toBe(true);
+  });
+  it('does not retry a missing, rejected or delayed equipment receipt',()=>{
+    const t=ammoSetup(-1);t.step();expect(t.sent).toEqual([{type:'equip',bagId:1750,equipped:true}]);
+    t.step(1000);t.step(6000);expect(t.engine.running).toBe(false);expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);
+    t.engine.receive([{type:'equipment',bagId:1750,slot:13,equipped:true}]);t.step();expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);expect(t.sent.some(a=>a.type==='attack')).toBe(false);
+  });
+  it.each([2,3,4])('stops on source ammo failure%s and never retries attack/equipment',event=>{
+    const t=ammoSetup();t.step();t.engine.receive([{type:'serverEvent',event,value:0,text:''}]);t.step(7000);
+    expect(t.engine.running).toBe(false);expect(t.sent).toEqual([{type:'attack',id:2},{type:'stop'}]);expect(t.engine.snapshot().loadout.state).toBe('fault');
+  });
+  it('cancels prior restoration on manual Stop and ordinary map refresh',()=>{
+    const t=ammoSetup(-1);t.step();t.engine.receive([{type:'equipment',bagId:1750,slot:13,equipped:true}]);expect(t.engine.snapshot().loadout.priorCaptured).toBe(true);
+    t.engine.stop();expect(t.engine.snapshot().loadout.priorCaptured).toBe(false);
+    t.engine.receive([{type:'map',map:'prt_fild05'}]);t.step();expect(t.engine.snapshot().loadout.priorCaptured).toBe(false);expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);
+  });
+  it('does not let new equipment override an outstanding server walk leg',()=>{
+    const t=ammoSetup();t.engine.settings.automation!.loadout.ammoPreferences=[{itemId:1751}];
+    t.engine.receive([{type:'walk',id:1,walk:{cells:[{x:100,y:100},{x:101,y:100}],secondsPerCell:2,firstSeconds:2,origin:{x:100.5,y:100.5},locked:false}}]);
+    t.step(100);expect(t.sent).toEqual([]);t.step(100);expect(t.sent).toEqual([]);t.step(2000);expect(t.sent).toEqual([{type:'equip',bagId:1751,equipped:true}]);
+  });
+});
