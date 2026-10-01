@@ -8,6 +8,7 @@ import { type LoginStatus } from './login';
 import { validMapInfo, type MapInfo } from './map-data';
 import { GridNavigator, MAX_MAP_DIMENSION, NAVIGATION_MAPS, searchGrid } from './navigation';
 import { MapTargets } from './targets';
+import { normalAttackProfile } from './combat';
 import './style.css';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
@@ -63,7 +64,7 @@ root.innerHTML = `
             <label>Approach seconds <code>attackMaxRouteTime</code><input id="attack-time" type="number" min="1" max="60" value="4" /></label>
           </div>
           <label class="toggle-row">Avoid walls <code>route_avoidWalls</code><input id="avoid-walls" type="checkbox" checked /></label>
-          <p class="hint">Melee approach: 1 cell. The bot waits for walkable terrain when maps change.</p>
+          <p id="attack-range" class="hint">Normal attack: conservative 1 cell until equipment is verified.</p>
         </details>
         <label class="toggle-row" for="loot"><div>Collect loot<small>Nearby drops from your defeated monsters</small></div><input id="loot" type="checkbox" checked role="switch" /></label>
         <div class="actions"><button id="start" class="primary" disabled>▶ &nbsp; Start bot</button><button id="stop" class="secondary" disabled>■ &nbsp; Stop</button></div>
@@ -437,6 +438,9 @@ function render(s: GameStatus): void {
   element('status').classList.toggle('active', s.running);
   element('character').textContent = s.player?.name ?? 'No character connected';
   element('location').textContent = s.player ? `Level ${s.player.level} · ${s.map} · ${s.player.x}, ${s.player.y}` : 'Your adventure starts in the game window.';
+  const attack = normalAttackProfile(s.character);
+  const rawRange = attack.sourceRange !== null && attack.sourceRange !== attack.range ? ` · source range ${attack.sourceRange}` : '';
+  element('attack-range').textContent = `Normal attack: ${attack.range} cells · ${attack.source}${rawRange}. ${attack.limitation} Projectile sight is checked; skill range and kiting are separate.`;
   element('hp-text').textContent = s.player ? `${s.player.hp} / ${s.player.maxHp}` : '— / —';
   element('hp-bar').style.width = `${s.player?.maxHp ? Math.max(0, Math.min(100, s.player.hp / s.player.maxHp * 100)) : 0}%`;
   for (const key of ['attacks','kills','looted'] as const) element(key).textContent = String(fieldRun.requested ? fieldRun.metrics[key] : s[key]);

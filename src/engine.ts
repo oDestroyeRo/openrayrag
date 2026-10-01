@@ -8,6 +8,7 @@ import { acceptsMonster, acceptsLoot, inSchedule, monsterRule, lootRule, effecti
 import { CharacterState, type CharacterSnapshot, type StatefulEntity } from './character-state';
 import { validateExpandedAction, type ExpandedAction, type FeatureEvent } from './protocol-feature';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost, skillPrerequisites } from './game-catalog';
+import { normalAttackProfile } from './combat';
 export { MAX_TARGETS, DEFAULT_SETTINGS, DEFAULT_AUTOMATION, validateSettings, validateAutomation } from './settings';
 export type { Settings, AutomationSettings } from './settings';
 
@@ -26,7 +27,7 @@ export type Action = { type: 'attack' | 'pickup'; id: number } | { type: 'stop' 
 const ACTION_DELAY = 100;
 const LOOT_DELAY = 150;
 const cell = (p: Position): Position => ({ x: Math.floor(p.x), y: Math.floor(p.y) });
-interface RouteTask { type: 'search' | 'attack' | 'pickup' | 'follow' | 'waypoint' | 'travel'; id?: number; destination: Position; cells: Position[]; since: number | null }
+interface RouteTask { type: 'search' | 'attack' | 'pickup' | 'follow' | 'waypoint' | 'travel'; id?: number; destination: Position; cells: Position[]; since: number | null; attackRange?: number }
 interface RouteLeg { destination: Position; cells: Position[]; since: number; acceptedUntil: number | null }
 
 export class BotEngine {
@@ -49,7 +50,7 @@ export class BotEngine {
   private implicitWalk: { targetId: number; until: number } | null = null;
   private routeFailures = 0;
   private routeStep = 10;
-  private pending: { type: 'attack' | 'pickup'; id: number; since: number; progress: number; approachSince: number | null; direct: boolean; movementAccepted: boolean } | null = null;
+  private pending: { type: 'attack' | 'pickup'; id: number; since: number; progress: number; approachSince: number | null; direct: boolean; attackRange?: number } | null = null;
   private foreignTargets = new Set<number>();
   private respawnRefreshPending = false;
   private skillKills = new Map<number, number>();
@@ -253,7 +254,6 @@ export class BotEngine {
             }
           }
           if (this.pending && this.pending.approachSince === null) this.pending.approachSince = this.now();
-          if (this.pending?.direct && !e.walk.locked) this.pending.movementAccepted = true;
         }
         break;
       }
@@ -349,7 +349,7 @@ export class BotEngine {
     if(this.character.sitting===true) {if(!this.motions.has(this.playerId))this.automation.submit({type:'sit',sitting:false},this.character);return;}
     let monsterChoice: { target: Entity; cells: Position[] } | null | undefined;
     const chooseMonster = () => {
-      if (monsterChoice === undefined) monsterChoice = this.bestRoute(p, [...this.entities.values()].filter(e => this.eligible(e, now)), e => monsterRule(a, e.classId)?.priority ?? 0);
+      if (monsterChoice === undefined) monsterChoice = this.bestRoute(p, [...this.entities.values()].filter(e => this.eligible(e, now)), e => monsterRule(a, e.classId)?.priority ?? 0, true);
       return monsterChoice;
     };
     const needsEnemy = a.skills.some(rule => rule.target === 'enemy') || a.equipment.some(rule => rule.monsterClassId > 0);
@@ -363,20 +363,23 @@ export class BotEngine {
     }
     if (this.pending) {
       const target = this.entities.get(this.pending.id);
-      if (this.pending.type === 'attack' && this.pending.direct && this.pending.approachSince !== null
-        && target && !nav.clearWalkCorridor(cell(p), cell(target))) {
+      const attackRange = normalAttackProfile(this.character).range;
+      if (this.pending.type === 'attack' && target && (this.pending.attackRange !== attackRange
+        || (!nav.canAttack(cell(p), cell(target), attackRange) && !nav.clearWalkCorridor(cell(p), cell(target))))) {
         const since = this.pending.approachSince;
         // Attack may already have requested a walk whose reply is still in flight.
         // Retain that owner until its reply or the existing bounded wait expires.
-        if (!this.pending.movementAccepted && !this.motions.has(this.playerId)) {
-          this.leg = {destination:cell(p),cells:[cell(p)],since:this.pending.since,acceptedUntil:null};
+        if (!this.motions.has(this.playerId)) {
+          // Stop on an idle attacker emits no movement acknowledgment. Keep a
+          // bounded ownership fence without inventing a failed physical leg.
+          this.implicitWalk ??= { targetId: target.id, until: now + 4000 };
         }
         this.send({ type: 'stop' }); this.lastAction = now; this.pending = null;
-        const cells = this.plan(p, target, 1);
+        const cells = this.planAttack(p, target);
         if (cells && this.eligible(target, now, false)) {
           this.pursue('attack', target.id, cell(target), cells);
           this.route!.since = since;
-          this.reason = 'Monster moved behind an obstacle; finishing the server walk before routing around it.';
+          this.reason = 'Attack range or sight changed; finishing the server walk before replanning.';
         } else {
           this.excluded.set(target.id, now + 30000);
           this.reason = 'Monster moved to unreachable ground; skipping it for 30 seconds.';
@@ -385,7 +388,7 @@ export class BotEngine {
       }
       const approachExpired = this.pending.approachSince !== null
         && (now - this.pending.approachSince >= this.settings.attackMaxRouteTime * 1000
-          || (this.pending.type === 'attack' && (!target || !this.plan(p, target, 1))));
+          || (this.pending.type === 'attack' && (!target || !this.planAttack(p, target))));
       if (!approachExpired && now - this.pending.progress < 12000 && now - this.pending.since < 90000) return;
       this.excluded.set(this.pending.id, now + 30000); this.send({ type: 'stop' });
       this.reason = 'Target timed out or became unreachable; skipping it for 30 seconds.'; this.note(this.reason);
@@ -431,20 +434,24 @@ export class BotEngine {
       && (!acquiring || distance(this.player!, e) <= this.settings.radius) && !this.foreignTargets.has(e.id)
       && (this.excluded.get(e.id) ?? 0) <= now;
   }
-  private plan(from: Position, to: Position, range: number): Position[] | null {
+  private plan(from: Position, to: Position, range: number, goal: 'walk' | 'attack' = 'walk'): Position[] | null {
     return this.navigation()?.plan(cell(from), cell(to), {
-      range, maxDistance: this.settings.attackRouteMaxPathDistance, avoidWalls: this.settings.route_avoidWalls,
+      range, goal, maxDistance: this.settings.attackRouteMaxPathDistance, avoidWalls: this.settings.route_avoidWalls,
     }) ?? null;
   }
-  private bestRoute<T extends Position & { id: number }>(from: Position, candidates: T[], priority: (target: T) => number = () => 0): { target: T; cells: Position[] } | null {
+  private planAttack(from: Position, to: Position): Position[] | null {
+    return this.plan(from, to, normalAttackProfile(this.character).range, 'attack');
+  }
+  private bestRoute<T extends Position & { id: number }>(from: Position, candidates: T[], priority: (target: T) => number = () => 0, attack = false): { target: T; cells: Position[] } | null {
     let best: { target: T; cells: Position[]; cost: number; priority: number } | null = null;
     const origin = cell(from);
+    const range = attack ? normalAttackProfile(this.character).range : 1;
     for (const target of candidates) {
       const rank = priority(target);
       // Iterate in original order: later equal-cost candidates never replace the
       // current winner. The bound omits walls and cannot overstate route cost.
-      if (best && (rank < best.priority || (rank === best.priority && minimumRouteCost(origin, cell(target), 1) >= best.cost))) continue;
-      const cells = this.plan(from, target, 1);
+      if (best && (rank < best.priority || (rank === best.priority && minimumRouteCost(origin, cell(target), range) >= best.cost))) continue;
+      const cells = this.plan(from, target, range, attack ? 'attack' : 'walk');
       if (!cells) continue;
       const cost = cells.reduce((sum, p, i) => sum + (i ? (p.x !== cells[i - 1]!.x && p.y !== cells[i - 1]!.y ? 14 : 10) : 0), 0);
       if (!best || rank > best.priority || (rank === best.priority && cost < best.cost)) best = { target, cells, cost, priority: rank };
@@ -453,7 +460,7 @@ export class BotEngine {
   }
   private pursue(type: 'attack' | 'pickup', id: number, destination: Position, cells: Position[]): void {
     // Finish an outstanding leg before changing destination; its reply has no request ID.
-    this.route = { type, id, destination, cells, since: null };
+    this.route = { type, id, destination, cells, since: null, ...(type === 'attack' ? { attackRange: normalAttackProfile(this.character).range } : {}) };
     const target = type === 'attack' ? this.entities.get(id)?.name ?? 'monster' : 'loot';
     this.reason = `Selected ${target}; finishing the current walk before approaching.`;
   }
@@ -461,7 +468,8 @@ export class BotEngine {
     const approachStarted = this.route?.since ?? this.now();
     this.route = null; this.leg = null;
     this.send({ type, id }); this.lastAction = this.now();
-    this.pending = { type, id, since: this.now(), progress: this.now(), approachSince: direct ? approachStarted : null, direct, movementAccepted: !direct };
+    this.pending = { type, id, since: this.now(), progress: this.now(), approachSince: direct ? approachStarted : null, direct,
+      ...(type === 'attack' ? { attackRange: normalAttackProfile(this.character).range } : {}) };
     if (direct) this.implicitWalk = {targetId:id,until:this.now()+4000};
     this.reason = type === 'attack' ? `Attacking ${this.entities.get(id)?.name ?? 'selected monster'}.` : `Collecting item #${this.drops.get(id)?.itemId}.`;
     if (type === 'attack') this.attacks++;
@@ -519,12 +527,17 @@ export class BotEngine {
         return;
       }
     }
+    const attackRange = normalAttackProfile(this.character).range;
+    if (route.type === 'attack' && route.attackRange !== attackRange) {
+      route.attackRange = attackRange; route.cells = [];
+    }
     // A normal monster click lets the server own both approach and attack. Never
     // replace an unresolved leg; only skip our walk when its corridor is verified.
     if (route.type === 'attack' && now - this.lastAction >= ACTION_DELAY
-      && Math.max(0, distance(cell(p), route.destination) - 1) <= this.settings.attackRouteMaxPathDistance
-      && nav.clearWalkCorridor(cell(p), route.destination)) {
-      this.act('attack', route.id!, distance(cell(p), route.destination) > 1); return;
+      && (nav.canAttack(cell(p), route.destination, attackRange)
+        || (Math.max(0, distance(cell(p), route.destination) - 1) <= this.settings.attackRouteMaxPathDistance
+          && nav.clearWalkCorridor(cell(p), route.destination)))) {
+      this.act('attack', route.id!, !nav.canAttack(cell(p), route.destination, attackRange)); return;
     }
     const range = route.type === 'follow' ? automationSettings(this.settings).follow.distance : navigationTask ? 0 : 1;
     const index = route.cells.findIndex(c => distance(c, p) === 0);
@@ -532,7 +545,7 @@ export class BotEngine {
     else route.cells = [];
     if (!route.cells.length) route.cells = (navigationTask
       ? nav.plan(p, route.destination, { range, avoidWalls: this.settings.route_avoidWalls })
-      : this.plan(p, route.destination, range)) ?? [];
+      : route.type === 'attack' ? this.planAttack(p, route.destination) : this.plan(p, route.destination, range)) ?? [];
     if (!route.cells.length) {
       if (route.id !== undefined) this.excluded.set(route.id, now + 30000);
       this.cancelRoute(); this.reason = 'Destination is unreachable; choosing another goal.'; return;

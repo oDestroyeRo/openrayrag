@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Extract only walk flags from a downloaded public RayRag Unity scene bundle.
+"""Extract walking and projectile visibility from a public RayRag scene bundle.
 
 Requires UnityPy==1.25.3. Never executes bundle code.
-Usage: python rayrag-extract-navigation.py BUNDLE MAP OUTPUT_JSON SOURCE_URL
+Usage: python scripts/extract-navigation.py BUNDLE MAP OUTPUT_JSON SOURCE_URL
 """
 import base64
 import hashlib
@@ -48,10 +48,14 @@ width, height, cells = tree["Width"], tree["Height"], tree["Cells"]
 if not 0 < width <= 32767 or not 0 < height <= 32767 or len(cells) != width * height:
     raise ValueError("Invalid map dimensions or cell count")
 bits = bytearray((len(cells) + 7) // 8)
+snipable = bytearray(len(bits))
 for index, cell in enumerate(cells):
     # Walkable=1; water=2 is an additional flag and remains walkable.
     if cell["Type"] & 1:
         bits[index // 8] |= 1 << (index % 8)
+    elif cell["Type"] & 4:
+        # LOS is (Type & 5) != 0; retain only the additional nonwalking cells.
+        snipable[index // 8] |= 1 << (index % 8)
 with open(bundle_path, "rb") as handle:
     source_hash = hashlib.file_digest(handle, "sha256").hexdigest()
 output = {
@@ -59,6 +63,7 @@ output = {
     "width": width,
     "height": height,
     "walkableBitsBase64": base64.b64encode(bits).decode("ascii"),
+    "snipableOnlyBitsBase64": base64.b64encode(snipable).decode("ascii"),
     "bitOrder": "lsb-first",
     "index": "x+y*width",
     "sourceUrl": source_url,
@@ -68,5 +73,6 @@ with open(output_path, "w", encoding="utf-8") as handle:
     json.dump(output, handle)
 print(json.dumps({"map": map_code, "width": width, "height": height,
                   "walkable": sum(bool(c["Type"] & 1) for c in cells),
+                  "snipableOnly": sum(bool(c["Type"] & 4) and not bool(c["Type"] & 1) for c in cells),
                   "cellTypes": dict(Counter(c["Type"] for c in cells)),
                   "sourceSha256": source_hash, "output": output_path}))

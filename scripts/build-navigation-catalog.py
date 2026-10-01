@@ -46,9 +46,12 @@ def extract(source, temp):
     if (width, height) != (source['width'], source['height']):
         raise ValueError(f'{map_code}: dimensions differ from the reviewed source')
     bits = base64.b64decode(grid['walkableBitsBase64'], validate=True)
-    if len(bits) != (width * height + 7) // 8:
+    sight = base64.b64decode(grid['snipableOnlyBitsBase64'], validate=True)
+    if len(bits) != (width * height + 7) // 8 or len(sight) != len(bits):
         raise ValueError('Invalid bitset size')
-    if width * height % 8 and bits[-1] >> (width * height % 8):
+    if any(walk & snipable for walk, snipable in zip(bits, sight)):
+        raise ValueError('Snipable-only cells overlap walking cells')
+    if width * height % 8 and (bits[-1] | sight[-1]) >> (width * height % 8):
         raise ValueError('Nonzero trailing bits')
     walkable = sum(byte.bit_count() for byte in bits)
     blocked = width * height - walkable
