@@ -1,6 +1,6 @@
 import type { Entity, GameEvent, Position, Walk } from './protocol';
 import type { Action } from './engine';
-import { distance, GridNavigator, routeSegment, searchGrid } from './navigation';
+import { distance, GridNavigator, routeSegment, searchGrid, type WalkGrid } from './navigation';
 import { walkDuration } from './movement';
 import { planArrivalEscape, planPortalApproach, routeBetweenMaps, travelNavigator, type TravelStep } from './travel';
 
@@ -28,8 +28,10 @@ export class TravelController {
   private stepSize = 10;
   private consecutiveNudges = 0;
   private nudgeNavigator: GridNavigator | null = null;
+  private approachNav: GridNavigator | null = null;
+  private approachTarget: Position | null = null;
   private leg: { cells: Position[]; since: number; acceptedUntil: number | null; nudged: boolean } | null = null;
-  constructor(private readonly send: (action: Action) => void, private readonly now = Date.now) {}
+  constructor(private readonly send: (action: Action) => void, private readonly now = Date.now, private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) {}
   get active(): boolean { return this.state === 'walking' || this.state === 'transition'; }
 
   start(map: string, player: Entity, destination: string, stepSize: number, avoidWalls: boolean): void {
@@ -37,6 +39,7 @@ export class TravelController {
     if (!Number.isInteger(stepSize) || stepSize < 1 || stepSize > 20) throw new Error('Invalid travel step size.');
     const steps = routeBetweenMaps(map, cell(player), destination, avoidWalls);
     if (!steps) throw new Error('No verified route connects this position to the destination.');
+    this.approachNav = null; this.approachTarget = null;
     this.steps = steps; this.destination = destination; this.map = map; this.playerId = player.id;
     this.stepSize = stepSize; this.avoidWalls = avoidWalls; this.since = this.now(); this.deadline = this.now() + 20_000;
     this.leg = null; this.awaitingSpawn = false; this.finalEscape = false; this.lastAction = 0;
@@ -44,14 +47,33 @@ export class TravelController {
     this.state = 'walking'; this.plan(player);
   }
 
+  /** Bounded final approach shares the trip's accepted-leg ownership and deadlines. */
+  startApproach(map: string, player: Entity, target: Position, stepSize = 10): void {
+    if (this.active) throw new Error('Stop the current trip first.');
+    if (!Number.isInteger(stepSize) || stepSize < 1 || stepSize > 20) throw new Error('Invalid travel step size.');
+    const grid = this.gridFor(map);
+    if (!grid) throw new Error('No verified collision map for the final approach.');
+    const nav = new GridNavigator(grid);
+    const destination = { ...target };
+    const route = nav.plan(cell(player),destination,{avoidWalls:true});
+    if (!route?.length || route.length > 512) throw new Error('The final approach is unreachable or exceeds 512 cells.');
+    this.approachNav = nav; this.approachTarget = destination; this.consecutiveNudges = 0; this.nudgeNavigator = null; this.steps = []; this.destination = map; this.map = map; this.playerId = player.id;
+    this.stepSize = stepSize; this.route = route; this.finalEscape = true; this.leg = null; this.awaitingSpawn = false;
+    this.since = this.now(); this.lastAction = 0; this.state = 'walking'; this.reason = 'Approaching the NPC on verified ground.';
+  }
+
   private plan(player: Entity): void {
     const step = this.steps[0];
-    const route = step ? planPortalApproach(this.map, cell(player), step.portal, this.avoidWalls)
-      : planArrivalEscape(this.map, cell(player), this.avoidWalls);
-    if (!route?.length) { this.cancel('Arrival or next portal is unreachable on verified ground.', true); return; }
+    const route = this.approachNav
+      ? this.approachTarget ? this.approachNav.plan(cell(player), this.approachTarget, { avoidWalls: true }) : null
+      : step ? planPortalApproach(this.map, cell(player), step.portal, this.avoidWalls)
+        : planArrivalEscape(this.map, cell(player), this.avoidWalls);
+    if (!route?.length || this.approachNav && route.length > 512) {
+      this.cancel(this.approachNav ? 'The final approach is unreachable or exceeds 512 cells.' : 'Arrival or next portal is unreachable on verified ground.', true); return;
+    }
     this.route = route; this.finalEscape = !step; this.leg = null;
     this.state = 'walking';
-    this.reason = step ? `Travel to ${this.destination}: approaching the portal to ${step.portal.toMap}.`
+    this.reason = this.approachNav ? 'Approaching the NPC on verified ground.' : step ? `Travel to ${this.destination}: approaching the portal to ${step.portal.toMap}.`
       : `Arrived in ${this.destination}; leaving the portal area.`;
   }
 
@@ -77,7 +99,7 @@ export class TravelController {
         this.awaitingSpawn = false; this.steps.shift(); this.plan(event.entity);
       } else if (event.type === 'walk' && event.id === this.playerId) {
         if (this.acceptNudge(event.walk)) continue;
-        const nav = travelNavigator(this.map, this.route);
+        const nav = this.approachNav ?? travelNavigator(this.map, this.route);
         if (!this.leg || this.leg.acceptedUntil !== null || !nav || event.walk.locked || event.walk.cells.length < 1 || event.walk.cells.length > 21
           || distance(cell(event.walk.origin), this.leg.cells[0]!) > 1
           || distance(event.walk.cells[0]!, this.leg.cells[0]!) > 1
@@ -111,9 +133,11 @@ export class TravelController {
       || walk.locked || walk.cells.length !== 2 || distance(walk.cells[0]!, leg.cells.at(-1)!) !== 0
       || distance(cell(walk.origin), walk.cells[0]!) > 1
       || !Number.isFinite(duration) || duration <= 0 || duration > 15_000) return false;
-    const grid = searchGrid(this.map);
-    if (!grid) return false;
-    this.nudgeNavigator ??= new GridNavigator(grid);
+    if (!this.nudgeNavigator) {
+      const grid = this.gridFor(this.map);
+      if (!grid) return false;
+      this.nudgeNavigator = this.approachNav ?? new GridNavigator(grid);
+    }
     // Unlike a planned portal leg, a server occupancy adjustment cannot enter a trigger.
     if (!this.nudgeNavigator.validRoute(walk.cells)) return false;
     leg.cells = walk.cells; leg.acceptedUntil = this.now() + duration + 100; leg.nudged = true;
@@ -127,6 +151,7 @@ export class TravelController {
   tick(map: string, player: Entity | undefined): void {
     if (!this.active) return;
     const now = this.now();
+    if (this.approachNav && now - this.since > 300_000) { this.cancel('Final NPC approach reached its five-minute limit.', true); return; }
     if (now - this.since > 1_200_000) { this.cancel('Travel reached its twenty-minute limit.', true); return; }
     if (this.state === 'transition') {
       if (now > this.deadline) this.cancel('The planned map transition was not confirmed. No retry was sent.', true);
@@ -150,7 +175,7 @@ export class TravelController {
     if (index < 0) { this.cancel('Character left the planned travel corridor.', true); return; }
     this.route = this.route.slice(index);
     if (this.route.length === 1) {
-      if (this.finalEscape) { this.state = 'complete'; this.reason = `Arrived in ${this.destination}. Choose targets before starting combat.`; }
+      if (this.finalEscape) { this.state = 'complete'; this.reason = this.approachNav ? 'Final NPC approach confirmed.' : `Arrived in ${this.destination}. Choose targets before starting combat.`; }
       else { this.state = 'transition'; this.deadline = now + 20_000; this.reason = 'Waiting for the planned map transition.'; }
       return;
     }

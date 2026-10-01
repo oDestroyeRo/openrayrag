@@ -11,6 +11,7 @@ import { TravelController, type TravelSnapshot } from './travel-controller';
 import { inSchedule, actionConfirmationTimeout } from './automation';
 import { searchGrid, type WalkGrid } from './navigation';
 import type { InventoryItem } from './protocol-feature';
+import { NpcServiceRuntime, validateServiceRequest, observeServiceReceipt, confirmServiceReceipt, type ServiceContext, type ServiceReceipt, type ServiceSnapshot } from './npc-services';
 import { ITEM_CATALOG } from './game-catalog';
 import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type EscapeSnapshot, type EscapeResumeGuard } from './escape';
 
@@ -18,7 +19,7 @@ import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type Es
 export type ControllerAction = ExpandedAction | WorldAction;
 export interface CompanionSnapshot extends Snapshot {
   runRequested: boolean; state: 'running' | 'waiting' | 'idle';
-  world: WorldSnapshot; workflow: WorkflowSnapshot; routine: RoutineSnapshot; travel: TravelSnapshot;
+  world: WorldSnapshot; workflow: WorkflowSnapshot; routine: RoutineSnapshot; travel: TravelSnapshot; service: ServiceSnapshot;
   escape: EscapeSnapshot;
 }
 function expanded(value: unknown): value is ExpandedAction {
@@ -32,7 +33,7 @@ interface Pending {
   action: ControllerAction; since: number; routineId: number | null;
   engineSequence?: number; workflow?: boolean; sent?: boolean;
   generation: number; worldGeneration: number; map: string; npcId: number | null;
-  receipt?: VendingReceipt;
+  receipt?: VendingReceipt; serviceReceipt?: ServiceReceipt;
   cart?: { source: InventoryItem; inventory: number; cart: number; acknowledged: boolean };
 }
 
@@ -44,6 +45,7 @@ export class CompanionController {
   readonly routine: RoutineRuntime<ControllerAction>;
   readonly travel: TravelController;
   readonly escape: EmergencyEscape;
+  readonly service: NpcServiceRuntime;
   private pending: Pending | null = null;
   private lastFrame = 0;
   private lastTick = 0;
@@ -79,13 +81,14 @@ export class CompanionController {
     this.engine = new BotEngine(send, now, gridFor);
     this.workflow = new NpcWorkflow(now);
     this.routine = new RoutineRuntime(validControllerAction, now, { actionTimeoutSeconds: actionConfirmationTimeout({ type: 'skill' }) / 1000 });
-    this.travel = new TravelController(send, now);
+    this.travel = new TravelController(send, now, gridFor);
+    this.service = new NpcServiceRuntime(this.travel, now, gridFor);
     this.escape = new EmergencyEscape(now);
   }
   get runRequested(): boolean { return this.requestedSettings !== null; }
   get connectionGeneration(): number { return this.connectionEpoch; }
   private get executing(): boolean {
-    return this.engine.running || this.returning || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
+    return this.engine.running || this.returning || this.service.active || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
       || ['running','waiting'].includes(this.routine.snapshot().state);
   }
   get active(): boolean { return this.runRequested || this.executing; }
@@ -113,6 +116,11 @@ export class CompanionController {
   }
   private syncWorkflowOwner(): void {
     if (!this.workflowOutstanding) return;
+    if (this.workflowOutstanding.serviceReceipt) {
+      if (this.service.snapshot().state === 'complete' || this.service.active && !this.service.receipt()) { this.workflowOutstanding = null; this.workflowDeadline = 0; }
+      else if (!this.service.active) this.retireWorld(null);
+      return;
+    }
     const state = this.workflow.snapshot();
     if (state.state === 'complete' || state.running && !state.pending) {
       this.workflowOutstanding = null; this.workflowDeadline = 0;
@@ -120,7 +128,7 @@ export class CompanionController {
   }
   private cancelOwners(reason: string): void {
     this.retireWorld();
-    this.generation++; this.pending = null; this.routine.cancel(reason); this.workflow.cancel(reason);
+    this.generation++; this.pending = null; this.routine.cancel(reason); this.workflow.cancel(reason); this.service.cancel(reason);
     this.travel.cancel(reason); this.travelSettings = null;
     if (!this.runRequested) { this.returning = false; this.returnSettings = null; }
     this.respawnRefresh = false;
@@ -132,7 +140,7 @@ export class CompanionController {
   }
   /** Retain the requested field run while yielding ownership of commands. */
   pause(reason: string, durationMs = 0): void {
-    const externalActive = this.travel.active || this.workflow.snapshot().running || !!this.pending || this.escape.sent;
+    const externalActive = this.service.active || this.travel.active || this.workflow.snapshot().running || !!this.pending || this.escape.sent;
     const engineStops = this.engine.running || this.engine.pendingFeatureAction?.type === 'skill';
     this.escape.cancel(reason);
     this.captureActionFailure(); this.cancelOwners(reason); this.engine.stop(reason); this.captureActionFailure();
@@ -216,7 +224,22 @@ export class CompanionController {
       pushCartLevel: character.skillsKnown ? character.skillLevel(73) : 0,
       vendingLevel: character.skillsKnown ? character.skillLevel(70) : 0 };
   }
-  perform(mode: 'command' | 'workflow' | 'routine', input: unknown): void {
+  private serviceContext(): ServiceContext {
+    return { ...this.context(), player:this.engine.player, actors:[...this.engine.actors.values()], connection:this.connectionEpoch, inventoryKnown:this.engine.character.inventoryKnown };
+  }
+  perform(mode: 'command' | 'workflow' | 'routine' | 'service', input: unknown): void {
+    if (mode === 'service') {
+      const definition = validateServiceRequest(input); this.requireReady();
+      if (this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
+        || ['running','waiting'].includes(this.routine.snapshot().state) || this.unresolvedWorld || this.now() < this.fencedUntil
+        || this.engine.pendingFeatureAction || this.featureReceipt)
+        throw new Error('Wait for the current transaction or unresolved escape/action before running a service.');
+      // Explicit service visits replace field intent; they never install a supply-trip policy.
+      this.requestedSettings = null; this.returnSettings = null; this.returning = false; this.travelSettings = null;
+      this.engine.stop('Preparing the requested NPC service.'); this.service.start(definition,this.serviceContext());
+      this.started = this.now(); this.lastTick = this.now(); this.workflowOutstanding = null; this.workflowDeadline = 0;
+      return;
+    }
     this.requireIdle(); this.started = this.now(); this.lastTick = this.now();
     this.travelSettings = null; this.returnSettings = null; this.returning = false;
     if (mode === 'workflow') {
@@ -323,12 +346,16 @@ export class CompanionController {
       this.world.apply(event, this.engine.playerId);
       if (event.type === 'cartMoved') this.engine.character.applyCartWeights(event.cartWeight, event.currentWeight);
     }
+    this.service.observe(events, worldEvents, this.serviceContext());
     this.workflow.observe(worldEvents, this.context()); this.syncWorkflowOwner();
     if (this.pending) this.observeCart(this.pending, worldEvents);
     if (this.unresolvedWorld) {
       const owner = this.unresolvedWorld;
       this.observeCart(owner, worldEvents);
-      if (owner.map !== this.engine.map || owner.worldGeneration !== this.world.generation
+      if (owner.serviceReceipt) {
+        observeServiceReceipt(owner.serviceReceipt,events,worldEvents,this.serviceContext());
+        if (confirmServiceReceipt(owner.serviceReceipt,this.serviceContext())) this.unresolvedWorld = null;
+      } else if (owner.map !== this.engine.map || owner.worldGeneration !== this.world.generation
         || worldEvents.some(event => event.type === 'npcEnd')
         || (owner.receipt ? confirmVendingReceipt(owner.receipt, this.context())
           : owner.cart ? this.cartConfirmed(owner) : this.worldConfirmed(owner.action, worldEvents, owner)))
@@ -413,7 +440,7 @@ export class CompanionController {
   }
   private escapeContext(): EscapeContext {
     const blocker = this.blockedReason || (this.featureReceipt ? 'Waiting for the previous resource action to settle.' : '')
-      || (this.pending || this.workflow.snapshot().running || this.unresolvedWorld || ['running','waiting'].includes(this.routine.snapshot().state)
+      || (this.service.active || this.pending || this.workflow.snapshot().running || this.unresolvedWorld || ['running','waiting'].includes(this.routine.snapshot().state)
         ? 'Waiting for the current action owner before emergency escape.' : '')
       || (this.now() < this.fencedUntil || !this.engine.featureActionsSettled ? 'Waiting for the previous action and cast to settle.' : '')
       || (this.world.npc.mode !== 'idle' || this.world.npc.id !== null || this.world.vending ? 'Finish the NPC or vending interaction before escape.' : '')
@@ -543,6 +570,17 @@ export class CompanionController {
     if (!this.engine.connected || !this.engine.compatible || now - Math.max(this.started, this.lastFrame) > 15_000) {
       this.pause('Game state became unavailable.'); return;
     }
+    if (this.service.active) {
+      const action = this.service.tick(this.serviceContext());
+      if (action) {
+        const receipt = this.service.receipt()!;
+        this.workflowDeadline = now + (receipt.outcome?.timeoutMs ?? 60_000);
+        this.workflowOutstanding = { action, since:now, routineId:null, generation:this.generation,
+          worldGeneration:this.world.generation, map:this.engine.map, npcId:receipt.npcId, workflow:true, sent:true, serviceReceipt:receipt };
+        this.send(action);
+      }
+      this.syncWorkflowOwner(); return;
+    }
     if (this.travel.active) {
       const player = this.engine.player;
       if (player && (player.dead || !player.maxHp || player.hp / player.maxHp * 100 <= (this.travelSettings?.minHpPercent ?? 45))) {
@@ -591,16 +629,17 @@ export class CompanionController {
   }
   snapshot(): CompanionSnapshot {
     const snapshot = this.engine.snapshot();
-    const workflow = this.workflow.snapshot(); const routine = this.routine.snapshot(); const travel = this.travel.snapshot();
-    if (this.travel.active || travel.state === 'complete' && this.travelSettings) snapshot.reason = travel.reason;
+    const workflow = this.workflow.snapshot(); const routine = this.routine.snapshot(); const travel = this.travel.snapshot(); const service = this.service.snapshot();
+    if (service.active) snapshot.reason = service.reason;
+    else if (this.travel.active || travel.state === 'complete' && this.travelSettings) snapshot.reason = travel.reason;
     else if (workflow.running) snapshot.reason = workflow.reason;
     else if (routine.state === 'running' || routine.state === 'waiting') snapshot.reason = routine.reason;
-    const executing = this.executing && (this.engine.running || this.travel.active || workflow.running || !!this.pending
+    const executing = this.executing && (this.engine.running || service.active || this.travel.active || workflow.running || !!this.pending
       || this.escape.inFlight || ['running','waiting'].includes(routine.state));
     if (this.runRequested && !executing) snapshot.reason = this.blockedReason || this.waitingReason || snapshot.reason;
     return { ...snapshot, running: executing, runRequested: this.runRequested,
       state: executing ? 'running' : this.runRequested ? 'waiting' : 'idle',
       runIntent: this.runRequested, elapsedSeconds: this.runRequested ? Math.max(0, Math.floor((this.now() - this.started) / 1000)) : snapshot.elapsedSeconds,
-      world: this.world.snapshot(), workflow, routine, travel, escape: this.escape.snapshot() };
+      world: this.world.snapshot(), workflow, routine, travel, service, escape: this.escape.snapshot() };
   }
 }

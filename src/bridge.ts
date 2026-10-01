@@ -13,7 +13,7 @@ interface BridgeWindow extends Window {
   __TAURI_INTERNALS__?: { invoke: (name: string, args: unknown) => Promise<unknown> };
   __RAYRAG__?: {
     control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings, escapeGuard?: EscapeResumeGuard) => void;
-    perform: (action: 'command' | 'workflow' | 'routine', request: unknown) => void;
+    perform: (action: 'command' | 'workflow' | 'routine' | 'service', request: unknown) => void;
     snapshot: () => CompanionSnapshot;
   };
 }
