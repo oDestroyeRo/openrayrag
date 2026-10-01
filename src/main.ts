@@ -4,6 +4,7 @@ import { type Snapshot } from './engine';
 import { DEFAULT_SETTINGS, DEFAULT_AUTOMATION, MAX_TARGETS, validateSettings, type Settings } from './settings';
 import { FeatureUi, validFeatureStatus } from './feature-ui';
 import { ReconnectPolicy, PersistentFieldRun } from './reconnect';
+import type { EscapeSnapshot } from './escape';
 import { type LoginStatus } from './login';
 import { validMapInfo, type MapInfo } from './map-data';
 import { GridNavigator, MAX_MAP_DIMENSION, NAVIGATION_MAPS, searchGrid } from './navigation';
@@ -87,7 +88,7 @@ const startButton = element<HTMLButtonElement>('start');
 const stopButton = element<HTMLButtonElement>('stop');
 const native = isTauri();
 interface SavedLogin { username: string; characterSlot: number; autoLogin: boolean }
-type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean };
+type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean; escape?: EscapeSnapshot };
 let savedLogin: SavedLogin | null = null;
 let loginBusy = false;
 let loginStartedAt = 0;
@@ -140,7 +141,7 @@ function resumeFieldRun(s: GameStatus): void {
   const request = fieldRun.resumeFor(s);
   if (!request) return;
   const generation = runGeneration;
-  const task = invoke('control_bot', { action: 'start', settings: request.settings });
+  const task = invoke('control_bot', { action: 'start', settings: request.settings, escapeGuard: request.escapeGuard });
   pendingResume = task;
   void task.then(() => { fieldRun.completeResume(request, true); })
     .catch(() => {
@@ -352,7 +353,8 @@ startButton.addEventListener('click', () => void perform(async () => {
   fieldRun.begin(checked, latest.player.name, latest.sessionId, { kills: latest.kills, looted: latest.looted, deaths: latest.deaths, attacks: latest.attacks });
   limitHeld = false; configureReconnect();
   reconnect.observe(latest.connected, true, latest.login.phase, Date.now(), latest.login.message);
-  const task = invoke('control_bot', { action: 'start', settings: checked });
+  const task = invoke('control_bot', { action: 'start', settings: checked,
+    escapeGuard: fieldRun.guardForStart(checked, latest?.player?.name ?? '', latest?.sessionId ?? '') });
   pendingResume = task;
   try { await task; }
   catch (error) { if (generation === runGeneration) { fieldRun.stop(); configureReconnect(); } throw error; }

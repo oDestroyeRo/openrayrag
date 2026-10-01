@@ -75,6 +75,8 @@ struct AutomationSettings {
     combat: Combat,
     loot: Loot,
     recovery: Recovery,
+    #[serde(default, skip_serializing_if = "Escape::is_default")]
+    escape: Escape,
     items: Vec<ItemRule>,
     skills: Vec<SkillRule>,
     equipment: Vec<EquipmentRule>,
@@ -84,6 +86,65 @@ struct AutomationSettings {
     limits: Limits,
     respawn: Respawn,
     schedule: Schedule,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Escape {
+    enabled: bool,
+    hp_below_percent: u8,
+    mode: EscapeMode,
+    method: EscapeMethod,
+    min_stock: u16,
+    cooldown_seconds: u16,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum EscapeMode {
+    Random,
+    Save,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum EscapeMethod {
+    Item,
+    Skill,
+}
+
+impl Default for Escape {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hp_below_percent: 20,
+            mode: EscapeMode::Random,
+            method: EscapeMethod::Item,
+            min_stock: 0,
+            cooldown_seconds: 60,
+        }
+    }
+}
+impl Escape {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct EscapeResumeGuard {
+    cooldown_seconds: u16,
+    latched: bool,
+}
+impl EscapeResumeGuard {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.cooldown_seconds <= 3600 {
+            Ok(())
+        } else {
+            Err("Invalid escape resume guard.".into())
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -315,6 +376,9 @@ impl AutomationSettings {
             && (1..=3600).contains(&self.recovery.timeout_seconds)
             && self.recovery.hp_start < self.recovery.hp_end
             && self.recovery.sp_start < self.recovery.sp_end
+            && (1..=95).contains(&self.escape.hp_below_percent)
+            && self.escape.min_stock <= 9999
+            && (1..=3600).contains(&self.escape.cooldown_seconds)
             && self.items.len() <= 32
             && unique_by(&self.items, |r| r.item_id)
             && self.items.iter().all(|r| {
@@ -381,7 +445,7 @@ impl AutomationSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::Settings;
+    use super::{EscapeResumeGuard, Settings};
     use serde_json::{json, Value};
 
     fn settings() -> Value {
@@ -411,6 +475,58 @@ mod tests {
 
     fn valid(value: Value) -> bool {
         serde_json::from_value::<Settings>(value).is_ok_and(|settings| settings.validate().is_ok())
+    }
+
+    #[test]
+    fn defaults_legacy_escape_to_disabled_and_validates_policy_bounds() {
+        let mut value = settings();
+        value["automation"] = automation();
+        let parsed: Settings = serde_json::from_value(value.clone()).unwrap();
+        assert!(!parsed.automation.unwrap().escape.enabled);
+        for mode in ["random", "save"] {
+            for method in ["item", "skill"] {
+                value["automation"]["escape"] = json!({"enabled":true,"hpBelowPercent":95,"mode":mode,"method":method,"minStock":9999,"cooldownSeconds":3600});
+                assert!(valid(value.clone()));
+            }
+        }
+        for (field, invalid) in [
+            ("enabled", json!(1)),
+            ("hpBelowPercent", json!(0)),
+            ("hpBelowPercent", json!(96)),
+            ("hpBelowPercent", json!(1.5)),
+            ("mode", json!("memo")),
+            ("method", json!("debug")),
+            ("minStock", json!(-1)),
+            ("minStock", json!(10000)),
+            ("cooldownSeconds", json!(0)),
+            ("cooldownSeconds", json!(3601)),
+            ("opcode", json!(21)),
+        ] {
+            let mut candidate = value.clone();
+            candidate["automation"]["escape"][field] = invalid;
+            assert!(!valid(candidate), "accepted {field}");
+        }
+        value["automation"]["escape"] = Value::Null;
+        assert!(!valid(value));
+    }
+
+    #[test]
+    fn validates_ephemeral_escape_resume_state_separately_from_profiles() {
+        for seconds in [0, 3600] {
+            let guard: EscapeResumeGuard =
+                serde_json::from_value(json!({"cooldownSeconds":seconds,"latched":true})).unwrap();
+            assert!(guard.validate().is_ok());
+        }
+        let guard: EscapeResumeGuard =
+            serde_json::from_value(json!({"cooldownSeconds":3601,"latched":false})).unwrap();
+        assert!(guard.validate().is_err());
+        for value in [
+            json!({"cooldownSeconds":-1,"latched":true}),
+            json!({"cooldownSeconds":1,"latched":1}),
+            json!({"cooldownSeconds":1,"latched":true,"opcode":21}),
+        ] {
+            assert!(serde_json::from_value::<EscapeResumeGuard>(value).is_err());
+        }
     }
 
     #[test]
