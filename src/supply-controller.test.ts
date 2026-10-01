@@ -778,6 +778,28 @@ describe("controller supply ownership", () => {
       position: { x: 156, y: 374 },
     });
   });
+  it("waits for a late canceled cast to settle before departing for supplies", () => {
+    const configured=structuredClone(settings);configured.automation.combat.mode='off';
+    const f=setup(configured);f.packet(stats(6));
+    f.c.engine.receive([{type:'spawn',entity:{...player,statuses:[],sp:200,maxSp:200}},
+      {type:'spawn',entity:{...player,id:2,kind:1,classId:4000,name:'Poring',x:290}},
+      {type:'skills',learned:[{skillId:1,level:5},{skillId:11,level:1}]}]);
+    f.c.start(configured);f.c.pause('Prepare manual cast',0);
+    f.c.engine.manualAction({type:'skill',mode:'target',skillId:11,level:1,target:2});
+    f.c.tick();f.c.pause('Temporary interruption',0);
+    f.step(31_000);f.packet(stats(4));
+    f.packet(new BitWriter().u8(FEATURE_OP.skill).u8(1).i32(1).i32(1).i32(2).u8(11).u8(1).u8(0)
+      .position(player).i32(1).u8(0).u8(1).f32(2).f32(0).bool(false).finish());
+    expect(f.c.engine.featureActionsSettled).toBe(false);
+    expect(f.c.supply.snapshot().actions).toBe(0);
+    f.step(1999);
+    expect(f.sent.some(a=>a.type==='npcTalk')).toBe(false);
+    expect(f.c.supply.snapshot().actions).toBe(0);
+    f.step(1);
+    for(let n=0;n<12&&!f.sent.some(a=>a.type==='npcTalk');n++)f.step();
+    expect(f.sent.filter(a=>a.type==='npcTalk')).toHaveLength(1);
+    expect(f.sent.filter(a=>a.type==='skill')).toHaveLength(1);
+  });
   it("keeps a confirmed trip receipt across a reconnect and requires fresh economics to reconcile unknown outcome", () => {
     const f = setup();
     f.begin();

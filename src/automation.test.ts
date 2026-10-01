@@ -90,7 +90,7 @@ describe('bounded skill confirmation deadlines',()=>{
   expect(scheduler.result.status).toBe('pending');
   now+=6000;
   expect(scheduler.observe({type:'skillResult',mode:'ground',source:1,skillId:85,level:1,
-    position:{x:100,y:100},motionSeconds:0,indirect:false},state,1).confirmed).toBe(true);
+    position:{x:100,y:100},targetPosition:{x:100,y:100},motionSeconds:0,indirect:false},state,1).confirmed).toBe(true);
   expect(scheduler.result.status).toBe('confirmed');
   expect(sends).toBe(1);
  });

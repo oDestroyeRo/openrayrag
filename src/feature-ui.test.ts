@@ -28,3 +28,5 @@ it('bounds actor telemetry and never freshens the last observed game frame durin
  expect(validFeatureStatus({actorObservations:snapshot})).toBe(true);expect(actorSnapshotAt(snapshot,20000)?.lastFrameAt).toBe(1000);expect(actorSnapshotAt(snapshot,20000)?.at).toBe(20000);
  expect(validFeatureStatus({actorObservations:{...snapshot,world:'invalid'}})).toBe(false);expect(validFeatureStatus({actorObservations:{...snapshot,actors:Array(65).fill(snapshot.actors[0])}})).toBe(false);
 });
+
+it('bounds attack strategy ledger telemetry without allowing non-finite counts',()=>{expect(validFeatureStatus({attackStrategies:{pending:false,truncated:false,entries:[{id:2,normalStarted:false,rules:[{id:'open',attempts:1,uses:0,uncertain:true}]}]}})).toBe(true);expect(validFeatureStatus({attackStrategies:{entries:[{rules:[{attempts:NaN}]}]}})).toBe(false);expect(validFeatureStatus({attackStrategies:{entries:Array(2049).fill(null)}})).toBe(false);});
