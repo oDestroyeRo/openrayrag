@@ -178,6 +178,25 @@ describe('normal expanded client commands', () => {
   });
 });
 
+describe('source actor cast and owner target packets',()=>{
+  it('decodes target and area casts without treating them as skill results',()=>{
+    const target=new Fixture().u8(24).i32(123).i32(-1).u8(20).u8(5).u8(7).position(10,20).f32(3.5).u8(15).finish();
+    expect(decode(target)).toEqual([{type:'castStart',id:123,target:-1,skillId:20,level:5,position:{x:10,y:20},remainingSeconds:3.5,flags:15}]);
+    const area=new Fixture().u8(25).i32(123).position(30,40).u8(20).u8(5).u8(9).u8(0).position(10,20).f32(3.5).u8(3).finish();
+    expect(decode(area)).toEqual([{type:'castStart',id:123,targetPosition:{x:30,y:40},size:9,skillId:20,level:5,position:{x:10,y:20},remainingSeconds:3.5,flags:3}]);
+  });
+  it('decodes signed cast-time deltas, stop and authoritative owner target clear',()=>{
+    expect(decode(new Fixture().u8(26).i32(123).f32(-1.5).finish())).toEqual([{type:'castExtend',id:123,deltaSeconds:-1.5}]);
+    expect(decode(new Fixture().u8(27).i32(123).finish())).toEqual([{type:'castStop',id:123}]);
+    for(const id of [0,123])expect(decode(new Fixture().u8(33).i32(id).finish())).toEqual([{type:'changeTarget',id}]);
+    expect(decode(Uint8Array.of(28))).toEqual([]); // circle has no actor identity
+  });
+  it('rejects malformed bounds, flags, clocks, truncation and whole-byte trailers atomically',()=>{
+    const cast=(id=1,target=-1,direction=0,seconds=1,flags=0)=>new Fixture().u8(24).i32(id).i32(target).u8(20).u8(1).u8(direction).position().f32(seconds).u8(flags).finish();
+    for(const bytes of [cast(0),cast(1,-2),cast(1,-1,8),cast(1,-1,0,NaN),cast(1,-1,0,Infinity),cast(1,-1,0,1,16),cast().slice(0,-1),Uint8Array.from([...cast(),0]),new Fixture().u8(33).i32(-1).finish()])expect(()=>decode(bytes)).toThrow(FeatureProtocolError);
+  });
+});
+
 describe('full ServerEvent91 wire layout',()=>{
   it.each([2,3,4])('decodes ammo event%s with source default value and empty UTF8 string',event=>{
     const bytes=new Fixture().u8(91).u8(event).i32(0).i16(0).finish();expect(bytes.length).toBe(8);

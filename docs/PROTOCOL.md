@@ -177,6 +177,10 @@ The checked-in augmented portal evidence report includes the per-source protocol
 
 Final direct-target release proof: 708 TypeScript tests and 25 Rust tests passed, plus typechecking, Clippy, formatting, native packaging and strict signature verification. Three consecutive fresh native logins entered the selected character. A Field 8 run confirmed one defeat and two pickups, then Stop. Synthetic scenarios cover obstacle/corner/portal fallback, moving targets, late acknowledgments and pursuit deadlines; live checks do not cover every such geometry.
 
+## Actor condition observations
+
+[Actor status and cast conditions](ACTOR_OBSERVATIONS.md) records the pinned packet layouts, supported status catalog, freshness/lifetime rules and conservative expiry semantics used by optional typed conditions.
+
 ## Ordinary emergency escape
 
 The implementation uses protocol pin `4099e2c000c3c550516760b9c1241595aac9aceb`: UseInventoryItem **47** with item **601** (Fly Wing) or **602** (Butterfly Wing) and target **-1**, or Skill **29** with self target **5**, skill **53** (Teleport, 30 SP) or **54** (Return, 10 SP), level **1**. The [item scripts](https://github.com/Doddler/RagnarokRebuildTcp/blob/4099e2c000c3c550516760b9c1241595aac9aceb/RoRebuildServer/GameConfig/ServerData/Script/Items/ItemEffects.txt) and [Teleport handler](https://github.com/Doddler/RagnarokRebuildTcp/blob/4099e2c000c3c550516760b9c1241595aac9aceb/RoRebuildServer/RoRebuildServer/Simulation/Skills/SkillHandlers/Acolyte/TeleportHandler.cs) establish these choices. Teleport level-two Return is commented out; the separate Return skill is used. Novice/Giant wing script validation is false, so catalog presence does not authorize substitution. [Raw RandomTeleport 21](https://github.com/Doddler/RagnarokRebuildTcp/blob/4099e2c000c3c550516760b9c1241595aac9aceb/RoRebuildServer/RoRebuildServer/Networking/PacketHandlers/Character/PacketRandomTeleport.cs) is debug/admin-only and is not an exposed action.

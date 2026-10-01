@@ -1,5 +1,8 @@
+import { evaluateActorPredicate, validActorPredicate, type ActorPredicate, type ActorObservationSnapshot } from './actor-observations';
+
 export type NumericOperator = 'lt' | 'lte' | 'eq' | 'gte' | 'gt';
 export type RoutineCondition =
+  | ActorPredicate
   | { field: 'hpPercent' | 'spPercent' | 'zeny' | 'elapsedSeconds'; operator: NumericOperator; value: number }
   | { field: 'map'; operator: 'eq' | 'ne'; value: string }
   | { field: 'inventory'; itemId: number; operator: NumericOperator; value: number };
@@ -11,6 +14,7 @@ export interface RoutineSpec<Action> {
   name: string; durationSeconds: number; maxActions: number; rules: RoutineRule<Action>[];
 }
 export interface RoutineObservation {
+  actors?: ActorObservationSnapshot;
   hpPercent?: number; spPercent?: number; map?: string; zeny?: number;
   inventory?: Readonly<Record<number, number>>;
   // Dry runs may supply elapsed time; a running routine always uses its own clock.
@@ -59,6 +63,7 @@ const keys = (value: Record<string, unknown>, expected: string[]): boolean => {
 
 function validCondition(value: unknown): value is RoutineCondition {
   if (!record(value)) return false;
+  if (value.field==='actorStatus'||value.field==='actorCasting') return validActorPredicate(value);
   if (value.field === 'map') return keys(value, ['field', 'operator', 'value'])
     && (value.operator === 'eq' || value.operator === 'ne') && mapCode(value.value);
   if (typeof value.operator !== 'string' || !numericOperators.includes(value.operator)) return false;
@@ -102,7 +107,7 @@ export function validateRoutineSpec<Action>(value: unknown, isAction: ActionVali
       || rule.conditions.length < 1 || rule.conditions.length > ROUTINE_LIMITS.conditions
       || !rule.conditions.every(validCondition)) throw new Error('Invalid routine rule or condition.');
     return { name: rule.name, priority: rule.priority, cooldownSeconds: rule.cooldownSeconds, maxRuns: rule.maxRuns,
-      conditions: rule.conditions.map(condition => ({ ...condition })), action: cloneAction(rule.action, isAction) };
+      conditions: structuredClone(rule.conditions), action: cloneAction(rule.action, isAction) };
   });
   if (new Set(rules.map(rule => rule.name)).size !== rules.length) throw new Error('Routine rule names must be unique.');
   const spec = { name: value.name, durationSeconds: value.durationSeconds, maxActions: value.maxActions, rules };
@@ -121,6 +126,7 @@ function compare(actual: number, operator: NumericOperator, expected: number): b
 }
 
 function conditionTrace(condition: RoutineCondition, observation: RoutineObservation): ConditionTrace {
+  if (condition.field==='actorStatus'||condition.field==='actorCasting') return evaluateActorPredicate(condition,observation.actors);
   let matched: boolean;
   if (condition.field === 'map') {
     if (!mapCode(observation.map)) return { condition: { ...condition }, state: 'unavailable', reason: 'Current map is unavailable.' };

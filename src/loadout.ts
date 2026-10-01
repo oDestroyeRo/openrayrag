@@ -2,7 +2,7 @@ import catalog from './data/weapon-catalog.json';
 import type { CharacterState } from './character-state';
 import type { Entity } from './protocol';
 import type { ExpandedAction, FeatureEvent, InventoryItem } from './protocol-feature';
-import type { AutomationSettings } from './settings';
+import type { AutomationSettings, EquipmentRule } from './settings';
 
 interface Weapon { code:string; range:number; weaponClass:number; minLevel:number; jobs:number[]|null; twoHanded:boolean }
 interface Armor { code:string; position:string; headPosition:string; minLevel:number; jobs:number[]|null }
@@ -14,6 +14,7 @@ const slots = [0,1,2,3,4,5,6,7,8,9,13];
 type Identity = { itemId:number; type:1|2; guid?:string };
 type Vector = Array<Identity|null>;
 export interface LoadoutSnapshot { state:'off'|'ready'|'switching'|'restoring'|'holding'|'fault'; reason:string; ammoItemId:number|null; stock:number|null; priorCaptured:boolean }
+export type EquipmentConditionState = 'matched' | 'unmatched' | 'unavailable';
 export interface LoadoutChange { action:Extract<ExpandedAction,{type:'equip'}>; expected:Vector; restoring:boolean }
 function identity(item:InventoryItem): Identity {
   if(item.type===2&&!item.guid)throw new Error('Unique equipment identity is unavailable.');
@@ -152,12 +153,18 @@ export class LoadoutPolicy {
     const ammo=state.inventory.get(state.ammoId);
     return {state:this.uncertain?'fault':this.fault?'fault':this.holdSince!==null?'holding':!a.loadout.enabled?'off':this.pending?(this.restoring?'restoring':'switching'):'ready',reason:this.uncertain?'Waiting for authoritative reconciliation of the canceled equipment request.':this.fault||this.holdReason,ammoItemId:ammo?.itemId??null,stock:state.inventoryKnown?ammo?.count??0:null,priorCaptured:this.prior!==null};
   }
-  next(a:AutomationSettings,p:Entity,state:CharacterState,enemy:Entity|null):{change?:LoadoutChange;failure?:string} {
+  next(a:AutomationSettings,p:Entity,state:CharacterState,enemy:Entity|null,
+    conditionState:(rule:EquipmentRule)=>EquipmentConditionState=rule=>rule.conditions?.length?'unavailable':'matched'):{change?:LoadoutChange;failure?:string} {
     this.reserve=a.loadout.minAmmoStock;this.ammoConfig={a,p};
     if(!a.loadout.enabled||this.pending||this.blocked)return {};
     try {
-      const current=vector(state),hp=p.hp/p.maxHp*100;
-      const rule=a.equipment.find(r=>hp<=r.hpBelowPercent&&(!r.monsterClassId||enemy?.classId===r.monsterClassId));
+      const hp=p.hp/p.maxHp*100;
+      const relevant=a.equipment.filter(rule=>hp<=rule.hpBelowPercent&&(!rule.monsterClassId||enemy?.classId===rule.monsterClassId))
+        .map(rule=>({rule,state:conditionState(rule)}));
+      const rule=relevant.find(entry=>entry.state==='matched')?.rule;
+      // Unknown evidence cannot establish condition end or authorize restoration.
+      if(!rule&&relevant.some(entry=>entry.state==='unavailable'))return {};
+      const current=vector(state);
       const weaponItem=state.inventory.get(state.equipment[4]??0),weapon=weaponItem?WEAPON_CATALOG[weaponItem.itemId]:undefined;
       const ammoCondition=!!enemy&&weapon?.weaponClass===12&&a.loadout.autoAmmo;
       if(!this.restoring&&this.prior&&!rule&&(this.equipmentConditionOwned||!ammoCondition)&&a.loadout.restore==='conditionEnd')this.restoring=true;

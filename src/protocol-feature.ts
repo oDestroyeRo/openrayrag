@@ -3,7 +3,7 @@ import type { Position } from './protocol';
 
 // Source: Rebuild pin 4099e2c000c3c550516760b9c1241595aac9aceb.
 export const FEATURE_OP = {
-  changeTarget: 33,
+  castStart: 24, areaCastStart: 25, castExtend: 26, castStop: 27, changeTarget: 33,
   sit: 14, skill: 29, skillImpact: 30, skillFailure: 31, featureError: 32, experience: 34, sp: 39,
   serverEvent: 91, currency: 40, respawn: 41, requestFailure: 42, targeted: 43, useItem: 47,
   equipment: 48, inventoryDelta: 50, stats: 56, learnedSkill: 57,
@@ -30,6 +30,9 @@ export interface SkillResult {
   result?: number; hits?: number; damageSeconds?: number; indirect?: boolean;
 }
 export type FeatureEvent =
+  | { type: 'castStart'; id: number; skillId: number; level: number; position: Position; remainingSeconds: number; flags: number; target?: number; targetPosition?: Position; size?: number }
+  | { type: 'castExtend'; id: number; deltaSeconds: number }
+  | { type: 'castStop'; id: number }
   | { type:'serverEvent'; event:number; value:number; text:string }
   | { type: 'changeTarget'; id: number }
   | ({ type: 'stats' } & PlayerStats)
@@ -175,7 +178,18 @@ function readSkillResult(r: BitReader): SkillResult {
 function parseFeatures(data: Uint8Array): FeatureEvent[] | null {
   const r = new BitReader(data); const opcode = r.u8(); let events: FeatureEvent[];
   switch (opcode) {
+    case FEATURE_OP.castStart:
+    case FEATURE_OP.areaCastStart: {
+      const id=positive(r.i32());
+      const target=opcode===FEATURE_OP.castStart?bounded(r.i32(),-1,0x7fffffff,'cast target'):undefined;
+      const targetPosition=opcode===FEATURE_OP.areaCastStart?r.position():undefined;
+      const skillId=r.u8();const level=r.u8();const size=opcode===FEATURE_OP.areaCastStart?r.u8():undefined;
+      bounded(r.u8(),0,7,'cast facing');const position=r.position();const remainingSeconds=r.f32();const flags=bounded(r.u8(),0,15,'cast flags');
+      events=[{type:'castStart',id,skillId,level,position,remainingSeconds,flags,...(target!==undefined?{target}:{}),...(targetPosition?{targetPosition,size}:{})}];break;
+    }
+    case FEATURE_OP.castExtend: events=[{type:'castExtend',id:positive(r.i32()),deltaSeconds:r.f32()}];break;
     case FEATURE_OP.changeTarget: events=[{type:'changeTarget',id:bounded(r.i32(),0,0x7fffffff,'current target')}];break;
+    case FEATURE_OP.castStop: events=[{type:'castStop',id:positive(r.i32())}];break;
     case FEATURE_OP.stats: return readStats(r, data.length === 145);
     case FEATURE_OP.sit: events = [{ type: 'sit', id: positive(r.i32()), sitting: r.bool() }]; break;
     case FEATURE_OP.sp: { const sp = r.i32(); const maxSp = r.i32(); health(sp, maxSp, 'SP'); events = [{ type: 'sp', sp, maxSp }]; break; }

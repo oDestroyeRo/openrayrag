@@ -1,12 +1,13 @@
 import type { Position } from './protocol';
+import { validActorConditions, type ActorPredicate } from './actor-observations';
 import { validateDispositionPolicy, type DispositionPolicy } from './disposition';
 
 export const MAX_TARGETS = 64;
-export interface MonsterRule { classId: number; action: 'attack' | 'ignore'; priority: number }
+export interface MonsterRule { classId: number; action: 'attack' | 'ignore'; priority: number; conditions?: ActorPredicate[] }
 export interface LootRule { itemId: number; action: 'pickup' | 'ignore'; priority: number }
-export interface ItemRule { itemId: number; resource: 'hp' | 'sp'; belowPercent: number; minStock: number; cooldownSeconds: number }
-export interface SkillRule { skillId: number; level: number; target: 'self' | 'enemy'; hpBelowPercent: number; spAbovePercent: number; cooldownSeconds: number }
-export interface EquipmentRule { itemId: number; hpBelowPercent: number; monsterClassId: number }
+export interface ItemRule { itemId: number; resource: 'hp' | 'sp'; belowPercent: number; minStock: number; cooldownSeconds: number; conditions?: ActorPredicate[] }
+export interface SkillRule { skillId: number; level: number; target: 'self' | 'enemy'; hpBelowPercent: number; spAbovePercent: number; cooldownSeconds: number; conditions?: ActorPredicate[] }
+export interface EquipmentRule { itemId: number; hpBelowPercent: number; monsterClassId: number; conditions?: ActorPredicate[] }
 export interface EscapeSettings {
   enabled: boolean; hpBelowPercent: number; mode: 'random' | 'save'; method: 'item' | 'skill';
   minStock: number; cooldownSeconds: number;
@@ -79,10 +80,11 @@ export function validateAutomation(a: AutomationSettings): AutomationSettings {
     strictKeys(a.recovery,['enabled','hpStart','hpEnd','spStart','spEnd','timeoutSeconds']); strictKeys(a.allocation,['stats','skills']);
     strictKeys(a.follow,['name','distance','lostSeconds']); strictKeys(a.travel,['destinationMap','returnToLockMap','waypoints','loop']);
     strictKeys(a.limits,['minutes','kills','pickups','weightPercent']); strictKeys(a.respawn,['enabled','maxDeaths']); strictKeys(a.schedule,['enabled','startHour','endHour']);
-    for(const r of a.combat.rules) strictKeys(r,['classId','action','priority']); for(const r of a.loot.rules) strictKeys(r,['itemId','action','priority']);
-    for(const r of a.items) strictKeys(r,['itemId','resource','belowPercent','minStock','cooldownSeconds']);
-    for(const r of a.skills) strictKeys(r,['skillId','level','target','hpBelowPercent','spAbovePercent','cooldownSeconds']);
-    for(const r of a.equipment) strictKeys(r,['itemId','hpBelowPercent','monsterClassId']);
+    for(const r of a.combat.rules) strictKeys(r,['classId','action','priority','conditions']); for(const r of a.loot.rules) strictKeys(r,['itemId','action','priority']);
+    for(const r of a.items) strictKeys(r,['itemId','resource','belowPercent','minStock','cooldownSeconds','conditions']);
+    for(const r of a.skills) strictKeys(r,['skillId','level','target','hpBelowPercent','spAbovePercent','cooldownSeconds','conditions']);
+    for(const r of a.equipment) strictKeys(r,['itemId','hpBelowPercent','monsterClassId','conditions']);
+    for(const r of [...a.combat.rules,...a.items,...a.skills,...a.equipment]) if(Object.hasOwn(r,'conditions')&&!validActorConditions(r.conditions,a.combat.rules.includes(r as MonsterRule))) throw new Error('Invalid actor conditions.');
     for(const r of a.allocation.stats) strictKeys(r,['stat','target']); for(const r of a.allocation.skills) strictKeys(r,['skillId','target']);
     for(const r of a.travel.waypoints) strictKeys(r,['map','x','y']);
     if (typeof a.loadout.enabled !== 'boolean' || typeof a.loadout.autoAmmo !== 'boolean'

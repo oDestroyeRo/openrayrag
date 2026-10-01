@@ -20,3 +20,11 @@ describe('extended controller telemetry',()=>{
     expect(validFeatureStatus({world:{barter:[{item:{itemId:501},required:[{itemId:502,count:2}]}]}})).toBe(true);
   });
 });
+
+import {ActorObservations} from './actor-observations';
+import {actorSnapshotAt} from './actor-predicate-ui';
+it('bounds actor telemetry and never freshens the last observed game frame during UI dry runs',()=>{
+ const observations=new ActorObservations(()=>1000);observations.spawn({id:1,kind:0,classId:0,name:'Player',level:1,hp:10,maxHp:10,x:1,y:1,dead:false,statuses:[]});observations.frame();const snapshot=observations.snapshot(1,null,true);
+ expect(validFeatureStatus({actorObservations:snapshot})).toBe(true);expect(actorSnapshotAt(snapshot,20000)?.lastFrameAt).toBe(1000);expect(actorSnapshotAt(snapshot,20000)?.at).toBe(20000);
+ expect(validFeatureStatus({actorObservations:{...snapshot,world:'invalid'}})).toBe(false);expect(validFeatureStatus({actorObservations:{...snapshot,actors:Array(65).fill(snapshot.actors[0])}})).toBe(false);
+});

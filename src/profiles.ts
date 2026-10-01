@@ -11,6 +11,9 @@ function keys(value: Record<string, unknown>, expected: string[]): boolean {
   const actual = Object.keys(value);
   return actual.length === expected.length && actual.every(key => expected.includes(key));
 }
+function ruleKeys(value: Record<string,unknown>, expected:string[], path:string): boolean {
+  return keys(value,[...expected,...(['items','skills','equipment','combat.rules'].includes(path)&&Object.hasOwn(value,'conditions')?['conditions']:[])]);
+}
 function checkedSettings(value: unknown): Settings {
   const expected = [...Object.keys(DEFAULT_SETTINGS), ...(record(value) && Object.hasOwn(value, 'automation') ? ['automation'] : [])];
   if (!record(value) || !keys(value, expected)) throw new Error('Profile contains unknown or missing settings.');
@@ -30,12 +33,12 @@ function checkedSettings(value: unknown): Settings {
     for (const [key, template] of Object.entries(DEFAULT_AUTOMATION)) {
       const child = a[key];
       if (Array.isArray(template)) {
-        if (!Array.isArray(child) || !child.every(entry => record(entry) && keys(entry, arrayKeys[key]!))) throw new Error('Profile contains unknown rule settings.');
+        if (!Array.isArray(child) || !child.every(entry => record(entry) && ruleKeys(entry, arrayKeys[key]!,key))) throw new Error('Profile contains unknown rule settings.');
       } else {
         if (!record(child) || !keys(child, Object.keys(template))) throw new Error('Profile contains unknown automation settings.');
         for (const [field, fields] of Object.entries(arrayKeys)) if (field.startsWith(`${key}.`)) {
           const entries = child[field.slice(key.length + 1)];
-          if (!Array.isArray(entries) || !entries.every(entry => record(entry) && keys(entry, fields))) throw new Error('Profile contains unknown rule settings.');
+          if (!Array.isArray(entries) || !entries.every(entry => record(entry) && ruleKeys(entry, fields,field))) throw new Error('Profile contains unknown rule settings.');
         }
       }
     }

@@ -11,3 +11,5 @@ main{padding-top:24px}header{margin-bottom:18px}.session-card{padding:13px 16px 
 @media(max-width:1000px){.sidebar{width:174px}.coverage-state{flex-basis:100px}.form-grid{gap:9px}}
 @media(max-width:760px){.mobile-nav{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:13px}.mobile-nav .nav-item{width:auto;padding:8px 10px;font-size:10px}.run-controls{bottom:7px}.feature-panel{max-width:100%}.telemetry-summary{max-height:240px}}
 @media(max-width:420px){.form-grid,.rule-row{grid-template-columns:1fr}.coverage-list>div{flex-direction:column;gap:4px}.coverage-state{flex-basis:auto;text-align:left}.signin-fields{grid-template-columns:1fr}}
+
+.rule-row>.actor-conditions{grid-column:1/-1}.actor-conditions>.hint{margin-top:10px}.actor-conditions .form-grid>.hint{grid-column:1/-1}
