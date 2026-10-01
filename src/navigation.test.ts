@@ -1,5 +1,5 @@
-import { expect, it } from 'vitest';
-import { distance, GridNavigator, MAX_MAP_DIMENSION, NAVIGATION_MAPS, routeSegment, searchGrid, type WalkGrid } from './navigation';
+import { expect, it, vi } from 'vitest';
+import { distance, minimumRouteCost, GridNavigator, MAX_MAP_DIMENSION, NAVIGATION_MAPS, routeSegment, searchGrid, type WalkGrid } from './navigation';
 import { type Position } from './protocol';
 import catalog from './data/navigation-maps.json';
 import sources from '../scripts/navigation-sources.json';
@@ -327,4 +327,98 @@ it('rejects straight-corridor diagonal corner cuts, portals and temporary failed
   expect(temporary.clearWalkCorridor({ x: 1, y: 1 }, { x: 6, y: 1 })).toBe(false);
   temporary.time(2000);
   expect(temporary.clearWalkCorridor({ x: 1, y: 1 }, { x: 6, y: 1 })).toBe(true);
+});
+
+it('uses an admissible cost bound including diagonal steps and the goal range', () => {
+  expect(minimumRouteCost({x:1,y:1},{x:6,y:4},1)).toBe(48);
+  expect(minimumRouteCost({x:1,y:1},{x:2,y:2},1)).toBe(0);
+  const nav=new GridNavigator(openGrid(15,15,p=>p.x===6&&p.y>=2&&p.y<=11));
+  for(const range of [0,1,2])for(const target of [{x:12,y:4},{x:4,y:12},{x:12,y:12}]){
+    const from={x:3,y:4},path=nav.plan(from,target,{range})!;
+    const cost=path.reduce((sum,p,i)=>sum+(i?(p.x!==path[i-1]!.x&&p.y!==path[i-1]!.y?14:10):0),0);
+    expect(minimumRouteCost(from,target,range)).toBeLessThanOrEqual(cost);
+  }
+});
+
+it('reuses exact plans without exposing mutable cached cells and separates every route option', () => {
+  const grid=openGrid(21,17,p=>p.y===5&&p.x>=3&&p.x<=17),nav=new GridNavigator(grid);
+  const from={x:2,y:6},to={x:18,y:6},calls=vi.spyOn(nav,'connected');
+  const original=nav.plan(from,to)!;const expected=original.map(p=>({...p}));const work=calls.mock.calls.length;
+  original[0]!.x=-1;original.pop();
+  const again=nav.plan(from,to)!;expect(again).toEqual(expected);expect(calls).toHaveBeenCalledTimes(work);
+  again[0]!.y=-1;expect(nav.plan(from,to)).toEqual(expected);
+  for(const options of [{avoidWalls:false},{maxDistance:16},{maxDistance:15},{range:1},{range:2,maxDistance:14,avoidWalls:false}]){
+    expect(nav.plan(from,to,options)).toEqual(new GridNavigator(grid).plan(from,to,options));
+  }
+  expect(nav.plan(to,from)).toEqual(new GridNavigator(grid).plan(to,from));
+});
+
+it('invalidates positive and negative cached routes on temporary block changes and expiry', () => {
+  const grid=fixture(['#########','#.......#','#########']),nav=new GridNavigator(grid);
+  const from={x:1,y:1},to={x:7,y:1};nav.time(1000);
+  const clear=nav.plan(from,to);expect(clear).not.toBeNull();
+  nav.temporaryBlocked({x:4,y:1},2000);expect(nav.plan(from,to)).toBeNull();
+  const calls=vi.spyOn(nav,'connected');expect(nav.plan(from,to)).toBeNull();expect(calls).not.toHaveBeenCalled();
+  nav.temporaryBlocked({x:4,y:1},3000);nav.time(2000);
+  expect(nav.plan(from,to)).toBeNull();expect(calls).not.toHaveBeenCalled();
+  nav.time(3000);expect(nav.plan(from,to)).toEqual(clear);expect(calls.mock.calls.length).toBeGreaterThan(0);
+  nav.temporaryBlocked({x:5,y:1},4000);expect(nav.plan(from,to)).toBeNull();
+  nav.time(4000);expect(nav.plan(from,to)).toEqual(clear);
+});
+
+it('evicts old exact results while preserving recent plans and their outcomes', () => {
+  const grid=openGrid(90,12),nav=new GridNavigator(grid);
+  const first={x:1,y:5},to={x:2,y:5};const initial=nav.plan(first,to);
+  for(let cap=100;cap<360;cap++)expect(nav.plan(first,to,{maxDistance:cap})).toEqual(initial);
+  const calls=vi.spyOn(nav,'connected');
+  expect(nav.plan(first,to,{maxDistance:359})).toEqual(initial);expect(calls).not.toHaveBeenCalled();
+  expect(nav.plan(first,to)).toEqual(initial);expect(calls.mock.calls.length).toBeGreaterThan(0);
+});
+
+it('bounds cached route cells as well as entries when many paths are long', () => {
+  const nav=new GridNavigator(openGrid(90,90));
+  const from={x:5,y:5},to={x:80,y:5},first=nav.plan(from,to);
+  for(let y=6;y<=70;y++)expect(nav.plan({x:5,y},{x:80,y})!.length).toBeGreaterThan(70);
+  const calls=vi.spyOn(nav,'connected');
+  expect(nav.plan({x:5,y:70},{x:80,y:70})).not.toBeNull();expect(calls).not.toHaveBeenCalled();
+  expect(nav.plan(from,to)).toEqual(first);expect(calls.mock.calls.length).toBeGreaterThan(0);
+});
+
+it('keeps reused search scratch equivalent to fresh searches across A* and capped BFS fallback', () => {
+  const grid=openGrid(30,22,p=>p.y===7&&p.x>=4&&p.x<=23),nav=new GridNavigator(grid);
+  for(let i=0;i<90;i++){
+    const from={x:2+i%2,y:8+i%3},to={x:25+i%3,y:8+i%4};
+    const options={range:i%3,maxDistance:20+i%10,avoidWalls:i%2===0};
+    expect(nav.plan(from,to,options)).toEqual(new GridNavigator(grid).plan(from,to,options));
+  }
+});
+
+it('clears visited generations before the reusable search stamp wraps', () => {
+  const grid=openGrid(20,20),nav=new GridNavigator(grid);
+  nav.plan({x:2,y:2},{x:10,y:2});
+  // Exercise the otherwise multi-billion-search rollover without changing the public API.
+  Reflect.set(Reflect.get(nav,'scratch'),'stamp',0xffff_ffff);
+  expect(nav.plan({x:2,y:2},{x:10,y:3})).toEqual(new GridNavigator(grid).plan({x:2,y:2},{x:10,y:3}));
+});
+
+it('retains the exact weighted route and original capped fallback after a reachability preflight', () => {
+  const grid=openGrid(400,400,p=>(p.y===205&&p.x>=190&&p.x<=225)||(p.x===203&&p.y===206));
+  const nav=new GridNavigator(grid),from={x:202,y:206},to={x:210,y:206};
+  expect(nav.plan(from,to,{maxDistance:64})).toEqual([
+    {x:202,y:206},{x:202,y:207},{x:202,y:208},{x:203,y:209},{x:204,y:210},{x:205,y:210},
+    {x:206,y:210},{x:207,y:209},{x:208,y:208},{x:209,y:207},{x:210,y:206},
+  ]);
+  expect(nav.plan(from,to,{maxDistance:9})).toEqual([
+    {x:202,y:206},{x:202,y:207},{x:203,y:208},{x:204,y:209},{x:205,y:210},
+    {x:206,y:210},{x:207,y:209},{x:208,y:208},{x:209,y:207},{x:210,y:206},
+  ]);
+  expect(nav.plan(from,to,{maxDistance:8})).toBeNull();
+});
+
+it('proves a capped wall rejection locally instead of exploring the entire large component', () => {
+  const nav=new GridNavigator(openGrid(400,400,p=>p.x===200&&p.y>=3));
+  const from={x:199,y:200},to={x:201,y:200},calls=vi.spyOn(nav,'connected');
+  expect(nav.plan(from,to,{range:1,maxDistance:20})).toBeNull();
+  expect(calls.mock.calls.length).toBeLessThan(15000);
+  calls.mockClear();expect(nav.plan(from,to,{range:1,maxDistance:20})).toBeNull();expect(calls).not.toHaveBeenCalled();
 });

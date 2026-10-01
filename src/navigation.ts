@@ -5,6 +5,12 @@ export const NAVIGATION_MAPS = Object.keys(gridData);
 // Includes the 416-cell Payon fields; shared with status validation and extraction.
 export const MAX_MAP_DIMENSION = 512;
 export const distance = (a: Position, b: Position): number => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+/** An admissible movement-cost bound to a square goal range, without wall penalties. */
+export function minimumRouteCost(from: Position, to: Position, range = 0): number {
+  const dx = Math.max(0, Math.abs(from.x - to.x) - range);
+  const dy = Math.max(0, Math.abs(from.y - to.y) - range);
+  return 10 * Math.max(dx, dy) + 4 * Math.min(dx, dy);
+}
 const directions = [[0,1],[1,1],[1,0],[1,-1],[0,-1],[-1,-1],[-1,0],[-1,1]] as const;
 const cardinalDirections = [[0,1],[1,0],[0,-1],[-1,0]] as const;
 const wallPenalties = [0, 60, 50, 20, 10, 0] as const;
@@ -45,6 +51,9 @@ export interface NavigationSummary {
 export interface RouteOptions { range?: number; maxDistance?: number; avoidWalls?: boolean }
 type TileState = 'blocked' | 'portal' | 'walkable';
 interface OpenCell { cell: number; cost: number; priority: number }
+interface SearchScratch { costs: Float64Array; parents: Int32Array; seen: Uint32Array; closed: Uint32Array; stamp: number; queue?: Int32Array }
+const ROUTE_CACHE_ENTRIES = 256;
+const ROUTE_CACHE_CELLS = 4096;
 
 class RouteHeap {
   private readonly cells: OpenCell[] = [];
@@ -90,6 +99,9 @@ export class GridNavigator {
   private readonly members: number[][] = [[]];
   private readonly blockedUntil = new Map<number, number>();
   private readonly counts: Omit<NavigationSummary, 'reachable'>;
+  private readonly routeCache = new Map<string, Position[] | null>();
+  private cachedCells = 0;
+  private scratch: SearchScratch | null = null;
   private now = 0;
 
   constructor(grid: WalkGrid, excludedAreas: readonly PortalArea[] = grid.portals ?? []) {
@@ -146,11 +158,14 @@ export class GridNavigator {
   time(now: number): void {
     if (!Number.isFinite(now)) return;
     this.now = now;
-    for (const [cell, until] of this.blockedUntil) if (until <= now) this.blockedUntil.delete(cell);
+    let changed = false;
+    for (const [cell, until] of this.blockedUntil) if (until <= now) { this.blockedUntil.delete(cell); changed = true; }
+    if (changed) this.clearRouteCache();
   }
   temporaryBlocked(p: Position, until: number): void {
     if (!this.safe(p) || !Number.isFinite(until) || until <= this.now) return;
     const cell = this.index(p);
+    if (!this.blockedUntil.has(cell)) this.clearRouteCache();
     this.blockedUntil.set(cell, Math.max(until, this.blockedUntil.get(cell) ?? until));
   }
   private available(p: Position): boolean {
@@ -243,6 +258,25 @@ export class GridNavigator {
     for (let cell = end; cell >= 0; cell = parents[cell]!) cells.push(this.position(cell));
     return cells.reverse();
   }
+  private clearRouteCache(): void { this.routeCache.clear(); this.cachedCells = 0; }
+  private cacheRoute(key: string, cells: Position[] | null): void {
+    if (cells && cells.length > ROUTE_CACHE_CELLS) return;
+    while (this.routeCache.size >= ROUTE_CACHE_ENTRIES || this.cachedCells + (cells?.length ?? 0) > ROUTE_CACHE_CELLS) {
+      const oldest = this.routeCache.keys().next().value!;
+      this.cachedCells -= this.routeCache.get(oldest)?.length ?? 0;
+      this.routeCache.delete(oldest);
+    }
+    this.routeCache.set(key, cells?.map(p => ({ ...p })) ?? null);
+    this.cachedCells += cells?.length ?? 0;
+  }
+  private beginSearch(): SearchScratch {
+    this.scratch ??= { costs: new Float64Array(this.count), parents: new Int32Array(this.count),
+      seen: new Uint32Array(this.count), closed: new Uint32Array(this.count), stamp: 0 };
+    if (++this.scratch.stamp > 0xffff_ffff) {
+      this.scratch.seen.fill(0); this.scratch.closed.fill(0); this.scratch.stamp = 1;
+    }
+    return this.scratch;
+  }
   plan(from: Position, to: Position, options: RouteOptions = {}): Position[] | null {
     const range = options.range ?? 0;
     const maxDistance = options.maxDistance ?? this.count - 1;
@@ -251,41 +285,56 @@ export class GridNavigator {
     const start = this.index(from);
     const target = this.index(to);
     if (this.components[start] !== this.components[target] || Math.max(0, distance(from, to) - range) > maxDistance) return null;
+    // Geometry is immutable. Only the effective temporary-block set invalidates
+    // exact results; extend this key whenever a new route option is introduced.
+    const key = `${start}:${target}:${range}:${maxDistance}:${options.avoidWalls === false ? 0 : 1}`;
+    if (this.routeCache.has(key)) {
+      const cached = this.routeCache.get(key)!;
+      this.routeCache.delete(key); this.routeCache.set(key, cached);
+      return cached?.map(p => ({ ...p })) ?? null;
+    }
+    const cells = this.findRoute(from, to, range, maxDistance, options.avoidWalls !== false);
+    this.cacheRoute(key, cells);
+    return cells;
+  }
+  private findRoute(from: Position, to: Position, range: number, maxDistance: number, avoidWalls: boolean): Position[] | null {
     const goal = (p: Position) => distance(p, to) <= range && this.clearApproach(p, to);
-    const heuristic = (p: Position) => {
-      const dx = Math.max(0, Math.abs(p.x - to.x) - range);
-      const dy = Math.max(0, Math.abs(p.y - to.y) - range);
-      return 10 * Math.max(dx, dy) + 4 * Math.min(dx, dy);
-    };
-    const costs = new Float64Array(this.count);
-    costs.fill(Infinity);
-    const parents = new Int32Array(this.count);
-    parents.fill(-1);
-    const closed = new Uint8Array(this.count);
+    // Prove capped local failures before exploring the whole component. This
+    // square bounds every cell BFS can reach within the cap; successful queries
+    // still use the original weighted search and its exact tie ordering.
+    let cappedRoute: Position[] | undefined;
+    if (maxDistance <= 64 && (2 * maxDistance + 1) ** 2 < this.count / 2 && !this.clearWalkCorridor(from, to)) {
+      const reachable = this.shortestSteps(from, goal, maxDistance);
+      if (!reachable) return null;
+      cappedRoute = reachable;
+    }
+    const heuristic = (p: Position) => minimumRouteCost(p, to, range);
+    const { costs, parents, seen, closed, stamp } = this.beginSearch();
+    const start = this.index(from);
     const open = new RouteHeap();
-    costs[start] = 0;
+    costs[start] = 0; parents[start] = -1; seen[start] = stamp;
     open.push({ cell: start, cost: 0, priority: heuristic(from) });
     let current: OpenCell | undefined;
     while ((current = open.pop())) {
-      if (closed[current.cell] || current.cost !== costs[current.cell]) continue;
-      closed[current.cell] = 1;
+      if (closed[current.cell] === stamp || current.cost !== costs[current.cell]) continue;
+      closed[current.cell] = stamp;
       const p = this.position(current.cell);
       if (goal(p)) {
         const route = this.route(parents, current.cell);
         if (route.length - 1 <= maxDistance) return route;
         // A cheaper wall-aware detour can exceed a step cap. Try a shortest-step
         // route so a narrow but valid corridor is still usable within that cap.
-        return this.shortestSteps(from, goal, maxDistance);
+        return cappedRoute ?? this.shortestSteps(from, goal, maxDistance);
       }
       for (const [dx, dy] of directions) {
         const next = { x: p.x + dx, y: p.y + dy };
         if (!this.step(p, next)) continue;
         const cell = this.index(next);
-        if (closed[cell]) continue;
-        const wallCost = options.avoidWalls === false ? 0 : wallPenalties[this.clearance[cell]!]!;
+        if (closed[cell] === stamp) continue;
+        const wallCost = avoidWalls ? wallPenalties[this.clearance[cell]!]! : 0;
         const cost = current.cost + (dx && dy ? 14 : 10) + wallCost;
-        if (cost >= costs[cell]!) continue;
-        costs[cell] = cost;
+        if (seen[cell] === stamp && cost >= costs[cell]!) continue;
+        costs[cell] = cost; seen[cell] = stamp;
         parents[cell] = current.cell;
         open.push({ cell, cost, priority: cost + heuristic(next) });
       }
@@ -293,16 +342,14 @@ export class GridNavigator {
     return null;
   }
   private shortestSteps(from: Position, goal: (p: Position) => boolean, maxDistance: number): Position[] | null {
-    const parents = new Int32Array(this.count);
-    parents.fill(-1);
-    const steps = new Int32Array(this.count);
-    steps.fill(-1);
-    const queue = new Int32Array(this.count);
+    const scratch = this.beginSearch();
+    const { parents, costs: steps, seen, stamp } = scratch;
+    const queue = scratch.queue ??= new Int32Array(this.count);
     const start = this.index(from);
     let head = 0;
     let tail = 1;
     queue[0] = start;
-    steps[start] = 0;
+    steps[start] = 0; parents[start] = -1; seen[start] = stamp;
     while (head < tail) {
       const cell = queue[head++]!;
       const p = this.position(cell);
@@ -311,8 +358,8 @@ export class GridNavigator {
       for (const [dx, dy] of directions) {
         const next = { x: p.x + dx, y: p.y + dy };
         const index = this.index(next);
-        if (index < 0 || steps[index] !== -1 || !this.step(p, next)) continue;
-        steps[index] = steps[cell]! + 1;
+        if (index < 0 || seen[index] === stamp || !this.step(p, next)) continue;
+        steps[index] = steps[cell]! + 1; seen[index] = stamp;
         parents[index] = cell;
         queue[tail++] = index;
       }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BotEngine, DEFAULT_SETTINGS, DEFAULT_AUTOMATION, type Action, validateSettings } from './engine';
-import { GridNavigator, searchGrid, type WalkGrid } from './navigation';
+import { GridNavigator, routeSegment, searchGrid, type WalkGrid } from './navigation';
 import { type Entity, type Position, type GameEvent } from './protocol';
 
 const player: Entity={id:1,classId:0,name:'Test player',kind:0,level:7,hp:70,maxHp:70,x:100,y:100,dead:false};
@@ -494,5 +494,80 @@ describe('direct monster targeting on a verified clear corridor', () => {
     for(let i=0;i<4;i++)slow.step(1000);
     expect(slow.sent.map(action=>action.type)).toEqual(['attack','stop']);
     expect(slow.engine.reason).toContain('timed out');
+  });
+});
+
+describe('target acquisition route work',()=>{
+  const origin={x:20,y:20};
+  function acquire(grid:WalkGrid,targets:Entity[],overrides:Partial<typeof DEFAULT_SETTINGS>={}){
+    const sent:Action[]=[];let now=100000;
+    const engine=new BotEngine(action=>sent.push(action),()=>now,()=>grid);
+    engine.connect(true);engine.receive([{type:'enter',id:1,map:'prt_fild08'},
+      {type:'spawn',entity:{...player,...origin}},...targets.map(entity=>({type:'spawn' as const,entity:{...entity}})),
+      {type:'inventory',items:[],equipment:[],ammoId:-1}]);
+    engine.start({...settings,radius:20,...overrides});now+=100;engine.receive([]);engine.tick();
+    return {engine,sent};
+  }
+  it('skips later equal-cost or worse candidates but still plans a higher-priority target',()=>{
+    const calls=vi.spyOn(GridNavigator.prototype,'plan');
+    try{
+      const automation=structuredClone(DEFAULT_AUTOMATION);
+      automation.combat.rules=[{classId:4001,action:'attack',priority:10}];
+      const targets=[{...monster,x:24,y:20},{...monster,id:3,x:20,y:24},
+        {...monster,id:4,x:30,y:20,classId:4001},{...monster,id:5,x:22,y:20}];
+      const f=acquire(openGrid,targets,{automation});
+      expect(f.sent).toEqual([{type:'attack',id:4}]);
+      expect(calls.mock.calls.map(call=>call[1])).toEqual([{x:24,y:20},{x:30,y:20}]);
+    }finally{calls.mockRestore();}
+  });
+  it('uses one acquisition result when an inactive enemy equipment rule also requests a target',()=>{
+    const automation=structuredClone(DEFAULT_AUTOMATION);
+    automation.equipment=[{itemId:1201,hpBelowPercent:1,monsterClassId:4000}];
+    const calls=vi.spyOn(GridNavigator.prototype,'plan');
+    try{
+      const f=acquire(openGrid,[{...monster,x:24,y:20},{...monster,id:3,x:25,y:20}],{automation});
+      expect(f.sent).toEqual([{type:'attack',id:2}]);expect(calls).toHaveBeenCalledTimes(1);
+    }finally{calls.mockRestore();}
+  });
+  it('keeps the first target on exact cost ties for both monsters and loot',()=>{
+    const f=acquire(openGrid,[{...monster,id:3,x:20,y:24},{...monster,id:2,x:24,y:20}]);
+    expect(f.sent).toEqual([{type:'attack',id:3}]);
+    f.engine.stop();f.engine.receive([{type:'stop',id:1},{type:'remove',id:2,dead:false},{type:'remove',id:3,dead:false}]);
+    const automation=structuredClone(DEFAULT_AUTOMATION);automation.loot.ownership='all';
+    f.engine.receive([{type:'drop',drop:{id:9,itemId:909,count:1,isNew:true,x:20,y:24}},
+      {type:'drop',drop:{id:8,itemId:909,count:1,isNew:true,x:24,y:20}}]);
+    f.engine.start({...settings,radius:20,automation});f.sent.length=0;f.engine.tick();
+    expect(f.engine.snapshot().navigation?.goal).toEqual({x:20,y:24});expect(f.sent[0]?.type).toBe('walk');
+  });
+  it('matches full all-candidate selection and exact routes across deterministic varied fields',()=>{
+    let seed=727;
+    const random=(max:number)=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed%max;};
+    for(let trial=0;trial<100;trial++){
+      const blocked=new Set(Array.from({length:random(120)},()=>random(1600)));blocked.delete(820);
+      const grid:WalkGrid={width:40,height:40,walkable:p=>!blocked.has(p.x+p.y*40),
+        portals:Array.from({length:random(3)},()=>({x:8+random(24),y:8+random(24),halfWidth:0,halfHeight:0}))};
+      grid.portals=grid.portals!.filter(p=>p.x!==origin.x||p.y!==origin.y);
+      const targets=Array.from({length:2+random(14)},(_,i)=>({...monster,id:2+i,classId:4000+random(3),
+        name:`Target ${i}`,x:12+random(17),y:12+random(17)}));
+      const automation=structuredClone(DEFAULT_AUTOMATION);
+      automation.combat.rules=[0,1,2].map(i=>({classId:4000+i,action:'attack' as const,priority:random(4)}));
+      const cap=2+random(20),avoidWalls=random(2)===1,nav=new GridNavigator(grid);
+      let expected:{target:Entity;cells:Position[];rank:number;cost:number}|null=null;
+      for(const target of targets){
+        const cells=nav.plan(origin,target,{range:1,maxDistance:cap,avoidWalls});if(!cells)continue;
+        const rank=automation.combat.rules.find(r=>r.classId===target.classId)!.priority;
+        const cost=cells.reduce((sum,p,i)=>sum+(i?(p.x!==cells[i-1]!.x&&p.y!==cells[i-1]!.y?14:10):0),0);
+        if(!expected||rank>expected.rank||(rank===expected.rank&&cost<expected.cost))expected={target,cells,rank,cost};
+      }
+      const f=acquire(grid,targets,{automation,attackRouteMaxPathDistance:cap,route_avoidWalls:avoidWalls});
+      if(!expected){expect(f.sent).toEqual([]);continue;}
+      expect(f.engine.snapshot().target).toBe(expected.target.name);
+      expect(f.engine.snapshot().navigation?.goal).toEqual({x:expected.target.x,y:expected.target.y});
+      if(nav.clearWalkCorridor(origin,expected.target))expect(f.sent).toEqual([{type:'attack',id:expected.target.id}]);
+      else{
+        expect(f.engine.snapshot().navigation?.route).toEqual(expected.cells);
+        expect(f.sent).toEqual([{type:'walk',destination:routeSegment(expected.cells,10).at(-1)!}]);
+      }
+    }
   });
 });
