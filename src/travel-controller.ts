@@ -1,6 +1,6 @@
-import type { Entity, GameEvent, Position } from './protocol';
+import type { Entity, GameEvent, Position, Walk } from './protocol';
 import type { Action } from './engine';
-import { distance, routeSegment } from './navigation';
+import { distance, GridNavigator, routeSegment, searchGrid } from './navigation';
 import { walkDuration } from './movement';
 import { planArrivalEscape, planPortalApproach, routeBetweenMaps, travelNavigator, type TravelStep } from './travel';
 
@@ -26,7 +26,9 @@ export class TravelController {
   private finalEscape = false;
   private avoidWalls = true;
   private stepSize = 10;
-  private leg: { cells: Position[]; since: number; acceptedUntil: number | null } | null = null;
+  private consecutiveNudges = 0;
+  private nudgeNavigator: GridNavigator | null = null;
+  private leg: { cells: Position[]; since: number; acceptedUntil: number | null; nudged: boolean } | null = null;
   constructor(private readonly send: (action: Action) => void, private readonly now = Date.now) {}
   get active(): boolean { return this.state === 'walking' || this.state === 'transition'; }
 
@@ -38,6 +40,7 @@ export class TravelController {
     this.steps = steps; this.destination = destination; this.map = map; this.playerId = player.id;
     this.stepSize = stepSize; this.avoidWalls = avoidWalls; this.since = this.now(); this.deadline = this.now() + 20_000;
     this.leg = null; this.awaitingSpawn = false; this.finalEscape = false; this.lastAction = 0;
+    this.consecutiveNudges = 0; this.nudgeNavigator = null;
     this.state = 'walking'; this.plan(player);
   }
 
@@ -66,15 +69,16 @@ export class TravelController {
         // never during an unrelated leg elsewhere on the same source map.
         const end = this.leg?.cells.at(-1) ?? this.route.at(-1);
         if (!end || !this.inPortal(end, step)) { this.cancel('Map changed before the planned portal was reached.', true); continue; }
-        this.map = event.map; this.awaitingSpawn = true; this.leg = null; this.route = [];
+        this.map = event.map; this.awaitingSpawn = true; this.leg = null; this.route = []; this.nudgeNavigator = null;
         this.state = 'transition'; this.deadline = this.now() + 20_000; this.reason = `Loading ${event.map}.`;
       } else if (event.type === 'spawn' && event.entity.id === this.playerId && this.awaitingSpawn) {
         const expected = this.steps[0]?.portal.arrival;
         if (!expected || distance(expected, event.entity) > 6) { this.cancel('Portal arrival did not match its verified destination.', true); continue; }
         this.awaitingSpawn = false; this.steps.shift(); this.plan(event.entity);
       } else if (event.type === 'walk' && event.id === this.playerId) {
+        if (this.acceptNudge(event.walk)) continue;
         const nav = travelNavigator(this.map, this.route);
-        if (!this.leg || !nav || event.walk.locked || event.walk.cells.length < 1 || event.walk.cells.length > 21
+        if (!this.leg || this.leg.acceptedUntil !== null || !nav || event.walk.locked || event.walk.cells.length < 1 || event.walk.cells.length > 21
           || distance(cell(event.walk.origin), this.leg.cells[0]!) > 1
           || distance(event.walk.cells[0]!, this.leg.cells[0]!) > 1
           || distance(event.walk.cells.at(-1)!, this.leg.cells.at(-1)!) !== 0
@@ -84,9 +88,36 @@ export class TravelController {
         this.leg.cells = event.walk.cells;
         this.leg.acceptedUntil = this.now() + walkDuration(event.walk) + 100;
       } else if ((event.type === 'position' || event.type === 'stop') && event.id === this.playerId && this.leg) {
+        const step = this.steps[0];
+        if (event.type === 'position' && step && this.leg.acceptedUntil !== null && !this.leg.nudged
+          && this.now() - this.leg.since <= 19_000
+          && this.inPortal(this.leg.cells.at(-1)!, step) && this.inPortal(event.position, step)
+          && this.leg.cells.some(p => distance(p, event.position) === 0)) {
+          // The portal script stops movement at its trigger before queuing the warp.
+          // Wait for the actual expected map and spawn; the correction is not an arrival.
+          this.leg = null; this.state = 'transition'; this.deadline = this.now() + 20_000;
+          this.reason = 'Waiting for the planned map transition.'; continue;
+        }
         this.cancel('Travel stopped after a movement correction. Choose the destination again.', true);
       }
     }
+  }
+
+  private acceptNudge(walk: Walk): boolean {
+    const leg = this.leg;
+    const duration = walkDuration(walk);
+    if (!leg || leg.acceptedUntil === null || this.consecutiveNudges >= 4 || this.now() - leg.since > 19_000
+      || this.now() > leg.acceptedUntil
+      || walk.locked || walk.cells.length !== 2 || distance(walk.cells[0]!, leg.cells.at(-1)!) !== 0
+      || distance(cell(walk.origin), walk.cells[0]!) > 1
+      || !Number.isFinite(duration) || duration <= 0 || duration > 15_000) return false;
+    const grid = searchGrid(this.map);
+    if (!grid) return false;
+    this.nudgeNavigator ??= new GridNavigator(grid);
+    // Unlike a planned portal leg, a server occupancy adjustment cannot enter a trigger.
+    if (!this.nudgeNavigator.validRoute(walk.cells)) return false;
+    leg.cells = walk.cells; leg.acceptedUntil = this.now() + duration + 100; leg.nudged = true;
+    this.consecutiveNudges++; return true;
   }
 
   private inPortal(p: Position, step: TravelStep): boolean {
@@ -103,11 +134,14 @@ export class TravelController {
     }
     if (!player || player.dead || map !== this.map) { this.cancel('Travel character or map state is unavailable.', true); return; }
     if (this.leg) {
+      if (now - this.leg.since > 19_000) { this.cancel('Travel movement confirmation timed out. No retry was sent.', true); return; }
       if (this.leg.acceptedUntil !== null && now >= this.leg.acceptedUntil) {
         if (distance(cell(player), this.leg.cells.at(-1)!) !== 0) { this.cancel('Travel movement did not finish at its accepted destination.', true); return; }
-        this.leg = null;
+        if (this.leg.nudged) this.plan(player);
+        else { this.leg = null; this.consecutiveNudges = 0; }
+        if (!this.active) return;
       } else {
-        if (now - this.leg.since > 19_000 || this.leg.acceptedUntil === null && now - this.leg.since > 4_000)
+        if (this.leg.acceptedUntil === null && now - this.leg.since > 4_000)
           this.cancel('Travel movement confirmation timed out. No retry was sent.', true);
         return;
       }
@@ -122,7 +156,7 @@ export class TravelController {
     }
     if (now - this.lastAction < 300) return;
     const cells = routeSegment(this.route, this.stepSize);
-    this.leg = { cells, since: now, acceptedUntil: null };
+    this.leg = { cells, since: now, acceptedUntil: null, nudged: false };
     this.send({ type: 'walk', destination: cells.at(-1)! }); this.lastAction = now;
   }
   cancel(reason = 'Travel stopped by you.', failed = false): void {
