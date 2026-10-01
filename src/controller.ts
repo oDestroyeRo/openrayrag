@@ -1,5 +1,7 @@
 import { matchesSkillExecution } from './skill-execution';
 import type { ActorPredicate } from './actor-observations';
+import { ManualSocial, type SocialContext, type SocialSnapshot } from './social';
+import type { ManualSocialAction } from './social-protocol';
 import { BotEngine, type Action, type Snapshot } from './engine';
 import { decode } from './protocol';
 import { validateExpandedAction, type ExpandedAction } from './protocol-feature';
@@ -28,6 +30,7 @@ export interface CompanionSnapshot extends Snapshot {
   runRequested: boolean; state: 'running' | 'waiting' | 'idle';
   world: WorldSnapshot; workflow: WorkflowSnapshot; routine: RoutineSnapshot; travel: TravelSnapshot; service: ServiceSnapshot;
   escape: EscapeSnapshot; supply: SupplySnapshot; supplyGuard?: SupplyResumeGuard;
+  social: SocialSnapshot;
 }
 function expanded(value: unknown): value is ExpandedAction {
   try { validateExpandedAction(value); return true; } catch { return false; }
@@ -60,6 +63,8 @@ export class CompanionController {
   private supplyInventoryFresh=false; private supplyCurrencyFresh=false;
   private supplyCloseSent=false; private supplyReturnApproach=false;private supplyServiceStarted=false;private supplyServiceContract:string|null=null;private supplyStorageFull:SupplyPhaseEvidence['storageFull']=null;private sendingSupply=false;
   private readonly dispositionMetadata=publishedDispositionMetadata();
+  readonly social: ManualSocial;
+  private socialIdentity: string | null = null;
   private pending: Pending | null = null;
   private lastFrame = 0;
   private lastTick = 0;
@@ -91,7 +96,8 @@ export class CompanionController {
   private workflowOutstanding: Pending | null = null;
 
   constructor(private readonly transport: (action: Action | WorldAction) => void, private readonly now = Date.now,
-    private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) {
+    private readonly gridFor: (map: string) => WalkGrid | null = searchGrid,
+    sendSocial: (action: ManualSocialAction) => void = () => { throw new Error('Manual social transport is unavailable.'); }) {
     this.engine = new BotEngine(action=>this.send(action), now, gridFor);
     this.workflow = new NpcWorkflow(now);
     this.routine = new RoutineRuntime(validControllerAction, now, { actionTimeoutSeconds: actionConfirmationTimeout({ type: 'skill' }) / 1000 });
@@ -99,6 +105,7 @@ export class CompanionController {
     this.service = new NpcServiceRuntime(this.travel, now, gridFor);
     this.escape = new EmergencyEscape(now);
     this.supply = new SupplyTripRuntime({next:(context,goals,policy)=>nextSupplyAction(context,goals,policy,this.requestedSettings?.automation?.supply!,{storageFull:this.supplyStorageFull}),confirm:confirmSupplyReceipt},now);
+    this.social = new ManualSocial(sendSocial, now);
   }
   private send(action:Action|WorldAction):void {
     if(action.type!=='stop'&&this.sendingSupply&&this.supply?.ownsField&&!this.supply.commandAllowed())throw new Error('Supply command allowance exhausted.');
@@ -107,11 +114,13 @@ export class CompanionController {
   get runRequested(): boolean { return this.requestedSettings !== null; }
   get connectionGeneration(): number { return this.connectionEpoch; }
   private get executing(): boolean {
-    return this.engine.running || this.returning || this.service.active || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
+    return this.social.busy || this.engine.running || this.returning || this.service.active || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
       || ['running','waiting'].includes(this.routine.snapshot().state);
   }
   get active(): boolean { return this.runRequested || this.executing; }
   connect(compatible: boolean): void {
+    this.social.reset('Social session changed.', true);
+    this.socialIdentity = null;
     this.escape.connectionChanged();
     this.supply.interrupt('Supply trip interrupted by reconnect.'); this.supplyInventoryFresh=false; this.supplyCurrencyFresh=false;
     this.connectionEpoch++; this.cancelOwners('Connection changed.'); this.fencedUntil = 0; this.unresolvedWorld = null;
@@ -119,6 +128,8 @@ export class CompanionController {
     this.waitingReason = this.engine.reason; this.retryAt = 0;
   }
   disconnect(): void {
+    this.social.reset('Social connection closed.', true);
+    this.socialIdentity = null;
     this.escape.connectionChanged();
     this.supply.interrupt('Supply trip interrupted by disconnect.');this.supplyInventoryFresh=false;this.supplyCurrencyFresh=false;
     this.connectionEpoch++;
@@ -149,6 +160,7 @@ export class CompanionController {
   }
   private cancelOwners(reason: string): void {
     this.supplyStorageFull=null;
+    this.social.cancel('Unconfirmed after cancellation. A transmitted message cannot be unsent.');
     this.retireWorld();
     this.generation++; this.pending = null; this.routine.cancel(reason); this.workflow.cancel(reason); this.service.cancel(reason);
     this.travel.cancel(reason); this.travelSettings = null;
@@ -256,10 +268,17 @@ export class CompanionController {
   private serviceContext(): ServiceContext {
     return { ...this.context(), player:this.engine.player, actors:[...this.engine.actors.values()], connection:this.connectionEpoch, inventoryKnown:this.engine.character.inventoryKnown };
   }
-  perform(mode: 'command' | 'workflow' | 'routine' | 'service', input: unknown): void {
+  private socialContext(): SocialContext {
+    const p = this.engine.player, c = this.engine.character;
+    return { ready: !!p && this.engine.connected && this.engine.compatible && !!this.engine.map && this.now() - this.lastFrame <= 15_000,
+      actorId: p?.id ?? null, name: p?.name ?? '', job: p?.classId ?? null, learnedBasic: c.skillsKnown ? c.learned.get(1) ?? 0 : null,
+      inParty: this.world.party !== null, silenced: c.statuses.has(6) };
+  }
+  perform(mode: 'command' | 'workflow' | 'routine' | 'service' | 'social', input: unknown): void {
+    if (mode === 'social') { this.requireIdle(); this.social.dispatch(input, this.socialContext()); return; }
     if (mode === 'service') {
       const definition = validateServiceRequest(input); this.requireReady();
-      if (this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
+      if (this.social.busy || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
         || ['running','waiting'].includes(this.routine.snapshot().state) || this.unresolvedWorld || this.now() < this.fencedUntil
         || this.engine.pendingFeatureAction || this.featureReceipt || this.supply.uncertain)
         throw new Error('Wait for the current transaction or unresolved escape/action before running a service.');
@@ -351,8 +370,9 @@ export class CompanionController {
     const respawning = this.engine.snapshot().task.kind === 'respawn' && this.engine.actionResult.status === 'pending';
     this.lastFrame = this.now();
     for (const event of events) {
-      if (event.type === 'enter') { this.pause('Preparing the reconnected character.'); this.world.reset(event.map); }
+      if (event.type === 'enter') { this.social.reset('Social character changed.'); this.pause('Preparing the reconnected character.'); this.world.reset(event.map); }
       else if (event.type === 'map' || event.type === 'clear') {
+        this.social.cancel('Unconfirmed after a world change. No social send will be replayed.');
         // Travel owns expected transitions; field runs retain their selected species.
         if (this.pending || this.workflow.snapshot().running || ['running','waiting'].includes(this.routine.snapshot().state)) {
           this.retireWorld();
@@ -363,6 +383,13 @@ export class CompanionController {
       }
     }
     this.engine.receive(events);
+    const socialPlayer = this.engine.player;
+    if (socialPlayer) {
+      const identity = JSON.stringify([socialPlayer.id, socialPlayer.name]);
+      if (this.socialIdentity !== null && identity !== this.socialIdentity) this.social.reset('Social character identity changed.');
+      this.socialIdentity = identity;
+    }
+    for (const event of events) if (event.type === 'chat' || event.type === 'emote') this.social.observe(event, this.socialContext());
     const escaped = this.escape.observe(events, this.escapeContext());
     if (escaped && this.runRequested && automationSettings(this.requestedSettings!).travel.returnToLockMap
       && this.engine.map !== this.requestedSettings!.map) {
@@ -676,6 +703,7 @@ export class CompanionController {
   }
   tick(): void {
     const now = this.now();
+    this.social.tick();
     this.escape.update(this.escapeContext());
     if (this.active && this.lastTick && now - this.lastTick > 5_000) {
       this.lastTick = now; this.pause('Waiting for fresh state after the Mac or game paused.', 1_000); return;
@@ -783,12 +811,12 @@ export class CompanionController {
     else if (this.travel.active || travel.state === 'complete' && this.travelSettings) snapshot.reason = travel.reason;
     else if (workflow.running) snapshot.reason = workflow.reason;
     else if (routine.state === 'running' || routine.state === 'waiting') snapshot.reason = routine.reason;
-    const executing = this.executing && (this.engine.running || service.active || this.travel.active || workflow.running || !!this.pending
+    const executing = this.executing && (this.social.busy || this.engine.running || service.active || this.travel.active || workflow.running || !!this.pending
       || this.escape.inFlight || ['running','waiting'].includes(routine.state));
     if (this.runRequested && !executing) snapshot.reason = this.blockedReason || this.waitingReason || snapshot.reason;
     return { ...snapshot, running: executing, runRequested: this.runRequested,
       state: executing ? 'running' : this.runRequested ? 'waiting' : 'idle',
       runIntent: this.runRequested, elapsedSeconds: this.runRequested ? Math.max(0, Math.floor((this.now() - this.started) / 1000)) : snapshot.elapsedSeconds,
-      world: this.world.snapshot(), workflow, routine, travel, service, escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard() };
+      world: this.world.snapshot(), workflow, routine, travel, service, escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),social:this.social.snapshot() };
   }
 }

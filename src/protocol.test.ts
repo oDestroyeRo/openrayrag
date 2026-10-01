@@ -71,9 +71,9 @@ describe('deployed Rebuild V8 protocol', () => {
     expect([...command('stop')]).toEqual([19]);
     for (const id of [0,-1,NaN,Infinity,1.2,2**32]) expect(() => command('attack',id)).toThrow();
   });
-  it('ignores authentication and chat payloads', () => {
+  it('ignores authentication payloads and rejects malformed owned chat', () => {
     expect(decode(Uint8Array.of(0,1,2,3))).toEqual([]);
-    expect(decode(Uint8Array.of(44,1,2,3))).toEqual([]);
+    expect(() => decode(Uint8Array.of(44,1,2,3))).toThrow('Truncated packet');
   });
   it('bounds position tracking before allocating', () => {
     expect(() => decode(Uint8Array.of(OP.tracking,255,255))).toThrow();

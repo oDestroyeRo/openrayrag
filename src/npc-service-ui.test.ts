@@ -64,6 +64,7 @@ function setup() {
     panels: new Map([['workflows', panel]]),
     editors: new Map(),
     dispositionEditor: { lock: () => {} },
+    social: { lock: () => {} },
     host,
     hooks,
     services: store,

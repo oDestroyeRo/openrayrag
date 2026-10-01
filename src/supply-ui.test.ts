@@ -8,7 +8,7 @@ function setup() {
     return nodes.get(key)!;
   } };
   const view = Object.create(FeatureUi.prototype);
-  Object.assign(view, { host, status: {}, dispositionPlan: null });
+  Object.assign(view, { host, status: {}, dispositionPlan: null, social: { render: () => {} } });
   return {
     render: (supply: unknown) => FeatureUi.prototype.render.call(view, { supply }),
     output: host.querySelector('#supply-preview'),
