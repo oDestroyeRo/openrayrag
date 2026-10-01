@@ -86,6 +86,65 @@ struct AutomationSettings {
     limits: Limits,
     respawn: Respawn,
     schedule: Schedule,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_disposition",
+        skip_serializing_if = "Option::is_none"
+    )]
+    disposition: Option<DispositionPolicy>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DispositionPolicy {
+    max_spend: u32,
+    rules: Vec<DispositionRule>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DispositionRule {
+    item_id: u32,
+    keep: u16,
+    minimum: u16,
+    desired: u16,
+    maximum: u16,
+    store: bool,
+    sell: bool,
+    cart: bool,
+    restock: Restock,
+    allow_unique: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Restock {
+    Off,
+    Storage,
+    Cart,
+    Buy,
+}
+
+fn deserialize_disposition<'de, D>(deserializer: D) -> Result<Option<DispositionPolicy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    DispositionPolicy::deserialize(deserializer).map(Some)
+}
+
+impl DispositionPolicy {
+    fn valid(&self) -> bool {
+        self.max_spend <= 2_000_000_000
+            && self.rules.len() <= 128
+            && unique_by(&self.rules, |rule| rule.item_id)
+            && self.rules.iter().all(|rule| {
+                positive_id(rule.item_id)
+                    && rule.keep <= rule.minimum
+                    && rule.minimum <= rule.desired
+                    && rule.desired <= rule.maximum
+                    && rule.maximum <= 32767
+            })
+    }
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
@@ -435,6 +494,11 @@ impl AutomationSettings {
             && self.respawn.max_deaths <= 100
             && self.schedule.start_hour <= 23
             && self.schedule.end_hour <= 23;
+        let valid = valid
+            && self
+                .disposition
+                .as_ref()
+                .map_or(true, DispositionPolicy::valid);
         if valid {
             Ok(())
         } else {
@@ -475,6 +539,70 @@ mod tests {
 
     fn valid(value: Value) -> bool {
         serde_json::from_value::<Settings>(value).is_ok_and(|settings| settings.validate().is_ok())
+    }
+
+    fn disposition() -> Value {
+        json!({"maxSpend":100,"rules":[{"itemId":501,"keep":2,"minimum":3,"desired":5,"maximum":6,"store":true,"sell":false,"cart":false,"restock":"storage","allowUnique":false}]})
+    }
+
+    #[test]
+    fn disposition_round_trip_preserves_permissions_and_legacy_absence() {
+        let mut value = settings();
+        value["automation"] = automation();
+        let legacy: Settings = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(legacy).unwrap(), value);
+        value["automation"]["disposition"] = disposition();
+        value["automation"]["escape"] = json!({"enabled":true,"hpBelowPercent":20,"mode":"save","method":"item","minStock":2,"cooldownSeconds":60});
+        let parsed: Settings = serde_json::from_value(value.clone()).unwrap();
+        assert!(parsed.validate().is_ok());
+        assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+    }
+
+    #[test]
+    fn disposition_rejects_conflicts_coercion_missing_and_unknown_fields() {
+        let mut value = settings();
+        value["automation"] = automation();
+        value["automation"]["disposition"] = disposition();
+        for (field, invalid) in [
+            ("itemId", json!(0)),
+            ("itemId", json!(2147483648_u32)),
+            ("keep", json!(4)),
+            ("minimum", json!(6)),
+            ("desired", json!(7)),
+            ("maximum", json!(32768)),
+            ("maximum", json!(0.5)),
+            ("sell", json!(1)),
+            ("allowUnique", json!("true")),
+            ("restock", json!("any")),
+            ("unexpected", json!(true)),
+        ] {
+            let mut changed = value.clone();
+            changed["automation"]["disposition"]["rules"][0][field] = invalid;
+            assert!(!valid(changed), "accepted invalid {field}");
+        }
+        for invalid in [
+            json!(null),
+            json!({"rules":[]}),
+            json!({"maxSpend":2000000001_u32,"rules":[]}),
+        ] {
+            let mut changed = value.clone();
+            changed["automation"]["disposition"] = invalid;
+            assert!(!valid(changed));
+        }
+        let duplicate = value["automation"]["disposition"]["rules"][0].clone();
+        value["automation"]["disposition"]["rules"] = json!([duplicate.clone(), duplicate]);
+        assert!(!valid(value));
+    }
+
+    #[test]
+    fn disposition_accepts_protocol_quantity_and_spending_ceilings() {
+        let mut value = settings();
+        value["automation"] = automation();
+        value["automation"]["disposition"] = disposition();
+        value["automation"]["disposition"]["maxSpend"] = json!(2000000000);
+        value["automation"]["disposition"]["rules"][0]["desired"] = json!(32767);
+        value["automation"]["disposition"]["rules"][0]["maximum"] = json!(32767);
+        assert!(valid(value));
     }
 
     #[test]

@@ -9,6 +9,19 @@ function fixture() {
   return { data, storage, store: new ProfileStore(storage, () => `profile-${++id}`, () => 100) };
 }
 describe('named profiles', () => {
+  it('round-trips protected disposition and rejects invalid imports atomically', () => {
+    const f=fixture();const automation=structuredClone(DEFAULT_AUTOMATION);automation.disposition={maxSpend:0,rules:[{itemId:501,keep:1,minimum:2,desired:3,maximum:4,store:true,sell:false,cart:false,restock:'storage',allowUnique:false}]};
+    automation.escape={...DEFAULT_ESCAPE,enabled:true,mode:'save',minStock:2};
+    const saved=f.store.save('Protected stock','Raon',{...settings(),automation});const exported=f.store.export(saved.id);
+    expect(f.store.import(exported)[0]?.settings.automation?.disposition).toEqual(automation.disposition);
+    expect(f.store.import(exported)[0]?.settings.automation?.escape).toEqual(automation.escape);
+    const legacy=JSON.parse(exported);delete legacy.profiles[0].settings.automation.escape;
+    expect(f.store.import(JSON.stringify(legacy))[0]?.settings.automation).toMatchObject({escape:DEFAULT_ESCAPE,disposition:automation.disposition});
+    const document=JSON.parse(exported);document.profiles[0].settings.automation.disposition.rules[0].maximum=2;
+    const before=f.data.get(PROFILE_STORAGE_KEY);expect(()=>f.store.import(JSON.stringify(document))).toThrow();expect(f.data.get(PROFILE_STORAGE_KEY)).toBe(before);
+    document.profiles[0].settings.automation.disposition.rules[0].maximum=4;document.profiles[0].settings.automation.disposition.rules[0].unknown=true;
+    expect(()=>f.store.import(JSON.stringify(document))).toThrow();expect(f.data.get(PROFILE_STORAGE_KEY)).toBe(before);
+  });
   it('round-trips detached settings without account or run state', () => {
     const f = fixture(); const input = settings();
     const saved = f.store.save(' Field eight ', 'Raon', input);

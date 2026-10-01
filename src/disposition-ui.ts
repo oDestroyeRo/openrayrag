@@ -1,0 +1,107 @@
+import { ITEM_CATALOG, itemName } from './game-catalog';
+import type { InventoryItem } from './protocol-feature';
+import { WorldState } from './world-state';
+import type { ShopEntry } from './world-protocol';
+import type { AutomationSettings } from './settings';
+import { type DispositionContext, type DispositionItemInfo, type DispositionPlan } from './disposition';
+
+const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
+const number = (v: unknown): number | null => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= 2_147_483_647 ? v : null;
+function items(input: unknown): InventoryItem[] | null {
+  if (!Array.isArray(input) || input.length > 600) return null;
+  const result: InventoryItem[] = [];
+  for (const value of input) {
+    const row = object(value); const bagId = number(row.bagId); const itemId = number(row.itemId); const count = number(row.count);
+    if (!bagId || !itemId || !count || count > 32767 || row.type !== 1 && row.type !== 2) return null;
+    // Character telemetry may omit unique identity/cards; world container
+    // snapshots can supply them. Copy only observed, bounded metadata.
+    result.push({ bagId, itemId, count, type: row.type,
+      ...(number(row.refine) === null || number(row.refine)! > 255 ? {} : { refine: number(row.refine)! }),
+      ...(typeof row.guid === 'string' && row.guid.length > 0 && row.guid.length <= 64 ? { guid: row.guid } : {}),
+      ...(Array.isArray(row.slots) && row.slots.length === 4 && row.slots.every(id => number(id) !== null) ? { slots: [...row.slots] as number[] } : {}) });
+  }
+  return result;
+}
+
+/** These are handler/category contracts from the pinned server, not item flags.
+ * DataLoader maps classes 1/4/5/6 to regular and 2/3 to unique items. The normal
+ * shop/storage/cart handlers have no additional binding or category restriction.
+ * Equipment, selected ammo and unique protections are applied by the planner.
+ */
+export function publishedDispositionMetadata(): Readonly<Record<string, DispositionItemInfo>> {
+  return Object.fromEntries(Object.entries(ITEM_CATALOG).map(([id, item]) => {
+    const known = [1, 2, 3, 4, 5, 6].includes(item.itemClass);
+    return [id, { weight: number(item.weight), sellPrice: number(item.sellPrice), itemClass: item.itemClass,
+      unique: known ? [2, 3].includes(item.itemClass) : null,
+      ...(known ? { store: true, sell: true, cart: true, buy: true } : {}) }];
+  }));
+}
+const metadata = publishedDispositionMetadata();
+
+export function dispositionStockFloors(settings: AutomationSettings): { itemId: number; count: number }[] {
+  const floors = settings.items.map(row => ({ itemId: row.itemId, count: row.minStock }));
+  const escape = settings.escape;
+  if (escape?.enabled && escape.method === 'item') floors.push({ itemId: escape.mode === 'random' ? 601 : 602, count: escape.minStock });
+  return floors;
+}
+
+/** Read-only adapter. No game/controller hooks are available to this module. */
+export function dispositionContextFromStatus(status: Record<string, unknown>): DispositionContext {
+  const character = object(status.character); const stats = object(character.stats); const observedWorld = object(status.world);
+  const npc = object(observedWorld.npc); const player = object(status.player); const world = new WorldState();
+  world.map = typeof observedWorld.map === 'string' ? observedWorld.map : '';
+  world.generation = number(observedWorld.generation) ?? 0; world.revision = number(observedWorld.revision) ?? 0;
+  const inventory = character.inventoryKnown === true ? items(character.inventory) : null;
+  const storage = observedWorld.storageReady === true ? items(observedWorld.storage) : null;
+  const cart = observedWorld.cartReady === true ? items(observedWorld.cart) : null;
+  const npcId = number(npc.id); const mode = npc.mode;
+  if (npcId && ['idle', 'dialog', 'options', 'shop', 'storage', 'barter', 'refine', 'vending'].includes(String(mode))) {
+    world.npc = { id: npcId, mode: mode as typeof world.npc.mode, dialog: null, options: [] };
+  }
+  const shop = object(observedWorld.shop);
+  if (['buy', 'sell'].includes(String(shop.mode)) && number(shop.discountLevel) !== null && Array.isArray(shop.entries)) {
+    const entries: ShopEntry[] = [];
+    for (const value of shop.entries) { const row = object(value); const itemId = number(row.itemId); const price = number(row.price); if (itemId && price !== null) entries.push({ itemId, price }); }
+    if (entries.length === shop.entries.length && new Set(entries.map(row => row.itemId)).size === entries.length) world.shop = { mode: shop.mode as 'buy' | 'sell', discountLevel: number(shop.discountLevel)!, entries };
+  }
+  world.storageReady = storage !== null; for (const item of storage ?? []) world.storage.set(item.bagId, item);
+  world.hasCart = observedWorld.hasCart === true; world.cartReady = cart !== null; for (const item of cart ?? []) world.cart.set(item.bagId, item);
+  if (observedWorld.vending) world.vending = { name: '', rows: [] };
+  const equipment = Array.isArray(character.equipment) && character.equipment.length <= 14
+    && character.equipment.every(id => typeof id === 'number' && Number.isInteger(id) && id >= -1 && id <= 2_147_483_647) ? [...character.equipment] as number[] : null;
+  const ammoId = typeof character.ammoId === 'number' && Number.isInteger(character.ammoId) && character.ammoId >= -1 && character.ammoId <= 2_147_483_647 ? character.ammoId : null;
+  const learned = character.skillsKnown === true && Array.isArray(character.learned) ? character.learned.map(object) : [];
+  const pushCartLevel = number(learned.find(row => row.skillId === 73)?.level) ?? 0;
+  const ready = status.connected === true && status.compatible === true && number(player.id) !== null && player.dead === false;
+  const idle = status.running === false && status.runRequested !== true && object(status.task).pending === false
+    && object(status.escape).pending !== true
+    && object(status.actionResult).status !== 'pending' && object(status.workflow).running !== true
+    && !['running', 'waiting'].includes(String(object(status.routine).state))
+    && (!Array.isArray(object(status.navigation).leg) || (object(status.navigation).leg as unknown[]).length === 0);
+  return {
+    revision: typeof status.sessionId === 'string' ? `${status.sessionId}:${status.connectionId ?? ''}:${world.map}:${world.generation}:${world.revision}` : '',
+    containers: {
+      // Source-known ceilings are explicit; current weight remains unknown
+      // until the server supplies it. Storage has no weight check in this pin.
+      inventory: { items: inventory, slots: 200, weight: number(stats.weight), maxWeight: number(stats.maxWeight) },
+      storage: { items: storage, slots: 600, weight: null, maxWeight: 'unlimited' },
+      cart: { items: cart, slots: 100, weight: number(stats.cartWeight), maxWeight: 80000 },
+    }, equipment, ammoId, metadata,
+    workflow: { map: typeof status.map === 'string' ? status.map : '', playerId: number(player.id) ?? 0,
+      alive: ready, idle, inventory: inventory ?? [], equipped: equipment ?? [], zeny: number(stats.zeny) ?? -1,
+      world, visibleNpcIds: [], pushCartLevel },
+  };
+}
+
+export function dispositionPreviewText(plan: DispositionPlan): string {
+  const lines = [`Preview only · ${plan.actions.length} suggested actions · ${plan.protections.length} protected entries`,
+    `Estimated spending ${plan.estimatedCost}z · Budget reserved ${plan.reservedSpend}z · Estimated proceeds ${plan.estimatedProceeds}z`,
+    ...plan.actions.map((action, index) => `${index + 1}. ${action.kind} ${itemName(action.itemId)} × ${action.count}${action.bagId === undefined ? '' : ` · bag #${action.bagId}`} · ${action.from} → ${action.to}`),
+    ...plan.protections.slice(0, 32).map(row => `Keep ${itemName(row.itemId)} × ${row.count} · ${row.container} bag #${row.bagId}: ${row.reason}`),
+    ...plan.unmet.map(row => `Unmet ${row.kind}: ${itemName(row.itemId)} × ${row.count}`),
+    ...plan.blocked.map(reason => `Blocked: ${reason}`)];
+  if (plan.protections.length > 32) lines.push(`+ ${plan.protections.length - 32} further protected entries`);
+  if (plan.estimatedCost !== plan.reservedSpend) lines.push('Shop pricing may differ from the display. The spending reservation uses the higher quote.');
+  lines.push('No items moved or sold. Generate a new preview when stock or transaction state changes.');
+  return lines.join('\n');
+}

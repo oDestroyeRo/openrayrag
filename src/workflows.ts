@@ -98,7 +98,7 @@ function stock(items: InventoryItem[]): Map<number, number> {
 function protectedItem(item: InventoryItem, context: WorkflowContext): boolean {
   return context.equipped.includes(item.bagId) || (context.protectedItemIds?.includes(item.itemId) ?? false);
 }
-function shopQuote(rows: ItemRow[], context: WorkflowContext): { cost: number; budget: number } | null {
+export function shopQuote(rows: ItemRow[], context: WorkflowContext): { cost: number; budget: number } | null {
   const shop = context.world.shop;
   if (shop?.mode !== 'buy') return null;
   const discount = shop.discountLevel > 0 ? Math.min(24, 5 + shop.discountLevel * 2) : 0;
@@ -119,7 +119,7 @@ function shopQuote(rows: ItemRow[], context: WorkflowContext): { cost: number; b
   }
   return Number.isSafeInteger(cost) && cost <= 2_147_483_647 && Number.isSafeInteger(budget) && budget <= 2_147_483_647 ? { cost, budget } : null;
 }
-function saleProceeds(rows: ItemRow[], context: WorkflowContext): number | null {
+export function saleProceeds(rows: ItemRow[], context: WorkflowContext): number | null {
   const shop = context.world.shop;
   if (shop?.mode !== 'sell') return null;
   const percent = shop.discountLevel > 0 ? Math.min(24, 5 + shop.discountLevel * 2) : 0;

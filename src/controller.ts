@@ -317,7 +317,10 @@ export class CompanionController {
     }
     this.travel.observe(events);
     for (const event of events) if (event.type === 'inventory' && event.cart !== undefined) this.world.replaceCart(event.cart);
-    for (const event of worldEvents) this.world.apply(event, this.engine.playerId);
+    for (const event of worldEvents) {
+      this.world.apply(event, this.engine.playerId);
+      if (event.type === 'cartMoved') this.engine.character.applyCartWeights(event.cartWeight, event.currentWeight);
+    }
     this.workflow.observe(worldEvents, this.context()); this.syncWorkflowOwner();
     if (this.pending) this.observeCart(this.pending, worldEvents);
     if (this.unresolvedWorld) {
