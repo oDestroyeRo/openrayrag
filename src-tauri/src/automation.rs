@@ -910,6 +910,13 @@ impl AutomationSettings {
     }
 }
 
+/// Validate a manual resource preview's visible policy without starting a run.
+pub(crate) fn validate_manual_protection_policy(value: &Value) -> Result<(), String> {
+    let policy: AutomationSettings = serde_json::from_value(value.clone())
+        .map_err(|_| "Invalid manual protection policy.".to_string())?;
+    policy.validate()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{EscapeResumeGuard, Settings, SupplyResumeGuard, SupplySettings};

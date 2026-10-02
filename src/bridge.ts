@@ -1,3 +1,4 @@
+import { socketCommand } from './socket-protocol';
 import { type Settings } from './engine';
 import { command, walkCommand, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
 import { featureCommand, validateExpandedAction } from './protocol-feature';
@@ -16,7 +17,7 @@ interface BridgeWindow extends Window {
   __TAURI_INTERNALS__?: { invoke: (name: string, args: unknown) => Promise<unknown> };
   __RAYRAG__?: {
     control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard) => void;
-    perform: (action: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo', request: unknown) => void;
+    perform: (action: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket', request: unknown) => void;
     snapshot: () => CompanionSnapshot;
   };
 }
@@ -55,6 +56,9 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   }, slot => {
     if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
     NativeSocket.prototype.send.call(active, memoCommand(slot));
+  }, action => {
+    if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
+    NativeSocket.prototype.send.call(active, socketCommand(action));
   });
   const engine = controller.engine;
   const publish = () => {
@@ -194,7 +198,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
     if (!event.isTrusted) return;
     // A map refresh briefly removes the player; it is not a new login attempt.
     if (!enteredWorld) cancelLogin();
-    if (controller.active) { controller.pause('Yielding briefly to manual game input.', 2_000); publish(); }
+    controller.manualInput(); publish();
   };
   document.addEventListener('pointerdown', manualInput, true);
   document.addEventListener('keydown', manualInput, true);
