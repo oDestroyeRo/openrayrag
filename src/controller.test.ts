@@ -15,9 +15,9 @@ const player: Entity = { id: 1, classId: 0, name: 'Test', kind: 0, level: 7, hp:
 const monster: Entity = { id: 2, classId: 4000, name: 'Poring', kind: 1, level: 1, hp: 10, maxHp: 10, x: 101, y: 100, dead: false };
 const grid: WalkGrid = { width: 200, height: 200, walkable: () => true };
 const settings = { ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [4000] };
-function setup() {
+function setup(walkGrid=grid) {
   let now = 100_000; const sent: Array<Action | ControllerAction> = [];
-  const controller = new CompanionController(action => sent.push(action), () => now, map => map === 'unknown' ? null : grid);
+  const controller = new CompanionController(action => sent.push(action), () => now, map => map === 'unknown' ? null : walkGrid);
   controller.connect(true);
   const receive = (...events: Array<GameEvent | FeatureEvent>) => { controller.engine.receive(events);
     for (const event of events) if (event.type === 'enter' || event.type === 'map') controller.world.reset(event.map);
@@ -29,6 +29,101 @@ function setup() {
   return { controller, sent, receive, step, advance, packet, time: () => now };
 }
 function policy() { return structuredClone(DEFAULT_AUTOMATION); }
+
+describe('official game panel input', () => {
+  it('keeps an opener receipt and target strategy through panel input, then attacks after exact skill motion', () => {
+    const f=setup(),automation=policy();
+    automation.attackStrategies=[{id:'open',speciesIds:[4000],skillId:11,level:1,behavior:'opener',maxAttempts:1,maxUses:1,cooldownSeconds:1}];
+    f.receive({type:'spawn',entity:{...player,statuses:[],sp:200,maxSp:200}},
+      {type:'inventory',items:[],equipment:Array(10).fill(0),ammoId:-1},{type:'skills',learned:[{skillId:11,level:1}]});
+    f.controller.start({...settings,automation});f.step();f.controller.manualInput();
+    f.advance(1000);
+    f.packet(new BitWriter().u8(FEATURE_OP.skill).u8(1).i32(1).i32(1).i32(2).u8(11).u8(1).u8(0)
+      .position({x:100,y:100}).i32(1).u8(0).u8(1).f32(1).f32(0).bool(false));
+    f.advance(999);expect(f.sent.filter(a=>a.type==='attack')).toEqual([]);
+    f.step(1);expect(f.sent.filter(a=>a.type==='attack')).toEqual([{type:'attack',id:2}]);
+    expect(f.controller.engine.actionResult.status).toBe('confirmed');
+    expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);
+    expect(f.sent.filter(a=>a.type==='skill')).toHaveLength(1);
+    expect(f.controller.snapshot()).toMatchObject({runRequested:true,running:true});
+    expect(f.controller.snapshot().reason).not.toContain('unresolved');
+  });
+  it('preserves a Thief normal attack and finite counters instead of restarting combat on every panel click',()=>{
+    const f=setup();f.controller.engine.player!.classId=6;
+    f.controller.start(settings);f.step();f.controller.manualInput();
+    f.packet(new BitWriter().u8(OP.attack).i32(1).i32(2).i32(0).position(player));f.advance(2000);
+    expect(f.sent).toEqual([{type:'attack',id:2}]);expect(f.controller.snapshot()).toMatchObject({runRequested:true,running:true,attacks:1});
+    expect(f.controller.snapshot().elapsedSeconds).toBe(2);
+    f.controller.stop();f.advance(2500);expect(f.controller.runRequested).toBe(false);expect(f.sent.filter(a=>a.type==='attack')).toHaveLength(1);
+  });
+  it('continues passive clocks through more than five seconds of held-key panel input',()=>{
+    const f=setup();f.controller.start(settings);f.step();
+    for(let i=0;i<9;i++){
+      f.controller.manualInput();f.advance(1000);f.packet(new BitWriter().u8(OP.heal).i32(1).i32(0).i32(100).i32(100));
+    }
+    f.advance(2000);expect(f.controller.engine.running).toBe(true);expect(f.sent).toEqual([{type:'attack',id:2}]);
+    expect(f.controller.engine.log.some(entry=>entry.text.includes('slept')||entry.text.includes('paused'))).toBe(false);
+    expect(f.controller.snapshot().elapsedSeconds).toBe(11);
+  });
+  it('keeps recovery item confirmation and its cooldown across panel input without a second spend',()=>{
+    const f=setup(),automation=policy();automation.items=[{itemId:501,resource:'hp',belowPercent:90,minStock:0,cooldownSeconds:10}];
+    f.receive({type:'inventory',items:[{bagId:501,itemId:501,type:1,count:4}],equipment:[],ammoId:-1},
+      {type:'heal',id:1,hp:80,maxHp:100});f.controller.start({...settings,automation});f.step();f.controller.manualInput();f.advance(1000);
+    f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false));
+    f.advance(2000);expect(f.sent.filter(a=>a.type==='useItem')).toEqual([{type:'useItem',itemId:501}]);
+    expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);expect(f.controller.engine.actionResult.status).toBe('confirmed');
+  });
+  it('still expires a genuinely unconfirmed item at its original deadline during repeated panel input',()=>{
+    const f=setup(),automation=policy();automation.items=[{itemId:501,resource:'hp',belowPercent:100,minStock:0,cooldownSeconds:1}];
+    f.receive({type:'inventory',items:[{bagId:501,itemId:501,type:1,count:4}],equipment:[],ammoId:-1});
+    f.controller.start({...settings,automation});f.step();
+    for(let i=0;i<7;i++){f.controller.manualInput();f.advance(1000);}
+    expect(f.controller.engine.actionResult.status).toBe('failed');expect(f.controller.engine.running).toBe(false);
+    expect(f.controller.snapshot().reason).toContain('Waiting for a confirmed result');expect(f.sent.filter(a=>a.type==='useItem')).toHaveLength(1);
+    f.advance(3000);expect(f.sent.filter(a=>a.type==='useItem')).toHaveLength(1);
+  });
+  it('keeps a pending automatic ammo change until its exact ACK, then attacks without repeating equipment',()=>{
+    const f=setup(),automation=policy();automation.loadout.enabled=true;automation.loadout.minAmmoStock=3;
+    f.controller.engine.player!.classId=5;f.controller.engine.player!.level=50;
+    f.receive({type:'inventory',items:[{bagId:1001,itemId:1701,type:2,count:1,guid:'bow'},{bagId:1750,itemId:1750,type:1,count:20}],
+      equipment:[0,0,0,0,1001,0,0,0,0,0],ammoId:-1});
+    f.controller.start({...settings,automation});f.step();f.controller.manualInput();f.advance(1000);
+    f.packet(new BitWriter().u8(FEATURE_OP.equipment).i32(1750).u8(13).bool(true));f.advance(1000);
+    expect(f.sent.filter(a=>a.type==='equip')).toEqual([{type:'equip',bagId:1750,equipped:true}]);
+    expect(f.sent.filter(a=>a.type==='attack')).toEqual([{type:'attack',id:2}]);expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);
+  });
+  it('keeps a pickup owner and attribution when its raw receipt arrives during the panel grace period',()=>{
+    const f=setup();f.controller.start(settings);f.step();
+    f.receive({type:'death',id:2},{type:'drop',drop:{id:9,itemId:909,count:1,isNew:true,x:101,y:100}});f.step(150);
+    expect(f.sent.at(-1)).toEqual({type:'pickup',id:9});f.controller.manualInput();f.advance(500);
+    f.packet(new BitWriter().u8(OP.pickup).i32(1).i32(9));f.advance(1500);
+    expect(f.controller.snapshot()).toMatchObject({kills:1,looted:1,runRequested:true,running:true});
+    expect(f.sent.filter(a=>a.type==='pickup')).toHaveLength(1);expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);
+  });
+  it('settles an accepted explicit route leg during panel input without another walk before the grace period ends',()=>{
+    const f=setup({width:200,height:200,walkable:p=>p.x!==104||p.y<98});
+    f.receive({type:'spawn',entity:{...monster,x:108}});f.controller.start(settings);f.step();
+    expect(f.sent).toEqual([{type:'walk',destination:{x:99,y:99}}]);f.controller.manualInput();
+    f.packet(new BitWriter().u8(OP.walk).i32(1).position(player).f32(100).f32(100).f32(1).f32(1).u8(2).u8(0x10).u8(0));
+    f.advance(1900);expect(f.controller.engine.player).toMatchObject({x:99,y:99});expect(f.sent).toHaveLength(1);
+    f.step(100);expect(f.sent.length).toBeGreaterThan(1);expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);expect(f.controller.engine.running).toBe(true);
+  });
+  it('does not replenish the requested finite time budget while repeated panel input suppresses decisions',()=>{
+    const f=setup(),automation=policy();automation.limits.minutes=1;f.controller.start({...settings,automation});f.step();
+    for(let i=0;i<61;i++){f.controller.manualInput();f.advance(1000);f.packet(new BitWriter().u8(OP.heal).i32(1).i32(0).i32(100).i32(100));}
+    expect(f.controller.engine.running).toBe(false);expect(f.controller.runRequested).toBe(true);expect(f.controller.snapshot().reason).toContain('session limit');
+    expect(f.sent.filter(a=>a.type==='attack')).toHaveLength(1);
+  });
+  it('retains destructive takeover and sent uncertainty for actual official gameplay',()=>{
+    const f=setup(),automation=policy();automation.skills=[{skillId:11,level:1,target:'enemy',hpBelowPercent:100,spAbovePercent:0,cooldownSeconds:10}];
+    f.receive({type:'spawn',entity:{...player,statuses:[],sp:200,maxSp:200}},
+      {type:'inventory',items:[],equipment:[],ammoId:-1},{type:'skills',learned:[{skillId:11,level:1}]});
+    f.controller.start({...settings,automation});f.step();f.controller.manualCommand();
+    expect(f.sent.filter(a=>a.type==='stop')).toHaveLength(1);expect(f.controller.engine.running).toBe(false);
+    expect(f.controller.snapshot().reason).toContain('Waiting for a confirmed result');f.advance(2000);
+    expect(f.sent.filter(a=>a.type==='skill')).toHaveLength(1);expect(f.controller.runRequested).toBe(true);
+  });
+});
 const routine = (action: ControllerAction, durationSeconds = 20) => ({ name: 'Test', durationSeconds, maxActions: 2,
   rules: [{ name: 'Act', priority: 1, maxRuns: 2, cooldownSeconds: 0, conditions: [{ field: 'hpPercent', operator: 'gte', value: 0 }], action }] });
 

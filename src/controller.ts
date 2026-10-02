@@ -219,7 +219,16 @@ export class CompanionController {
     const active=this.active;
     this.socket.externalInput();
     this.memo.cancel('Memo preview or intent canceled by manual game input. A transmitted update cannot replay.');
-    if(active)this.pause('Yielding briefly to manual game input.',2_000);
+    if(active){
+      // Pointer/key input also opens local panels. Keep sent action receipts,
+      // cast strategy allowances and clocks; suspend only new decisions.
+      this.yieldUntil=Math.max(this.yieldUntil,this.now()+2_000);
+      this.waitingReason='Yielding briefly to manual game input.';
+    }
+  }
+  manualCommand():void {
+    this.manualInput();
+    if(this.active)this.pause('Yielding to an official game action.',2_000);
   }
   heartbeat(healthy: boolean): void {
     this.heartbeatHealthy = healthy;
@@ -867,11 +876,17 @@ export class CompanionController {
         || policy.limits.pickups > 0 && this.engine.looted - this.runPickups >= policy.limits.pickups) {
         this.wait('Configured session limit reached. Stop and reconfigure to begin a new run.'); return;
       }
-      if (!this.heartbeatHealthy || now < this.yieldUntil) { this.resumeRun(); return; }
+      if (!this.heartbeatHealthy) { this.resumeRun(); return; }
       if (!this.engine.connected || !this.engine.compatible || now - this.lastFrame > 15_000) {
         this.wait(!this.engine.connected ? 'Waiting for the game to reconnect.' : !this.engine.compatible
           ? 'Waiting for a verified game build and protocol.' : 'Waiting for a fresh server update.'); return;
       }
+    }
+    if(now<this.yieldUntil){
+      // Poll receipts, movement and absolute deadlines while held keys keep
+      // extending the grace period. The engine's clock must not look asleep.
+      this.engine.tick(false);this.captureActionFailure();this.syncWorkflowOwner();
+      this.resumeRun();return;
     }
     // Escape owns its own receipt rather than the scheduler's cost-only ACK.
     // It must run while a requested field run is already waiting below its HP floor.
@@ -958,6 +973,7 @@ export class CompanionController {
     const executing = this.executing && (this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || service.active || this.travel.active || workflow.running || !!this.pending
       || this.escape.inFlight || ['running','waiting'].includes(routine.state));
     if (this.runRequested && !executing) snapshot.reason = this.blockedReason || this.waitingReason || snapshot.reason;
+    if(this.runRequested&&this.now()<this.yieldUntil&&!this.blockedReason)snapshot.reason=this.waitingReason;
     return { ...snapshot, running: executing, runRequested: this.runRequested,
       state: executing ? 'running' : this.runRequested ? 'waiting' : 'idle',
       runIntent: this.runRequested, elapsedSeconds: this.runRequested ? Math.max(0, Math.floor((this.now() - this.started) / 1000)) : snapshot.elapsedSeconds,

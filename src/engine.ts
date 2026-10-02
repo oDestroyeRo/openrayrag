@@ -397,7 +397,7 @@ export class BotEngine {
     if (this.player && this.character.stats) { this.character.stats.hp = this.player.hp; this.character.stats.maxHp = this.player.maxHp; this.character.stats.level = this.player.level; }
     if (this.running && this.player && !this.player.dead && this.player.hp / this.player.maxHp * 100 <= this.settings.minHpPercent) this.stop('HP reached the stop limit. Recover manually.');
   }
-  tick(): void {
+  tick(dispatchDecisions = true): void {
     const now = this.now();
     this.advanceMovement(); this.loadout.tick();
     const manualSkill = !this.running && this.automation.pendingAction?.type === 'skill';
@@ -412,6 +412,12 @@ export class BotEngine {
     const a = automationSettings(this.settings);
     if (!inSchedule(a,now)) { this.stop('Daily schedule ended. Press Start during the next allowed period.'); return; }
     if ((a.limits.minutes && now - this.runStarted >= a.limits.minutes * 60000) || (a.limits.kills && this.kills - this.runKills >= a.limits.kills) || (a.limits.pickups && this.looted - this.runPickups >= a.limits.pickups)) { this.stop('Configured session limit reached.'); return; }
+    if(!dispatchDecisions){
+      // Panel input yields decisions, not ownership. Advance accepted legs and
+      // their original deadlines without sending another walk, attack or cast.
+      if(!p.dead&&this.route)this.routeTick(p,now,true);
+      return;
+    }
     if (p.dead) { if(a.respawn.enabled && this.deaths <= a.respawn.maxDeaths && !this.automation.busy) { this.automation.submit({type:'respawn'},this.character); this.reason='Waiting for respawn confirmation.'; } return; }
     if(!this.actorActionIdentity()) {
       const intent=this.runIntent;this.stop('Waiting for the current own actor lifetime to be observed.');this.runIntent=intent;return;
