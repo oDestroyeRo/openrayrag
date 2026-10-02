@@ -10,6 +10,16 @@ function fixture() {
   return { data, storage, store: new ProfileStore(storage, () => `profile-${++id}`, () => 100) };
 }
 describe('named profiles', () => {
+  it('round-trips opt-in party engagement, accepts old omission and rejects imports atomically',()=>{
+    const f=fixture(),a=structuredClone(DEFAULT_AUTOMATION);a.combat.partyEngagement=true;
+    const profile=f.store.save('Party engagement','Test',{...settings(),automation:a}),document=JSON.parse(f.store.export(profile.id));
+    expect(f.store.import(JSON.stringify(document))[0]?.settings.automation?.combat.partyEngagement).toBe(true);
+    delete document.profiles[0].settings.automation.combat.partyEngagement;
+    expect(f.store.import(JSON.stringify(document))[0]?.settings.automation?.combat.partyEngagement).toBeUndefined();
+    for(const bad of [null,1,'true',[],{}]){document.profiles[0].settings.automation.combat.partyEngagement=bad;const before=f.data.get(PROFILE_STORAGE_KEY);expect(()=>f.store.import(JSON.stringify(document))).toThrow();expect(f.data.get(PROFILE_STORAGE_KEY)).toBe(before);}
+    document.profiles[0].settings.automation.combat.partyEngagement=true;document.profiles[0].settings.automation.combat.partyId=5;expect(()=>f.store.import(JSON.stringify(document))).toThrow();
+    expect(DEFAULT_AUTOMATION.combat.partyEngagement).toBe(false);
+  });
   it.each(['own','all'] as const)('keeps the canonical %s pickup scope and master switch through export/import without run evidence', ownership => {
     for(const loot of [false,true]) {
       const f=fixture(),automation=structuredClone(DEFAULT_AUTOMATION);automation.loot.ownership=ownership;

@@ -1,0 +1,11 @@
+[
+ {"name":"omitted legacy option","value":{},"omit":true,"valid":true},
+ {"name":"disabled default","value":{"partyEngagement":false},"valid":true},
+ {"name":"explicit opt in","value":{"partyEngagement":true},"valid":true},
+ {"name":"null is not absent","value":{"partyEngagement":null},"valid":false},
+ {"name":"numeric option","value":{"partyEngagement":1},"valid":false},
+ {"name":"string option","value":{"partyEngagement":"true"},"valid":false},
+ {"name":"array option","value":{"partyEngagement":[]},"valid":false},
+ {"name":"object option","value":{"partyEngagement":{}},"valid":false},
+ {"name":"unknown membership state","value":{"partyEngagement":true,"partyId":5},"valid":false}
+]

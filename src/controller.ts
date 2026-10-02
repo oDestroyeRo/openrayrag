@@ -124,7 +124,11 @@ export class CompanionController {
     sendSocial: (action: ManualSocialAction) => void = () => { throw new Error('Manual social transport is unavailable.'); },
     sendMemo: (slot: MemoSlot) => void = () => { throw new Error('Manual memo transport is unavailable.'); },
     sendSocket: (action: SocketAction) => void = () => { throw new Error('Manual socket transport is unavailable.'); }) {
-    this.engine = new BotEngine(action=>this.send(action), now, gridFor);
+    this.engine = new BotEngine(action=>this.send(action), now, gridFor, entityId => {
+      if (!this.world.party) return null;
+      const members = [...this.world.party.members.values()].filter(member=>member.entityId===entityId);
+      return members.length===1 ? this.world.partyActors.get(members[0]!.memberId) : null;
+    });
     this.workflow = new NpcWorkflow(now);
     this.routine = new RoutineRuntime(validControllerAction, now, { actionTimeoutSeconds: actionConfirmationTimeout({ type: 'skill' }) / 1000 });
     this.travel = new TravelController(action=>this.send(action), now, gridFor, { context: () => {
@@ -555,6 +559,7 @@ export class CompanionController {
     const manualMovementReceipts=new Map(events.map(event=>[event,this.engine.manualMovementReceiptOwner(event)]));
     this.engine.receive(events);
     this.world.partyActors.sync(this.world.party,this.world.map,this.engine.observations,this.engine.player?.id??null);
+    this.engine.partyChanged();
     const readyIdentity=this.engine.actorActionIdentity(),readyPlayer=this.engine.player;
     if(readyIdentity&&readyPlayer&&events.some(event=>event.type==='spawn'&&event.entity.id===readyPlayer.id&&event.entity.kind===0
       &&event.entity.id===this.ownArrival?.id&&event.entryType===this.ownArrival.entry&&!event.entity.dead&&event.entity.hp>0
@@ -616,8 +621,12 @@ export class CompanionController {
     this.travel.observe(events);
     for (const event of events) if (event.type === 'inventory' && event.cart !== undefined) this.world.replaceCart(event.cart);
     for (const event of worldEvents) {
+      if(event.type==='partyJoined'||event.type==='partyLeft')this.engine.partyMembershipChanged();
+      else if(event.type==='partyMember')this.engine.partyMembershipChanged(event.member.memberId);
+      else if(event.type==='partyRemove'||event.type==='partyMap')this.engine.partyMembershipChanged(event.memberId);
       this.world.apply(event, this.engine.player?.id??null);
       this.world.partyActors.observe(event,this.world.party,this.world.map,this.engine.observations,this.engine.player?.id??null);
+      this.engine.partyChanged();
       if (event.type === 'cartMoved') this.engine.character.applyCartWeights(event.cartWeight, event.currentWeight);
     }
     if(this.supplyReceipt)observeSupplyReceipt(this.supplyReceipt,worldEvents,this.supplyContext());

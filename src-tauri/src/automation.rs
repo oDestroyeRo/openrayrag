@@ -614,7 +614,19 @@ impl<'de> Deserialize<'de> for RestorePolicy {
 struct Combat {
     mode: CombatMode,
     level_difference: i16,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_party_engagement",
+        skip_serializing_if = "Option::is_none"
+    )]
+    party_engagement: Option<bool>,
     rules: Vec<MonsterRule>,
+}
+
+fn deserialize_party_engagement<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error> {
+    bool::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1046,6 +1058,37 @@ pub(crate) fn validate_manual_protection_policy(value: &Value) -> Result<(), Str
 mod tests {
     use super::{Escape, EscapeResumeGuard, Settings, SupplyResumeGuard, SupplySettings};
     use serde_json::{json, Value};
+
+    #[test]
+    fn shares_strict_optional_party_engagement_settings() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!(
+            "../../src/data/party-engagement-settings-cases.json"
+        ))
+        .unwrap();
+        for case in cases {
+            let mut value = settings();
+            value["automation"] = automation();
+            for (key, setting) in case["value"].as_object().unwrap() {
+                value["automation"]["combat"][key] = setting.clone();
+            }
+            let accepted = serde_json::from_value::<Settings>(value.clone())
+                .map(|settings| settings.validate().is_ok())
+                .unwrap_or(false);
+            assert_eq!(
+                accepted,
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            if accepted {
+                let parsed: Settings = serde_json::from_value(value.clone()).unwrap();
+                assert_eq!(
+                    serde_json::to_value(parsed).unwrap()["automation"]["combat"],
+                    value["automation"]["combat"]
+                );
+            }
+        }
+    }
 
     fn settings() -> Value {
         json!({

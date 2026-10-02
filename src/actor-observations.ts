@@ -161,6 +161,8 @@ export class ActorObservations {
       hp:absoluteResource(entity.hp,entity.maxHp,at,'spawn'),
       ...(sp?{sp}:{})});
   }
+  /** Current observed HP, including a party update, can revoke a visible player's availability. */
+  livingPlayer(id:number): boolean { const actor=this.actors.get(id);return actor?.kind===0&&actor.hp?.reason===null&&actor.hp.value!==null&&actor.hp.value>0; }
   partyActor(id:number): PartyActorEvidence | null {
     const actor=this.actors.get(id);return actor?{world:this.world,incarnation:actor.incarnation,kind:actor.kind,name:actor.name,
       partyId:actor.partyId,partyName:actor.partyName,affiliationRevision:actor.affiliationRevision}:null;

@@ -1,5 +1,7 @@
 import { ObservedThreats, type ThreatSnapshot } from './observed-threats';
 import { matchesSkillExecution } from './skill-execution';
+import { PartyEngagements, type PartyEngagementSnapshot } from './party-engagement';
+import type { PartyActorBinding } from './party-actors';
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { deathLimitGuidance } from './death-recovery';
 import { AttackStrategyPolicy, engagementIdentity, type StrategyChoice, type AttackStrategySnapshot, type EngagementIdentity } from './attack-strategy';
@@ -32,7 +34,7 @@ export interface Snapshot {
   map: string; player: Entity | null; monsters: Entity[]; drops: Drop[];
   attacks: number; kills: number; looted: number; target: string; log: LogEntry[]; navigation: NavigationStatus | null;
   attackStrategies:AttackStrategySnapshot; actorObservations: ActorObservationSnapshot; ruleConditions: PublishedConditionReport[];
-  manualTarget:ManualTargetSnapshot;
+  manualTarget:ManualTargetSnapshot; partyEngagement:PartyEngagementSnapshot;
   loadout: LoadoutSnapshot; character: CharacterSnapshot; actors: Entity[]; task: AutomationTask; elapsedSeconds: number; deaths: number; runIntent: boolean; lootStats: Array<{itemId:number;count:number}>; actionResult: ActionResult;
 }
 export type Action = { type: 'attack' | 'pickup'; id: number } | { type: 'stop' } | { type: 'walk'; destination: Position } | ExpandedAction;
@@ -87,6 +89,7 @@ export class BotEngine {
   private routeStep = 10;
   private pending: { type: 'attack' | 'pickup'; id: number; since: number; progress: number; approachSince: number | null; direct: boolean; attackRange?: number; engagement?:EngagementIdentity|null; actorIdentity?:ActionIdentity|null; dropIdentity?:DropIdentity } | null = null;
   private foreignTargets = new Set<number>();
+  private readonly partyEngagements = new PartyEngagements();
   private serverTargetId:number|null=null;
   private readonly combatConditions=new Map<number,{rule:string;conditions:PredicateTrace[]}>();
   private respawnRefreshPending = false;
@@ -122,7 +125,8 @@ export class BotEngine {
   private lootOwner:ActionIdentity|null=null;
 
   constructor(private readonly send: (action: Action) => void, private readonly now = Date.now,
-    private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) { this.automation = new AutomationScheduler(a=>this.send(a),this.now,a=>this.actionIdentity(a)); this.observations=new ActorObservations(this.now);this.loadout=new LoadoutPolicy(this.now); }
+    private readonly gridFor: (map: string) => WalkGrid | null = searchGrid,
+    private readonly partyBinding: (entityId: number) => PartyActorBinding | null = () => null) { this.automation = new AutomationScheduler(a=>this.send(a),this.now,a=>this.actionIdentity(a)); this.observations=new ActorObservations(this.now);this.loadout=new LoadoutPolicy(this.now); }
   private navigation(settings: Settings = this.settings): GridNavigator | null {
     const policy=mapPolicy(settings), identity=`${this.map}:${policyIdentity(policy)}`;
     if (this.navigationMap !== identity) {
@@ -232,6 +236,7 @@ export class BotEngine {
         if (source?.kind === 1 && !source.dead && source.hp > 0 && !identity) this.threats.unavailable(observedAt);
         this.threats.observe(event.source, event.target, own, identity, observedAt, this.now(), id => this.threatIdentity(id));
       }
+      this.partyChanged();
     }
     this.observations.frame();
   }
@@ -276,7 +281,7 @@ export class BotEngine {
     this.loadout.reset(preserveCharacter);
     if(!preserveCharacter)this.respawnRefreshPending=false;
     if(preserveCharacter)this.character.resetField();else {this.character.reset();this.automation.reset(true);this.runIntent=false;} this.implicitWalk = null; this.motions.clear(); this.navigator = null; this.navigationMap = ''; this.route = null; this.leg = null; this.routeFailures = 0;
-    this.entities.clear(); this.actors.clear(); this.aggressors.clear(); this.drops.clear(); this.foreignTargets.clear(); this.excluded.clear();
+    this.entities.clear(); this.actors.clear(); this.aggressors.clear(); this.drops.clear(); this.foreignTargets.clear(); this.partyEngagements.clear(); this.excluded.clear();
     this.clearLootEvidence();this.skillKills.clear();this.skillTargets.clear();this.pending = null;this.map='';this.playerId=null;
   }
   private removed(id: number, dead: boolean): void {
@@ -306,7 +311,7 @@ export class BotEngine {
       this.pending = null;
     }
     if (this.route?.id === id) {if(this.route.type==='follow')this.followLostAt??=this.now();this.cancelRoute();}
-    this.skillKills.delete(id); this.skillTargets.delete(id); this.foreignTargets.delete(id); this.aggressors.delete(id); this.actors.delete(id);
+    this.skillKills.delete(id); this.skillTargets.delete(id); this.foreignTargets.delete(id); this.partyEngagements.remove(id); this.aggressors.delete(id); this.actors.delete(id);
     if(id===this.playerId){this.clearLootEvidence();this.skillKills.clear();this.skillTargets.clear();}
     if (id === this.playerId && dead && entity) { const alreadyDead=entity.dead;entity.dead=true;entity.hp=0;if(!alreadyDead)this.onDeath(); }
     else { this.entities.delete(id);if(id===this.playerId)this.stop('Character left the field.'); }
@@ -322,7 +327,7 @@ export class BotEngine {
       if(result.confirmed||result.failure)this.strategies.settled(this.automation.result.sequence,result.confirmed?'confirmed':'rejected',strategyTarget===null?null:engagementIdentity(strategyTarget,this.observations.context(strategyTarget)));
       if (result.confirmed && this.running && e.type === 'skillResult' && e.mode === 'target'
         && e.target !== undefined && pendingSkill?.type === 'skill' && pendingSkill.mode === 'target'
-        && this.entities.get(e.target)?.kind === 1 && !this.foreignTargets.has(e.target)) {
+        && this.entities.get(e.target)?.kind === 1 && !e.indirect && (e.attacker === undefined || e.attacker === -1 || e.attacker === e.source) && !this.foreignTargets.has(e.target)) {
         const identity=this.actionIdentity(pendingSkill);
         if(identity) {
           this.skillTargets.set(e.target, { skillId: e.skillId, until: this.now() + 30_000,identity });
@@ -331,10 +336,10 @@ export class BotEngine {
       }
       if ((e.type === 'skillResult' || e.type === 'skillImpact') && e.target !== undefined && (e.damage ?? 0) > 0
         && this.entities.get(e.target)?.kind === 1) {
-        if (e.source !== this.playerId) {
-          this.foreignTargets.add(e.target); this.skillKills.delete(e.target); this.skillTargets.delete(e.target);
-          if (this.pending?.type === 'attack' && this.pending.id === e.target || this.route?.type === 'attack' && this.route.id === e.target)
-            this.stop('Another character engaged this target.');
+        if (e.source !== this.playerId || e.type === 'skillResult' && (e.indirect || e.attacker !== undefined && e.attacker !== -1 && e.attacker !== e.source)) {
+          const direct = e.type === 'skillResult' && e.mode === 'target' && !e.indirect && (e.attacker === undefined || e.attacker === -1 || e.attacker === e.source);
+          this.observeForeignEngagement(e.target, direct ? this.currentPartyBinding(e.source) : null,
+            direct ? 'unverified source' : 'indirect or conflicting damage owner');
         } else if (e.type === 'skillImpact') {
           const target=this.skillTargets.get(e.target);
           if(target?.skillId===e.skillId&&target.until>=this.now()&&sameActionIdentity(target.identity,this.actorActionIdentity(e.target)))
@@ -476,8 +481,7 @@ export class BotEngine {
         const entity = this.entities.get(e.source) ?? this.actors.get(e.source); if (entity&&!manualWalkOwner) Object.assign(entity, e.position);
         if (e.target === this.playerId && this.entities.get(e.source)?.kind === 1) this.aggressors.add(e.source);
         if (e.source !== this.playerId && this.entities.get(e.target)?.kind === 1) {
-          this.foreignTargets.add(e.target);
-          if ((this.pending?.type === 'attack' && this.pending.id === e.target) || (this.route?.type === 'attack' && this.route.id === e.target)) this.stop('Another character engaged this target.');
+          this.observeForeignEngagement(e.target, this.currentPartyBinding(e.source));
         }
         if (e.source === this.playerId && this.pending?.type === 'attack' && this.pending.id === e.target
           && sameActionIdentity(this.pending.actorIdentity,this.actorActionIdentity(e.target))) { this.pending.progress = this.now(); this.pending.approachSince = null; this.pending.direct = false; }
@@ -525,7 +529,7 @@ export class BotEngine {
   }
   tick(dispatchDecisions = true): void {
     const now = this.now();
-    this.advanceMovement(); this.loadout.tick();
+    this.advanceMovement(); this.loadout.tick(); this.partyChanged();
     const manualSkill = !this.running && this.automation.pendingAction?.type === 'skill';
     const actionTimeout = this.automation.timeout();
     if (actionTimeout) { if (manualSkill && this.connected) this.send({ type: 'stop' }); this.stop(actionTimeout); return; }
@@ -723,7 +727,10 @@ export class BotEngine {
         this.note(`Searching the map toward ${destination.x}, ${destination.y}.`);
       }
       this.routeTick(p, now);
-    } else this.reason = 'Waiting for a reachable matching monster.';
+    } else {
+      const denied=a.combat.partyEngagement&&[...this.entities.values()].find(e=>e.kind===1&&this.foreignTargets.has(e.id)&&!this.engagementAllowed(e.id));
+      this.reason=denied?this.partyEngagements.reason(denied.id):'Waiting for a reachable matching monster.';
+    }
   }
   /** Existing receipts retain their original deadlines while new decisions wait. */
   private expirePending(now:number):void {
@@ -763,13 +770,77 @@ export class BotEngine {
     return this.killedAt.some(k=>distance(k,drop)<=3&&(evidence.at>=k.at
       ||k.at-evidence.at<=PRE_DEATH_DROP_WINDOW&&evidence.engagements.some(identity=>sameActionIdentity(identity,k.identity))));
   }
+  private currentPartyBinding(source: number): PartyActorBinding | null {
+    if (source <= 0 || !this.connected || !this.compatible || !this.actorActionIdentity() || !this.observations.livingPlayer(source)) return null;
+    const actor = this.actors.get(source) ?? this.entities.get(source), evidence = this.observations.partyActor(source);
+    const binding = this.partyBinding(source);
+    return actor?.kind === 0 && !actor.dead && actor.hp > 0 && evidence?.kind === 0 && binding
+      && binding.entityId === source && binding.map === this.map && binding.world === evidence.world
+      && binding.incarnation === evidence.incarnation && binding.affiliationRevision === evidence.affiliationRevision
+      && binding.partyId === evidence.partyId ? binding : null;
+  }
+  private engagementAllowed(id: number): boolean {
+    if (!this.foreignTargets.has(id)) return true;
+    const identity = engagementIdentity(id, this.observations.context(id));
+    return automationSettings(this.settings).combat.partyEngagement === true && !!identity && this.partyEngagements.allows(identity);
+  }
+  private observeForeignEngagement(id: number, binding: PartyActorBinding | null,
+    blocker: 'unverified source' | 'indirect or conflicting damage owner' = 'unverified source'): void {
+    const alreadyForeign = this.foreignTargets.has(id);
+    this.foreignTargets.add(id); this.skillKills.delete(id); this.skillTargets.delete(id);
+    const monster = engagementIdentity(id, this.observations.context(id));
+    if (monster) this.partyEngagements.observe(monster, binding, alreadyForeign, blocker);
+    if (!this.engagementAllowed(id)) {
+      if (automationSettings(this.settings).combat.partyEngagement === true && !this.manualTask) this.cancelPartyEngagement(id);
+      else if (this.pending?.type === 'attack' && this.pending.id === id || this.route?.type === 'attack' && this.route.id === id)
+        this.stop('Another character engaged this target.');
+    }
+  }
+  /** A full association replacement can have the same fields; retire the old authorization first. */
+  partyMembershipChanged(memberId?: number): void {
+    const revoked = this.partyEngagements.invalidateMember(memberId);
+    if (automationSettings(this.settings).combat.partyEngagement === true)
+      for (const id of revoked) this.cancelPartyEngagement(id);
+  }
+  /** Observe each binding invalidation before a later full roster can replace it. */
+  partyChanged(): void {
+    const revoked = this.partyEngagements.refresh(id => this.currentPartyBinding(id));
+    if (automationSettings(this.settings).combat.partyEngagement === true)
+      for (const id of revoked) this.cancelPartyEngagement(id);
+  }
+  private cancelPartyEngagement(id: number): void {
+    if (!this.running) return; // Explicit manual skill owners do not inherit this automatic policy.
+    const attack = this.pending?.type === 'attack' && this.pending.id === id;
+    const route = !!this.route && ['attack','skill'].includes(this.route.type) && this.route.id === id;
+    const action = this.automation.pendingAction;
+    const cast = action?.type === 'skill' && action.mode === 'target' && action.target === id;
+    if (!attack && !route && !cast) return;
+    if (this.manualTask) { this.stop('Party engagement permission was revoked.'); return; }
+    // Cancellation preserves finite run/strategy ledgers. An accepted walk keeps
+    // its original motion; an unacknowledged/direct approach cannot match a late attack.
+    if (attack || route && this.leg) this.implicitWalk ??= {targetId:null,until:this.now()+4000};
+    if (this.implicitWalk) this.implicitWalk.targetId = null;
+    if (cast) {
+      this.automation.reset(); this.strategies.cancel();
+      // Preserve requested intent and clocks, but hand the sent cast back to
+      // the controller's retained receipt fence before any new field decision.
+      this.running = false; this.stoppedAt = this.now();
+    }
+    if (attack) this.pending = null;
+    if (route) { this.route = null; this.leg = null; }
+    if (this.strategyWait?.id === id) this.strategyWait = null;
+    if (attack || cast || route && this.ownMotion() || this.awaitsImplicitWalk()) {
+      this.send({type:'stop'}); this.lastAction = this.now();
+    }
+    this.reason = this.partyEngagements.reason(id); this.note(this.reason);
+  }
   private fieldContains(p:Position):boolean {const policy=mapPolicy(this.settings);return mapAllowed(policy,this.map)&&insideLockArea(policy,this.map,p);}
   private eligible(e: Entity, now: number, acquiring = true): boolean {
     const automation=automationSettings(this.settings);const conditions=monsterRule(automation,e.classId)?.conditions;
     const observations=conditions?.length?this.actorObservation(conditions,this.currentTargetId,e.id):undefined;
     if(conditions?.length&&(this.combatConditions.has(e.id)||this.combatConditions.size<32))this.combatConditions.set(e.id,{rule:`Monster ${e.classId} · actor ${e.id}`,conditions:conditions.map(condition=>evaluateActorPredicate(condition,observations))});
     return this.fieldContains(e) && e.kind === 1 && !e.dead && e.hp > 0 && !!this.observations.context(e.id).incarnation && acceptsMonster(automation,e,this.player!,this.settings.targets,this.aggressors.has(e.id),observations)
-      && (!acquiring || distance(this.player!, e) <= this.settings.radius) && !this.foreignTargets.has(e.id)
+      && (!acquiring || distance(this.player!, e) <= this.settings.radius) && this.engagementAllowed(e.id)
       && (this.excluded.get(e.id) ?? 0) <= now;
   }
   private plan(from: Position, to: Position, range: number, goal: 'walk' | 'attack' | 'cast' = 'walk'): Position[] | null {
@@ -842,6 +913,7 @@ export class BotEngine {
     this.reason = `Selected ${target}; finishing the current walk before approaching.`;
   }
   private act(type: 'attack' | 'pickup', id: number, direct = false): void {
+    if (type === 'attack' && !this.engagementAllowed(id)) { this.cancelPartyEngagement(id); return; }
     const actorIdentity=this.actorActionIdentity(type==='attack'?id:undefined);
     if(!actorIdentity){this.reason='Waiting for the current action actor lifetime to be observed.';return;}
     const approachStarted = this.route?.since ?? this.now();
@@ -885,7 +957,7 @@ export class BotEngine {
     }
     if(own){this.skillKills.clear();this.skillTargets.clear();}
     else {this.skillKills.delete(id);this.skillTargets.delete(id);}
-    this.combatConditions.delete(id);this.foreignTargets.delete(id);this.aggressors.delete(id);this.excluded.delete(id);
+    this.combatConditions.delete(id);this.foreignTargets.delete(id); this.partyEngagements.remove(id);this.aggressors.delete(id);this.excluded.delete(id);
   }
   private cancelRoute(): void {
     this.fenceUnacknowledgedLeg();
@@ -1255,6 +1327,7 @@ export class BotEngine {
     return {
       connected: this.connected, compatible: this.compatible, running: this.running, reason: this.reason,
       manualTarget:{...this.manualStatus,settling:!this.manualTask&&this.manualTargetOwned,reason:this.manualStatus.reason+(!this.manualTask&&this.manualTargetOwned?' Waiting for authoritative '+(this.manualReceiptOwner&&!this.manualReceiptCurrent()?'fresh connection after the character lifetime changed':this.manualAttackFence?'attack acceptance and target clear':this.manualWalkFence?'Walk or Stop acknowledgment':'accepted movement to finish')+'; nothing is retried.':''),goal:this.manualStatus.goal?{...this.manualStatus.goal}:null,target:this.manualStatus.target?{...this.manualStatus.target}:null},
+      partyEngagement:this.partyEngagements.snapshot(automationSettings(this.settings).combat.partyEngagement===true),
       map: this.map, player: this.player ? { ...this.player } : null,
       monsters: [...this.entities.values()].filter(e => e.kind === 1).slice(0,150),
       drops: [...this.drops.values()].slice(0,150), attacks: this.attacks, kills: this.kills,

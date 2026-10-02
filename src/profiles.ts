@@ -35,7 +35,7 @@ function checkedSettings(value: unknown): Settings {
       if (Array.isArray(template)) {
         if (!Array.isArray(child) || !child.every(entry => record(entry) && ruleKeys(entry, arrayKeys[key]!,key))) throw new Error('Profile contains unknown rule settings.');
       } else {
-        const optional = key === 'escape' ? ['hpEnabled','threatEnabled','threatCount','threatWindowSeconds'] : [];
+        const optional = key === 'escape' ? ['hpEnabled','threatEnabled','threatCount','threatWindowSeconds'] : key === 'combat' ? ['partyEngagement'] : [];
         if (!record(child) || !keys(child, Object.keys(template).filter(field => !optional.includes(field) || Object.hasOwn(child, field)))) throw new Error('Profile contains unknown automation settings.');
         for (const [field, fields] of Object.entries(arrayKeys)) if (field.startsWith(`${key}.`)) {
           const entries = child[field.slice(key.length + 1)];
