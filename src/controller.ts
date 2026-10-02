@@ -1,4 +1,4 @@
-import { farmingDestination, deathCycle, deathGuard, validateDeathRecoveryGuard, type DeathRecoveryGuard, type DeathCycle } from './death-recovery';
+import { deathLimitGuidance, farmingDestination, deathCycle, deathGuard, validateDeathRecoveryGuard, type DeathRecoveryGuard, type DeathCycle } from './death-recovery';
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { ManualSocket, type SocketContext, type SocketSnapshot } from './socket';
 import { socketStockFloors, validateSocketEnvelope, type SocketAction } from './socket-protocol';
@@ -914,7 +914,8 @@ export class CompanionController {
     }
     if(cycle.guard.phase==='revival'){
       if(!p.dead)return wait('Waiting for an ordered ready living-own arrival.');
-      if(!a.respawn.enabled||this.engine.deaths>a.respawn.maxDeaths)return wait('Death limit reached; waiting for revival.');
+      if(!a.respawn.enabled||this.engine.deaths>a.respawn.maxDeaths)return wait(a.respawn.enabled
+        ?`Death limit reached. ${deathLimitGuidance(this.engine.deaths,a.respawn.maxDeaths)}`:'Waiting for revival; automatic respawn is disabled.');
       if(cycle.guard.uncertain)return wait('Respawn outcome is unconfirmed. Waiting for a verified living character; no repeat request will be sent.');
       if(now<this.quietUntil)return wait('Waiting briefly for input and movement to settle before the one respawn attempt.');
       if(!this.engine.idleForActions())return wait('Waiting for movement to settle before respawn.');
@@ -999,7 +1000,7 @@ export class CompanionController {
     }
     if (now - this.lastFrame > 15_000) { this.wait('Waiting for a fresh server update.'); return; }
     if (player.dead && (!policy.respawn.enabled || this.engine.deaths > policy.respawn.maxDeaths)) {
-      this.wait(policy.respawn.enabled ? 'Death limit reached; waiting for revival.' : 'Waiting for revival.'); return;
+      this.wait(policy.respawn.enabled ? `Death limit reached. ${deathLimitGuidance(this.engine.deaths,policy.respawn.maxDeaths)}` : 'Waiting for revival.'); return;
     }
     if (!player.dead && (!player.maxHp || player.hp / player.maxHp * 100 <= settings.minHpPercent)) {
       this.wait('Waiting for HP to recover above the configured limit.'); return;
