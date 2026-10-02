@@ -1,5 +1,6 @@
 import { validateDeathRecoveryGuard } from './death-recovery';
 import { DEFAULT_MAP_POLICY, insideLockArea, mapPolicy, policySummary, validateMapPolicy } from './map-policy';
+import { ManualTargetUi } from './manual-target-ui';
 import { routeBetweenMapsAsync } from './travel';
 import {actorId} from './actor-identity';
 import { SocketUi, validSocketSnapshot } from './socket-ui';
@@ -28,6 +29,7 @@ interface Hooks {
   command(action: Record<string, unknown>): Promise<unknown>;
   workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>; social(spec: unknown): Promise<unknown>; memo(spec: unknown): Promise<unknown>; socketPreview?(spec:unknown):Promise<unknown>; socket?(spec:unknown):Promise<unknown>;
   notify(text: string, error?: boolean): void; changed(): void;
+  stop?():void;
 }
 type Field = { path: string; label: string; kind?: 'text' | 'checkbox'; min?: number; max?: number; options?: Array<[string,string]> };
 type Column = { key: string; label: string; kind?: 'text' | 'ids'; min?: number; max?: number; options?: Array<[string,string]> };
@@ -174,7 +176,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     if (v && typeof v === 'object') return Object.keys(v).length <= 256 && Object.values(v).every(entry => bounded(entry,depth+1));
     return false;
   }
-  if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','supply','supplyGuard','deathRecoveryGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','supply','supplyGuard','deathRecoveryGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies','manualTarget'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
   if(object(value.travel).policy!==undefined){try{validateMapPolicy(object(value.travel).policy);}catch{return false;}}
   if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
   if(value.social!==undefined&&!validSocialSnapshot(value.social))return false;
@@ -190,6 +192,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
 }
 
 export class FeatureUi {
+  private readonly manualTargets:ManualTargetUi;
   private readonly panels = new Map<Section, HTMLElement>(); private readonly editors = new Map<string,RuleEditor>();
   private readonly profiles: ProfileStore; private readonly services: NpcServiceStore; private locked = false; private manualLocked = true; private serviceLocked = true;
   private status: Record<string, unknown> = {};
@@ -257,6 +260,7 @@ export class FeatureUi {
     const footnote = combat.querySelector('.footnote')!; footnote.textContent = 'Game input yields briefly. Temporary interruptions wait and resume; Stop cancels the run. Profiles never start automation.'; actions.append(footnote);
     combat.querySelector('.routing-settings .hint')?.remove();
     this.rules(); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.servicePanel(); this.profilePanel(); this.navigation();
+    this.manualTargets=new ManualTargetUi(this.hooks);this.panel('workflows').prepend(this.manualTargets.root);
     this.dispositionPanel();this.supplyPanel();this.mapPolicyPanel();
     this.social = new SocialUi(action => this.hooks.social(action), (message, error) => this.hooks.notify(message, error)); this.panel('workflows').append(this.social.root);
     this.memo = new MemoUi(request=>this.hooks.memo(request),(message,error)=>this.hooks.notify(message,error));this.panel('travel').append(this.memo.root);
@@ -572,12 +576,12 @@ export class FeatureUi {
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-manual]'))button.disabled=manual;
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-service]'))button.disabled=service;
     this.social.lock(manual);
-    this.memo.lock(manual);this.socket.lock(manual);
+    this.memo.lock(manual);this.socket.lock(manual);this.manualTargets.lock(manual);
   }
-  serviceBlocked(): boolean { return ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
+  serviceBlocked(): boolean { return object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
   clearSocial(): void { delete this.status.social; this.social.clear(); delete this.status.socket; this.socket.clear(); }
   clearMemo(): void { delete this.status.memo; this.memo.clear(); }
-  active(): boolean { return ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
+  active(): boolean { return object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
   private observation(): RoutineObservation {
     const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:this.hooks.map(),elapsedSeconds:0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;
@@ -589,6 +593,7 @@ export class FeatureUi {
     this.social.render(s);
     this.memo.render(s);
     this.socket.render(s.socket);
+    this.manualTargets.render(s);
     const conditionState=this.host.querySelector<HTMLElement>('#actor-condition-state')!;const traces=Array.isArray(s.ruleConditions)?s.ruleConditions:[];conditionState.hidden=traces.length===0;conditionState.textContent=traces.slice(0,32).map(entry=>{const rule=object(entry);const conditions=Array.isArray(rule.conditions)?rule.conditions:[];return text(rule.rule)+(rule.truncated===true?' · additional evidence omitted':'')+conditions.map(condition=>{const trace=object(condition);return '\n  '+text(trace.state)+' · '+text(trace.reason);}).join('');}).join('\n');
     if(this.dispositionPlan){try{const settings=this.read();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
     const supply=object(s.supply),supplyOutput=this.host.querySelector<HTMLElement>('#supply-preview')!;
