@@ -3,6 +3,7 @@ import { routeBetweenMaps } from './travel';
 import {actorId} from './actor-identity';
 import { ActorPredicateEditor, actorSnapshotAt } from './actor-predicate-ui';
 import { SocialUi, validSocialSnapshot } from './social-ui';
+import { MemoUi, validMemoSnapshot } from './memo-ui';
 import { validActorSnapshot, type ActorObservationSnapshot } from './actor-observations';
 import { DEFAULT_AUTOMATION, validateAutomation, type AutomationSettings, type Settings } from './settings';
 import { MAX_PROFILES, ProfileStore } from './profiles';
@@ -23,7 +24,7 @@ type Section = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows' | 'p
 interface Hooks {
   settings(): Settings; apply(settings: Settings): void; map(): string; character(): string;
   command(action: Record<string, unknown>): Promise<unknown>;
-  workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>; social(spec: unknown): Promise<unknown>;
+  workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>; social(spec: unknown): Promise<unknown>; memo(spec: unknown): Promise<unknown>;
   notify(text: string, error?: boolean): void; changed(): void;
 }
 type Field = { path: string; label: string; kind?: 'text' | 'checkbox'; min?: number; max?: number; options?: Array<[string,string]> };
@@ -173,6 +174,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
   if(object(value.travel).policy!==undefined){try{validateMapPolicy(object(value.travel).policy);}catch{return false;}}
   if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
   if(value.social!==undefined&&!validSocialSnapshot(value.social))return false;
+  if(value.memo!==undefined&&!validMemoSnapshot(value.memo))return false;
   if(value.ruleConditions!==undefined&&!bounded(value.ruleConditions,0))return false;
   const barter = object(value.world).barter;
   return barter === undefined || Array.isArray(barter) && barter.every(entry => {
@@ -190,6 +192,7 @@ export class FeatureUi {
   private dispositionPlan: DispositionPlan | null = null;
   private attackStrategiesPresent = false;
   private readonly social: SocialUi;
+  private readonly memo: MemoUi;
   constructor(private readonly host: HTMLElement, private readonly hooks: Hooks) {
     let storage: Pick<Storage,'getItem'|'setItem'>;
     try { storage = localStorage; } catch { storage = {getItem:()=>null,setItem:()=>{throw new Error('Profile storage is unavailable.');}}; }
@@ -214,6 +217,7 @@ export class FeatureUi {
     this.rules(); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.servicePanel(); this.profilePanel(); this.navigation();
     this.dispositionPanel();this.supplyPanel();this.mapPolicyPanel();
     this.social = new SocialUi(action => this.hooks.social(action), (message, error) => this.hooks.notify(message, error)); this.panel('workflows').append(this.social.root);
+    this.memo = new MemoUi(request=>this.hooks.memo(request),(message,error)=>this.hooks.notify(message,error));this.panel('travel').append(this.memo.root);
     for (const [id,catalog] of [['itemId',ITEM_CATALOG],['skillId',SKILL_CATALOG]] as const) {
       const list=document.createElement('datalist');list.id=`${id}-catalog`;
       for(const [value,entry]of Object.entries(catalog)){const option=document.createElement('option');option.value=value;option.label=entry.name;list.append(option);}this.host.append(list);
@@ -515,10 +519,12 @@ export class FeatureUi {
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-manual]'))button.disabled=manual;
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-service]'))button.disabled=service;
     this.social.lock(manual);
+    this.memo.lock(manual);
   }
-  serviceBlocked(): boolean { return object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
+  serviceBlocked(): boolean { return object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
   clearSocial(): void { delete this.status.social; this.social.clear(); }
-  active(): boolean { return object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
+  clearMemo(): void { delete this.status.memo; this.memo.clear(); }
+  active(): boolean { return object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
   private observation(): RoutineObservation {
     const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:this.hooks.map(),elapsedSeconds:0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;
@@ -528,6 +534,7 @@ export class FeatureUi {
     this.status=object(value);const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
     const strategyState=this.host.querySelector<HTMLElement>('#attack-strategy-state')!;const strategy=object(s.attackStrategies);const engagements=Array.isArray(strategy.entries)?strategy.entries:[];strategyState.hidden=engagements.length===0;strategyState.textContent=engagements.slice(0,8).map(entry=>{const actor=object(entry);const rules=Array.isArray(actor.rules)?actor.rules:[];return `Actor #${number(actor.id)??'?'} · ${actor.normalStarted===true?'normal attack started':'opener window open'}`+rules.slice(0,32).map(value=>{const rule=object(value);return `\n  ${text(rule.id)} · ${number(rule.attempts)??'?'} attempts · ${number(rule.uses)??'?'} confirmed${rule.uncertain===true?' · unresolved':rule.rejected===true?' · rejected':''}`;}).join('');}).join('\n')+(strategy.truncated===true?'\nAdditional actor ledgers omitted from display.':'');
     this.social.render(s);
+    this.memo.render(s);
     const conditionState=this.host.querySelector<HTMLElement>('#actor-condition-state')!;const traces=Array.isArray(s.ruleConditions)?s.ruleConditions:[];conditionState.hidden=traces.length===0;conditionState.textContent=traces.slice(0,32).map(entry=>{const rule=object(entry);const conditions=Array.isArray(rule.conditions)?rule.conditions:[];return text(rule.rule)+(rule.truncated===true?' · additional evidence omitted':'')+conditions.map(condition=>{const trace=object(condition);return '\n  '+text(trace.state)+' · '+text(trace.reason);}).join('');}).join('\n');
     if(this.dispositionPlan){try{const settings=this.read();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
     const supply=object(s.supply),supplyOutput=this.host.querySelector<HTMLElement>('#supply-preview')!;

@@ -640,6 +640,56 @@ fn validate_routine(value: &Value) -> Validation {
     Ok(())
 }
 
+fn validate_memo(value: &Value) -> Validation {
+    let request = object(value, &["type", "slot", "preview"])?;
+    if string(request, "type")? != "memoSave" {
+        return Err(invalid());
+    }
+    integer(request, "slot", 0, 3)?;
+    let preview = object(
+        field(request, "preview")?,
+        &[
+            "world",
+            "actorId",
+            "incarnation",
+            "connectionEpoch",
+            "revision",
+            "map",
+            "x",
+            "y",
+        ],
+    )?;
+    integer(preview, "actorId", 0, MAX_ID)?;
+    for key in ["incarnation", "connectionEpoch", "revision"] {
+        integer(preview, key, 1, MAX_ID)?;
+    }
+    for key in ["x", "y"] {
+        integer(preview, key, 0, 511)?;
+    }
+    let map = string(preview, "map")?;
+    if map.is_empty()
+        || map.len() > 64
+        || !map
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+    {
+        return Err(invalid());
+    }
+    let world = string(preview, "world")?;
+    if world.len() != 36
+        || !world.bytes().enumerate().all(|(index, c)| {
+            if [8, 13, 18, 23].contains(&index) {
+                c == b'-'
+            } else {
+                c.is_ascii_digit() || (b'a'..=b'f').contains(&c)
+            }
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 fn validate_social(value: &Value) -> Validation {
     let kind = value
         .as_object()
@@ -705,6 +755,7 @@ pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
             }
         }
         "social" => validate_social(request),
+        "memo" => validate_memo(request),
         _ => Err("Unknown bot action.".into()),
     }
 }
@@ -721,8 +772,25 @@ pub(crate) fn request_script(action: &str, request: &Value) -> Result<String, St
 #[cfg(test)]
 mod tests {
     use super::{validate_action, validate_request};
-    use serde_json::json;
-
+    use serde_json::{json, Value};
+    #[test]
+    fn manual_memo_shared_corpus_and_automation_exclusion() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../../src/data/memo-request-cases.json")).unwrap();
+        for case in cases.as_array().unwrap() {
+            assert_eq!(
+                validate_request("memo", &case["request"]).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            for mode in ["command", "workflow", "service", "social"] {
+                assert!(validate_request(mode, &case["request"]).is_err());
+            }
+            let routine = json!({"name":"No memo automation","durationSeconds":10,"maxActions":1,"rules":[{"name":"Rejected","priority":0,"cooldownSeconds":1,"maxRuns":1,"conditions":[{"field":"hpPercent","operator":"lt","value":100}],"action":case["request"]}]});
+            assert!(validate_request("routine", &routine).is_err());
+        }
+    }
     #[test]
     fn manual_social_shared_corpus_and_routine_exclusion() {
         let cases: serde_json::Value =

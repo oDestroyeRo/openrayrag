@@ -1,0 +1,457 @@
+[
+  {
+    "name": "slot zero",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "slot three own zero max guards",
+    "request": {
+      "type": "memoSave",
+      "slot": 3,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 2147483647,
+        "connectionEpoch": 2147483647,
+        "revision": 2147483647,
+        "map": "prt_fild08",
+        "x": 511,
+        "y": 511
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "negative slot",
+    "request": {
+      "type": "memoSave",
+      "slot": -1,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "fifth slot",
+    "request": {
+      "type": "memoSave",
+      "slot": 4,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "fraction slot",
+    "request": {
+      "type": "memoSave",
+      "slot": 0.1,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "string slot",
+    "request": {
+      "type": "memoSave",
+      "slot": "1",
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong type",
+    "request": {
+      "type": "memo",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "arbitrary destination",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      },
+      "map": "other"
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview world unknown",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "unknown",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview world AAAAAAAA-0000-4000-8000-000000000001",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "AAAAAAAA-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview actorId -1",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": -1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview actorId 2147483648",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 2147483648,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview incarnation 0",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 0,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview connectionEpoch 0",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 0,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview revision 0",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 0,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview revision 1.5",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1.5,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview map ",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview map aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview map ﻿prt_fild08",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "﻿prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview map <script>",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "<script>",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview x -1",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": -1,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview y 512",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 512
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "bad preview extra 1",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20,
+        "extra": 1
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "omitted revision",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 20
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "array preview",
+    "request": {
+      "type": "memoSave",
+      "slot": 0,
+      "preview": []
+    },
+    "valid": false
+  },
+  {
+    "name": "no preview",
+    "request": {
+      "type": "memoSave",
+      "slot": 0
+    },
+    "valid": false
+  },
+  {
+    "name": "not an object",
+    "request": null,
+    "valid": false
+  }
+]

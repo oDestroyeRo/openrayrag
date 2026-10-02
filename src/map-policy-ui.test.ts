@@ -6,7 +6,7 @@ import { DEFAULT_MAP_POLICY } from './map-policy';
 function setup(settings=()=>DEFAULT_SETTINGS){
   const nodes=new Map<string,{textContent:string;dataset:Record<string,string>;value:string;hidden:boolean}>();
   const host={querySelector:(key:string)=>{if(!nodes.has(key))nodes.set(key,{textContent:'',dataset:{actors:''},value:'',hidden:false});return nodes.get(key)!;}};
-  const view=Object.create(FeatureUi.prototype);Object.assign(view,{host,hooks:{settings,map:()=> 'prt_fild08'},status:{},dispositionPlan:null,social:{render:()=>{}}});
+  const view=Object.create(FeatureUi.prototype);Object.assign(view,{host,hooks:{settings,map:()=> 'prt_fild08'},status:{},dispositionPlan:null,social:{render:()=>{}},memo:{render:()=>{}}});
   return {render:(status:unknown)=>FeatureUi.prototype.render.call(view,status),output:host.querySelector('#map-policy-preview'),session:host.querySelector('#session-details')};
 }
 describe('map policy status rendering',()=>{
