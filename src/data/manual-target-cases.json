@@ -1,0 +1,1057 @@
+[
+  {
+    "name": "zero walk and actor",
+    "valid": true,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "explicit actor zero target",
+    "valid": true,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "attack",
+        "target": {
+          "world": "12345678-1234-1234-1234-123456789abc",
+          "id": 0,
+          "incarnation": 2
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "inclusive maximum cell",
+    "valid": true,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 399,
+          "y": 399
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "bounded deadline",
+    "valid": true,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 120,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "conditional candidate rule",
+    "valid": true,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [
+          {
+            "classId": 4000,
+            "action": "ignore",
+            "priority": 0,
+            "conditions": [
+              {
+                "field": "actorCasting",
+                "actor": {
+                  "scope": "candidate"
+                },
+                "operator": "eq",
+                "value": true
+              }
+            ]
+          }
+        ],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "unknown wrapper key",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      },
+      "password": "excluded"
+    }
+  },
+  {
+    "name": "unknown owner key",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1,
+        "name": "forged"
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "negative actor",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": -1,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "large actor",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 2147483648,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "fractional actor",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0.5,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "zero incarnation",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 0
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "invalid world",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "same-map",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "different target world",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "attack",
+        "target": {
+          "world": "00000000-0000-0000-0000-000000000000",
+          "id": 2,
+          "incarnation": 2
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "missing target lifetime",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "attack",
+        "target": {
+          "world": "12345678-1234-1234-1234-123456789abc",
+          "id": 2
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "unknown map",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "unsupported",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "outside actual map",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 400,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "fractional destination",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0.5
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "negative destination",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": -1,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "unknown destination key",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "walk target injection",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        },
+        "target": {
+          "world": "12345678-1234-1234-1234-123456789abc",
+          "id": 0,
+          "incarnation": 1
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "unknown command type",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "pickup",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "missing policy",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30
+    }
+  },
+  {
+    "name": "unknown policy key",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0,
+        "autoLoot": true
+      }
+    }
+  },
+  {
+    "name": "zero deadline",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 0,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "large deadline",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 121,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "fractional deadline",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 1.5,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "negative reserve",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": -1
+      }
+    }
+  },
+  {
+    "name": "unknown monster rule key",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [
+          {
+            "classId": 4000,
+            "action": "attack",
+            "priority": 0,
+            "mode": "any"
+          }
+        ],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "duplicate monster rules",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [
+          {
+            "classId": 4000,
+            "action": "attack",
+            "priority": 0
+          },
+          {
+            "classId": 4000,
+            "action": "attack",
+            "priority": 0
+          }
+        ],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "unsupported rule condition",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [
+          {
+            "classId": 4000,
+            "action": "ignore",
+            "priority": 0,
+            "conditions": [
+              {
+                "field": "actorCasting",
+                "actor": {
+                  "scope": "candidate"
+                },
+                "operator": "eval",
+                "value": true
+              }
+            ]
+          }
+        ],
+        "minAmmoStock": 0
+      }
+    }
+  },
+  {
+    "name": "foreign lock map",
+    "valid": false,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "minHpPercent": 45,
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0,
+        "mapPolicy": {
+          "mode": "legacy",
+          "allow": [],
+          "deny": [],
+          "penalties": [],
+          "lockArea": {
+            "map": "prontera",
+            "minX": 0,
+            "minY": 0,
+            "maxX": 10,
+            "maxY": 10
+          }
+        }
+      }
+    }
+  }
+]

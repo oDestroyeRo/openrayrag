@@ -225,6 +225,8 @@ Active and canceled skill receipts share an execution matcher. Ground results mu
 
 The field navigator is one bounded map+policy cache and masks walking to the inclusive explicit-map rectangle. Target coordinate gates reject outside monsters/loot/follow/waypoints even when ranged or adjacent shortcuts would otherwise succeed. The controller retains physical grids for service/return movement and reachable field entry; supply arming and field resume wait for verified entry. Manual service requests carry a separate `executionPolicy` beside the immutable verified `service` definition. Policies cannot constrain server-selected escape arrivals or guarantee immediate Stop processing; unexpected transitions invalidate the active route.
 
+The command-only [bounded manual target owner](MANUAL_TARGETS.md) exposes typed current-map Walk and normal Attack with world/incarnation binding, shared collision/range/LOS/area/ammo checks and no persistent intent. First Attack does not complete the engagement. Unaccepted cancellation remains fenced; a matching late acceptance permits one reconciliation Stop, never a re-Attack. Profiles/routines never carry manual target tasks.
+
 ## Actor ID zero and own readiness
 
 [Actor identity contracts](ACTOR_IDS.md) records the source-valid zero actor IDs, nullable unannounced own identity, post-enter initialization ordering, world/incarnation receipt fences and field-specific exceptions. `ChangeTarget(0)` remains clear/ambiguous; offline party entity zero cannot prove membership. The evidence is pinned source plus synthetic/local checks, with no live allocator-wrap or social-send claim.

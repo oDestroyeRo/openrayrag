@@ -763,11 +763,122 @@ fn validate_socket(request: &Value, commit: bool) -> Validation {
     Ok(())
 }
 
+fn manual_identity(value: &Value) -> Result<&str, String> {
+    let actor = object(value, &["world", "id", "incarnation"])?;
+    integer(actor, "id", 0, MAX_ID)?;
+    integer(actor, "incarnation", 1, MAX_ID)?;
+    let world = string(actor, "world")?;
+    if world.len() != 36
+        || !world.bytes().enumerate().all(|(i, c)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                c == b'-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(world)
+}
+
+fn validate_manual_target(value: &Value) -> Validation {
+    let request = object(
+        value,
+        &[
+            "type",
+            "map",
+            "owner",
+            "command",
+            "timeoutSeconds",
+            "policy",
+        ],
+    )?;
+    if string(request, "type")? != "manualTarget" {
+        return Err(invalid());
+    }
+    let map = string(request, "map")?;
+    map_code(map)?;
+    let (width, height) = crate::map_dimensions(map).ok_or_else(invalid)?;
+    let world = manual_identity(field(request, "owner")?)?;
+    integer(request, "timeoutSeconds", 1, 120)?;
+    let policy = object(
+        field(request, "policy")?,
+        &[
+            "minHpPercent",
+            "routeStep",
+            "avoidWalls",
+            "walkSeconds",
+            "approachSeconds",
+            "maxPathDistance",
+            "levelDifference",
+            "monsterRules",
+            "minAmmoStock",
+            "mapPolicy",
+        ],
+    )?;
+    for (key, min, max) in [
+        ("minHpPercent", 20, 95),
+        ("routeStep", 1, 20),
+        ("walkSeconds", 1, 600),
+        ("approachSeconds", 1, 60),
+        ("maxPathDistance", 1, 200),
+        ("levelDifference", -100, 100),
+        ("minAmmoStock", 0, 9999),
+    ] {
+        integer(policy, key, min, max)?;
+    }
+    boolean(policy, "avoidWalls")?;
+    let mut ids = HashSet::new();
+    for rule in array(field(policy, "monsterRules")?, 64)? {
+        let rule = object(rule, &["classId", "action", "priority", "conditions"])?;
+        if !ids.insert(integer(rule, "classId", 1, MAX_ID)?)
+            || !matches!(string(rule, "action")?, "attack" | "ignore")
+        {
+            return Err(invalid());
+        }
+        integer(rule, "priority", -100, 100)?;
+        if let Some(conditions) = rule.get("conditions") {
+            for condition in array(conditions, 16)? {
+                validate_actor_predicate_for(condition, true)?;
+            }
+        }
+    }
+    if let Some(policy) = policy.get("mapPolicy") {
+        crate::automation::validate_map_policy(policy)?;
+        if let Some(area) = policy.get("lockArea").filter(|v| !v.is_null()) {
+            if area.get("map").and_then(Value::as_str) != Some(map) {
+                return Err(invalid());
+            }
+        }
+    }
+    let command = field(request, "command")?;
+    match command.get("type").and_then(Value::as_str) {
+        Some("walk") => {
+            let command = object(command, &["type", "destination"])?;
+            let position = object(field(command, "destination")?, &["x", "y"])?;
+            integer(position, "x", 0, width as i64 - 1)?;
+            integer(position, "y", 0, height as i64 - 1)?;
+        }
+        Some("attack") => {
+            let command = object(command, &["type", "target"])?;
+            if manual_identity(field(command, "target")?)? != world {
+                return Err(invalid());
+            }
+        }
+        _ => return Err(invalid()),
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
     if serde_json::to_vec(request).map_err(|_| invalid())?.len() > MAX_REQUEST_BYTES {
         return Err("Automation request exceeds its limit.".into());
     }
     match action {
+        "command" if request.get("type").and_then(Value::as_str) == Some("manualTarget") => {
+            validate_manual_target(request)
+        }
         "command" => validate_action(request),
         "workflow" => validate_workflow(request),
         "routine" => validate_routine(request),
@@ -1281,6 +1392,36 @@ mod automation_request_tests {
             &json!({"service":service,"executionPolicy":null})
         )
         .is_err());
+    }
+    #[test]
+    fn manual_targets_are_strict_and_command_only() {
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../../src/data/manual-target-cases.json")).unwrap();
+        for case in cases {
+            let request = &case["request"];
+            assert_eq!(
+                validate_request("command", request).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            assert!(
+                validate_action(request).is_err(),
+                "manual target cannot be a routine action"
+            );
+            assert!(validate_request("workflow", request).is_err());
+            assert!(validate_request("routine", request).is_err());
+            assert!(validate_request("service", request).is_err());
+        }
+    }
+    #[test]
+    fn manual_target_envelope_retains_the_native_size_limit() {
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../../src/data/manual-target-cases.json")).unwrap();
+        let mut request = cases[0]["request"].clone();
+        request["policy"]["monsterRules"]=serde_json::Value::Array((0..64).map(|i|json!({"classId":4000+i,"action":"attack","priority":0,"conditions":(0..16).map(|_|json!({"field":"actorStatus","actor":{"scope":"actor","world":"12345678-1234-1234-1234-123456789abc","id":2,"incarnation":2},"statusId":1,"operator":"eq","value":true})).collect::<Vec<_>>()})).collect());
+        assert!(serde_json::to_vec(&request).unwrap().len() > 65536);
+        assert!(validate_request("command", &request).is_err());
     }
 }
 

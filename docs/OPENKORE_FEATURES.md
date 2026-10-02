@@ -82,4 +82,6 @@ Direct player trading, guild/friend/clan, pets and other companions, quest logs/
 
 Run `npm run check`, formatting verification and `npm run app:build`; inspect the integrated diff and app signature. Protocol additions require fixed fixtures and malformed-bound tests. Resource actions require state readback, cancellation/late-response tests and no duplicate request after uncertainty. Persistent running requires tests for map changes, temporary loss, manual-input grace, exhausted limits and Stop cancelling every retry. Native tests must report exactly which action families were exercised; unvisited maps and untested transactions remain explicit gaps.
 
+Bounded command-only Walk and explicit visible-monster normal Attack now use the same physical navigation, field policy, range/LOS and observed arrow reserve as field combat. They retain cancellation receipts and never create field/reconnect intent, acquire replacements, loot, or execute strategies. See [manual target behavior and proof limits](MANUAL_TARGETS.md).
+
 Actor ID zero is supported through the bounded entity, observation, combat, NPC and explicit action paths. Own readiness requires Enter plus an observed kind-0 entity; zero never stands in for unknown self. Selected-target and offline-party zero sentinels retain their source limitations. See [actor identity contracts and evidence](ACTOR_IDS.md).

@@ -9,7 +9,7 @@ function setup() {
     return nodes.get(key)!;
   } };
   const view = Object.create(FeatureUi.prototype);
-  Object.assign(view, { host, hooks:{settings:()=>DEFAULT_SETTINGS,map:()=>''}, status: {}, dispositionPlan: null, social: { render: () => {} }, memo: { render: () => {} }, socket: { render: () => {} } });
+  Object.assign(view, { host, hooks:{settings:()=>DEFAULT_SETTINGS,map:()=>''}, status: {}, dispositionPlan: null, manualTargets:{render:()=>{}}, social: { render: () => {} }, memo: { render: () => {} }, socket: { render: () => {} } });
   return {
     render: (supply: unknown) => FeatureUi.prototype.render.call(view, { supply }),
     output: host.querySelector('#supply-preview'),

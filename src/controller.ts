@@ -3,6 +3,7 @@ import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { ManualSocket, type SocketContext, type SocketSnapshot } from './socket';
 import { socketStockFloors, validateSocketEnvelope, type SocketAction } from './socket-protocol';
 import { matchesSkillExecution } from './skill-execution';
+import { validateManualTargetRequest } from './manual-target';
 import { insideLockArea, lockEntry, mapAllowed, mapPolicy } from './map-policy';
 import type { ActorPredicate } from './actor-observations';
 import { ManualSocial, type SocialContext, type SocialSnapshot } from './social';
@@ -152,10 +153,14 @@ export class CompanionController {
     this.transport(action);
   }
   private resetMemoMovement():void {this.memoWalkPending=null;this.memoWalkEnd=null;this.memoMovementUnknown=false;}
+  private movementSettled():boolean {
+    const p=this.engine.player;
+    return !this.memoMovementUnknown||this.memoWalkPending===null&&!!this.memoWalkEnd&&p?.x===this.memoWalkEnd.x&&p?.y===this.memoWalkEnd.y;
+  }
   get runRequested(): boolean { return this.requestedSettings !== null; }
   get connectionGeneration(): number { return this.connectionEpoch; }
   private get executing(): boolean {
-    return this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || this.returning || this.service.active || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
+    return this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || this.engine.manualTargetActive || this.returning || this.service.active || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
       || ['running','waiting'].includes(this.routine.snapshot().state);
   }
   get active(): boolean { return this.runRequested || this.executing; }
@@ -228,7 +233,7 @@ export class CompanionController {
   pause(reason: string, durationMs = 0): void {
     this.supply.interrupt(reason);this.supplyIntent=null;
     const externalActive = this.service.active || this.travel.active || this.workflow.snapshot().running || !!this.pending || this.escape.sent;
-    const engineStops = this.engine.running || this.engine.pendingFeatureAction?.type === 'skill';
+    const engineStops = this.engine.running || this.engine.manualTargetActive || this.engine.pendingFeatureAction?.type === 'skill';
     this.escape.cancel(reason);
     this.captureActionFailure(); this.cancelOwners(reason); this.engine.stop(reason); this.captureActionFailure();
     this.yieldUntil = Math.max(this.yieldUntil, this.now() + durationMs);
@@ -313,7 +318,7 @@ export class CompanionController {
     const context=this.supplyContext();
     if(supplyGuard){supplyGuard=validateSupplyResumeGuard(supplyGuard);if(supplyGuard.character!==context.character)throw new Error('Supply resume state belongs to a different character.');}
     if(this.supply.uncertain)throw new Error('Waiting for the previous supply transaction to reconcile.');
-    if (this.socket.busy || this.memo.blocked || this.active || this.engine.pendingFeatureAction)
+    if (this.socket.busy || this.memo.blocked || this.active || this.engine.manualTargetOwned || this.engine.pendingFeatureAction)
       throw new Error('Stop the current automation or manual action before requesting a new run.');
     this.supply.configure(settings,context,supplyGuard);
     this.engine.acknowledgeLoadoutOverride();
@@ -350,7 +355,7 @@ export class CompanionController {
   private socketContext(floors:ReadonlyMap<number,number>=this.socketFloors??socketStockFloors(automationSettings(this.engine.settings))): SocketContext {
     const e=this.engine,c=e.character,p=e.player,actor=e.actorActionIdentity();
     const casting=e.observations.snapshot(e.playerId,null,e.connected,[],false).actors.find(row=>row.id===e.playerId)?.cast.state==='casting';
-    const stationary=!this.memoMovementUnknown||this.memoWalkPending===null&&!!this.memoWalkEnd&&p?.x===this.memoWalkEnd.x&&p?.y===this.memoWalkEnd.y;
+    const stationary=this.movementSettled();
     const identity=actor?JSON.stringify([actor.world,actor.selfId,actor.selfIncarnation]):'';
     const init=this.socketInitialization;if(init&&identity&&init.identity===null)init.identity=identity;
     const readbackKey=identity?(init?.identity===identity?init.key:identity):init?.identity===null?init.key:null;
@@ -369,6 +374,7 @@ export class CompanionController {
       actorId: p?.id ?? null, name: p?.name ?? '', job: p?.classId ?? null, learnedBasic: c.skillsKnown ? c.learned.get(1) ?? 0 : null,
       inParty: this.world.party !== null, silenced: c.statuses.has(6) };
   }
+  private manualWorldBlocker():string|null {return this.world.npc.mode!=='idle'||this.world.npc.id!==null||!!this.world.vending?'Finish the NPC or vending interaction before a manual command.':null;}
   private memoContext(): MemoContext {
     const p=this.engine.player, actor=this.engine.actorActionIdentity();
     const grid=this.gridFor(this.engine.map);
@@ -376,7 +382,7 @@ export class CompanionController {
     // equipment receipts. An interpolated destination alone is not stationary evidence.
     const settled=this.engine.idleForActions();
     const x=Math.floor(p?.x??-1),y=Math.floor(p?.y??-1);
-    const stationary=!this.memoMovementUnknown||this.memoWalkPending===null&&!!this.memoWalkEnd&&p?.x===this.memoWalkEnd.x&&p?.y===this.memoWalkEnd.y;
+    const stationary=this.movementSettled();
     const idle=settled&&stationary&&!this.socket.busy&&!this.runRequested&&!this.engine.running&&!this.returning&&!this.social.busy&&!this.service.active&&!this.travel.active&&!this.escape.busy
       &&!this.pending&&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)
       &&!this.supply.ownsField&&!this.supply.uncertain&&!this.unresolvedWorld&&!this.workflowOutstanding&&!this.featureReceipt
@@ -396,6 +402,12 @@ export class CompanionController {
       return;
     }
     if (mode === 'memo') { this.requireIdle(); this.memo.dispatch(input,this.memoContext()); this.started=this.now(); this.lastTick=this.now(); return; }
+    if(mode==='command'&&input&&typeof input==='object'&&'type' in input&&input.type==='manualTarget') {
+      const request=validateManualTargetRequest(input);this.requireIdle();
+      if(!this.movementSettled())throw new Error('Wait for authoritative movement to settle before a manual command.');
+      const blocker=this.manualWorldBlocker();if(blocker)throw new Error(blocker);
+      this.engine.startManual(request);this.started=this.now();this.lastTick=this.now();return;
+    }
     if (mode === 'social') {
       this.requireIdle();
       const actor=this.engine.actorActionIdentity();
@@ -405,7 +417,7 @@ export class CompanionController {
     }
     if (mode === 'service') {
       const {service:definition,executionPolicy} = validateServiceExecution(input); this.requireReady();
-      if (this.socket.busy || this.memo.blocked || this.social.busy || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
+      if (this.socket.busy || this.memo.blocked || this.social.busy || this.engine.manualTargetOwned || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
         || ['running','waiting'].includes(this.routine.snapshot().state) || this.unresolvedWorld || this.now() < this.fencedUntil
         || this.engine.pendingFeatureAction || this.featureReceipt || this.supply.uncertain)
         throw new Error('Wait for the current transaction or unresolved escape/action before running a service.');
@@ -528,6 +540,7 @@ export class CompanionController {
         this.world.reset(event.type === 'map' ? event.map : this.engine.map, true);
       }
     }
+    const manualMovementReceipts=new Map(events.map(event=>[event,this.engine.manualMovementReceiptOwner(event)]));
     this.engine.receive(events);
     const readyIdentity=this.engine.actorActionIdentity(),readyPlayer=this.engine.player;
     if(readyIdentity&&readyPlayer&&events.some(event=>event.type==='spawn'&&event.entity.id===readyPlayer.id&&event.entity.kind===0
@@ -552,11 +565,16 @@ export class CompanionController {
       this.memoIdentity=identity;
     }
     for(const event of events){
+      const manualOwner=manualMovementReceipts.get(event);
+      const ownedManualReceipt=!!manualOwner&&!!memoActor&&manualOwner.world===memoActor.world
+        &&manualOwner.id===memoActor.selfId&&manualOwner.incarnation===memoActor.selfIncarnation;
       if(event.type==='walk'&&event.id===memoPlayer?.id){
         this.memoMovementUnknown=true;const end=event.walk.cells.at(-1);
-        if(!event.walk.locked&&end&&(!this.memoWalkPending||end.x===this.memoWalkPending.x&&end.y===this.memoWalkPending.y)){
+        if(!event.walk.locked&&end&&(ownedManualReceipt||!this.memoWalkPending||end.x===this.memoWalkPending.x&&end.y===this.memoWalkPending.y)){
           this.memoWalkPending=null;this.memoWalkEnd={...end};
         }else this.memoWalkEnd=null;
+      }else if(event.type==='stop'&&ownedManualReceipt){
+        this.resetMemoMovement();
       }else if(!this.memoWalkPending&&((event.type==='spawn'&&event.entity.id===memoPlayer?.id)
         ||((event.type==='position'||event.type==='hit'||event.type==='resurrection')&&event.id===memoPlayer?.id)
         ||(event.type==='attack'&&event.source===memoPlayer?.id))){this.memoMovementUnknown=false;this.memoWalkEnd=null;}
@@ -1056,6 +1074,7 @@ export class CompanionController {
     if (this.escapeTick()) return;
     if(this.supplyTick())return;
     const wasRunning = this.engine.running;
+    const manualBlocker=this.engine.manualTargetActive?this.manualWorldBlocker():null;if(manualBlocker)this.engine.stop(manualBlocker);
     this.engine.tick(); this.captureActionFailure();
     if (this.runRequested && wasRunning && !this.engine.running && !this.engine.player?.dead
       && !this.engine.reason.includes('HP reached')) {
@@ -1133,7 +1152,7 @@ export class CompanionController {
     else if (this.travel.active || travel.state === 'complete' && this.travelSettings) snapshot.reason = travel.reason;
     else if (workflow.running) snapshot.reason = workflow.reason;
     else if (routine.state === 'running' || routine.state === 'waiting') snapshot.reason = routine.reason;
-    const executing = this.executing && (this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || service.active || this.travel.active || workflow.running || !!this.pending
+    const executing = this.executing && (this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || this.engine.manualTargetActive || service.active || this.travel.active || workflow.running || !!this.pending
       || this.escape.inFlight || ['running','waiting'].includes(routine.state));
     if (this.runRequested && !executing) snapshot.reason = this.blockedReason || this.waitingReason || snapshot.reason;
     if(this.runRequested&&this.now()<this.yieldUntil&&!this.blockedReason)snapshot.reason=this.waitingReason;

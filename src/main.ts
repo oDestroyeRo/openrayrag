@@ -105,6 +105,7 @@ let sessionLoginAvailable = false;
 let runGeneration = 0;
 let loginGeneration = 0;
 let pendingService: Promise<unknown> | null = null;
+let pendingManual:Promise<unknown>|null=null;
 let pendingResume: Promise<unknown> | null = null;
 let pendingLogin: Promise<unknown> | null = null;
 let stopping = false;
@@ -153,7 +154,7 @@ let targetOrder = '';
 const features = new FeatureUi(document.querySelector<HTMLElement>('main')!, {
   settings, apply: applySettings, map: () => targets.map, character: () => latest?.player?.name ?? '',
   command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request), memo: request => featureRequest('memo',request), socketPreview:request=>featureRequest('socketPreview',request),socket:request=>featureRequest('socket',request),
-  notify: message, changed: () => { targets.setLevelDifference(features.levelDifference()); renderTargets(); updateButtons(); },
+  notify: message,stop:()=>stopButton.click(), changed: () => { targets.setLevelDifference(features.levelDifference()); renderTargets(); updateButtons(); },
 });
 const configHelp = document.createElement('p'); configHelp.id = 'config-help'; configHelp.className = 'hint'; document.querySelector('.run-controls')!.append(configHelp);
 const monsterCatalog = document.createElement('datalist'); monsterCatalog.id = 'classId-catalog'; document.querySelector('main')!.append(monsterCatalog);
@@ -170,6 +171,12 @@ async function featureRequest(action: string, request: unknown): Promise<unknown
       if(generation!==runGeneration||stopping)throw new Error('Service request canceled by Stop.');
       const task=invoke('control_bot',{action,request});pendingService=task;
       try{return await task;}finally{if(pendingService===task)pendingService=null;}
+    }
+    if(action==='command'&&request&&typeof request==='object'&&'type' in request&&request.type==='manualTarget') {
+      const generation=++runGeneration;reconnect.cancel();
+      const task=invoke('control_bot',{action,request});pendingManual=task;
+      try {const result=await task;if(generation!==runGeneration&&stopping)await invoke('control_bot',{action:'stop'});return result;}
+      finally{if(pendingManual===task)pendingManual=null;}
     }
     return await invoke('control_bot',{action,request});
   } finally { busy=false;updateButtons(); }
@@ -379,7 +386,7 @@ stopButton.addEventListener('click', () => {
   if (stopping) return;
   const generation = ++runGeneration; ++loginGeneration;
   fieldRun.stop(); reconnect.cancel(); limitHeld = false; loginBusy = false; previousSession = undefined;
-  const pending = [pendingResume, pendingLogin, pendingLimitStop, pendingService].filter((task): task is Promise<unknown> => task !== null);
+  const pending = [pendingResume, pendingLogin, pendingLimitStop, pendingService,pendingManual].filter((task): task is Promise<unknown> => task !== null);
   stopping = true; updateButtons();
   void (async () => {
     try {
