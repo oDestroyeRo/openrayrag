@@ -155,7 +155,7 @@ const targetRows = new Map<number, { label: HTMLLabelElement; input: HTMLInputEl
 let targetOrder = '';
 const features = new FeatureUi(document.querySelector<HTMLElement>('main')!, {
   settings, apply: applySettings, map: () => targets.map, character: () => latest?.player?.name ?? '',
-  command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request),
+  command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request), memo: request => featureRequest('memo',request),
   notify: message, changed: () => { targets.setLevelDifference(features.levelDifference()); renderTargets(); updateButtons(); },
 });
 const configHelp = document.createElement('p'); configHelp.id = 'config-help'; configHelp.className = 'hint'; document.querySelector('.run-controls')!.append(configHelp);
@@ -528,6 +528,7 @@ if (native) {
   await listen<unknown>('game-status', event => { if (validStatus(event.payload)) render(event.payload); });
   await listen('game-closed', () => {
     features.clearSocial();
+    features.clearMemo();
     ++runGeneration; ++loginGeneration; fieldRun.stop(); reconnect.cancel();
     sessionLoginAvailable = false; pendingResume = null; pendingLogin = null; limitHeld = false; previousSession = undefined;
     gameOpen = false; latest = null; receivedAt = 0; loginBusy = false;

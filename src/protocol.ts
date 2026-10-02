@@ -2,6 +2,7 @@ import {actorId,optionalWireActorId} from './actor-identity';
 import { decodeFeatures, FEATURE_OP } from './protocol-feature';
 import type { FeatureEvent } from './protocol-feature';
 import { decodeSocial, type SocialEvent } from './social-protocol';
+import { decodeMemo, decodeMemoNotification, type MemoEvent } from './memo-protocol';
 export { featureCommand, validateExpandedAction, decodeFeatures, FEATURE_OP, FeatureProtocolError } from './protocol-feature';
 export type { ExpandedAction, FeatureEvent, InventoryItem, SkillLevel, PlayerStats, Attributes } from './protocol-feature';
 
@@ -25,7 +26,7 @@ export interface Entity extends Position {
 }
 export interface Walk { origin: Position; cells: Position[]; secondsPerCell: number; firstSeconds: number; locked: boolean }
 export interface Drop extends Position { id: number; itemId: number; count: number; isNew: boolean }
-export type GameEvent = FeatureEvent | SocialEvent
+export type GameEvent = FeatureEvent | SocialEvent | MemoEvent
   | { type: 'enter'; id: number; map: string }
   | { type: 'map'; map: string }
   | { type: 'spawn'; entity: Entity; entryType?: number }
@@ -169,10 +170,14 @@ export function decode(data: Uint8Array): GameEvent[] {
   if (!data.length || data.length > 1_000_000) throw new Error('Invalid packet size');
   const r = new Reader(data);
   const opcode = r.u8();
+  const memoNotification=decodeMemoNotification(data);
+  if(memoNotification!==null)return memoNotification;
   const features = decodeFeatures(data);
   if (features !== null) return features;
   const social = decodeSocial(data);
   if (social !== null) return social;
+  const memo = decodeMemo(data);
+  if (memo !== null) return memo;
   switch (opcode) {
     case OP.enter: return [{ type: 'enter', id: actorId(r.i32()), map: mapName(r.string()) }];
     case OP.map: return [{ type: 'map', map: mapName(r.string()) }];

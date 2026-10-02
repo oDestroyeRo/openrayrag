@@ -3,6 +3,7 @@ import { command, walkCommand, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './pr
 import { featureCommand, validateExpandedAction } from './protocol-feature';
 import { worldCommand, validateWorldAction } from './world-protocol';
 import { socialCommand } from './social-protocol';
+import { memoCommand } from './memo-protocol';
 import { CompanionController, type CompanionSnapshot } from './controller';
 import { LoginController, loginDriver, loginReady, type LoginProfile, type LoginStatus, type UnityClient } from './login';
 import { currentMapInfo, loadMapCatalog, type MapCatalog } from './map-data';
@@ -15,7 +16,7 @@ interface BridgeWindow extends Window {
   __TAURI_INTERNALS__?: { invoke: (name: string, args: unknown) => Promise<unknown> };
   __RAYRAG__?: {
     control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard) => void;
-    perform: (action: 'command' | 'workflow' | 'routine' | 'service' | 'social', request: unknown) => void;
+    perform: (action: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo', request: unknown) => void;
     snapshot: () => CompanionSnapshot;
   };
 }
@@ -51,6 +52,9 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   }, Date.now, undefined, action => {
     if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
     NativeSocket.prototype.send.call(active, socialCommand(action));
+  }, slot => {
+    if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
+    NativeSocket.prototype.send.call(active, memoCommand(slot));
   });
   const engine = controller.engine;
   const publish = () => {

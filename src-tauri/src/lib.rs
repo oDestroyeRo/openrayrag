@@ -83,7 +83,15 @@ fn control_bot(
     }
     if !matches!(
         action.as_str(),
-        "start" | "stop" | "heartbeat" | "command" | "workflow" | "routine" | "service" | "social"
+        "start"
+            | "stop"
+            | "heartbeat"
+            | "command"
+            | "workflow"
+            | "routine"
+            | "service"
+            | "social"
+            | "memo"
     ) {
         return Err("Unknown bot action.".into());
     }
@@ -92,7 +100,7 @@ fn control_bot(
     }
     if matches!(
         action.as_str(),
-        "command" | "workflow" | "routine" | "service" | "social"
+        "command" | "workflow" | "routine" | "service" | "social" | "memo"
     ) && settings.is_some()
     {
         return Err("Use start to apply automation settings.".into());
@@ -113,7 +121,7 @@ fn control_bot(
         .ok_or("Open the game first.")?;
     let script = if matches!(
         action.as_str(),
-        "command" | "workflow" | "routine" | "service" | "social"
+        "command" | "workflow" | "routine" | "service" | "social" | "memo"
     ) {
         control::request_script(
             &action,

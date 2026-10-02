@@ -4,6 +4,9 @@ import { insideLockArea, lockEntry, mapAllowed, mapPolicy } from './map-policy';
 import type { ActorPredicate } from './actor-observations';
 import { ManualSocial, type SocialContext, type SocialSnapshot } from './social';
 import type { ManualSocialAction } from './social-protocol';
+import { ManualMemo, type MemoContext, type MemoSnapshot } from './memo';
+import type { MemoSlot } from './memo-protocol';
+import { canMemoMap } from './memo-map-catalog';
 import { BotEngine, type Action, type Snapshot } from './engine';
 import { decode } from './protocol';
 import { validateExpandedAction, type ExpandedAction } from './protocol-feature';
@@ -33,6 +36,7 @@ export interface CompanionSnapshot extends Snapshot {
   world: WorldSnapshot; workflow: WorkflowSnapshot; routine: RoutineSnapshot; travel: TravelSnapshot; service: ServiceSnapshot;
   escape: EscapeSnapshot; supply: SupplySnapshot; supplyGuard?: SupplyResumeGuard;
   social: SocialSnapshot;
+  memo: MemoSnapshot;
 }
 function expanded(value: unknown): value is ExpandedAction {
   try { validateExpandedAction(value); return true; } catch { return false; }
@@ -66,6 +70,11 @@ export class CompanionController {
   private supplyCloseSent=false; private supplyReturnApproach=false;private supplyServiceStarted=false;private supplyServiceContract:string|null=null;private supplyStorageFull:SupplyPhaseEvidence['storageFull']=null;private sendingSupply=false;
   private readonly dispositionMetadata=publishedDispositionMetadata();
   readonly social: ManualSocial;
+  readonly memo: ManualMemo;
+  private memoIdentity: string | null = null;
+  private memoWalkPending: {x:number;y:number} | null = null;
+  private memoWalkEnd: {x:number;y:number} | null = null;
+  private memoMovementUnknown = false;
   private socialIdentity: { actor:ActionIdentity; name:string } | null = null;
   private pending: Pending | null = null;
   private lastFrame = 0;
@@ -98,7 +107,8 @@ export class CompanionController {
 
   constructor(private readonly transport: (action: Action | WorldAction) => void, private readonly now = Date.now,
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid,
-    sendSocial: (action: ManualSocialAction) => void = () => { throw new Error('Manual social transport is unavailable.'); }) {
+    sendSocial: (action: ManualSocialAction) => void = () => { throw new Error('Manual social transport is unavailable.'); },
+    sendMemo: (slot: MemoSlot) => void = () => { throw new Error('Manual memo transport is unavailable.'); }) {
     this.engine = new BotEngine(action=>this.send(action), now, gridFor);
     this.workflow = new NpcWorkflow(now);
     this.routine = new RoutineRuntime(validControllerAction, now, { actionTimeoutSeconds: actionConfirmationTimeout({ type: 'skill' }) / 1000 });
@@ -107,19 +117,24 @@ export class CompanionController {
     this.escape = new EmergencyEscape(now);
     this.supply = new SupplyTripRuntime({next:(context,goals,policy)=>nextSupplyAction(context,goals,policy,this.requestedSettings?.automation?.supply!,{storageFull:this.supplyStorageFull}),confirm:confirmSupplyReceipt},now);
     this.social = new ManualSocial(sendSocial, now);
+    this.memo = new ManualMemo(sendMemo, now);
   }
   private send(action:Action|WorldAction):void {
     if(action.type!=='stop'&&this.sendingSupply&&this.supply?.ownsField&&!this.supply.commandAllowed())throw new Error('Supply command allowance exhausted.');
+    if(action.type==='walk'){this.memoWalkPending={...action.destination};this.memoWalkEnd=null;this.memoMovementUnknown=true;}
     this.transport(action);
   }
+  private resetMemoMovement():void {this.memoWalkPending=null;this.memoWalkEnd=null;this.memoMovementUnknown=false;}
   get runRequested(): boolean { return this.requestedSettings !== null; }
   get connectionGeneration(): number { return this.connectionEpoch; }
   private get executing(): boolean {
-    return this.social.busy || this.engine.running || this.returning || this.service.active || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
+    return this.memo.busy || this.social.busy || this.engine.running || this.returning || this.service.active || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
       || ['running','waiting'].includes(this.routine.snapshot().state);
   }
   get active(): boolean { return this.runRequested || this.executing; }
   connect(compatible: boolean): void {
+    this.resetMemoMovement();
+    this.memo.reset('Memo connection changed. Wait for a new complete snapshot.'); this.memoIdentity = null;
     this.social.reset('Social session changed.', true);
     this.socialIdentity = null;
     this.escape.connectionChanged();
@@ -129,6 +144,8 @@ export class CompanionController {
     this.waitingReason = this.engine.reason; this.retryAt = 0;
   }
   disconnect(): void {
+    this.resetMemoMovement();
+    this.memo.reset('Memo connection closed. A transmitted update cannot be undone.'); this.memoIdentity = null;
     this.social.reset('Social connection closed.', true);
     this.socialIdentity = null;
     this.escape.connectionChanged();
@@ -160,6 +177,7 @@ export class CompanionController {
     } else if (!state.running) this.retireWorld(null);
   }
   private cancelOwners(reason: string): void {
+    this.memo.cancel('Memo intent canceled. A transmitted update cannot be undone or replayed.');
     this.supplyStorageFull=null;
     this.social.cancel('Unconfirmed after cancellation. A transmitted message cannot be unsent.');
     this.retireWorld();
@@ -234,7 +252,7 @@ export class CompanionController {
   }
   private requireIdle(): void {
     this.requireReady();
-    if (this.active || this.escape.busy || this.supply.uncertain || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
+    if (this.memo.blocked || this.active || this.escape.busy || this.supply.uncertain || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
   }
   start(input: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard): void {
     const settings = validateSettings(input);
@@ -242,7 +260,7 @@ export class CompanionController {
     const context=this.supplyContext();
     if(supplyGuard){supplyGuard=validateSupplyResumeGuard(supplyGuard);if(supplyGuard.character!==context.character)throw new Error('Supply resume state belongs to a different character.');}
     if(this.supply.uncertain)throw new Error('Waiting for the previous supply transaction to reconcile.');
-    if (this.active || this.engine.pendingFeatureAction)
+    if (this.memo.blocked || this.active || this.engine.pendingFeatureAction)
       throw new Error('Stop the current automation or manual action before requesting a new run.');
     this.supply.configure(settings,context,supplyGuard);
     this.engine.acknowledgeLoadoutOverride();
@@ -278,7 +296,26 @@ export class CompanionController {
       actorId: p?.id ?? null, name: p?.name ?? '', job: p?.classId ?? null, learnedBasic: c.skillsKnown ? c.learned.get(1) ?? 0 : null,
       inParty: this.world.party !== null, silenced: c.statuses.has(6) };
   }
-  perform(mode: 'command' | 'workflow' | 'routine' | 'service' | 'social', input: unknown): void {
+  private memoContext(): MemoContext {
+    const p=this.engine.player, actor=this.engine.actorActionIdentity();
+    const grid=this.gridFor(this.engine.map);
+    // idleForActions includes accepted motion, outstanding walk legs, casts and
+    // equipment receipts. An interpolated destination alone is not stationary evidence.
+    const settled=this.engine.idleForActions();
+    const x=Math.floor(p?.x??-1),y=Math.floor(p?.y??-1);
+    const stationary=!this.memoMovementUnknown||this.memoWalkPending===null&&!!this.memoWalkEnd&&p?.x===this.memoWalkEnd.x&&p?.y===this.memoWalkEnd.y;
+    const idle=settled&&stationary&&!this.runRequested&&!this.engine.running&&!this.returning&&!this.social.busy&&!this.service.active&&!this.travel.active&&!this.escape.busy
+      &&!this.pending&&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)
+      &&!this.supply.ownsField&&!this.supply.uncertain&&!this.unresolvedWorld&&!this.workflowOutstanding&&!this.featureReceipt
+      &&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil&&this.heartbeatHealthy
+      &&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending;
+    return {ready:!!p&&!p.dead&&!!actor&&this.now()-this.lastFrame<=15_000,
+      idle,world:actor?.world??'',actorId:actor?.selfId??null,incarnation:actor?.selfIncarnation??null,connectionEpoch:this.connectionEpoch,
+      map:this.engine.map,x,y,walkable:grid?x>=0&&y>=0&&x<grid.width&&y<grid.height&&grid.walkable({x,y}):null,
+      canMemo:canMemoMap(this.engine.map),learnedWarp:this.engine.character.skillsKnown?this.engine.character.learned.get(55)??0:null};
+  }
+  perform(mode: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo', input: unknown): void {
+    if (mode === 'memo') { this.requireIdle(); this.memo.dispatch(input,this.memoContext()); this.started=this.now(); this.lastTick=this.now(); return; }
     if (mode === 'social') {
       this.requireIdle();
       const actor=this.engine.actorActionIdentity();
@@ -288,7 +325,7 @@ export class CompanionController {
     }
     if (mode === 'service') {
       const {service:definition,executionPolicy} = validateServiceExecution(input); this.requireReady();
-      if (this.social.busy || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
+      if (this.memo.blocked || this.social.busy || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
         || ['running','waiting'].includes(this.routine.snapshot().state) || this.unresolvedWorld || this.now() < this.fencedUntil
         || this.engine.pendingFeatureAction || this.featureReceipt || this.supply.uncertain)
         throw new Error('Wait for the current transaction or unresolved escape/action before running a service.');
@@ -389,8 +426,10 @@ export class CompanionController {
     const respawning = this.engine.snapshot().task.kind === 'respawn' && this.engine.actionResult.status === 'pending';
     this.lastFrame = this.now();
     for (const event of events) {
-      if (event.type === 'enter') { this.social.reset('Social character changed.'); this.pause('Preparing the reconnected character.'); this.world.reset(event.map); }
+      if (event.type === 'enter') { this.resetMemoMovement(); this.memo.invalidate('Memo character changed. Wait for full state.'); this.memoIdentity=null; this.social.reset('Social character changed.'); this.pause('Preparing the reconnected character.'); this.world.reset(event.map); }
       else if (event.type === 'map' || event.type === 'clear') {
+        this.resetMemoMovement();
+        this.memo.cancel('Memo intent canceled after a world change. Nothing will replay.'); this.memoIdentity=null;
         this.social.cancel('Unconfirmed after a world change. No social send will be replayed.');
         // Travel owns expected transitions; field runs retain their selected species.
         if (this.pending || this.workflow.snapshot().running || ['running','waiting'].includes(this.routine.snapshot().state)) {
@@ -402,6 +441,31 @@ export class CompanionController {
       }
     }
     this.engine.receive(events);
+    const memoPlayer=this.engine.player,memoActor=this.engine.actorActionIdentity();
+    if(memoPlayer&&memoActor){
+      const identity=JSON.stringify([memoActor.world,memoActor.selfId,memoActor.selfIncarnation,memoPlayer.name]);
+      if(this.memoIdentity!==null&&this.memoIdentity!==identity){this.resetMemoMovement();this.memo.invalidate('Memo character incarnation changed. Wait for full state.');}
+      this.memoIdentity=identity;
+    }
+    for(const event of events){
+      if(event.type==='walk'&&event.id===memoPlayer?.id){
+        this.memoMovementUnknown=true;const end=event.walk.cells.at(-1);
+        if(!event.walk.locked&&end&&(!this.memoWalkPending||end.x===this.memoWalkPending.x&&end.y===this.memoWalkPending.y)){
+          this.memoWalkPending=null;this.memoWalkEnd={...end};
+        }else this.memoWalkEnd=null;
+      }else if(!this.memoWalkPending&&((event.type==='spawn'&&event.entity.id===memoPlayer?.id)
+        ||((event.type==='position'||event.type==='hit'||event.type==='resurrection')&&event.id===memoPlayer?.id)
+        ||(event.type==='attack'&&event.source===memoPlayer?.id))){this.memoMovementUnknown=false;this.memoWalkEnd=null;}
+    }
+    this.memo.tick(this.memoContext());
+    for(const event of events){
+      if(event.type==='memoSlots')this.memo.observeSlots(event.slots,this.memoContext());
+      else if(event.type==='serverEvent'&&event.event===8){
+        if(Number.isInteger(event.value)&&event.value>=0&&event.value<=3&&event.text==='')this.memo.observeNotification(event.value,this.memoContext());
+        else if(this.memo.busy)this.memo.cancel('Uncertain: memo notification differs from the pinned slot/text contract. Nothing will retry.');
+      }
+      else if((event.type==='requestFailure'||event.type==='skillFailure'||event.type==='featureError')&&this.memo.busy)this.memo.cancel('Uncertain memo result after an unrelated or rejected request. Check fresh slot state; nothing will retry.');
+    }
     const socialPlayer = this.engine.player, socialActor=this.engine.actorActionIdentity();
     if(this.socialIdentity&&!sameActionIdentity(this.socialIdentity.actor,socialActor)) {
       if(socialPlayer&&socialPlayer.name!==this.socialIdentity.name)this.social.reset('Social character identity changed.');
@@ -636,7 +700,7 @@ export class CompanionController {
     if (this.engine.running || this.travel.active) this.pause(reason);
   }
   private escapeContext(): EscapeContext {
-    const blocker = (this.supply.uncertain ? 'Waiting for the exact supply transaction receipt before escape.' : '') || this.blockedReason || (this.featureReceipt ? 'Waiting for the previous resource action to settle.' : '')
+    const blocker = (this.memo.blocked?'Waiting for memo state to settle.':'') || (this.supply.uncertain ? 'Waiting for the exact supply transaction receipt before escape.' : '') || this.blockedReason || (this.featureReceipt ? 'Waiting for the previous resource action to settle.' : '')
       || (this.service.active&&!['travel','approach'].includes(this.service.snapshot().state) || this.pending || this.workflow.snapshot().running || this.unresolvedWorld || ['running','waiting'].includes(this.routine.snapshot().state)
         ? 'Waiting for the current action owner before emergency escape.' : '')
       || (this.now() < this.fencedUntil || !this.engine.featureActionsSettled ? 'Waiting for the previous action and cast to settle.' : '')
@@ -670,7 +734,7 @@ export class CompanionController {
   }
   private resumeRun(): void {
     const settings = this.requestedSettings;
-    if (!settings || this.supply.ownsField || this.supply.uncertain || this.engine.running || this.travel.active || this.pending || this.workflow.snapshot().running
+    if (!settings || this.memo.blocked || this.supply.ownsField || this.supply.uncertain || this.engine.running || this.travel.active || this.pending || this.workflow.snapshot().running
       || ['running','waiting'].includes(this.routine.snapshot().state)) return;
     const now = this.now(); const policy = automationSettings(settings); const player = this.engine.player;
     if (this.escape.blocked) { this.waitingReason = this.escape.snapshot().reason; return; }
@@ -735,6 +799,7 @@ export class CompanionController {
   tick(): void {
     const now = this.now();
     this.social.tick();
+    this.memo.tick(this.memoContext());
     this.escape.update(this.escapeContext());
     if (this.active && this.lastTick && now - this.lastTick > 5_000) {
       this.lastTick = now; this.pause('Waiting for fresh state after the Mac or game paused.', 1_000); return;
@@ -843,12 +908,12 @@ export class CompanionController {
     else if (this.travel.active || travel.state === 'complete' && this.travelSettings) snapshot.reason = travel.reason;
     else if (workflow.running) snapshot.reason = workflow.reason;
     else if (routine.state === 'running' || routine.state === 'waiting') snapshot.reason = routine.reason;
-    const executing = this.executing && (this.social.busy || this.engine.running || service.active || this.travel.active || workflow.running || !!this.pending
+    const executing = this.executing && (this.memo.busy || this.social.busy || this.engine.running || service.active || this.travel.active || workflow.running || !!this.pending
       || this.escape.inFlight || ['running','waiting'].includes(routine.state));
     if (this.runRequested && !executing) snapshot.reason = this.blockedReason || this.waitingReason || snapshot.reason;
     return { ...snapshot, running: executing, runRequested: this.runRequested,
       state: executing ? 'running' : this.runRequested ? 'waiting' : 'idle',
       runIntent: this.runRequested, elapsedSeconds: this.runRequested ? Math.max(0, Math.floor((this.now() - this.started) / 1000)) : snapshot.elapsedSeconds,
-      world: this.world.snapshot(), workflow, routine, travel, service, escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),social:this.social.snapshot() };
+      world: this.world.snapshot(), workflow, routine, travel, service, escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),social:this.social.snapshot(),memo:this.memo.snapshot(this.memoContext()) };
   }
 }
