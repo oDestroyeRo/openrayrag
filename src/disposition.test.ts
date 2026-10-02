@@ -212,7 +212,7 @@ describe('revision-bound preview and future execution boundary', () => {
   });
   it('adapts a real catalog regular-item sale without a command hook or sender', () => {
     const status = { sessionId: 'test', connectionId: 1, map: 'prontera', connected: true, compatible: true, running: false,
-      player: { id: 1, dead: false }, task: { pending: false }, actionResult: { status: 'idle' },
+      player: { id: 1, kind:0, dead: false }, task: { pending: false }, actionResult: { status: 'idle' },
       character: { inventoryKnown: true, inventory: [stack(512, 10)], equipment: [], ammoId: -1, stats: { zeny: 50, weight: 200, maxWeight: 10000 } },
       world: { map: 'prontera', generation: 1, revision: 2, npc: { id: 42, mode: 'shop' }, shop: { mode: 'sell', discountLevel: 0, entries: [] }, storageReady: false, cartReady: false } };
     const ctx = dispositionContextFromStatus(status); const result = planDisposition(policy({ itemId: 512, sell: true }), ctx);
@@ -233,7 +233,7 @@ describe('revision-bound preview and future execution boundary', () => {
   it.each(['storage','cart'] as const)('preserves fully observed %s unique identity for explicit restocking', source => {
     const item=unique(20001);const ctx=context(source);setItems(ctx,'inventory',[]);setItems(ctx,source,[item]);ctx.containers.inventory.weight=0;
     const carried: InventoryItem[]=[];
-    const status={sessionId:'test',map:'prontera',connected:true,compatible:true,running:false,player:{id:1,dead:false},task:{pending:false},
+    const status={sessionId:'test',map:'prontera',connected:true,compatible:true,running:false,player:{id:1,kind:0,dead:false},task:{pending:false},
       character:{inventoryKnown:true,inventory:carried,equipment:[],ammoId:-1,skillsKnown:true,learned:[{skillId:73,level:1}],stats:{weight:0,maxWeight:10000,zeny:1000,cartWeight:100}},world:ctx.workflow.world.snapshot()};
     const observed=dispositionContextFromStatus(status);const result=planDisposition(policy({itemId:1201,keep:0,minimum:1,desired:1,maximum:1,restock:source,allowUnique:true}),observed);
     expect(result.actions[0]).toMatchObject({bagId:20001,uniqueId:'unique-20001',count:1,from:source,to:'inventory'});

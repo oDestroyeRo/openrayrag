@@ -5,7 +5,8 @@ const record = (v: unknown): Record<string, unknown> => v && typeof v === 'objec
 export function socialContextFromStatus(value: unknown): SocialContext {
   const s = record(value), p = record(s.player), c = record(s.character);
   const skills = Array.isArray(c.learned) ? c.learned.map(record) : [];
-  return { ready: s.connected === true && s.compatible === true && typeof p.id === 'number', actorId: typeof p.id === 'number' ? p.id : null,
+  const own=typeof p.id==='number'&&Number.isInteger(p.id)&&p.id>=0&&p.id<=0x7fffffff&&p.kind===0;
+  return { ready: s.connected === true && s.compatible === true && own, actorId: own ? p.id as number : null,
     name: typeof p.name === 'string' ? p.name : '', job: typeof p.classId === 'number' ? p.classId : null,
     learnedBasic: c.skillsKnown === true ? Number(skills.find(skill => skill.skillId === 1)?.level ?? 0) : null,
     inParty: record(s.world).party != null, silenced: Array.isArray(c.statuses) && c.statuses.some(status => record(status).id === 6) };

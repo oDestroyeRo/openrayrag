@@ -1,5 +1,6 @@
 import { DEFAULT_MAP_POLICY, mapAllowed, policySummary, validateMapPolicy, type MapPolicy } from './map-policy';
 import { routeBetweenMaps } from './travel';
+import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import catalog from './data/npc-services.json';
 import { distance, GridNavigator, searchGrid, type WalkGrid } from './navigation';
 import type { Entity, GameEvent, Position } from './protocol';
@@ -239,6 +240,7 @@ export interface ServiceSnapshot {
   npcId: number | null;
 }
 export interface ServiceReceipt {
+  actorIdentity?:ActionIdentity;
   economic: WorkflowReceipt;
   map: string;
   generation: number;
@@ -258,7 +260,7 @@ export function observeServiceReceipt(
   worldEvents: readonly WorldEvent[],
   context: ServiceContext,
 ): void {
-  if (context.connection !== r.connection) return;
+  if (context.connection !== r.connection || r.outcome?.type!=='arrival'&&r.actorIdentity&&!sameActionIdentity(r.actorIdentity,context.actorIdentity?.(r.npcId))) return;
   if (r.outcome?.type === 'arrival') {
     for (const e of events) {
       if (e.type === 'clear' && r.outcome.map === r.map && context.map === r.map) r.transition = true;
@@ -294,6 +296,7 @@ export function observeServiceReceipt(
 export function confirmServiceReceipt(r: ServiceReceipt, context: ServiceContext): boolean {
   return (
     context.connection === r.connection &&
+    (r.outcome?.type==='arrival'||!r.actorIdentity||sameActionIdentity(r.actorIdentity,context.actorIdentity?.(r.npcId))) &&
     r.acknowledged &&
     context.inventoryKnown &&
     confirmWorkflowReceipt(r.economic, context)
@@ -530,11 +533,11 @@ export class NpcServiceRuntime {
         const terminal = w.step === s.workflow.steps.length - 1,
           economic = this.workflow.receipt()!;
         this.receiptValue = {
-          economic,
+          ...(c.actorIdentity?.(this.binding!.actor.id)?{actorIdentity:c.actorIdentity(this.binding!.actor.id)!}:{}),economic,
           map: c.map,
           generation: c.world.generation,
           npcId: this.binding!.actor.id,
-          playerId: c.playerId,
+          playerId: c.player!.id,
           playerName: c.player!.name,
           connection: c.connection,
           outcome: terminal ? s.outcome : null,

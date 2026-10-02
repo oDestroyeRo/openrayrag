@@ -155,7 +155,7 @@ pub(crate) fn validate_action(value: &Value) -> Validation {
             integer(action, "itemId", 1, MAX_ID)?;
             if let Some(target) = action.get("target") {
                 let target = number(target, -1, MAX_ID)?;
-                if target != -1 && target <= 0 {
+                if target != -1 && target < 0 {
                     return Err(invalid());
                 }
             }
@@ -172,7 +172,7 @@ pub(crate) fn validate_action(value: &Value) -> Validation {
                     let action = object(value, &["type", "mode", "skillId", "level", "target"])?;
                     integer(action, "skillId", 1, 255)?;
                     integer(action, "level", 1, 255)?;
-                    integer(action, "target", 1, MAX_ID)?;
+                    integer(action, "target", 0, MAX_ID)?;
                 }
                 "ground" => {
                     let action = object(value, &["type", "mode", "skillId", "level", "position"])?;
@@ -212,7 +212,7 @@ pub(crate) fn validate_action(value: &Value) -> Validation {
         }
         "npcTalk" | "partyInviteId" | "vendingView" => {
             let action = object(value, &["type", "id"])?;
-            integer(action, "id", 1, MAX_ID)?;
+            integer(action, "id", 0, MAX_ID)?;
         }
         "npcOption" => {
             let action = object(value, &["type", "index"])?;
@@ -310,7 +310,7 @@ fn validate_workflow(value: &Value) -> Validation {
     )?;
     text(string(workflow, "name")?, 64)?;
     map_code(string(workflow, "map")?)?;
-    integer(workflow, "npcId", 1, MAX_ID)?;
+    integer(workflow, "npcId", 0, MAX_ID)?;
     integer(workflow, "maxSpend", 0, 2_000_000_000)?;
     if let Some(timeout) = workflow.get("timeoutMs") {
         number(timeout, 1000, 60_000)?;
@@ -523,7 +523,7 @@ pub(crate) fn validate_actor_predicate_for(value: &Value, allow_candidate: bool)
         }
         "actor" => {
             object(actor_value, &["scope", "id", "world", "incarnation"])?;
-            integer(actor, "id", 1, MAX_ID)?;
+            integer(actor, "id", 0, MAX_ID)?;
             integer(actor, "incarnation", 1, MAX_ID)?;
             let world = string(actor, "world")?;
             if world.len() != 36
@@ -819,7 +819,7 @@ mod tests {
             json!({"type":"sit","sitting":1}),
             json!({"type":"sit"}),
             json!({"type":"useItem","itemId":0}),
-            json!({"type":"useItem","itemId":1,"target":0}),
+            json!({"type":"useItem","itemId":1,"target":-2}),
             json!({"type":"useItem","itemId":1,"target":null}),
             json!({"type":"skill","mode":"self","skillId":1,"level":1,"target":1}),
             json!({"type":"skill","mode":"target","skillId":256,"level":1,"target":1}),
@@ -876,6 +876,33 @@ mod automation_request_tests {
     use super::{request_script, validate_action, validate_actor_predicate, validate_request};
     use serde_json::{json, Value};
 
+    #[test]
+    fn actor_zero_field_contract_matches_typescript() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../../src/data/actor-zero-request-cases.json"))
+                .unwrap();
+        for action in cases["valid"].as_array().unwrap() {
+            assert!(validate_action(action).is_ok(), "rejected {action}");
+        }
+        for action in cases["invalid"].as_array().unwrap() {
+            assert!(validate_action(action).is_err(), "accepted {action}");
+        }
+        let mut spec = workflow();
+        spec["npcId"] = json!(0);
+        assert!(validate_request("workflow", &spec).is_ok());
+        let actor = json!({"field":"actorCasting","actor":{"scope":"actor","id":0,"incarnation":1,"world":"00000000-0000-0000-0000-000000000001"},"operator":"eq","value":false});
+        assert!(validate_actor_predicate(&actor).is_ok());
+        for (field, value) in [
+            ("id", json!(-1)),
+            ("id", json!(null)),
+            ("incarnation", json!(0)),
+        ] {
+            let mut bad = actor.clone();
+            bad["actor"][field] = value;
+            assert!(validate_actor_predicate(&bad).is_err());
+        }
+    }
+
     fn workflow() -> Value {
         json!({
             "name":"Restock", "map":"prontera", "npcId":1,
@@ -925,7 +952,7 @@ mod automation_request_tests {
         }
         for (path, invalid) in [
             ("/map", json!("../map")),
-            ("/npcId", json!(0)),
+            ("/npcId", json!(-1)),
             ("/maxSpend", json!(2_000_000_001)),
             ("/timeoutMs", json!(999)),
             ("/timeoutMs", json!(null)),

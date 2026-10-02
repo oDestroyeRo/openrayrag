@@ -168,7 +168,7 @@ describe('normal expanded client commands', () => {
     expect([...featureCommand({type:'allocateStats',attributes:[1,0,0,0,0,0]})]).toEqual([58,1,0,0,0,...Array(20).fill(0)]);
   });
   it('strictly rejects unknown fields and invalid nested actions at the boundary', () => {
-    const invalid:unknown[]=[null,[],{type:'sit',sitting:1},{type:'respawn',inPlace:true},{type:'useItem',itemId:501,target:0},
+    const invalid:unknown[]=[null,[],{type:'sit',sitting:1},{type:'respawn',inPlace:true},{type:'useItem',itemId:501,target:-2},
       {type:'equip',bagId:-1,equipped:true},{type:'skill',mode:'self',skillId:1,level:0},
       {type:'skill',mode:'target',skillId:256,level:1,target:1},{type:'skill',mode:'ground',skillId:1,level:1,position:{x:1,y:1,z:1}},
       {type:'allocateStats',attributes:[0,0,0,0,0,0]},{type:'allocateStats',attributes:[100,0,0,0,0,0]},
@@ -193,7 +193,7 @@ describe('source actor cast and owner target packets',()=>{
   });
   it('rejects malformed bounds, flags, clocks, truncation and whole-byte trailers atomically',()=>{
     const cast=(id=1,target=-1,direction=0,seconds=1,flags=0)=>new Fixture().u8(24).i32(id).i32(target).u8(20).u8(1).u8(direction).position().f32(seconds).u8(flags).finish();
-    for(const bytes of [cast(0),cast(1,-2),cast(1,-1,8),cast(1,-1,0,NaN),cast(1,-1,0,Infinity),cast(1,-1,0,1,16),cast().slice(0,-1),Uint8Array.from([...cast(),0]),new Fixture().u8(33).i32(-1).finish()])expect(()=>decode(bytes)).toThrow(FeatureProtocolError);
+    for(const bytes of [cast(-1),cast(1,-2),cast(1,-1,8),cast(1,-1,0,NaN),cast(1,-1,0,Infinity),cast(1,-1,0,1,16),cast().slice(0,-1),Uint8Array.from([...cast(),0]),new Fixture().u8(33).i32(-1).finish()])expect(()=>decode(bytes)).toThrow(FeatureProtocolError);
   });
 });
 

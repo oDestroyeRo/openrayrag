@@ -36,7 +36,7 @@ export class CharacterState {
       ...(entity.sp !== undefined && entity.maxSp !== undefined && entity.maxSp > 0 ? { sp: entity.sp, maxSp: entity.maxSp } : {}) };
     if (entity.statuses) { this.statuses.clear(); for (const s of entity.statuses) this.statuses.set(s.id,s.seconds); }
   }
-  apply(event: FeatureEvent, playerId: number): void {
+  apply(event: FeatureEvent, playerId: number | null): void {
     switch (event.type) {
       case 'stats': { const { type: _type, ...stats } = event; this.stats = { ...this.stats, ...stats }; this.statsRevision++; break; }
       case 'sp': if (this.stats) { this.stats.sp = event.sp; this.stats.maxSp = event.maxSp; } break;

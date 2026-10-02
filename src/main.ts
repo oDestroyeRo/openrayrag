@@ -413,7 +413,7 @@ function validStatus(value: unknown): value is GameStatus {
   const entity = (v: unknown) => {
     if (!v || typeof v !== 'object') return false;
     const e = v as Record<string, unknown>;
-    return ['id','classId','kind','level','hp','maxHp','x','y'].every(k => finite(e[k])) && typeof e.name === 'string' && e.name.length <= 512;
+    return Number.isInteger(e.id)&&Number(e.id)>=0&&Number(e.id)<=0x7fffffff&&['id','classId','kind','level','hp','maxHp','x','y'].every(k => finite(e[k])) && typeof e.name === 'string' && e.name.length <= 512;
   };
   if (!validNavigationStatus(s.navigation)) return false;
   if ((s.runRequested !== undefined && typeof s.runRequested !== 'boolean') || (s.state !== undefined && !['running','waiting','idle'].includes(s.state as string))) return false;
@@ -421,7 +421,7 @@ function validStatus(value: unknown): value is GameStatus {
     && ['reason','map','target'].every(k => typeof s[k] === 'string' && (s[k] as string).length <= 1024)
     && validMapInfo(s.mapInfo, s.map as string)
     && ['attacks','kills','looted'].every(k => finite(s[k]))
-    && (s.player === null || entity(s.player))
+    && (s.player === null || entity(s.player) && (s.player as Record<string,unknown>).kind===0)
     && Array.isArray(s.monsters) && s.monsters.length <= 150 && s.monsters.every(entity)
     && Array.isArray(s.drops) && s.drops.length <= 150 && s.drops.every(v => v && ['id','x','y'].every(k => finite(v[k])))
     && Array.isArray(s.log) && s.log.length <= 50 && s.log.every(v => v && finite(v.at) && typeof v.text === 'string' && v.text.length < 1024)

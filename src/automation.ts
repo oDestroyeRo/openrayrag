@@ -1,3 +1,4 @@
+import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { matchesSkillExecution } from './skill-execution';
 import type { AutomationSettings, LootRule, MonsterRule } from './settings';
 import type { Entity } from './protocol';
@@ -34,7 +35,7 @@ import type { CharacterState } from './character-state';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost, skillPrerequisites } from './game-catalog';
 import type { ExpandedAction, FeatureEvent, Attributes } from './protocol-feature';
 export interface AutomationTask { kind: string; label: string; pending: boolean; since: number | null }
-interface PendingFeature { afterCastSeconds:number; action: ExpandedAction; since: number; deadline: number; inventory: number; equipment: number; stats: number; skills: number; count: number; skillLevel: number; attributes: Attributes | null; equipmentReceipt?: (state: CharacterState)=>boolean }
+interface PendingFeature { identity?:ActionIdentity; afterCastSeconds:number; action: ExpandedAction; since: number; deadline: number; inventory: number; equipment: number; stats: number; skills: number; count: number; skillLevel: number; attributes: Attributes | null; equipmentReceipt?: (state: CharacterState)=>boolean }
 export interface ActionResult { sequence: number; status: 'idle' | 'pending' | 'confirmed' | 'failed'; reason: string }
 // Pinned player spells include Magnus Exorcismus (12s), Storm Gust and Lord
 // of Vermilion (up to 15s). Allow a bounded cast and response margin. Equipment
@@ -64,10 +65,11 @@ export class AutomationScheduler {
   private cooldown = new Map<string, number>();
   private recoverySince: number | null = null;
   private resting = false;
-  constructor(private readonly send: (action: ExpandedAction) => void, private readonly now: () => number) {}
+  constructor(private readonly send: (action: ExpandedAction) => void, private readonly now: () => number, private readonly identity?:(action:ExpandedAction)=>ActionIdentity|null) {}
   get busy(): boolean { return this.pending !== null || this.now()<this.settlingUntil || this.now()<this.canceledUntil; }
   get recovering(): boolean { return this.recoverySince !== null; }
   get pendingAction(): ExpandedAction | null { return this.pending?.action ?? null; }
+  get pendingIdentity(): ActionIdentity | null { return this.pending?.identity ?? null; }
   settleSkill(motionSeconds:number,afterCastSeconds:number):void {
     this.settlingUntil=Math.max(this.settlingUntil,this.now()+Math.max(0,motionSeconds,afterCastSeconds)*1000);
   }
@@ -79,17 +81,22 @@ export class AutomationScheduler {
   }
   submit(action: ExpandedAction, state: CharacterState, equipmentReceipt?: (state: CharacterState)=>boolean, afterCastSeconds=0): void {
     if (this.busy) throw new Error('Wait for the current action confirmation.');
+    const identity=this.identity?.(action);if(this.identity&&!identity)throw new Error('A current observed own and target identity is required.');
     const count = action.type === 'useItem' ? state.count(action.itemId) : 0;
     const skillLevel = action.type === 'allocateSkill' ? state.learned.get(action.skillId) ?? 0 : 0;
     const since=this.now();
-    this.pending = { action,since,equipmentReceipt,afterCastSeconds,deadline:since+actionConfirmationTimeout(action),inventory:state.inventoryRevision,equipment:state.equipmentRevision,
+    this.pending = { ...(identity?{identity}:{}),action,since,equipmentReceipt,afterCastSeconds,deadline:since+actionConfirmationTimeout(action),inventory:state.inventoryRevision,equipment:state.equipmentRevision,
       stats:state.statsRevision,skills:state.skillsRevision,count,skillLevel,attributes:state.stats?.attributes?.slice() as Attributes ?? null };
     this.result={sequence:++this.sequence,status:'pending',reason:`Waiting for ${action.type} confirmation.`};
     try { this.send(action); } catch (error) { this.pending = null; this.result={sequence:this.sequence,status:'failed',reason:'Connection failed while sending action.'}; throw error; }
   }
-  observe(event: FeatureEvent | {type:'map'|'resurrection'}, state: CharacterState, playerId: number): { confirmed: boolean; failure: string | null } {
+  observe(event: FeatureEvent | {type:'map'|'resurrection'}, state: CharacterState, playerId: number | null, respawnTransition=false): { confirmed: boolean; failure: string | null } {
     const pending = this.pending;
-    if (!pending) return {confirmed:false,failure:null};
+    if (!pending || playerId===null) return {confirmed:false,failure:null};
+    const current=this.identity?.(pending.action);
+    // Only the engine's verified own respawn transition may cross a world/incarnation.
+    const respawnRebound=respawnTransition&&pending.action.type==='respawn'&&(event.type==='map'||event.type==='resurrection')&&current?.selfId===pending.identity?.selfId;
+    if(pending.identity&&!sameActionIdentity(pending.identity,current)&&!respawnRebound)return {confirmed:false,failure:null};
     if (event.type === 'featureError') {this.pending=null;this.result={sequence:this.sequence,status:'failed',reason:`Server rejected ${pending.action.type}: ${event.message.slice(0,120)}`};return {confirmed:false,failure:this.result.reason};}
     if (event.type === 'skillFailure' || event.type === 'requestFailure') {
       this.pending = null; this.result={sequence:this.sequence,status:'failed',reason:`Server rejected ${pending.action.type} (code ${event.reason}).`}; return {confirmed:false,failure:`Server rejected ${pending.action.type} (code ${event.reason}).`};

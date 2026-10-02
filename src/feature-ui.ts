@@ -1,5 +1,6 @@
 import { DEFAULT_MAP_POLICY, insideLockArea, mapPolicy, policySummary, validateMapPolicy } from './map-policy';
 import { routeBetweenMaps } from './travel';
+import {actorId} from './actor-identity';
 import { ActorPredicateEditor, actorSnapshotAt } from './actor-predicate-ui';
 import { SocialUi, validSocialSnapshot } from './social-ui';
 import { validActorSnapshot, type ActorObservationSnapshot } from './actor-observations';
@@ -31,6 +32,11 @@ type Row = Record<string, unknown>;
 const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const text = (v: unknown): string => typeof v === 'string' ? v : '';
 const number = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
+/** Blank is absence, never the allocator's valid actor zero. */
+export function actorInput(value:string,optional=false):number|undefined {
+  if(!value.trim()){if(optional)return undefined;throw new Error('Choose an observed actor ID.');}
+  return actorId(Number(value));
+}
 function checkedAction(input: unknown): Record<string, unknown> {
   if (['sit','useItem','skill','equip','respawn','allocateSkill','allocateStats'].includes(text(object(input).type))) {
     return validateExpandedAction(input) as unknown as Record<string,unknown>;
@@ -292,14 +298,14 @@ export class FeatureUi {
     const bag=this.input(grid,'manual-equip','Equipment bag ID','number','1',1);
     const skill=this.input(grid,'manual-skill','Learned skill ID','number','1',1,255);skill.setAttribute('list','skillId-catalog');
     const level=this.input(grid,'manual-skill-level','Skill level','number','1',1,10);
-    const target=this.input(grid,'manual-target','Target entity ID','number','0',0);
+    const target=this.input(grid,'manual-target','Target entity ID · blank for untargeted item','number','',0);
     const x=this.input(grid,'manual-ground-x','Ground X','number','0',0,511);const y=this.input(grid,'manual-ground-y','Ground Y','number','0',0,511);
     const buttons=document.createElement('div');buttons.className='button-row';manual.append(buttons);
     this.manualButton('Sit',()=>({type:'sit',sitting:true}),buttons);this.manualButton('Stand',()=>({type:'sit',sitting:false}),buttons);this.manualButton('Respawn',()=>({type:'respawn'}),buttons);
-    this.manualButton('Use item',()=>({type:'useItem',itemId:Number(item.value),...(Number(target.value)>0?{target:Number(target.value)}:{})}),buttons);
+    this.manualButton('Use item',()=>({type:'useItem',itemId:Number(item.value),...(actorInput(target.value,true)!==undefined?{target:actorInput(target.value)}:{})}),buttons);
     this.manualButton('Equip',()=>({type:'equip',bagId:Number(bag.value),equipped:true}),buttons);this.manualButton('Unequip',()=>({type:'equip',bagId:Number(bag.value),equipped:false}),buttons);
     this.manualButton('Self skill',()=>({type:'skill',mode:'self',skillId:Number(skill.value),level:Number(level.value)}),buttons);
-    this.manualButton('Target skill',()=>({type:'skill',mode:'target',skillId:Number(skill.value),level:Number(level.value),target:Number(target.value)}),buttons);
+    this.manualButton('Target skill',()=>({type:'skill',mode:'target',skillId:Number(skill.value),level:Number(level.value),target:actorInput(target.value)}),buttons);
     this.note('inventory','Manual Thunderstorm uses verified range 9 (5 while Blind), stationary projectile sight and exact ground confirmation. Its center may be blocked terrain. Other unverified skills retain adjacent manual targeting. Effective SP needs observed equipment/card/refine metadata; server-only cooldown or disabled state can still reject a cast.');
     this.manualButton('Ground skill',()=>({type:'skill',mode:'ground',skillId:Number(skill.value),level:Number(level.value),position:{x:Number(x.value),y:Number(y.value)}}),buttons);
     this.manualButton('Spend 1 skill point',()=>({type:'allocateSkill',skillId:Number(skill.value)}),buttons);
@@ -378,10 +384,10 @@ export class FeatureUi {
   private detail(title: string): HTMLDetailsElement { const details = document.createElement('details'); details.className = 'manual-group'; const summary = document.createElement('summary'); summary.textContent = title; details.append(summary); this.panel('workflows').append(details); return details; }
   private workflows(): void {
     const npc = this.detail('NPC dialogue'); const npcGrid = document.createElement('div'); npcGrid.className = 'form-grid'; npc.append(npcGrid);
-    const npcId = this.input(npcGrid,'npc-id','Visible NPC ID','number','0',1); const option = this.input(npcGrid,'npc-option','Option index','number','0',0,31);
+    const npcId = this.input(npcGrid,'npc-id','Visible NPC ID','number','',0); const option = this.input(npcGrid,'npc-option','Option index','number','0',0,31);
     const npcChoiceLabel=document.createElement('label');npcChoiceLabel.className='form-field';npcChoiceLabel.textContent='NPCs in view';const npcChoice=document.createElement('select');npcChoice.id='visible-npcs';const emptyNpc=document.createElement('option');emptyNpc.value='';emptyNpc.textContent='Choose a visible NPC';npcChoice.append(emptyNpc);npcChoiceLabel.append(npcChoice);npcGrid.append(npcChoiceLabel);npcChoice.addEventListener('change',()=>{if(npcChoice.value)npcId.value=npcChoice.value;});
     const npcButtons = document.createElement('div'); npcButtons.className = 'button-row'; npc.append(npcButtons);
-    this.manualButton('Talk',()=>({type:'npcTalk',id:Number(npcId.value)}),npcButtons); this.manualButton('Continue',()=>({type:'npcAdvance'}),npcButtons); this.manualButton('Choose option',()=>({type:'npcOption',index:Number(option.value)}),npcButtons);
+    this.manualButton('Talk',()=>({type:'npcTalk',id:actorInput(npcId.value)}),npcButtons); this.manualButton('Continue',()=>({type:'npcAdvance'}),npcButtons); this.manualButton('Choose option',()=>({type:'npcOption',index:Number(option.value)}),npcButtons);
     const dialogue = document.createElement('p'); dialogue.id = 'npc-dialogue'; dialogue.className = 'telemetry-summary'; dialogue.textContent = 'No NPC dialogue open.'; npc.append(dialogue);
     const shop = this.detail('NPC shop · buy & sell');
     const shopRows = new RuleEditor('Transaction rows',[idColumn('id','Shop item / bag ID'),countColumn],{id:1,count:1},64,()=>{}); shop.append(shopRows.root); shopRows.root.open = true;
@@ -408,13 +414,13 @@ export class FeatureUi {
     this.manualButton('Create party',()=>({type:'partyCreate',name:partyName.value}),partyButtons); this.manualButton('Invite named player',()=>({type:'partyInviteName',name:playerName.value}),partyButtons); this.manualButton('Accept invite',()=>({type:'partyAccept',partyId:Number(partyId.value)}),partyButtons);
     this.manualButton('Make leader',()=>({type:'partyLeader',memberId:Number(member.value)}),partyButtons); this.manualButton('Remove member',()=>({type:'partyRemove',memberId:Number(member.value)}),partyButtons); this.manualButton('Leave party',()=>({type:'partyLeave'}),partyButtons); this.manualButton('Disband party',()=>({type:'partyDisband'}),partyButtons);
     const partyState = document.createElement('p'); partyState.id = 'party-state'; partyState.className = 'telemetry-summary'; party.append(partyState);
-    const vending = this.detail('Player vending'); const vendingName = this.input(vending,'vending-name','Shop name','text',''); const seller = this.input(vending,'vending-seller','Visible seller ID','number','0',1);
+    const vending = this.detail('Player vending'); const vendingName = this.input(vending,'vending-name','Shop name','text',''); const seller = this.input(vending,'vending-seller','Visible seller ID','number','',0);
     const vendingRows = new RuleEditor('Vending rows',[idColumn('id','Bag / sale ID'),countColumn,{key:'price',label:'Price',min:0,max:9999999}],{id:1,count:1,price:1},32,()=>{}); vending.append(vendingRows.root);
     const vendingButtons = document.createElement('div'); vendingButtons.className = 'button-row'; vending.append(vendingButtons);
-    this.manualButton('Open your shop',()=>({type:'vendingStart',name:vendingName.value,rows:vendingRows.read()}),vendingButtons); this.manualButton('Close your shop',()=>({type:'vendingStop'}),vendingButtons); this.manualButton('View seller',()=>({type:'vendingView',id:Number(seller.value)}),vendingButtons); this.manualButton('Buy sale rows',()=>({type:'vendingPurchase',rows:vendingRows.read().map(({id,count})=>({id,count}))}),vendingButtons);
+    this.manualButton('Open your shop',()=>({type:'vendingStart',name:vendingName.value,rows:vendingRows.read()}),vendingButtons); this.manualButton('Close your shop',()=>({type:'vendingStop'}),vendingButtons); this.manualButton('View seller',()=>({type:'vendingView',id:actorInput(seller.value)}),vendingButtons); this.manualButton('Buy sale rows',()=>({type:'vendingPurchase',rows:vendingRows.read().map(({id,count})=>({id,count}))}),vendingButtons);
     const workflow = this.detail('NPC workflow builder'); const workflowGrid = document.createElement('div'); workflowGrid.className = 'form-grid'; workflow.append(workflowGrid);
     const workflowName = this.input(workflowGrid,'workflow-name','Workflow name','text','Town visit'); const workflowMap = this.input(workflowGrid,'workflow-map','Map code','text','');
-    const workflowNpc = this.input(workflowGrid,'workflow-npc','NPC entity ID','number','0',1); const budget = this.input(workflowGrid,'workflow-budget','Maximum spend','number','0',0);
+    const workflowNpc = this.input(workflowGrid,'workflow-npc','NPC entity ID','number','',0); const budget = this.input(workflowGrid,'workflow-budget','Maximum spend','number','0',0);
     const workflowStock = new RuleEditor('Minimum stock guards',[idColumn('itemId','Item ID'),{key:'count',label:'Keep quantity',min:0,max:9999}],{itemId:501,count:1},64,()=>{}); workflow.append(workflowStock.root);
     const steps: Array<Record<string,unknown>> = []; const stepsList = document.createElement('ol'); stepsList.className = 'workflow-steps'; workflow.append(stepsList);
     const builder = document.createElement('div'); builder.className = 'form-grid'; workflow.append(builder);
@@ -425,13 +431,13 @@ export class FeatureUi {
     const addStep = document.createElement('button'); addStep.type = 'button'; addStep.className = 'secondary compact'; addStep.textContent = '＋ Add step'; addStep.dataset.config = 'true'; workflowButtons.append(addStep);
     const renderSteps = () => { stepsList.replaceChildren(); steps.forEach((step,index)=> { const li = document.createElement('li'); const description = document.createElement('span'); description.textContent = JSON.stringify(step); const remove = document.createElement('button'); remove.type='button'; remove.className='text-button'; remove.textContent='Remove'; remove.dataset.config='true'; remove.addEventListener('click',()=>{steps.splice(index,1);renderSteps();}); li.append(description,remove); stepsList.append(li); }); addStep.disabled = this.locked || steps.length>=32; };
     addStep.addEventListener('click',()=> { if (steps.length>=32) return; const type=kind.value; let step:Record<string,unknown>={type}; if(['talk','advance','option'].includes(type))step.expectedCost=Number(expectedCost.value); if(type==='advance'&&expected.value)step.expectedText=expected.value; if(type==='option'){step.index=Number(stepIndex.value);step.expectedLabel=expected.value;} if(type==='buy'||type==='sell')step.rows=[{id:Number(stepIndex.value),count:Number(stepCount.value)}]; if(type==='deposit'||type==='withdraw'){step.bagId=Number(stepIndex.value);step.count=Number(stepCount.value);} steps.push(step);renderSteps(); });
-    const spec = () => ({name:workflowName.value,map:workflowMap.value || this.hooks.map(),npcId:Number(workflowNpc.value),maxSpend:Number(budget.value),minStock:workflowStock.read(),steps});
+    const spec = () => ({name:workflowName.value,map:workflowMap.value || this.hooks.map(),npcId:actorInput(workflowNpc.value),maxSpend:Number(budget.value),minStock:workflowStock.read(),steps});
     const run = document.createElement('button'); run.type='button'; run.className='primary compact'; run.textContent='Start workflow'; run.dataset.manual='true'; run.addEventListener('click',()=>void this.operation(()=>this.hooks.workflow(validateWorkflowSpec(spec())))); workflowButtons.append(run);
     const workflowPreview=document.createElement('p');workflowPreview.className='telemetry-summary';workflowPreview.hidden=true;workflow.append(workflowPreview);
     const preview=document.createElement('button');preview.type='button';preview.className='secondary compact';preview.textContent='Validate / preview';preview.dataset.config='true';preview.addEventListener('click',()=>{try{const checked=validateWorkflowSpec(spec());const expectedFees=checked.steps.reduce((total,step)=>total+('expectedCost' in step?Number(step.expectedCost??0):0),0);workflowPreview.hidden=false;workflowPreview.textContent=`${checked.steps.length} validated steps · budget ${checked.maxSpend} · expected NPC fees ${expectedFees} · ${checked.minStock.length} stock guards.\nNPC fees count toward the spending cap. Live map, NPC, shop prices and stock are checked on Start.\n${checked.steps.map((step,index)=>`${index+1}. ${JSON.stringify(step)}`).join('\n')}`;}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid workflow.',true);}});workflowButtons.append(preview);
     const workflowDocument=document.createElement('details');workflowDocument.className='manual-group';const workflowDocumentTitle=document.createElement('summary');workflowDocumentTitle.textContent='Advanced workflow document';workflowDocument.append(workflowDocumentTitle);workflow.append(workflowDocument);
     const workflowText=document.createElement('textarea');workflowText.className='document-editor';workflowText.rows=8;workflowText.maxLength=65000;workflowText.spellcheck=false;workflowText.placeholder='Export the builder, or paste a typed workflow for multi-item transactions and exchanges.';workflowDocument.append(workflowText);
-    const exportWorkflow=document.createElement('button');exportWorkflow.type='button';exportWorkflow.className='secondary compact';exportWorkflow.textContent='Export builder';exportWorkflow.dataset.config='true';exportWorkflow.addEventListener('click',()=>{workflowText.value=JSON.stringify(spec(),null,2);});workflowDocument.append(exportWorkflow);
+    const exportWorkflow=document.createElement('button');exportWorkflow.type='button';exportWorkflow.className='secondary compact';exportWorkflow.textContent='Export builder';exportWorkflow.dataset.config='true';exportWorkflow.addEventListener('click',()=>{try{workflowText.value=JSON.stringify(spec(),null,2);}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid actor selection.',true);}});workflowDocument.append(exportWorkflow);
     const startDocument=document.createElement('button');startDocument.type='button';startDocument.className='secondary compact';startDocument.textContent='Start document';startDocument.dataset.manual='true';startDocument.addEventListener('click',()=>void this.operation(()=>this.hooks.workflow(validateWorkflowSpec(JSON.parse(workflowText.value)))));workflowDocument.append(startDocument);
     const workflowHelp = document.createElement('p'); workflowHelp.className='hint'; workflowHelp.textContent='Choose exact option labels, observed NPC fees and a spending cap. Talk, continue and option fees count toward that cap. The workflow checks the map, NPC, stock and server acknowledgements before each step.'; workflow.append(workflowHelp);
     const workflowState=document.createElement('p');workflowState.id='workflow-state';workflowState.className='telemetry-summary';workflow.append(workflowState);

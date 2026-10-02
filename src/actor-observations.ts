@@ -28,7 +28,7 @@ export function validActorSelector(value: unknown): value is ActorSelector {
   if (!record(value)) return false;
   if (value.scope === 'self' || value.scope === 'target' || value.scope==='candidate') return keys(value,['scope']);
   return value.scope === 'actor' && keys(value,['scope','id','world','incarnation']) && uuid(value.world)
-    && integer(value.id,1,0x7fffffff) && integer(value.incarnation,1,0x7fffffff);
+    && integer(value.id,0,0x7fffffff) && integer(value.incarnation,1,0x7fffffff);
 }
 export function validActorPredicate(value: unknown, allowCandidate=false): value is ActorPredicate {
   if (!record(value) || !validActorSelector(value.actor) || value.actor.scope==='candidate'&&!allowCandidate || (value.operator!=='eq'&&value.operator!=='ne') || typeof value.value !== 'boolean') return false;
@@ -42,13 +42,13 @@ export function validActorConditions(value: unknown, allowCandidate=false): valu
 const clock = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 export function validActorSnapshot(value: unknown): value is ActorObservationSnapshot {
   if (!record(value) || !keys(value,['world','at','lastFrameAt','connected','selfId','targetId','actors'],['candidateId','truncated']) || !uuid(value.world) || !clock(value.at) || !(value.lastFrameAt === null || clock(value.lastFrameAt))
-    || typeof value.connected !== 'boolean' || !(value.selfId === null || integer(value.selfId,1,0x7fffffff))
+    || typeof value.connected !== 'boolean' || !(value.selfId === null || integer(value.selfId,0,0x7fffffff))
     || !(value.truncated===undefined||typeof value.truncated==='boolean')
-    || !(value.candidateId===undefined||value.candidateId===null||integer(value.candidateId,1,0x7fffffff))
-    || !(value.targetId === null || integer(value.targetId,1,0x7fffffff)) || !Array.isArray(value.actors) || value.actors.length > 64) return false;
+    || !(value.candidateId===undefined||value.candidateId===null||integer(value.candidateId,0,0x7fffffff))
+    || !(value.targetId === null || integer(value.targetId,0,0x7fffffff)) || !Array.isArray(value.actors) || value.actors.length > 64) return false;
   let statuses = 0;const actorIds=new Set<number>();
   return value.actors.every(actor => {
-    if (!record(actor) || !keys(actor,['id','incarnation','kind','name','observedAt','statusesKnown','statuses','cast']) || !integer(actor.id,1,0x7fffffff) || !integer(actor.incarnation,1,0x7fffffff)
+    if (!record(actor) || !keys(actor,['id','incarnation','kind','name','observedAt','statusesKnown','statuses','cast']) || !integer(actor.id,0,0x7fffffff) || !integer(actor.incarnation,1,0x7fffffff)
       || !integer(actor.kind,0,4) || typeof actor.name !== 'string' || actor.name.length > 64 || !clock(actor.observedAt)
       || typeof actor.statusesKnown !== 'boolean' || !Array.isArray(actor.statuses) || actor.statuses.length > 128
       || (statuses += actor.statuses.length) > 512 || !record(actor.cast)) return false;
@@ -107,9 +107,12 @@ export class ActorObservations {
   frame(): void { const at=this.now(); if (this.lastFrameAt !== null && at < this.lastFrameAt) this.reset(); if (clock(at)) this.lastFrameAt=at; }
   reset(): void { this.world=this.newWorld();this.nextIncarnation=0;this.lastFrameAt=null;this.actors.clear(); }
   remove(id: number): void { this.actors.delete(id); }
-  spawn(entity: Entity): void {
-    if (entity.dead || entity.hp <= 0) {this.remove(entity.id);return;}
-    if (!this.actors.has(entity.id) && this.actors.size >= ACTOR_OBSERVATION_LIMITS.actors) return;
+  spawn(entity: Entity, selfId:number|null=null): void {
+    if (entity.dead || (entity.kind===0||entity.kind===1)&&entity.hp <= 0) {this.remove(entity.id);return;}
+    // Keep room for an announced own actor during loading/death. Filling that
+    // slot with another actor must not prevent authoritative self revival.
+    const limit=ACTOR_OBSERVATION_LIMITS.actors-(selfId!==null&&entity.id!==selfId&&!this.actors.has(selfId)?1:0);
+    if (!this.actors.has(entity.id) && this.actors.size >= limit) return;
     const at=this.now();if(!clock(at)||this.nextIncarnation>=0x7fffffff){this.reset();return;} const statuses=new Map<number,StatusObservation>();
     for (const status of entity.statuses ?? []) if(SUPPORTED_STATUS_IDS.has(status.id)) statuses.set(status.id,this.status(status.id,status.seconds,at));
     this.actors.set(entity.id,{id:entity.id,incarnation:++this.nextIncarnation,kind:entity.kind,name:entity.name.slice(0,64),observedAt:at,
@@ -142,8 +145,8 @@ export class ActorObservations {
       actor.cast={state:'idle',observedAt:at,deadline:null,skillId:null};actor.observedAt=at;
     }
   }
-  snapshot(selfId: number, targetId: number | null, connected: boolean, requested: ActorPredicate[]=[], includeRest=true,candidateId:number|null=null): ActorObservationSnapshot {
-    const ids=new Set<number>([selfId,...(targetId?[targetId]:[]),...(candidateId?[candidateId]:[]),...requested.flatMap(p=>p.actor.scope==='actor'?[p.actor.id]:[]),...(includeRest?this.actors.keys():[])]);
+  snapshot(selfId: number | null, targetId: number | null, connected: boolean, requested: ActorPredicate[]=[], includeRest=true,candidateId:number|null=null): ActorObservationSnapshot {
+    const ids=new Set<number>([...(selfId!==null?[selfId]:[]),...(targetId!==null?[targetId]:[]),...(candidateId!==null?[candidateId]:[]),...requested.flatMap(p=>p.actor.scope==='actor'?[p.actor.id]:[]),...(includeRest?this.actors.keys():[])]);
     let remaining:number=includeRest?ACTOR_OBSERVATION_LIMITS.publishedStatuses:ACTOR_OBSERVATION_LIMITS.evaluatedStatuses;let truncated=false;
     const actors:ActorObservation[]=[];
     for(const id of ids) {
@@ -152,7 +155,7 @@ export class ActorObservations {
       truncated||=!complete;remaining-=statuses.length;actors.push({...actor,statusesKnown:complete&&actor.statusesKnown,statuses,cast:{...actor.cast}});
       if(actors.length>=ACTOR_OBSERVATION_LIMITS.publishedActors){truncated||=ids.size>actors.length;break;}
     }
-    return {world:this.world,at:this.now(),lastFrameAt:this.lastFrameAt,connected,selfId:selfId||null,targetId,...(candidateId?{candidateId}:{}),...(truncated?{truncated:true}:{}),actors};
+    return {world:this.world,at:this.now(),lastFrameAt:this.lastFrameAt,connected,selfId,targetId,...(candidateId!==null?{candidateId}:{}),...(truncated?{truncated:true}:{}),actors};
   }
 }
 

@@ -69,7 +69,7 @@ describe('deployed Rebuild V8 protocol', () => {
     expect([...command('attack',1638)]).toEqual([11,102,6,0,0]);
     expect([...command('pickup',65537)]).toEqual([82,1,0,1,0]);
     expect([...command('stop')]).toEqual([19]);
-    for (const id of [0,-1,NaN,Infinity,1.2,2**32]) expect(() => command('attack',id)).toThrow();
+    for (const id of [-1,NaN,Infinity,1.2,2**32]) expect(() => command('attack',id)).toThrow();
   });
   it('ignores authentication payloads and rejects malformed owned chat', () => {
     expect(decode(Uint8Array.of(0,1,2,3))).toEqual([]);

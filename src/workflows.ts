@@ -1,3 +1,4 @@
+import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import type { InventoryItem } from './protocol-feature';
 import { validateWorldAction, type ItemRow, type WorldAction, type WorldEvent } from './world-protocol';
 import { WorldState } from './world-state';
@@ -16,9 +17,10 @@ export interface WorkflowSpec {
   steps: WorkflowStep[]; timeoutMs?: number;
 }
 export interface WorkflowContext {
-  map: string; playerId: number; alive: boolean; idle: boolean;
+  map: string; playerId: number | null; alive: boolean; idle: boolean;
   inventory: InventoryItem[]; equipped: number[]; zeny: number;
-  world: WorldState; visibleNpcIds: number[];
+  world: WorldState; visibleNpcIds: number[]; visiblePlayerIds?: number[];
+  actorIdentity?:(id:number)=>ActionIdentity|null;
   protectedItemIds?: number[]; basicSkillLevel?: number; pushCartLevel?: number; vendingLevel?: number;
   itemCatalog?: Readonly<Record<string, { sellPrice: number; itemClass: number }>>;
 }
@@ -47,7 +49,7 @@ export function validateWorkflowSpec(input: unknown): WorkflowSpec {
   const value = record(input, ['name', 'map', 'npcId', 'maxSpend', 'minStock', 'steps', 'timeoutMs']);
   const name = text(value.name, 64); const map = text(value.map, 64);
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(map)) throw new Error('Invalid workflow map');
-  const npcId = integer(value.npcId, 1, 2_147_483_647); const maxSpend = integer(value.maxSpend, 0, 2_000_000_000);
+  const npcId = integer(value.npcId, 0, 2_147_483_647); const maxSpend = integer(value.maxSpend, 0, 2_000_000_000);
   if (!Array.isArray(value.minStock) || value.minStock.length > 100) throw new Error('Invalid stock rules');
   const minStock = value.minStock.map(item => {
     const row = record(item, ['itemId', 'count']);
@@ -174,17 +176,18 @@ export function worldActionBlockers(input: WorldAction, context: WorkflowContext
   let action: WorldAction;
   try { action = validateWorldAction(input); } catch (error) { return [error instanceof Error ? error.message : 'Invalid action']; }
   const reasons: string[] = []; const state = context.world;
-  if (!context.alive) reasons.push('Character must be alive.');
+  if (context.playerId===null||!context.alive) reasons.push('A ready living character is required.');
   if (!context.idle) reasons.push('Wait for movement and the previous action to finish.');
   if (!context.map || context.map !== state.map) reasons.push('World state is not ready for this map.');
-  const npcContext = () => { if (state.npc.id === null) reasons.push('No confirmed NPC interaction.'); };
+  const npcContext = () => { if (state.npc.id === null) reasons.push('No confirmed NPC interaction.'); else if(state.npc.id===0&&!context.visibleNpcIds.includes(0))reasons.push('NPC actor zero is no longer observed.'); };
   const checkBag = (items: InventoryItem[], bagId: number, count: number, protect: boolean) => {
     const item = items.find(item => item.bagId === bagId);
     if (!item || item.count < count) reasons.push('Item count is unavailable.');
     else if (protect && protectedItem(item, context)) reasons.push('Equipped or protected items cannot be consumed.');
   };
-  const ownMember = state.party ? [...state.party.members.values()].find(member => member.entityId === context.playerId) : undefined;
-  const leader = () => { if (!state.party || !ownMember?.leader) reasons.push('Only the confirmed party leader can perform this action.'); };
+  const ownMember = state.party ? [...state.party.members.values()].find(member => member.entityId > 0 && member.entityId === context.playerId) : undefined;
+  const partyIdentity = () => {if(context.playerId===0)reasons.push('Party member actor zero is ambiguous with offline membership; identity is unavailable.');};
+  const leader = () => {partyIdentity(); if (!state.party || !ownMember?.leader) reasons.push('Only the confirmed party leader can perform this action.'); };
   switch (action.type) {
     case 'npcTalk':
       if (!context.visibleNpcIds.includes(action.id)) reasons.push('Select a visible NPC.');
@@ -224,10 +227,10 @@ export function worldActionBlockers(input: WorldAction, context: WorkflowContext
       if (state.party) reasons.push('Already in a party.');
       if ((context.basicSkillLevel ?? 0) < 6) reasons.push('Basic Mastery level 6 is required.');
       if (action.inviteId === context.playerId) reasons.push('Cannot invite yourself.'); break;
-    case 'partyInviteId': leader(); if (action.id === context.playerId) reasons.push('Cannot invite yourself.'); break;
+    case 'partyInviteId': leader(); if(action.id===0&&!context.visiblePlayerIds?.includes(0))reasons.push('Select a currently observed player for actor-zero invitation.'); if (action.id === context.playerId) reasons.push('Cannot invite yourself.'); break;
     case 'partyInviteName': leader(); break;
     case 'partyAccept': if (state.party || state.invite?.partyId !== action.partyId) reasons.push('Select the current received party invitation.'); break;
-    case 'partyLeave': if (!state.party || !ownMember) reasons.push('No confirmed party membership.'); break;
+    case 'partyLeave': partyIdentity(); if (!state.party || !ownMember) reasons.push('No confirmed party membership.'); break;
     case 'partyLeader': case 'partyRemove':
       leader(); if (!state.party?.members.has(action.memberId)) reasons.push('Selected party member is unavailable.'); break;
     case 'partyDisband': leader(); break;
@@ -351,6 +354,7 @@ export function confirmWorkflowReceipt(pending: WorkflowReceipt, context: Workfl
 /** A bounded script of normal actions, each confirmed before the next is sent. */
 export class NpcWorkflow {
   private spec: WorkflowSpec | null = null;
+  private identity:ActionIdentity|null=null;
   private generation = 0; private step = 0; private pending: Pending | null = null;
   private running = false; private reason = 'No workflow running.'; private spent = 0;
   private state: WorkflowSnapshot['state'] = 'idle';
@@ -361,7 +365,9 @@ export class NpcWorkflow {
     if (this.running) return { ok: false, reasons: ['A workflow is already running.'], estimatedSpend: 0, unpriced: false };
     const preview = dryRunWorkflow(input, context);
     if (!preview.ok) { this.state = 'failed'; this.reason = preview.reasons.join(' '); return preview; }
-    this.spec = validateWorkflowSpec(input); this.generation = context.world.generation;
+    this.spec = validateWorkflowSpec(input);this.identity=context.actorIdentity?.(this.spec.npcId)??null;
+    if(context.actorIdentity&&!this.identity){this.state='failed';this.reason='A current own and NPC identity is required.';return {...preview,ok:false,reasons:[this.reason]};}
+    this.generation = context.world.generation;
     this.terminal = policy.terminal ?? false; this.strictStock = policy.strictStock ?? false;
     this.step = 0; this.pending = null; this.spent = 0; this.running = true; this.state = 'running'; this.reason = 'Ready.';
     return preview;
@@ -396,6 +402,7 @@ export class NpcWorkflow {
     if (!this.spec || context.map !== this.spec.map || context.world.map !== this.spec.map || context.world.generation !== this.generation) {
       this.cancel('Map or session changed; workflow stopped.'); return false;
     }
+    if(this.identity&&!sameActionIdentity(this.identity,context.actorIdentity?.(this.spec.npcId))){this.cancel('Own or NPC actor lifetime changed; workflow stopped.');return false;}
     if (!context.alive) { this.cancel('Character died; workflow stopped.'); return false; }
     if (context.world.npc.id !== null && context.world.npc.id !== this.spec.npcId) {
       this.cancel('NPC interaction changed; workflow stopped.'); return false;

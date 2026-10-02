@@ -22,7 +22,7 @@ function setup(send = vi.fn(async (_action: ManualSocialAction) => {})) {
   const field = (name: string) => root.all().find(node => node.attributes.get('aria-label') === name)!;
   const button = (name: string) => root.all().find(node => node.tag === 'button' && node.textContent === name)!;
   const social = new ManualSocial(() => {}).snapshot();
-  const status = { sessionId: 'synthetic-page', connectionId: 'synthetic-socket', connected: true, compatible: true, player: { id: 0, name: 'Synthetic', classId: 0 },
+  const status = { sessionId: 'synthetic-page', connectionId: 'synthetic-socket', connected: true, compatible: true, player: { id: 0, kind:0, name: 'Synthetic', classId: 0 },
     character: { skillsKnown: true, learned: [{ skillId: 1, level: 7 }], granted: [], statuses: [] }, world: { party: null }, social };
   ui.render(status); ui.lock(false);
   return { ui, root, field, button, send, notify, status };
