@@ -734,6 +734,35 @@ fn validate_social(value: &Value) -> Validation {
     Ok(())
 }
 
+fn validate_socket(request: &Value, commit: bool) -> Validation {
+    let keys = if commit {
+        vec!["targetBagId", "cardBagId", "previewToken", "policy"]
+    } else {
+        vec!["targetBagId", "cardBagId", "policy"]
+    };
+    let v = object(request, &keys)?;
+    if v.len() != keys.len() {
+        return Err(invalid());
+    }
+    crate::automation::validate_manual_protection_policy(field(v, "policy")?)?;
+    let target = integer(v, "targetBagId", 1, MAX_ID)?;
+    let card = integer(v, "cardBagId", 1, MAX_ID)?;
+    if target == card {
+        return Err(invalid());
+    }
+    if commit {
+        let token = string(v, "previewToken")?;
+        if token.len() != 32
+            || !token
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
     if serde_json::to_vec(request).map_err(|_| invalid())?.len() > MAX_REQUEST_BYTES {
         return Err("Automation request exceeds its limit.".into());
@@ -756,6 +785,8 @@ pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
         }
         "social" => validate_social(request),
         "memo" => validate_memo(request),
+        "socketPreview" => validate_socket(request, false),
+        "socket" => validate_socket(request, true),
         _ => Err("Unknown bot action.".into()),
     }
 }
@@ -1250,5 +1281,36 @@ mod automation_request_tests {
             &json!({"service":service,"executionPolicy":null})
         )
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod socket_tests {
+    use super::{request_script, validate_request};
+    use serde_json::Value;
+    #[test]
+    fn shares_strict_manual_socket_request_corpus() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../src/data/socket-request-cases.json")).unwrap();
+        for case in cases {
+            let mode = case["mode"].as_str().unwrap();
+            let request = &case["request"];
+            assert_eq!(
+                validate_request(mode, request).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            for other in [
+                "command", "workflow", "routine", "service", "social", "memo",
+            ] {
+                assert!(validate_request(other, request).is_err());
+            }
+            if case["valid"].as_bool().unwrap() {
+                assert!(request_script(mode, request)
+                    .unwrap()
+                    .starts_with("window.__RAYRAG__?.perform("));
+            }
+        }
     }
 }

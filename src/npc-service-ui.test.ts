@@ -69,6 +69,7 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
     dispositionEditor: { lock: () => {} },
     social: { lock: () => {} },
     memo: { lock: () => {} },
+    socket: { lock: () => {} },
     host,
     hooks,
     services: store,
