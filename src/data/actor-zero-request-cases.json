@@ -1,0 +1,25 @@
+{
+  "valid": [
+    {"type":"useItem","itemId":501,"target":0},
+    {"type":"useItem","itemId":501,"target":-1},
+    {"type":"skill","mode":"target","skillId":11,"level":1,"target":0},
+    {"type":"npcTalk","id":0},
+    {"type":"partyInviteId","id":0},
+    {"type":"vendingView","id":0}
+  ],
+  "invalid": [
+    {"type":"useItem","itemId":0,"target":0},
+    {"type":"useItem","itemId":501,"target":null},
+    {"type":"useItem","itemId":501,"target":"0"},
+    {"type":"useItem","itemId":501,"target":-2},
+    {"type":"skill","mode":"target","skillId":11,"level":1,"target":-1},
+    {"type":"skill","mode":"target","skillId":0,"level":1,"target":0},
+    {"type":"equip","bagId":0,"equipped":true},
+    {"type":"npcTalk","id":null},
+    {"type":"npcTalk","id":-1},
+    {"type":"vendingView","id":2147483648},
+    {"type":"partyCreate","name":"Synthetic","inviteId":0},
+    {"type":"partyAccept","partyId":0},
+    {"type":"partyLeader","memberId":0}
+  ]
+}

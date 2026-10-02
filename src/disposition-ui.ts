@@ -59,7 +59,7 @@ export function dispositionContextFromStatus(status: Record<string, unknown>): D
   const storage = observedWorld.storageReady === true ? items(observedWorld.storage) : null;
   const cart = observedWorld.cartReady === true ? items(observedWorld.cart) : null;
   const npcId = number(npc.id); const mode = npc.mode;
-  if (npcId && ['idle', 'dialog', 'options', 'shop', 'storage', 'barter', 'refine', 'vending'].includes(String(mode))) {
+  if (npcId !== null && Number.isInteger(npcId) && npcId>=0 && npcId<=0x7fffffff && ['idle', 'dialog', 'options', 'shop', 'storage', 'barter', 'refine', 'vending'].includes(String(mode))) {
     world.npc = { id: npcId, mode: mode as typeof world.npc.mode, dialog: null, options: [] };
   }
   const shop = object(observedWorld.shop);
@@ -76,7 +76,8 @@ export function dispositionContextFromStatus(status: Record<string, unknown>): D
   const ammoId = typeof character.ammoId === 'number' && Number.isInteger(character.ammoId) && character.ammoId >= -1 && character.ammoId <= 2_147_483_647 ? character.ammoId : null;
   const learned = character.skillsKnown === true && Array.isArray(character.learned) ? character.learned.map(object) : [];
   const pushCartLevel = number(learned.find(row => row.skillId === 73)?.level) ?? 0;
-  const ready = status.connected === true && status.compatible === true && number(player.id) !== null && player.dead === false;
+  const ownId=number(player.id);const own=ownId!==null&&Number.isInteger(ownId)&&ownId>=0&&ownId<=0x7fffffff&&player.kind===0;
+  const ready = status.connected === true && status.compatible === true && own && player.dead === false;
   const idle = status.running === false && status.runRequested !== true && object(status.task).pending === false
     && object(status.escape).pending !== true
     && !['switching', 'restoring', 'holding', 'fault'].includes(String(object(status.loadout).state))
@@ -92,7 +93,7 @@ export function dispositionContextFromStatus(status: Record<string, unknown>): D
       storage: { items: storage, slots: 600, weight: null, maxWeight: 'unlimited' },
       cart: { items: cart, slots: 100, weight: number(stats.cartWeight), maxWeight: 80000 },
     }, equipment, ammoId, metadata,
-    workflow: { map: typeof status.map === 'string' ? status.map : '', playerId: number(player.id) ?? 0,
+    workflow: { map: typeof status.map === 'string' ? status.map : '', playerId: own?ownId:null,
       alive: ready, idle, inventory: inventory ?? [], equipped: equipment ?? [], zeny: number(stats.zeny) ?? -1,
       world, visibleNpcIds: [], pushCartLevel },
   };

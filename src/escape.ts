@@ -12,7 +12,7 @@ export function escapeAction(policy: EscapeSettings): EscapeAction {
     : { type: 'skill', mode: 'self', skillId: policy.mode === 'random' ? 53 : 54, level: 1 };
 }
 export interface EscapeContext {
-  connected: boolean; compatible: boolean; fresh: boolean; map: string; playerId: number;
+  connected: boolean; compatible: boolean; fresh: boolean; map: string; playerId: number | null;
   player: Entity | undefined; character: CharacterState; connection: number;
   ready: boolean; blocker: string;
 }
@@ -101,7 +101,7 @@ export class EmergencyEscape {
     const action = escapeAction(policy); const recovery = automationSettings(settings).recovery;
     this.recoveryHp = Math.min(100, Math.max(policy.hpBelowPercent + 10, settings.minHpPercent + 1, recovery.enabled ? recovery.hpEnd : 0));
     this.state = 'preparing'; this.reason = 'Preparing emergency escape; letting the previous input settle.';
-    this.request = { action, policy, name: p.name, id: context.playerId, map: context.map, connection: context.connection,
+    this.request = { action, policy, name: p.name, id: p.id, map: context.map, connection: context.connection,
       readyAt: this.now() + 250, sentAt: null, deadline: 0, count: action.type === 'useItem' ? context.character.count(action.itemId) : 0,
       sp: context.character.stats?.sp ?? 0, refresh: null, arrivalMap: '', consumed: false,
       reconnect: false, entered: false, spawned: false, resources: false, died: false };

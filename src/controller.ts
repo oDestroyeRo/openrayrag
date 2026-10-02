@@ -1,3 +1,4 @@
+import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { matchesSkillExecution } from './skill-execution';
 import { insideLockArea, lockEntry, mapAllowed, mapPolicy } from './map-policy';
 import type { ActorPredicate } from './actor-observations';
@@ -41,7 +42,7 @@ export function validControllerAction(value: unknown): value is ControllerAction
   try { validateWorldAction(value); return true; } catch { return false; }
 }
 interface Pending {
-  action: ControllerAction; since: number; routineId: number | null;
+  actorIdentity?:ActionIdentity; action: ControllerAction; since: number; routineId: number | null;
   engineSequence?: number; workflow?: boolean; sent?: boolean;
   generation: number; worldGeneration: number; map: string; npcId: number | null;
   receipt?: VendingReceipt; serviceReceipt?: ServiceReceipt;
@@ -65,7 +66,7 @@ export class CompanionController {
   private supplyCloseSent=false; private supplyReturnApproach=false;private supplyServiceStarted=false;private supplyServiceContract:string|null=null;private supplyStorageFull:SupplyPhaseEvidence['storageFull']=null;private sendingSupply=false;
   private readonly dispositionMetadata=publishedDispositionMetadata();
   readonly social: ManualSocial;
-  private socialIdentity: string | null = null;
+  private socialIdentity: { actor:ActionIdentity; name:string } | null = null;
   private pending: Pending | null = null;
   private lastFrame = 0;
   private lastTick = 0;
@@ -91,7 +92,7 @@ export class CompanionController {
   private runKills = 0;
   private runPickups = 0;
   private characterName: string | null = null;
-  private featureReceipt: { action: ExpandedAction; count: number; stats: number; skills: number; attributes: number[] | null; level: number } | null = null;
+  private featureReceipt: { sequence:number; identity:ActionIdentity|null; action: ExpandedAction; count: number; stats: number; skills: number; attributes: number[] | null; level: number } | null = null;
   private unresolvedWorld: Pending | null = null;
   private workflowOutstanding: Pending | null = null;
 
@@ -190,8 +191,8 @@ export class CompanionController {
   }
   private captureActionFailure(): void {
     const result = this.engine.actionResult; const action = this.engine.pendingFeatureAction;
-    if (action) {
-      this.featureReceipt = { action, count: action.type === 'useItem' ? this.engine.character.count(action.itemId) : 0,
+    if (action && this.featureReceipt?.sequence!==result.sequence) {
+      this.featureReceipt = { sequence:result.sequence,identity:this.engine.pendingActionIdentity,action, count: action.type === 'useItem' ? this.engine.character.count(action.itemId) : 0,
         stats: this.engine.character.statsRevision, skills: this.engine.character.skillsRevision,
         attributes: this.engine.character.stats?.attributes?.slice() ?? null,
         level: action.type === 'allocateSkill' ? this.engine.character.learned.get(action.skillId) ?? 0 : 0 };
@@ -210,9 +211,9 @@ export class CompanionController {
   }
   private reconcileFeature(events: ReturnType<typeof decode>): void {
     const receipt = this.featureReceipt;
-    if (!this.blockedReason || !receipt) return;
+    if (!this.blockedReason || !receipt || !sameActionIdentity(receipt.identity,this.engine.actionIdentity(receipt.action))) return;
     const action = receipt.action; const state = this.engine.character;
-    const execution=action.type==='skill'?events.find(event=>matchesSkillExecution(action,event,this.engine.playerId)):undefined;
+    const execution=action.type==='skill'?events.find(event=>matchesSkillExecution(action,event,this.engine.player?.id??null)):undefined;
     const confirmed = action.type === 'useItem' ? state.inventoryKnown && state.count(action.itemId) < receipt.count
       : action.type === 'allocateSkill' ? state.skillsRevision > receipt.skills && (state.learned.get(action.skillId) ?? 0) > receipt.level
       : action.type === 'allocateStats' ? state.statsRevision > receipt.stats && !!receipt.attributes && !!state.stats?.attributes
@@ -258,10 +259,12 @@ export class CompanionController {
 
   context(): WorkflowContext {
     const engine = this.engine; const character = engine.character;
-    return { map: engine.map, playerId: engine.playerId, alive: !!engine.player && !engine.player.dead,
+    return { map: engine.map, playerId: engine.player?.id??null, alive: !!engine.player && !engine.player.dead,
       idle: engine.idleForActions(), inventory: character.inventoryKnown ? [...character.inventory.values()] : [],
       equipped: [...character.equipment, character.ammoId], zeny: character.stats?.zeny ?? -1,
       world: this.world, itemCatalog: ITEM_CATALOG, visibleNpcIds: [...engine.actors.values()].filter(e => e.kind === 2 || e.kind === 4).map(e => e.id),
+      actorIdentity:id=>engine.actorActionIdentity(id)??(id===0?null:engine.actorActionIdentity()),
+      visiblePlayerIds:[...engine.actors.values()].filter(e=>e.kind===0&&!e.dead).map(e=>e.id),
       basicSkillLevel: character.skillsKnown ? character.skillLevel(1) : 0,
       pushCartLevel: character.skillsKnown ? character.skillLevel(73) : 0,
       vendingLevel: character.skillsKnown ? character.skillLevel(70) : 0 };
@@ -276,7 +279,13 @@ export class CompanionController {
       inParty: this.world.party !== null, silenced: c.statuses.has(6) };
   }
   perform(mode: 'command' | 'workflow' | 'routine' | 'service' | 'social', input: unknown): void {
-    if (mode === 'social') { this.requireIdle(); this.social.dispatch(input, this.socialContext()); return; }
+    if (mode === 'social') {
+      this.requireIdle();
+      const actor=this.engine.actorActionIdentity();
+      if(!actor)throw new Error('A current observed own character is required.');
+      this.socialIdentity={actor,name:this.engine.player!.name};
+      this.social.dispatch(input, this.socialContext()); return;
+    }
     if (mode === 'service') {
       const {service:definition,executionPolicy} = validateServiceExecution(input); this.requireReady();
       if (this.social.busy || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
@@ -305,6 +314,14 @@ export class CompanionController {
       this.dispatch(input, null);
     }
   }
+  private worldActionIdentity(action:WorldAction):ActionIdentity|null {
+    const target=['npcTalk','partyInviteId','vendingView'].includes(action.type)&&'id' in action?action.id:this.world.npc.id??undefined;
+    const identity=this.engine.actorActionIdentity(target);
+    // Older positive-ID focus-only contexts retain their existing guard contract;
+    // newly supported zero requires independently observed actor identity.
+    return target===0?identity:identity??this.engine.actorActionIdentity();
+  }
+  private worldOwnerCurrent(owner:Pending):boolean {return !owner.actorIdentity||sameActionIdentity(owner.actorIdentity,this.engine.actorActionIdentity(owner.actorIdentity.targetId));}
   private dispatch(input: ControllerAction, routineId: number | null): void {
     if (this.escape.busy) throw new Error('Waiting for emergency escape to settle.');
     if (this.now() < this.fencedUntil) throw new Error('Waiting for the previous action deadline.');
@@ -316,6 +333,7 @@ export class CompanionController {
       return;
     }
     const action = validateWorldAction(input); const context = this.context();
+    const actorIdentity=this.worldActionIdentity(action);if(!actorIdentity)throw new Error('A current own and target actor identity is required.');
     const blockers = worldActionBlockers(action, context);
     if (action.type === 'vendingView' && (this.world.npc.id !== null || this.world.npc.mode !== 'idle'))
       blockers.push('Finish the current NPC interaction before opening another vendor.');
@@ -328,14 +346,14 @@ export class CompanionController {
         maxSpend: Math.min(context.zeny, 2_000_000_000), minStock: [], steps: [resource] }, context);
       if (!result.ok) throw new Error(result.reasons.join(' '));
       this.workflowTimeout = 10_000; this.workflowOutstanding = null; this.workflowDeadline = 0;
-      this.pending = { action, since: this.now(), routineId, ...binding, workflow: true, sent: false };
+      this.pending = { actorIdentity,action, since: this.now(), routineId, ...binding, workflow: true, sent: false };
     } else {
       const receipt = action.type === 'vendingPurchase' ? createVendingReceipt(action, context) : undefined;
       const source = action.type === 'cart' ? (action.direction === 1
         ? this.engine.character.inventory.get(action.bagId) : this.world.cart.get(action.bagId)) : undefined;
       const cart = source ? { source: { ...source }, inventory: this.engine.character.count(source.itemId),
         cart: this.cartCount(source), acknowledged: false } : undefined;
-      this.send(action); this.pending = { action, since: this.now(), routineId, ...binding,
+      this.send(action); this.pending = { actorIdentity,action, since: this.now(), routineId, ...binding,
         ...(receipt ? { receipt } : {}), ...(cart ? { cart } : {}) };
       this.engine.reason = `Sent ${action.type}; waiting for the game.`;
       this.engine.note(this.engine.reason);
@@ -384,12 +402,12 @@ export class CompanionController {
       }
     }
     this.engine.receive(events);
-    const socialPlayer = this.engine.player;
-    if (socialPlayer) {
-      const identity = JSON.stringify([socialPlayer.id, socialPlayer.name]);
-      if (this.socialIdentity !== null && identity !== this.socialIdentity) this.social.reset('Social character identity changed.');
-      this.socialIdentity = identity;
+    const socialPlayer = this.engine.player, socialActor=this.engine.actorActionIdentity();
+    if(this.socialIdentity&&!sameActionIdentity(this.socialIdentity.actor,socialActor)) {
+      if(socialPlayer&&socialPlayer.name!==this.socialIdentity.name)this.social.reset('Social character identity changed.');
+      else this.social.cancel('Unconfirmed after the own actor lifetime changed. No social send will be replayed.');
     }
+    this.socialIdentity=socialActor&&socialPlayer?{actor:socialActor,name:socialPlayer.name}:null;
     for (const event of events) if (event.type === 'chat' || event.type === 'emote') this.social.observe(event, this.socialContext());
     const escaped = this.escape.observe(events, this.escapeContext());
     if (escaped && this.runRequested && automationSettings(this.requestedSettings!).travel.returnToLockMap
@@ -404,7 +422,7 @@ export class CompanionController {
     this.travel.observe(events);
     for (const event of events) if (event.type === 'inventory' && event.cart !== undefined) this.world.replaceCart(event.cart);
     for (const event of worldEvents) {
-      this.world.apply(event, this.engine.playerId);
+      this.world.apply(event, this.engine.player?.id??null);
       if (event.type === 'cartMoved') this.engine.character.applyCartWeights(event.cartWeight, event.currentWeight);
     }
     if(this.supplyReceipt)observeSupplyReceipt(this.supplyReceipt,worldEvents,this.supplyContext());
@@ -422,9 +440,9 @@ export class CompanionController {
         observeServiceReceipt(owner.serviceReceipt,events,worldEvents,this.serviceContext());
         if (confirmServiceReceipt(owner.serviceReceipt,this.serviceContext())) this.unresolvedWorld = null;
       } else if (owner.map !== this.engine.map || owner.worldGeneration !== this.world.generation
-        || worldEvents.some(event => event.type === 'npcEnd')
-        || (owner.receipt ? confirmVendingReceipt(owner.receipt, this.context())
-          : owner.cart ? this.cartConfirmed(owner) : this.worldConfirmed(owner.action, worldEvents, owner)))
+        || this.worldOwnerCurrent(owner) && (worldEvents.some(event => event.type === 'npcEnd')
+          || (owner.receipt ? confirmVendingReceipt(owner.receipt, this.context())
+            : owner.cart ? this.cartConfirmed(owner) : this.worldConfirmed(owner.action, worldEvents, owner))))
         this.unresolvedWorld = null;
     }
     this.reconcileFeature(events);
@@ -434,7 +452,7 @@ export class CompanionController {
     }
     if (this.pending && !this.pending.workflow && this.pending.engineSequence === undefined
       && this.pending.generation === this.generation && this.pending.worldGeneration === this.world.generation
-      && this.pending.map === this.engine.map
+      && this.pending.map === this.engine.map && this.worldOwnerCurrent(this.pending)
       && (this.pending.receipt ? confirmVendingReceipt(this.pending.receipt, this.context())
         : this.pending.cart ? this.cartConfirmed(this.pending) : this.worldConfirmed(this.pending.action, worldEvents)))
       this.completePending(true, 'Game response confirmed.');
@@ -459,6 +477,7 @@ export class CompanionController {
     return [...this.world.cart.values()].reduce((sum, item) => sum + (this.sameItem(item, source) ? item.count : 0), 0);
   }
   private cartConfirmed(pending: Pending): boolean {
+    if(!this.worldOwnerCurrent(pending))return false;
     if (!pending.cart || pending.action.type !== 'cart' || !pending.cart.acknowledged || !this.engine.character.inventoryKnown || !this.world.cartReady) return false;
     const { source, inventory, cart } = pending.cart; const action = pending.action;
     const direction = action.direction === 1 ? 1 : -1;
@@ -468,6 +487,7 @@ export class CompanionController {
       && this.cartCount(source) === cart + direction * action.count;
   }
   private worldConfirmed(action: ControllerAction, events: WorldEvent[], owner: Pending | null = this.pending): boolean {
+    if(owner&&!this.worldOwnerCurrent(owner))return false;
     return events.some(event => {
       switch (action.type) {
         case 'npcTalk': return event.type === 'npcFocus' && event.id === action.id;
@@ -661,6 +681,7 @@ export class CompanionController {
     if (!this.engine.connected) { this.wait('Waiting for the game to reconnect.'); return; }
     if (!this.engine.compatible) { this.wait('Waiting for a verified game build and protocol.'); return; }
     if (!player || !this.engine.map) { this.wait('Waiting for the character and map to load.'); return; }
+    if(!player.dead&&!this.engine.actorActionIdentity()){this.wait('Waiting for the current own actor lifetime to be observed.');return;}
     this.characterName ??= player.name;
     if (player.name !== this.characterName) { this.wait('Waiting for the originally selected character.'); return; }
     if (this.unresolvedWorld) { this.wait('Waiting for the canceled world request to settle or its interaction to close.'); return; }
@@ -789,7 +810,8 @@ export class CompanionController {
       const action = this.workflow.tick(this.context());
       if (action) {
         this.workflowDeadline = now + this.workflowTimeout;
-        this.workflowOutstanding = { action, since: now, routineId: this.pending?.routineId ?? null,
+        const actorIdentity=this.worldActionIdentity(action);
+        this.workflowOutstanding = { ...(actorIdentity?{actorIdentity}:{}),action, since: now, routineId: this.pending?.routineId ?? null,
           generation: this.generation, worldGeneration: this.world.generation, map: this.engine.map,
           npcId: this.world.npc.id, workflow: true, sent: true };
         if (this.pending?.workflow) { this.pending.sent = true; this.pending.since = now; }

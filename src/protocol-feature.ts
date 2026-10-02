@@ -1,3 +1,4 @@
+import {actorId,optionalWireActorId} from './actor-identity';
 import { BitReader, BitWriter } from './binary';
 import type { Position } from './protocol';
 
@@ -154,10 +155,10 @@ function readStats(r: BitReader, legacy: boolean): FeatureEvent[] {
 function readSkillResult(r: BitReader): SkillResult {
   const mode = r.u8();
   if (mode !== 1 && mode !== 2 && mode !== 3 && mode !== 4 && mode !== 5) throw new Error('Unknown skill mode');
-  const source = r.i32();
+  const source = actorId(r.i32());
   let target: number | undefined; let attacker: number | undefined; let targetPosition: Position | undefined;
   if (mode === 4) targetPosition = r.position();
-  else if (mode !== 5) { attacker = r.i32(); target = r.i32(); }
+  else if (mode !== 5) { attacker = optionalWireActorId(r.i32()); target = optionalWireActorId(r.i32()); }
   const skillId = r.u8(); const level = r.u8(); const facing = r.u8(); const position = r.position();
   if (facing > 7) throw new Error('Invalid facing');
   let damage: number | undefined; let result: number | undefined; let hits: number | undefined;
@@ -181,24 +182,24 @@ function parseFeatures(data: Uint8Array): FeatureEvent[] | null {
   switch (opcode) {
     case FEATURE_OP.castStart:
     case FEATURE_OP.areaCastStart: {
-      const id=positive(r.i32());
+      const id=actorId(r.i32());
       const target=opcode===FEATURE_OP.castStart?bounded(r.i32(),-1,0x7fffffff,'cast target'):undefined;
       const targetPosition=opcode===FEATURE_OP.areaCastStart?r.position():undefined;
       const skillId=r.u8();const level=r.u8();const size=opcode===FEATURE_OP.areaCastStart?r.u8():undefined;
       bounded(r.u8(),0,7,'cast facing');const position=r.position();const remainingSeconds=r.f32();const flags=bounded(r.u8(),0,15,'cast flags');
       events=[{type:'castStart',id,skillId,level,position,remainingSeconds,flags,...(target!==undefined?{target}:{}),...(targetPosition?{targetPosition,size}:{})}];break;
     }
-    case FEATURE_OP.castExtend: events=[{type:'castExtend',id:positive(r.i32()),deltaSeconds:r.f32()}];break;
+    case FEATURE_OP.castExtend: events=[{type:'castExtend',id:actorId(r.i32()),deltaSeconds:r.f32()}];break;
     case FEATURE_OP.changeTarget: events=[{type:'changeTarget',id:bounded(r.i32(),0,0x7fffffff,'current target')}];break;
-    case FEATURE_OP.castStop: events=[{type:'castStop',id:positive(r.i32())}];break;
+    case FEATURE_OP.castStop: events=[{type:'castStop',id:actorId(r.i32())}];break;
     case FEATURE_OP.stats: return readStats(r, data.length === 145);
-    case FEATURE_OP.sit: events = [{ type: 'sit', id: positive(r.i32()), sitting: r.bool() }]; break;
+    case FEATURE_OP.sit: events = [{ type: 'sit', id: actorId(r.i32()), sitting: r.bool() }]; break;
     case FEATURE_OP.sp: { const sp = r.i32(); const maxSp = r.i32(); health(sp, maxSp, 'SP'); events = [{ type: 'sp', sp, maxSp }]; break; }
     case FEATURE_OP.status: {
-      const id = positive(r.i32()); const statusId = r.u8(); const seconds = r.f32();
+      const id = actorId(r.i32()); const statusId = r.u8(); const seconds = r.f32();
       events = [{ type: 'status', id, statusId, seconds }]; break;
     }
-    case FEATURE_OP.removeStatus: events = [{ type: 'status', id: positive(r.i32()), statusId: r.u8(), seconds: null, refresh: r.bool() }]; break;
+    case FEATURE_OP.removeStatus: events = [{ type: 'status', id: actorId(r.i32()), statusId: r.u8(), seconds: null, refresh: r.bool() }]; break;
     case FEATURE_OP.grantedSkills: events = [{ type: 'skills', granted: readSkills(r) }]; break;
     case FEATURE_OP.learnedSkill: events = [{ type: 'learnedSkill', skillId: positive(r.u8(), 'skill ID'), level: positive(r.u8(), 'skill level'), points: resource(r.i32(), 'skill points') }]; break;
     case FEATURE_OP.inventoryDelta: {
@@ -211,19 +212,19 @@ function parseFeatures(data: Uint8Array): FeatureEvent[] | null {
     }
     case FEATURE_OP.inventoryItem: { const bagId=positive(r.i32(),'bag ID'); events=[{type:'inventoryItem',item:readItem(r,2,bagId)}]; break; }
     case FEATURE_OP.equipment: events = [{ type: 'equipment', bagId: positive(r.i32(), 'bag ID'), slot: bounded(r.u8(), 0, 13, 'equipment slot'), equipped: r.bool() }]; break;
-    case FEATURE_OP.targeted: events = [{ type: 'targeted', id: positive(r.i32()) }]; break;
+    case FEATURE_OP.targeted: events = [{ type: 'targeted', id: actorId(r.i32()) }]; break;
     case FEATURE_OP.experience: events = [{ type: 'experience', baseTotal: resource(r.i32(), 'experience'), baseGained: r.i32(), jobTotal: resource(r.i32(), 'job experience'), jobGained: r.i32() }]; break;
     case FEATURE_OP.serverEvent: { const event=r.u8(),value=r.i32(),text=r.string(); events=[{type:'serverEvent',event,value,text}]; break; }
     case FEATURE_OP.currency: events = [{ type: 'currency', zeny: resource(r.i32(), 'zeny') }]; break;
     case FEATURE_OP.skill: return [readSkillResult(r)];
     case FEATURE_OP.skillImpact: {
-      const source = r.i32(); const target = r.i32(); const position = r.position();
+      const source = actorId(r.i32()); const target = actorId(r.i32()); const position = r.position();
       const damage = r.i32(); const damageSeconds = r.f32(); const skillId = r.u8(); const hits = r.u8(); const result = bounded(r.u8(), 0, 8, 'skill result');
       if (damageSeconds > 60) throw new Error('Invalid skill timing');
       events = [{ type: 'skillImpact', source, target, position, damage, damageSeconds, skillId, hits, result }]; break;
     }
     case FEATURE_OP.maskedSkill: {
-      const source = r.i32(); const targetPosition = r.position(); const skillId = r.u8(); const level = r.u8();
+      const source = actorId(r.i32()); const targetPosition = r.position(); const skillId = r.u8(); const level = r.u8();
       const facing = r.u8(); const position = r.position(); const range = bounded(r.u8(), 0, 31, 'skill mask range');
       const motionSeconds = r.f32(); const indirect = r.bool();
       if (facing > 7 || Math.abs(motionSeconds) > 60) throw new Error('Invalid skill timing or facing');
@@ -279,7 +280,7 @@ export function validateExpandedAction(value: unknown): ExpandedAction {
       keys(action, ['type', 'itemId'], ['target']);
       const itemId = number(action.itemId, 1, 0x7fffffff, 'item ID');
       if (!Object.hasOwn(action, 'target')) return { type: 'useItem', itemId };
-      const target = action.target === -1 ? -1 : number(action.target, 1, 0x7fffffff, 'target');
+      const target = action.target === -1 ? -1 : number(action.target, 0, 0x7fffffff, 'target');
       return { type: 'useItem', itemId, target };
     }
     case 'equip': keys(action, ['type', 'bagId', 'equipped']); return { type: 'equip', bagId: number(action.bagId, 1, 0x7fffffff, 'bag ID'), equipped: boolean(action.equipped) };
@@ -301,7 +302,7 @@ export function validateExpandedAction(value: unknown): ExpandedAction {
       const skillId = number(action.skillId, 1, 255, 'skill ID');
       if (action.mode === 'target') {
         keys(action, ['type', 'mode', 'skillId', 'level', 'target']);
-        return { type: 'skill', mode: 'target', skillId, level, target: number(action.target, 1, 0x7fffffff, 'target') };
+        return { type: 'skill', mode: 'target', skillId, level, target: number(action.target, 0, 0x7fffffff, 'target') };
       }
       if (action.mode === 'ground') {
         keys(action, ['type', 'mode', 'skillId', 'level', 'position']);
@@ -321,7 +322,7 @@ export function featureCommand(value: ExpandedAction): Uint8Array<ArrayBuffer> {
     case 'sit': return w.u8(FEATURE_OP.sit).bool(action.sitting).finish();
     case 'useItem': {
       const target = action.target ?? -1;
-      if (target !== -1) positive(target, 'target');
+      if (target !== -1) actorId(target, 'target');
       return w.u8(FEATURE_OP.useItem).i32(positive(action.itemId, 'item ID')).i32(target).finish();
     }
     case 'equip': return w.u8(FEATURE_OP.equipment).i32(positive(action.bagId, 'bag ID')).bool(action.equipped).finish();
@@ -338,7 +339,7 @@ export function featureCommand(value: ExpandedAction): Uint8Array<ArrayBuffer> {
       w.u8(FEATURE_OP.skill);
       if (action.mode === 'self') return w.u8(5).i16(bounded(action.skillId, 1, 32767, 'skill ID')).u8(level).finish();
       const skillId = bounded(action.skillId, 1, 255, 'skill ID');
-      if (action.mode === 'target') return w.u8(1).i32(positive(action.target, 'target')).u8(skillId).u8(level).finish();
+      if (action.mode === 'target') return w.u8(1).i32(actorId(action.target, 'target')).u8(skillId).u8(level).finish();
       if (action.mode === 'ground') return w.u8(4).position(action.position).u8(skillId).u8(level).finish();
       throw new Error('Unknown skill mode');
     }

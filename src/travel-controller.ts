@@ -21,7 +21,7 @@ export class TravelController {
   private steps: TravelStep[] = [];
   private route: Position[] = [];
   private map = '';
-  private playerId = 0;
+  private playerId: number | null = null;
   private since = 0;
   private deadline = 0;
   private lastAction = 0;

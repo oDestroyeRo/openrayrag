@@ -1,3 +1,4 @@
+import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { AttackStrategyPolicy, engagementIdentity, type StrategyChoice, type AttackStrategySnapshot, type EngagementIdentity } from './attack-strategy';
 import { castReadiness, skillAfterCastSeconds, CAST_PREREQUISITES, BLIND_CONDITION, AUTOMATIC_ATTACK_SKILLS, MANUAL_GROUND_SKILL } from './cast-policy';
 import { fieldGrid, insideLockArea, mapAllowed, mapPolicy, policyIdentity } from './map-policy';
@@ -41,7 +42,7 @@ export class BotEngine {
   compatible = false;
   running = false;
   reason = 'Open the game and sign in to your character.';
-  playerId = 0;
+  playerId: number | null = null;
   map = '';
   readonly entities = new Map<number, Entity>();
   readonly drops = new Map<number, Drop>();
@@ -53,16 +54,16 @@ export class BotEngine {
   private navigationMap = '';
   private route: RouteTask | null = null;
   private leg: RouteLeg | null = null;
-  private implicitWalk: { targetId: number|null; until: number } | null = null;
+  private implicitWalk: { targetId: number | null; until: number } | null = null;
   private routeFailures = 0;
   private routeStep = 10;
-  private pending: { type: 'attack' | 'pickup'; id: number; since: number; progress: number; approachSince: number | null; direct: boolean; attackRange?: number; engagement?:EngagementIdentity|null } | null = null;
+  private pending: { type: 'attack' | 'pickup'; id: number; since: number; progress: number; approachSince: number | null; direct: boolean; attackRange?: number; engagement?:EngagementIdentity|null; actorIdentity?:ActionIdentity|null } | null = null;
   private foreignTargets = new Set<number>();
   private serverTargetId:number|null=null;
   private readonly combatConditions=new Map<number,{rule:string;conditions:PredicateTrace[]}>();
   private respawnRefreshPending = false;
-  private skillKills = new Map<number, number>();
-  private skillTargets = new Map<number, { skillId: number; until: number }>();
+  private skillKills = new Map<number, { until:number; identity:ActionIdentity }>();
+  private skillTargets = new Map<number, { skillId: number; until: number; identity:ActionIdentity }>();
   private aggressors = new Set<number>();
   readonly actors = new Map<number, Entity>();
   private readonly revivableActors=new Map<number,Entity>();
@@ -89,7 +90,7 @@ export class BotEngine {
   private dropCreatedAt = new Map<number, number>();
 
   constructor(private readonly send: (action: Action) => void, private readonly now = Date.now,
-    private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) { this.automation = new AutomationScheduler(a=>this.send(a),this.now); this.observations=new ActorObservations(this.now);this.loadout=new LoadoutPolicy(this.now); }
+    private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) { this.automation = new AutomationScheduler(a=>this.send(a),this.now,a=>this.actionIdentity(a)); this.observations=new ActorObservations(this.now);this.loadout=new LoadoutPolicy(this.now); }
   private navigation(settings: Settings = this.settings): GridNavigator | null {
     const policy=mapPolicy(settings), identity=`${this.map}:${policyIdentity(policy)}`;
     if (this.navigationMap !== identity) {
@@ -101,7 +102,21 @@ export class BotEngine {
     this.navigator?.time(this.now());
     return this.navigator;
   }
-  get player(): Entity | undefined { return this.entities.get(this.playerId); }
+  get pendingActionIdentity():ActionIdentity|null {return this.automation.pendingIdentity;}
+  get player(): Entity | undefined { const p=this.playerId===null?undefined:this.entities.get(this.playerId);return p?.kind===0?p:undefined; }
+  private ownMotion() {return this.playerId===null?undefined:this.motions.get(this.playerId);}
+  /** Bind actions to existing observed lifetimes; NPC health is not combat evidence. */
+  actorActionIdentity(targetId?:number,allowDeadSelf=false):ActionIdentity|null {
+    const p=this.player;if(!p||!this.connected||!this.compatible)return null;
+    const self=this.observations.context(p.id);if(!self.incarnation&&!allowDeadSelf)return null;
+    const identity:ActionIdentity={world:self.world,selfId:p.id,selfIncarnation:self.incarnation??0};
+    if(targetId!==undefined){const target=this.observations.context(targetId);if(!target.incarnation)return null;identity.targetId=targetId;identity.targetIncarnation=target.incarnation;}
+    return identity;
+  }
+  actionIdentity(action:ExpandedAction):ActionIdentity|null {
+    const target=action.type==='skill'&&action.mode==='target'?action.target:action.type==='useItem'&&action.target!==undefined&&action.target>=0?action.target:undefined;
+    return this.actorActionIdentity(target,action.type==='respawn');
+  }
   private awaitsImplicitWalk(): boolean {
     if (this.implicitWalk && this.now() >= this.implicitWalk.until) this.implicitWalk = null;
     return this.implicitWalk !== null;
@@ -141,6 +156,7 @@ export class BotEngine {
     if(this.automation.busy||this.awaitsImplicitWalk()||this.loadout.startBlocked)throw new Error('Wait for the current action and movement to finish.');
     if (!inSchedule(automationSettings(validated),this.now())) throw new Error('Outside the configured daily schedule.');
     if (!this.connected || !this.compatible || !p || p.kind !== 0 || !this.map) throw new Error('Enter a character in the verified game build first.');
+    if(!p.dead&&!this.actorActionIdentity())throw new Error('Waiting for the current own actor lifetime to be observed.');
     const respawnOnly=p.dead&&continuing&&automationSettings(validated).respawn.enabled;
     if (!respawnOnly && validated.map !== this.map) throw new Error('Map changed. Choose monsters on the current map before starting.');
     if ((!p.dead && (p.maxHp <= 0 || p.hp / p.maxHp * 100 <= settings.minHpPercent))
@@ -176,9 +192,15 @@ export class BotEngine {
     if(!preserveCharacter)this.respawnRefreshPending=false;
     if(preserveCharacter)this.character.resetField();else {this.character.reset();this.automation.reset(true);this.runIntent=false;} this.implicitWalk = null; this.motions.clear(); this.navigator = null; this.navigationMap = ''; this.route = null; this.leg = null; this.routeFailures = 0;
     this.entities.clear(); this.actors.clear(); this.aggressors.clear(); this.drops.clear(); this.foreignTargets.clear(); this.excluded.clear();
-    this.killedAt = []; this.dropCreatedAt.clear(); this.skillKills.clear(); this.skillTargets.clear(); this.pending = null; this.map = ''; this.playerId = 0;
+    this.killedAt = []; this.dropCreatedAt.clear(); this.skillKills.clear(); this.skillTargets.clear(); this.pending = null; this.map = ''; this.playerId = null;
   }
   private removed(id: number, dead: boolean): void {
+    const skillKill=this.skillKills.get(id);
+    // HP reaching zero invalidates predicate observations before the death
+    // packet. Target replacement/departure already discards these owners;
+    // the surviving credit must still belong to the current own lifetime.
+    const ownKill=this.pending?.type==='attack'&&this.pending.id===id&&this.selfOwnerCurrent(this.pending.actorIdentity)
+      || !!skillKill&&skillKill.until>=this.now()&&this.selfOwnerCurrent(skillKill.identity);
     if(this.strategyWait?.id===id)this.strategyWait=null;
     this.strategies.remove(id);this.combatConditions.delete(id);this.observations.remove(id);if(this.serverTargetId===id)this.serverTargetId=null;
     this.motions.delete(id);
@@ -186,7 +208,7 @@ export class BotEngine {
     if(!dead)this.revivableActors.delete(id);
     else if(entity?.kind===0&&id!==this.playerId&&(this.revivableActors.has(id)||this.revivableActors.size<150))this.revivableActors.set(id,{...entity,statuses:undefined});
     if (dead && entity && !this.foreignTargets.has(id)
-      && (this.pending?.type === 'attack' && this.pending.id === id || (this.skillKills.get(id) ?? 0) >= this.now())) {
+      && ownKill) {
       this.kills++; this.killedAt.push({ x: entity.x, y: entity.y, at: this.now() });
       this.lootAfter = this.now() + LOOT_DELAY;
       this.note(`Defeated ${entity.name}.`);
@@ -197,23 +219,27 @@ export class BotEngine {
     }
     if (this.route?.id === id) {if(this.route.type==='follow')this.followLostAt??=this.now();this.cancelRoute();}
     this.skillKills.delete(id); this.skillTargets.delete(id); this.foreignTargets.delete(id); this.aggressors.delete(id); this.actors.delete(id);
+    if(id===this.playerId){this.skillKills.clear();this.skillTargets.clear();}
     if (id === this.playerId && dead && entity) { const alreadyDead=entity.dead;entity.dead=true;entity.hp=0;if(!alreadyDead)this.onDeath(); }
     else { this.entities.delete(id);if(id===this.playerId)this.stop('Character left the field.'); }
   }
   private apply(e: GameEvent | FeatureEvent): void {
     this.observations.apply(e);
     if (!['enter','map','spawn','remove','clear','stop','position','tracking','walk','attack','hit','death','resurrection','heal','drop','pickup'].includes(e.type)) {
-      this.character.apply(e as FeatureEvent,this.playerId);
+      if(this.playerId!==null)this.character.apply(e as FeatureEvent,this.player?.id??null);
       const loadoutFailure=this.loadout.observe(e as FeatureEvent,this.character,automationSettings(this.settings).loadout.enabled);
       const pendingSkill = this.automation.pendingAction;
       const strategyTarget=this.strategies.pendingTarget;
-      const result = this.automation.observe(e as FeatureEvent,this.character,this.playerId);
+      const result = this.automation.observe(e as FeatureEvent,this.character,this.player?.id??null);
       if(result.confirmed||result.failure)this.strategies.settled(this.automation.result.sequence,result.confirmed?'confirmed':'rejected',strategyTarget===null?null:engagementIdentity(strategyTarget,this.observations.context(strategyTarget)));
       if (result.confirmed && this.running && e.type === 'skillResult' && e.mode === 'target'
         && e.target !== undefined && pendingSkill?.type === 'skill' && pendingSkill.mode === 'target'
         && this.entities.get(e.target)?.kind === 1 && !this.foreignTargets.has(e.target)) {
-        this.skillTargets.set(e.target, { skillId: e.skillId, until: this.now() + 30_000 });
-        if ((e.damage ?? 0) > 0) this.skillKills.set(e.target, this.now() + 30_000);
+        const identity=this.actionIdentity(pendingSkill);
+        if(identity) {
+          this.skillTargets.set(e.target, { skillId: e.skillId, until: this.now() + 30_000,identity });
+          if ((e.damage ?? 0) > 0) this.skillKills.set(e.target, {until:this.now() + 30_000,identity});
+        }
       }
       if ((e.type === 'skillResult' || e.type === 'skillImpact') && e.target !== undefined && (e.damage ?? 0) > 0
         && this.entities.get(e.target)?.kind === 1) {
@@ -221,8 +247,11 @@ export class BotEngine {
           this.foreignTargets.add(e.target); this.skillKills.delete(e.target); this.skillTargets.delete(e.target);
           if (this.pending?.type === 'attack' && this.pending.id === e.target || this.route?.type === 'attack' && this.route.id === e.target)
             this.stop('Another character engaged this target.');
-        } else if (e.type === 'skillImpact' && this.skillTargets.get(e.target)?.skillId === e.skillId
-          && this.skillTargets.get(e.target)!.until >= this.now()) this.skillKills.set(e.target, this.now() + 30_000);
+        } else if (e.type === 'skillImpact') {
+          const target=this.skillTargets.get(e.target);
+          if(target?.skillId===e.skillId&&target.until>=this.now()&&sameActionIdentity(target.identity,this.actorActionIdentity(e.target)))
+            this.skillKills.set(e.target,{until:this.now()+30_000,identity:target.identity});
+        }
       }
       if(result.confirmed&&pendingSkill?.type==='equip')this.loadout.confirmed(this.character);
       if(loadoutFailure&&this.running&&automationSettings(this.settings).loadout.enabled)this.stop(loadoutFailure);
@@ -232,13 +261,13 @@ export class BotEngine {
       }
     }
     switch (e.type) {
-      case 'changeTarget': {const target=this.entities.get(e.id)??this.actors.get(e.id);this.serverTargetId=target&&!target.dead&&target.hp>0?e.id:null;break;}
+      case 'changeTarget': {const target=e.id===0?undefined:this.entities.get(e.id)??this.actors.get(e.id);this.serverTargetId=target&&!target.dead&&target.hp>0?e.id:null;break;}
       case 'enter':
         this.stop('Preparing character.'); this.resetWorld(); this.playerId = e.id; this.map = e.map; break;
       case 'map': {
         const respawning=this.automation.pendingAction?.type==='respawn';
         const resume=respawning||(!this.running&&this.runIntent);
-        this.automation.observe({type:'map'},this.character,this.playerId);
+        this.automation.observe({type:'map'},this.character,this.player?.id??null,true);
         this.stop(respawning ? 'Respawn confirmed. Return to the lock map before resuming.' : 'Map changed. Press Start when ready.'); this.runIntent = resume; const id = this.playerId;
         this.resetWorld(true); this.playerId = id; this.map = e.map; break;
       }
@@ -253,22 +282,25 @@ export class BotEngine {
         this.resetWorld(true); this.playerId = id; this.map = map; this.respawnRefreshPending = respawning; break;
       }
       case 'spawn':
+        if(this.entities.has(e.entity.id)||this.actors.has(e.entity.id))this.replaceActorOwnership(e.entity.id);
         if(this.strategyWait?.id===e.entity.id)this.strategyWait=null;
         this.strategies.remove(e.entity.id);this.revivableActors.delete(e.entity.id);
         if(this.serverTargetId===e.entity.id)this.serverTargetId=null;
-        this.observations.spawn(e.entity);
+        this.observations.spawn(e.entity,this.playerId);
         this.motions.delete(e.entity.id);
+        // A spawn replaces this ID in both stores, including cross-kind reuse.
+        this.entities.delete(e.entity.id);this.actors.delete(e.entity.id);
         // Actors remain bounded in memory for opt-in follow and NPC workflows.
-        if (e.entity.id !== this.playerId && (e.entity.kind === 0 || e.entity.kind === 2 || e.entity.kind === 4) && (this.actors.has(e.entity.id)||this.actors.size < 150)) this.actors.set(e.entity.id, e.entity);
-        if (e.entity.id === this.playerId || e.entity.kind === 1) this.entities.set(e.entity.id, e.entity);
-        if (e.entity.id === this.playerId) {
+        if ((e.entity.id !== this.playerId || e.entity.kind!==0) && (e.entity.kind === 0 || e.entity.kind === 2 || e.entity.kind === 4) && (this.actors.has(e.entity.id)||this.actors.size < 150)) this.actors.set(e.entity.id, e.entity);
+        if (e.entity.id === this.playerId&&e.entity.kind===0 || e.entity.kind === 1) this.entities.set(e.entity.id, e.entity);
+        if (e.entity.id === this.playerId&&e.entity.kind===0) {
           this.character.spawn(e.entity as StatefulEntity);
           if (this.respawnRefreshPending && !e.entity.dead && e.entity.hp > 0) {
-            this.automation.observe({ type: 'resurrection' }, this.character, this.playerId);
+            this.automation.observe({ type: 'resurrection' }, this.character, this.player?.id??null,true);
             this.respawnRefreshPending = false;
           }
         }
-        if (e.entity.id === this.playerId && !this.running) { this.reason = 'Ready. Choose your targets and press Start.'; this.note('Character ready.'); }
+        if (e.entity.id === this.playerId&&e.entity.kind===0 && !this.running) { this.reason = 'Ready. Choose your targets and press Start.'; this.note('Character ready.'); }
         break;
       case 'tracking': break; // Minimap markers do not correct world movement.
       case 'stop':
@@ -324,8 +356,8 @@ export class BotEngine {
         const entity = this.entities.get(e.id) ?? this.actors.get(e.id) ?? this.revivableActors.get(e.id);
         this.revivableActors.delete(e.id);
         if(entity?.kind===0&&e.id!==this.playerId&&this.actors.size<150)this.actors.set(e.id,entity);
-        if (entity) { entity.dead = false; entity.hp = Math.min(e.hp, entity.maxHp); Object.assign(entity, e.position);this.observations.spawn({...entity,statuses:undefined}); }
-        if (e.id === this.playerId) { const resume = this.automation.pendingAction?.type === 'respawn'; this.automation.observe({type:'resurrection'},this.character,this.playerId); this.stop('Character revived. Press Start when ready.'); this.runIntent = resume; }
+        if (entity) { entity.dead = false; entity.hp = Math.min(e.hp, entity.maxHp); Object.assign(entity, e.position);this.observations.spawn({...entity,statuses:undefined},this.playerId); }
+        if (e.id === this.playerId) { const resume = this.automation.pendingAction?.type === 'respawn'; this.automation.observe({type:'resurrection'},this.character,this.player?.id??null,true); this.stop('Character revived. Press Start when ready.'); this.runIntent = resume; }
         break;
       }
       case 'attack': {
@@ -337,7 +369,8 @@ export class BotEngine {
           this.foreignTargets.add(e.target);
           if ((this.pending?.type === 'attack' && this.pending.id === e.target) || (this.route?.type === 'attack' && this.route.id === e.target)) this.stop('Another character engaged this target.');
         }
-        if (e.source === this.playerId && this.pending?.type === 'attack' && this.pending.id === e.target) { this.pending.progress = this.now(); this.pending.approachSince = null; this.pending.direct = false; }
+        if (e.source === this.playerId && this.pending?.type === 'attack' && this.pending.id === e.target
+          && sameActionIdentity(this.pending.actorIdentity,this.actorActionIdentity(e.target))) { this.pending.progress = this.now(); this.pending.approachSince = null; this.pending.direct = false; }
         break;
       }
       case 'hit': {
@@ -380,6 +413,9 @@ export class BotEngine {
     if (!inSchedule(a,now)) { this.stop('Daily schedule ended. Press Start during the next allowed period.'); return; }
     if ((a.limits.minutes && now - this.runStarted >= a.limits.minutes * 60000) || (a.limits.kills && this.kills - this.runKills >= a.limits.kills) || (a.limits.pickups && this.looted - this.runPickups >= a.limits.pickups)) { this.stop('Configured session limit reached.'); return; }
     if (p.dead) { if(a.respawn.enabled && this.deaths <= a.respawn.maxDeaths && !this.automation.busy) { this.automation.submit({type:'respawn'},this.character); this.reason='Waiting for respawn confirmation.'; } return; }
+    if(!this.actorActionIdentity()) {
+      const intent=this.runIntent;this.stop('Waiting for the current own actor lifetime to be observed.');this.runIntent=intent;return;
+    }
     if (p.maxHp <= 0 || p.hp / p.maxHp * 100 <= this.settings.minHpPercent) { this.stop('HP reached the stop limit. Recover manually.'); return; }
     if (a.limits.weightPercent) { const stats=this.character.stats; if(stats?.weight===undefined||!stats.maxWeight) { this.stop('Weight is unavailable for the configured weight limit.');return; } if(stats.weight/stats.maxWeight*100>=a.limits.weightPercent) { this.stop('Configured weight limit reached.');return; } }
     const nav = this.navigation();
@@ -401,7 +437,7 @@ export class BotEngine {
       if(target&&(!this.fieldContains(target)||monsterRule(a,target.classId)?.conditions?.length&&!this.eligible(target,now,false))) {
         // Stop the owned auto-attack, keeping an unresolved server approach fenced
         // until its walk/stop reply or the existing bounded wait settles it.
-        if(!this.motions.has(this.playerId))this.implicitWalk ??= {targetId:this.pending.id,until:now+4000};
+        if(!this.ownMotion())this.implicitWalk ??= {targetId:this.pending.id,until:now+4000};
         this.pending=null;this.route=null;this.send({type:'stop'});this.lastAction=now;
         this.reason='Monster conditions no longer permit this attack.';this.note(this.reason);return;
       }
@@ -417,21 +453,22 @@ export class BotEngine {
       const recoveryItem=this.automation.nextRecoveryItem(a,p,this.character,this.actorObservation(a.items.flatMap(r=>r.conditions??[])));
       if(recoveryItem.failure){this.stop(recoveryItem.failure);return;}
       if (this.pending || this.route || this.leg) { this.pending=null;const stoppingLeg=!!this.leg;this.cancelRoute();if(!stoppingLeg)this.send({type:'stop'});this.lastAction=now;this.reason='Stopping combat before recovery.';return; }
-      if(this.motions.has(this.playerId)||now-this.lastAction<ACTION_DELAY)return;
+      if(!!this.ownMotion()||now-this.lastAction<ACTION_DELAY)return;
       if(recoveryItem.action){this.automation.submit(recoveryItem.action,this.character);this.reason=this.automation.task().label;return;}
       const recovery=this.automation.recover(a,p,this.character);
       if(recovery.failure) {this.stop(recovery.failure);return;}
       if(recovery.action)this.automation.submit(recovery.action,this.character);
       this.reason=this.automation.task().label;if(this.automation.recovering||this.automation.busy)return;
     }
-    if(this.character.sitting===true) {if(!this.motions.has(this.playerId))this.automation.submit({type:'sit',sitting:false},this.character);return;}
+    if(this.character.sitting===true) {if(!this.ownMotion())this.automation.submit({type:'sit',sitting:false},this.character);return;}
     let monsterChoice: { target: Entity; cells: Position[]; strategy?:StrategyChoice } | null | undefined;
     const chooseMonster = () => {
       if (monsterChoice === undefined) {const candidates=[...this.entities.values()].filter(e=>this.eligible(e,now));monsterChoice=a.attackStrategies?.length?this.bestStrategyRoute(p,candidates):this.bestRoute(p,candidates,e=>monsterRule(a,e.classId)?.priority??0,true);}
       return monsterChoice;
     };
     const needsEnemy = !!a.attackStrategies?.length || a.loadout.enabled || a.skills.some(rule => rule.target === 'enemy') || a.equipment.some(rule => rule.monsterClassId > 0);
-    const enemy=this.pending?.type==='attack'?this.entities.get(this.pending.id)??null:(this.route?.type==='attack'||this.route?.type==='skill')?this.entities.get(this.route.id!)??null:needsEnemy?chooseMonster()?.target??null:null;
+    const candidateEnemy=this.pending?.type==='attack'?this.entities.get(this.pending.id)??null:(this.route?.type==='attack'||this.route?.type==='skill')?this.entities.get(this.route.id!)??null:needsEnemy?chooseMonster()?.target??null:null;
+    const enemy=candidateEnemy&&!candidateEnemy.dead&&candidateEnemy.hp>0&&this.observations.context(candidateEnemy.id).incarnation?candidateEnemy:null;
     const conditions=[...a.items,...a.skills,...a.equipment].flatMap(rule=>rule.conditions??[]);
     const observations=conditions.length?this.actorObservation(conditions):undefined;
     const featureSettings=enemy&&a.attackStrategies?.some(rule=>rule.speciesIds.includes(enemy.classId))?{...a,skills:a.skills.filter(rule=>rule.target!=='enemy')}:a;
@@ -439,7 +476,7 @@ export class BotEngine {
     if(next.failure) {this.stop(next.failure);return;}
     if(next.action) {
       if(this.pending||this.route||this.leg) {this.pending=null;const stoppingLeg=!!this.leg;this.cancelRoute();if(!stoppingLeg)this.send({type:'stop'});this.lastAction=now;return;}
-      if(this.motions.has(this.playerId)||now-this.lastAction<ACTION_DELAY)return;
+      if(!!this.ownMotion()||now-this.lastAction<ACTION_DELAY)return;
       this.automation.submit(next.action,this.character);this.reason=this.automation.task().label;return;
     }
     if(a.loadout.enabled) {
@@ -453,7 +490,7 @@ export class BotEngine {
           this.loadout.requestStop('Waiting for target clear before changing equipment.');
           this.send({type:'stop'});this.lastAction=now;return;
         }
-        if(this.motions.has(this.playerId)||now-this.lastAction<ACTION_DELAY)return;
+        if(!!this.ownMotion()||now-this.lastAction<ACTION_DELAY)return;
         this.loadout.begin(planned.change,this.character);
         this.automation.submit(planned.change.action,this.character,state=>this.loadout.receipt(state));
         this.reason=this.automation.task().label;return;
@@ -495,7 +532,7 @@ export class BotEngine {
         const since = this.pending.approachSince;
         // Attack may already have requested a walk whose reply is still in flight.
         // Retain that owner until its reply or the existing bounded wait expires.
-        if (!this.motions.has(this.playerId)) {
+        if (!this.ownMotion()) {
           // Stop on an idle attacker emits no movement acknowledgment. Keep a
           // bounded ownership fence without inventing a failed physical leg.
           this.implicitWalk ??= { targetId: target.id, until: now + 4000 };
@@ -560,7 +597,7 @@ export class BotEngine {
     const automation=automationSettings(this.settings);const conditions=monsterRule(automation,e.classId)?.conditions;
     const observations=conditions?.length?this.actorObservation(conditions,this.currentTargetId,e.id):undefined;
     if(conditions?.length&&(this.combatConditions.has(e.id)||this.combatConditions.size<32))this.combatConditions.set(e.id,{rule:`Monster ${e.classId} · actor ${e.id}`,conditions:conditions.map(condition=>evaluateActorPredicate(condition,observations))});
-    return this.fieldContains(e) && e.kind === 1 && !e.dead && e.hp > 0 && acceptsMonster(automation,e,this.player!,this.settings.targets,this.aggressors.has(e.id),observations)
+    return this.fieldContains(e) && e.kind === 1 && !e.dead && e.hp > 0 && !!this.observations.context(e.id).incarnation && acceptsMonster(automation,e,this.player!,this.settings.targets,this.aggressors.has(e.id),observations)
       && (!acquiring || distance(this.player!, e) <= this.settings.radius) && !this.foreignTargets.has(e.id)
       && (this.excluded.get(e.id) ?? 0) <= now;
   }
@@ -610,7 +647,7 @@ export class BotEngine {
     return best;
   }
   private stopAttackForSkill(id:number,now:number):void {
-    if(!this.motions.has(this.playerId))this.implicitWalk??={targetId:id,until:now+4000};
+    if(!this.ownMotion())this.implicitWalk??={targetId:id,until:now+4000};
     if(automationSettings(this.settings).loadout.enabled)this.loadout.requestStop('Waiting for target clear before the attack skill.');
     const engagement=engagementIdentity(id,this.observations.context(id));
     const since=engagement&&this.sameEngagement(this.pending?.engagement??this.route?.engagement,engagement)?this.pending?.approachSince??this.route?.since??null:null;
@@ -618,7 +655,7 @@ export class BotEngine {
     this.send({type:'stop'});this.lastAction=now;this.reason='Stopping normal attack before casting.';
   }
   private dispatchStrategy(target:Entity,choice:Extract<StrategyChoice,{state:'cast'}>):void {
-    if(this.pending||this.leg||!this.featureActionsSettled||this.motions.has(this.playerId)||this.awaitsImplicitWalk()||this.loadout.blocked)return;
+    if(this.pending||this.leg||!this.featureActionsSettled||!!this.ownMotion()||this.awaitsImplicitWalk()||this.loadout.blocked)return;
     const fresh=this.strategyChoice(target);
     if(fresh.state!=='cast'||fresh.rule.id!==choice.rule.id||fresh.identity.world!==choice.identity.world||fresh.identity.incarnation!==choice.identity.incarnation||!this.eligible(target,this.now(),false))return;
     if(!this.navigation()?.canCast(cell(this.player!),cell(target),fresh.profile.range))return;
@@ -634,6 +671,8 @@ export class BotEngine {
     this.reason = `Selected ${target}; finishing the current walk before approaching.`;
   }
   private act(type: 'attack' | 'pickup', id: number, direct = false): void {
+    const actorIdentity=this.actorActionIdentity(type==='attack'?id:undefined);
+    if(!actorIdentity){this.reason='Waiting for the current action actor lifetime to be observed.';return;}
     const approachStarted = this.route?.since ?? this.now();
     this.route = null; this.leg = null;
     if(type==='attack'&&this.player){const failure=this.loadout.attackGuard(automationSettings(this.settings),this.player,this.character);if(failure){this.stop(failure);return;}if(automationSettings(this.settings).loadout.enabled)this.loadout.attackDispatched();}
@@ -641,7 +680,7 @@ export class BotEngine {
     if(type==='attack')this.strategies.normalDispatched(engagement);
     this.send({ type, id }); this.lastAction = this.now();
     this.pending = { type, id, since: this.now(), progress: this.now(), approachSince: direct ? approachStarted : null, direct,
-      ...(type === 'attack' ? { engagement,attackRange: normalAttackProfile(this.character).range } : {}) };
+      ...(type === 'attack' ? { engagement,actorIdentity,attackRange: normalAttackProfile(this.character).range } : {}) };
     if (direct) this.implicitWalk = {targetId:id,until:this.now()+4000};
     this.reason = type === 'attack' ? `Attacking ${this.entities.get(id)?.name ?? 'selected monster'}.` : `Collecting item #${this.drops.get(id)?.itemId}.`;
     if (type === 'attack') this.attacks++;
@@ -649,6 +688,30 @@ export class BotEngine {
   }
   private interrupted(id: number): void {
     if (id === this.playerId) { this.leg = null; if (this.route) this.route.cells = []; }
+  }
+  private selfOwnerCurrent(identity:ActionIdentity|null|undefined):boolean {
+    return !!identity&&sameActionIdentity({world:identity.world,selfId:identity.selfId,selfIncarnation:identity.selfIncarnation},this.actorActionIdentity());
+  }
+  /** A replacement spawn is a new lifetime, even without a preceding removal. */
+  private replaceActorOwnership(id:number):void {
+    const own=id===this.playerId;
+    const pending=!!this.pending&&(own||this.pending.type==='attack'&&this.pending.id===id);
+    const route=!!this.route&&(own||['attack','skill'].includes(this.route.type)&&this.route.id===id);
+    if(pending||route) {
+      const stopping=this.pending?.type==='attack'&&pending||route&&!!this.leg||own&&!!this.ownMotion();
+      if(stopping) {
+        // A late Attack for a reused ID cannot acknowledge this cancellation.
+        if(this.implicitWalk)this.implicitWalk.targetId=null;
+        else this.implicitWalk={targetId:null,until:this.now()+4000};
+        if(this.connected){this.send({type:'stop'});this.lastAction=this.now();}
+      }
+      if(pending)this.pending=null;
+      if(route){this.route=null;this.leg=null;}
+      this.reason='Actor lifetime changed; waiting to select a current eligible target.';
+    }
+    if(own){this.skillKills.clear();this.skillTargets.clear();}
+    else {this.skillKills.delete(id);this.skillTargets.delete(id);}
+    this.combatConditions.delete(id);this.foreignTargets.delete(id);this.aggressors.delete(id);this.excluded.delete(id);
   }
   private cancelRoute(): void {
     this.fenceUnacknowledgedLeg();
@@ -692,7 +755,7 @@ export class BotEngine {
         : `Approach time limit (${limit}s) reached for ${target}; skipping it for 30 seconds.`;
       this.note(this.reason); return;
     }
-    const motion = this.motions.get(this.playerId);
+    const motion = this.ownMotion();
     if (!this.leg && motion) {
       if (motion.walk.cells.length > 21 || !nav.validRoute(motion.walk.cells)) { this.stop('Existing movement crossed blocked cells or a portal exclusion.'); return; }
       this.leg = { destination: motion.walk.cells.at(-1)!, cells: motion.walk.cells,
@@ -782,6 +845,7 @@ export class BotEngine {
   }
   private onDeath(): void {
     this.strategies.cancel();
+    this.skillKills.clear();this.skillTargets.clear();
     this.implicitWalk = null; this.loadout.reset(true);
     this.deaths++;
     const a=automationSettings(this.settings);
@@ -798,7 +862,7 @@ export class BotEngine {
   /** Emergency escape may preempt walking/combat, but never an unresolved resource or cast. */
   get featureActionsSettled(): boolean { return !this.automation.busy && this.loadout.equipmentSettled; }
   get actionResult(): ActionResult { return {...this.automation.result}; }
-  idleForActions(): boolean { this.advanceMovement(); return !this.running&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.motions.has(this.playerId)&&!this.loadout.blocked; }
+  idleForActions(): boolean { this.advanceMovement(); return !this.running&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&!this.loadout.blocked; }
   manualAction(action: ExpandedAction): void {
     action=validateExpandedAction(action);
     if(!this.idleForActions())throw new Error('Stop automation and wait for movement and action confirmation first.');
@@ -810,8 +874,8 @@ export class BotEngine {
     if(action.type==='useItem') {
       if(!this.character.inventoryKnown||this.character.count(action.itemId)<1)throw new Error('Item is not present in a verified inventory.');
       const item=ITEM_CATALOG[action.itemId];if(!item||item.useType<1)throw new Error('This item is not usable.');
-      if(action.target&&!this.entities.has(action.target)&&!this.actors.has(action.target))throw new Error('Item target is not visible.');
-      if(item.useType===2&&!action.target)throw new Error('This item requires a target.');
+      if(action.target!==undefined&&action.target!==-1&&!this.entities.has(action.target)&&!this.actors.has(action.target))throw new Error('Item target is not visible.');
+      if(item.useType===2&&(action.target===undefined||action.target===-1))throw new Error('This item requires a target.');
     }
     if(action.type==='equip') {const item=this.character.inventory.get(action.bagId),info=item?ITEM_CATALOG[item.itemId]:undefined;if(!this.character.inventoryKnown||!item||!info||![2,3,4].includes(info.itemClass)||(!info.position&&!AMMO_CATALOG[item!.itemId]))throw new Error('Equipment is not present in a verified inventory.');}
     if(action.type==='allocateSkill') {
@@ -873,7 +937,7 @@ export class BotEngine {
     this.routeTick(p,now);
   }
   actorObservation(conditions:ActorPredicate[]=[], targetId:number|null=this.currentTargetId,candidateId:number|null=null): ActorObservationSnapshot {
-    return this.observations.snapshot(this.playerId,targetId,this.connected&&this.compatible,conditions,false,candidateId);
+    return this.observations.snapshot(this.player?.id??null,targetId,this.connected&&this.compatible,conditions,false,candidateId);
   }
   get currentTargetId():number|null {
     return this.serverTargetId;
@@ -881,7 +945,7 @@ export class BotEngine {
   snapshot(): Snapshot {
     const nav = this.navigation();
     const chase = this.pending?.type === 'attack' ? this.entities.get(this.pending.id) : null;
-    const chaseCells = chase ? this.motions.get(this.playerId)?.walk.cells ?? [] : [];
+    const chaseCells = chase ? this.ownMotion()?.walk.cells ?? [] : [];
     const navigation: NavigationStatus | null = nav ? {
       ...nav.summary(this.player ?? { x: -1, y: -1 }), ready: !!this.player && nav.safe(this.player),
       mode: this.automation.recovering ? 'recover' : this.route?.type ?? (chase ? 'attack' : 'idle'), goal: this.route?.destination ?? (chase ? cell(chase) : null),
@@ -893,7 +957,7 @@ export class BotEngine {
       monsters: [...this.entities.values()].filter(e => e.kind === 1).slice(0,150),
       drops: [...this.drops.values()].slice(0,150), attacks: this.attacks, kills: this.kills,
       looted: this.looted, target: this.pending?.type === 'attack' ? this.entities.get(this.pending.id)?.name ?? '' : (this.route?.type === 'attack'||this.route?.type==='skill') ? this.entities.get(this.route.id!)?.name ?? '' : '',
-      attackStrategies:automationSettings(this.settings).attackStrategies?.length?this.strategies.snapshot():{pending:false,entries:[],truncated:false},actorObservations:this.observations.snapshot(this.playerId,this.currentTargetId,this.connected&&this.compatible),ruleConditions:publishConditionReports([...this.automation.ruleConditions,...this.combatConditions.values()]),
+      attackStrategies:automationSettings(this.settings).attackStrategies?.length?this.strategies.snapshot():{pending:false,entries:[],truncated:false},actorObservations:this.observations.snapshot(this.player?.id??null,this.currentTargetId,this.connected&&this.compatible),ruleConditions:publishConditionReports([...this.automation.ruleConditions,...this.combatConditions.values()]),
       log: this.log.slice(), navigation, loadout:this.loadout.snapshot(automationSettings(this.settings),this.character), character:this.character.snapshot(), actors:[...this.actors.values()].slice(0,100),
       task:this.automation.busy||this.automation.recovering?this.automation.task():{kind:this.pending?.type??this.route?.type??'idle',label:this.reason,pending:!!this.pending||!!this.leg,since:this.pending?.since??this.route?.since??null},
       elapsedSeconds:this.runStarted?Math.max(0,Math.floor(((this.running?this.now():this.stoppedAt)-this.runStarted)/1000)):0,deaths:this.deaths,runIntent:this.runIntent,lootStats:[...this.lootStats].slice(0,128).map(([itemId,count])=>({itemId,count})),actionResult:{...this.automation.result},

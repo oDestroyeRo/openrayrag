@@ -1,3 +1,4 @@
+import {actorId,optionalWireActorId} from './actor-identity';
 import { decodeFeatures, FEATURE_OP } from './protocol-feature';
 import type { FeatureEvent } from './protocol-feature';
 import { decodeSocial, type SocialEvent } from './social-protocol';
@@ -122,7 +123,7 @@ function spawn(r: Reader): GameEvent[] {
     statusIds.add(id); statuses.push({ id, seconds });
   }
   e.u8(); // IsMainCharacter; actual identity comes from EnterServer.
-  if (e.offset !== size || id <= 0 || classId < 0 || kind > 4 || state > 4) throw new Error('Invalid entity');
+  if (e.offset !== size || id < 0 || classId < 0 || kind > 4 || state > 4) throw new Error('Invalid entity');
   health(hp, maxHp);
   // Non-self player broadcasts can reach the owner with placeholder SP. Match
   // the official client: only a positive maximum establishes a player SP value.
@@ -173,20 +174,20 @@ export function decode(data: Uint8Array): GameEvent[] {
   const social = decodeSocial(data);
   if (social !== null) return social;
   switch (opcode) {
-    case OP.enter: return [{ type: 'enter', id: r.i32(), map: mapName(r.string()) }];
+    case OP.enter: return [{ type: 'enter', id: actorId(r.i32()), map: mapName(r.string()) }];
     case OP.map: return [{ type: 'map', map: mapName(r.string()) }];
     case OP.spawn: return spawn(r);
-    case OP.remove: return [{ type: 'remove', id: r.i32(), dead: r.u8() === 3 }];
+    case OP.remove: return [{ type: 'remove', id: actorId(r.i32()), dead: r.u8() === 3 }];
     case OP.clear: return [{ type: 'clear' }];
-    case OP.stop: return [{ type: 'stop', id: r.i32() }];
+    case OP.stop: return [{ type: 'stop', id: actorId(r.i32()) }];
     case OP.walk: {
-      const id = r.i32();
+      const id = actorId(r.i32());
       const walk = readWalk(r);
       if (r.offset !== data.length) throw new Error('Unknown walk trailer');
       return [{ type: 'walk', id, walk }];
     }
     case OP.move:
-    case OP.stopImmediate: return [{ type: 'position', id: r.i32(), position: r.position() }];
+    case OP.stopImmediate: return [{ type: 'position', id: actorId(r.i32()), position: r.position() }];
     case OP.tracking: {
       const count = r.u16();
       if (count > 4096) throw new Error('Unknown tracking layout');
@@ -201,22 +202,22 @@ export function decode(data: Uint8Array): GameEvent[] {
       return events;
     }
     case OP.attack: {
-      const source = r.i32(); const target = r.i32(); r.take(4);
+      const source = optionalWireActorId(r.i32()); const target = actorId(r.i32()); r.take(4);
       return [{ type: 'attack', source, target, position: r.position() }];
     }
     case OP.hit: {
-      const id = r.i32(); const damage = r.i32();
+      const id = actorId(r.i32()); const damage = r.i32();
       const pos = r.position();
       return [{ type: 'hit', id, damage, position: pos, stops: (r.u8() & 1) !== 0 }];
     }
-    case OP.death: return [{ type: 'death', id: r.i32() }];
+    case OP.death: return [{ type: 'death', id: actorId(r.i32()) }];
     case OP.resurrection: {
-      const id = r.i32(); const pos = r.position(); const hp = r.i32();
+      const id = actorId(r.i32()); const pos = r.position(); const hp = r.i32();
       if (hp <= 0) throw new Error('Invalid resurrection health');
       return [{ type: 'resurrection', id, hp, position: pos }];
     }
     case OP.heal: {
-      const id = r.i32(); r.i32();
+      const id = actorId(r.i32()); r.i32();
       const hp = r.i32(); const maxHp = r.i32(); health(hp, maxHp);
       return [{ type: 'heal', id, hp, maxHp }];
     }
@@ -227,7 +228,7 @@ export function decode(data: Uint8Array): GameEvent[] {
       if (id <= 0 || itemId <= 0 || count <= 0) throw new Error('Invalid drop');
       return [{ type: 'drop', drop: { id, ...pos, itemId, count, isNew } }];
     }
-    case OP.pickup: return [{ type: 'pickup', picker: r.i32(), id: r.i32() }];
+    case OP.pickup: {const picker=optionalWireActorId(r.i32());const id=r.i32();if(id<=0)throw new Error('Invalid drop ID');return [{type:'pickup',picker,id}];}
     // Unsupported login/other packet payloads are ignored.
     default: return [];
   }
@@ -235,7 +236,7 @@ export function decode(data: Uint8Array): GameEvent[] {
 
 export function command(action: 'attack' | 'pickup' | 'stop', id?: number): Uint8Array<ArrayBuffer> {
   if (action === 'stop') return Uint8Array.of(OP.stop);
-  if (!Number.isInteger(id) || id! <= 0 || id! > 0x7fffffff) throw new Error('Invalid target');
+  if (!Number.isInteger(id) || id! < (action==='attack'?0:1) || id! > 0x7fffffff) throw new Error('Invalid target');
   const result = new Uint8Array(5);
   result[0] = OP[action];
   new DataView(result.buffer).setInt32(1, id!, true);

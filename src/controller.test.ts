@@ -182,8 +182,8 @@ describe('persistent field run ownership', () => {
 
 describe('latency and confirmation ownership', () => {
   it('reacts to an incoming packet immediately and starts the next action at 100 ms', () => {
-    const { controller, sent, packet, step } = setup(); controller.start(settings); step();
-    controller.engine.entities.delete(2); controller.engine.entities.set(3, { ...monster, id: 3 }); step();
+    const { controller, sent, packet, step, receive } = setup(); controller.start(settings); step();
+    receive({type:'spawn',entity:{...monster,id:3}});step();
     packet(new BitWriter().u8(OP.remove).i32(2).bool(false));
     expect(sent.at(-1)).toEqual({ type: 'attack', id: 3 });
   });

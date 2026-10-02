@@ -216,9 +216,12 @@ Pinned `4099e2c000c3c550516760b9c1241595aac9aceb` opcode 63 carries `bagId:i32` 
 
 Active and canceled skill receipts share an execution matcher. Ground results must identify the exact requested X/Y coordinate as well as source, skill, level and mode. Cast starts and indirect impacts are not execution confirmations.
 
-
 ## Map policy and lock-area ownership
 
 `automation.mapPolicy` is optional and strictly validated across native/settings/profile boundaries; absent policy preserves unrestricted legacy routing. See [MAP_POLICY.md](MAP_POLICY.md) for score units, bounds and owner rules. Fixed routes filter denied/unallowed destinations and intermediate maps before graph expansion, permit a forbidden initial origin only for departure, and never reenter it. Weighted search is separate from the legacy algorithm and retains Pareto score/hop labels per exact arrival under 64-crossing/4096-expanded-state bounds, with verified terminal escape cost. Physical portal/path caches remain policy independent; permission filtering uses each trip’s detached snapshot.
 
 The field navigator is one bounded map+policy cache and masks walking to the inclusive explicit-map rectangle. Target coordinate gates reject outside monsters/loot/follow/waypoints even when ranged or adjacent shortcuts would otherwise succeed. The controller retains physical grids for service/return movement and reachable field entry; supply arming and field resume wait for verified entry. Manual service requests carry a separate `executionPolicy` beside the immutable verified `service` definition. Policies cannot constrain server-selected escape arrivals or guarantee immediate Stop processing; unexpected transitions invalidate the active route.
+
+## Actor ID zero and own readiness
+
+[Actor identity contracts](ACTOR_IDS.md) records the source-valid zero actor IDs, nullable unannounced own identity, post-enter initialization ordering, world/incarnation receipt fences and field-specific exceptions. `ChangeTarget(0)` remains clear/ambiguous; offline party entity zero cannot prove membership. The evidence is pinned source plus synthetic/local checks, with no live allocator-wrap or social-send claim.

@@ -1,3 +1,4 @@
+import {actorId} from './actor-identity';
 // Source: Rayrag Rebuild pin 4099e2c000c3c550516760b9c1241595aac9aceb.
 // Normal player actions only. Inventory and combat packets have separate owners.
 import { BitReader, BitWriter } from './binary';
@@ -113,7 +114,7 @@ export function decodeWorld(data: Uint8Array): WorldEvent[] | null {
   switch (opcode) {
     case WORLD_OP.npc: {
       switch (r.u8()) {
-        case 0: event = { type: 'npcFocus', id: id(r.i32()), focus: r.bool() }; break;
+        case 0: event = { type: 'npcFocus', id: actorId(r.i32()), focus: r.bool() }; break;
         case 1: event = { type: 'npcDialog', name: r.string(256), text: r.string(), big: r.bool() }; break;
         case 2: {
           const count = bounded(r.i32(), 0, 32, 'option count');
@@ -195,7 +196,7 @@ export function decodeWorld(data: Uint8Array): WorldEvent[] | null {
     }
     case WORLD_OP.vendingStop: event = { type: 'vendingStopped' }; break;
     case WORLD_OP.vendingView: {
-      const vendorId = id(r.i32()); const name = r.string(128); const count = bounded(r.i32(), 0, 32, 'vending count');
+      const vendorId = actorId(r.i32()); const name = r.string(128); const count = bounded(r.i32(), 0, 32, 'vending count');
       const entries = Array.from({ length: count }, (): VendingEntry => {
         const bagId = id(r.i32()); const item = readItem(r, itemType(r), bagId); const price = bounded(r.i32(), 0, 9_999_999, 'price');
         return { item, price };
@@ -237,7 +238,7 @@ export function validateWorldAction(input: unknown): WorldAction {
   const value = object(input, ['type', 'id', 'index', 'mode', 'rows', 'operation', 'bagId', 'count', 'choice', 'bagIds', 'direction', 'name', 'inviteId', 'partyId', 'memberId']);
   const exact = (keys: string[]) => object(value, ['type', ...keys]);
   switch (value.type) {
-    case 'npcTalk': case 'partyInviteId': case 'vendingView': exact(['id']); return { type: value.type, id: number(value.id) };
+    case 'npcTalk': case 'partyInviteId': case 'vendingView': exact(['id']); return { type: value.type, id: number(value.id,0) };
     case 'npcAdvance': case 'npcBarterCancel': case 'partyLeave': case 'partyDisband': case 'vendingStop': exact([]); return { type: value.type };
     case 'npcOption': exact(['index']); return { type: value.type, index: number(value.index, 0, 31) };
     case 'shop': {
