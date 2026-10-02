@@ -10,6 +10,7 @@ import { SocketUi, validSocketSnapshot } from './socket-ui';
 import { ActorPredicateEditor, actorSnapshotAt } from './actor-predicate-ui';
 import { SocialUi, validSocialSnapshot } from './social-ui';
 import { MemoUi, validMemoSnapshot } from './memo-ui';
+import { WarpUi, validWarpSnapshot } from './warp-ui';
 import { validActorSnapshot, type ActorObservationSnapshot } from './actor-observations';
 import { DEFAULT_AUTOMATION, DEFAULT_RETREAT, DEFAULT_PARTY_HEAL, validateAutomation, type AutomationSettings, type Settings } from './settings';
 import { MAX_PROFILES, ProfileStore } from './profiles';
@@ -30,7 +31,7 @@ type Section = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows' | 'p
 interface Hooks {
   settings(): Settings; apply(settings: Settings): void; map(): string; character(): string;
   command(action: Record<string, unknown>): Promise<unknown>;
-  workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>; social(spec: unknown): Promise<unknown>; memo(spec: unknown): Promise<unknown>; socketPreview?(spec:unknown):Promise<unknown>; socket?(spec:unknown):Promise<unknown>;
+  workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>; social(spec: unknown): Promise<unknown>; memo(spec: unknown): Promise<unknown>; socketPreview?(spec:unknown):Promise<unknown>; socket?(spec:unknown):Promise<unknown>; warp?(spec:unknown):Promise<unknown>;warpPreview?(spec:unknown):Promise<unknown>;warpCancel?():Promise<unknown>;
   refinePreview?(spec: unknown): Promise<unknown>; refine?(spec: unknown): Promise<unknown>; refineAdvance?(promptToken: string): Promise<unknown>;
   notify(text: string, error?: boolean): void; changed(): void;
   stop?():void;
@@ -212,6 +213,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
   if(value.partyFollow!==undefined&&!validPartyFollowSnapshot(value.partyFollow))return false;
   if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
   if(value.social!==undefined&&!validSocialSnapshot(value.social))return false;
+  if(value.warp!==undefined&&!validWarpSnapshot(value.warp))return false;
   if(value.memo!==undefined&&!validMemoSnapshot(value.memo))return false;
   if(value.socket!==undefined&&!validSocketSnapshot(value.socket))return false;
   if(value.refine!==undefined&&!validRefineSnapshot(value.refine))return false;
@@ -274,6 +276,7 @@ export class FeatureUi {
   private readonly memo: MemoUi;
   private readonly socket: SocketUi;
   private readonly refine: RefineUi;
+  private readonly warp:WarpUi;
   constructor(private readonly host: HTMLElement, private readonly hooks: Hooks) {
     let storage: Pick<Storage,'getItem'|'setItem'>;
     try { storage = localStorage; } catch { storage = {getItem:()=>null,setItem:()=>{throw new Error('Profile storage is unavailable.');}}; }
@@ -311,6 +314,8 @@ export class FeatureUi {
     this.socket=new SocketUi(request=>this.hooks.socketPreview?.(request)??Promise.reject(new Error('Socket preview unavailable.')),request=>this.hooks.socket?.(request)??Promise.reject(new Error('Socket action unavailable.')),(message,error)=>this.hooks.notify(message,error),()=>this.read());this.panel('inventory').append(this.socket.root);
     this.host.addEventListener('input',()=>{this.socket.policyChanged();this.refine.policyChanged();});this.host.addEventListener('change',()=>{this.socket.policyChanged();this.refine.policyChanged();});
     this.refine = new RefineUi(() => this.read(), request => this.hooks.refinePreview?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), request => this.hooks.refine?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), promptToken => this.hooks.refineAdvance?.(promptToken) ?? Promise.reject(new Error('Refining transport unavailable.')), (message, error) => this.hooks.notify(message, error)); this.panel('inventory').append(this.refine.root);
+    this.warp=new WarpUi(request=>this.hooks.warp?this.hooks.warp(request):Promise.reject(new Error('Warp request transport unavailable.')),(message,error)=>this.hooks.notify(message,error),request=>this.hooks.warpPreview?.(request)??Promise.reject(new Error('Warp preview unavailable.')),()=>this.read(),()=>this.hooks.warpCancel?.()??Promise.reject(new Error('Warp cancel unavailable.')));this.panel('travel').append(this.warp.root);
+    this.host.addEventListener('input',()=>this.warp.policyChanged());this.host.addEventListener('change',()=>this.warp.policyChanged());
     for (const [id,catalog] of [['itemId',ITEM_CATALOG],['skillId',SKILL_CATALOG]] as const) {
       const list=document.createElement('datalist');list.id=`${id}-catalog`;
       for(const [value,entry]of Object.entries(catalog)){const option=document.createElement('option');option.value=value;option.label=entry.name;list.append(option);}this.host.append(list);
@@ -632,7 +637,7 @@ export class FeatureUi {
     const rows:Array<[string,string]>=[['login','Login & character selection'],['profiles','Profiles & import/export'],['combat','Combat & retaliation'],['monsterRules','Monster policies & priority'],['antiKs','Engagement ownership'],['combatMovement','Ranged combat, LOS & kiting'],['navigation','Map navigation & unstuck'],['travel','Travel & lock map'],['teleport','Teleport & escape'],['follow','Follow player'],['recovery','HP/SP & item recovery'],['death','Death & respawn'],['skills','Skills & support'],['conditionRules','Conditional rules'],['equipment','Equipment conditions'],['loot','Pickup filters & priority'],['inventory','Inventory & weight'],['storage','Storage & cart'],['shops','NPC shops'],['npc','NPC workflows'],['repair','Equipment repair'],['crafting','Crafting & exchanges'],['progression','Stat & skill allocation'],['party','Party controls'],['social','Guild, friends & chat'],['trade','Trade & vending'],['quests','Quests & achievements'],['mailBank','Mail, bank & auction'],['companions','Pets & companions'],['scheduler','Hours & session limits'],['reconnect','Reconnect backoff'],['avoidance','Map & actor avoidance'],['observability','Logs & session statistics'],['commands','Typed manual commands'],['macros','Condition routines & macros'],['plugins','Extensions & hooks'],['roTransport','RO server transport adapters'],['xkorePoseidon','XKore & Poseidon'],['gmDebug','GM, raw packets & eval']];
     for(const[id,label]of rows){const row=document.createElement('div');const name=document.createElement('span');name.textContent=label;const state=document.createElement('span');state.className='coverage-state';state.textContent=ready.has(id)?'Local implementation':partial.has(id)?'Partial implementation':unverified.has(id)?'No verified game adapter':excluded.has(id)?'Not applicable':'Not implemented';row.append(name,state);table.append(row);}
   }
-  lock(config: boolean, manual: boolean, service=manual): void {
+  lock(config: boolean, manual: boolean, service=manual,warp=manual): void {
     this.locked=config;this.manualLocked=manual;this.serviceLocked=service;
     for(const input of this.host.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('[data-setting], [data-config], .feature-panel input, .feature-panel select, .feature-panel textarea, .rule-editor button')) input.disabled=config;
     this.syncFollowMode();
@@ -641,13 +646,14 @@ export class FeatureUi {
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-manual]'))button.disabled=manual;
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-service]'))button.disabled=service;
     this.social.lock(manual);this.refine.lock(manual);
-    this.memo.lock(manual);this.socket.lock(manual);this.manualTargets.lock(manual);
+    this.memo.lock(manual);this.warp.lock(warp);this.socket.lock(manual);this.manualTargets.lock(manual);
   }
   settledForMaintenance(): boolean { return this.refine.settledForMaintenance(); }
-  serviceBlocked(): boolean { return object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
+  serviceBlocked(): boolean { return object(this.status.warp).blocked===true || object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
   clearSocial(): void { delete this.status.social; this.social.clear(); delete this.status.socket; this.socket.clear();delete this.status.refine;this.refine.clear(); }
-  clearMemo(): void { delete this.status.memo; this.memo.clear(); }
-  active(): boolean { return object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
+  clearMemo(): void { delete this.status.memo; this.memo.clear();delete this.status.warp;this.warp.clear(); }
+  active(): boolean { return object(this.status.warp).blocked===true || object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
+  warpActivationReady():boolean{return validWarpSnapshot(this.status.warp)&&this.status.warp.activation!==null;}
   private observation(): RoutineObservation {
     const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:this.hooks.map(),elapsedSeconds:0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;
@@ -665,6 +671,7 @@ export class FeatureUi {
     this.socket.render(s.socket);
     this.manualTargets.render(s);
     this.refine.render(s);
+    this.warp.render(s);
     const conditionState=this.host.querySelector<HTMLElement>('#actor-condition-state')!;const traces=Array.isArray(s.ruleConditions)?s.ruleConditions:[];conditionState.hidden=traces.length===0;conditionState.textContent=traces.slice(0,32).map(entry=>{const rule=object(entry);const conditions=Array.isArray(rule.conditions)?rule.conditions:[];return text(rule.rule)+(rule.truncated===true?' · additional evidence omitted':'')+conditions.map(condition=>{const trace=object(condition);return '\n  '+text(trace.state)+' · '+text(trace.reason);}).join('');}).join('\n');
     if(this.dispositionPlan){try{const settings=this.read();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
     const follow=object(s.partyFollow);this.host.querySelector<HTMLElement>('#party-follow-state')!.textContent=follow.state&&follow.state!=='disabled'?`${text(follow.state)} · ${text(follow.reason)}${follow.destination?' · '+text(follow.destination):''} · ${Math.ceil(number(follow.remainingSeconds)??0)}s remaining`:'';

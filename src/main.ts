@@ -165,7 +165,7 @@ const targetRows = new Map<number, { label: HTMLLabelElement; input: HTMLInputEl
 let targetOrder = '';
 const features = new FeatureUi(document.querySelector<HTMLElement>('main')!, {
   settings, apply: applySettings, map: () => targets.map, character: () => latest?.player?.name ?? '',
-  command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request), memo: request => featureRequest('memo',request), socketPreview:request=>featureRequest('socketPreview',request),socket:request=>featureRequest('socket',request),
+  command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request), memo: request => featureRequest('memo',request), socketPreview:request=>featureRequest('socketPreview',request),socket:request=>featureRequest('socket',request), warp:request=>featureRequest('warp',request),warpPreview:request=>featureRequest('warpPreview',request),warpCancel:()=>invoke('control_bot',{action:'warpCancel',request:{}}),
   refinePreview: request => featureRequest('refinePreview',request), refine: request => featureRequest('refine',request), refineAdvance: promptToken => featureRequest('refineAdvance',{promptToken}),
   notify: message,stop:()=>stopButton.click(), changed: () => { formChanged(); targets.setLevelDifference(features.levelDifference()); renderTargets(); updateButtons(); },
 });
@@ -216,7 +216,7 @@ const configHelp = document.createElement('p'); configHelp.id = 'config-help'; c
 const monsterCatalog = document.createElement('datalist'); monsterCatalog.id = 'classId-catalog'; document.querySelector('main')!.append(monsterCatalog);
 
 async function featureRequest(action: string, request: unknown): Promise<unknown> {
-  if (!native || busy || stopping || loginBusy || !latest?.connected || !latest.compatible || !latest.player || (action==='service'?features.serviceBlocked():runActive()) || Date.now()-receivedAt >= 7000) {
+  if (!native || busy || stopping || loginBusy || !latest?.connected || !latest.compatible || !latest.player || (action==='service'?features.serviceBlocked():(action==='warp'||action==='warpPreview')&&features.warpActivationReady()?fieldRun.requested:runActive()) || Date.now()-receivedAt >= 7000) {
     throw new Error('Stop automation and connect a verified character before sending a manual command.');
   }
   busy=true;updateButtons();
@@ -294,7 +294,7 @@ function updateButtons(): void {
   element<HTMLButtonElement>('select-targets').disabled = locked || !targets.options.some(m => targets.eligible(m.classId));
   element<HTMLButtonElement>('clear-targets').disabled = locked || !targets.options.some(m => targets.checked(m.classId));
   for (const [id, row] of targetRows) row.input.disabled = locked || !targets.eligible(id) || (!targets.checked(id) && targets.ids.length >= MAX_TARGETS);
-  features.lock(busy || stopping || loginBusy || runActive(),busy || stopping || loginBusy || !ready || runActive(),busy || stopping || loginBusy || !ready || features.serviceBlocked());
+  features.lock(busy || stopping || loginBusy || runActive(),busy || stopping || loginBusy || !ready || runActive(),busy || stopping || loginBusy || !ready || features.serviceBlocked(),busy || stopping || loginBusy || !ready || fieldRun.requested);
 }
 
 function renderTargets(): void {

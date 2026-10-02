@@ -15,7 +15,7 @@ import { type Drop, type Entity, type GameEvent, type Position, type Walk, type 
 import { walkDuration, walkPosition } from './movement';
 import { GridNavigator, routeSegment, searchGrid, distance, minimumRouteCost, type NavigationSummary, type WalkGrid } from './navigation';
 
-import { automationSettings, DEFAULT_SETTINGS, validateSettings, type Settings } from './settings';
+import { automationSettings, DEFAULT_SETTINGS, validateSettings, type Settings, type AutomationSettings } from './settings';
 import { acceptsMonster, acceptsLoot, inSchedule, monsterRule, lootRule, effectiveSkillLevel, AutomationScheduler, type AutomationTask, type ActionResult } from './automation';
 import { CharacterState, type CharacterSnapshot, type StatefulEntity } from './character-state';
 import { validateExpandedAction, type ExpandedAction, type FeatureEvent } from './protocol-feature';
@@ -1476,6 +1476,12 @@ export class BotEngine {
     if(next.failure)return {complete:false,reason:next.failure};
     if(next.action){this.automation.submit(next.action,this.character);return {complete:false,reason:this.automation.task().label};}
     return {complete:!this.automation.recovering,reason:this.automation.task().label};
+  }
+  manualWarpGroundAllowed(target:Position,range:number,policy:AutomationSettings=automationSettings(this.settings)):boolean {
+    const settings={...this.settings,automation:policy};const p=this.player,nav=this.navigation(settings);
+    return !!p&&!!nav&&mapAllowed(mapPolicy(settings),this.map)&&nav.safe(target)&&nav.canCast(cell(p),target,range)
+      &&!(target.x===Math.floor(p.x)&&target.y===Math.floor(p.y))
+      &&![...this.actors.values(),...this.entities.values()].some(actor=>actor.id!==p.id&&!actor.dead&&Math.floor(actor.x)===target.x&&Math.floor(actor.y)===target.y);
   }
   manualAction(action: ExpandedAction): void {
     action=validateExpandedAction(action);

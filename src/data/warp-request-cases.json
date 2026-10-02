@@ -1,0 +1,3271 @@
+[
+  {
+    "name": "ground-own-zero",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "activation-slot-owned",
+    "mode": "warp",
+    "request": {
+      "type": "warpActivate",
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "ground-preview",
+    "mode": "warpPreview",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "activation-preview",
+    "mode": "warpPreview",
+    "request": {
+      "type": "warpActivate",
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "cancel-no-payload",
+    "mode": "warpCancel",
+    "request": {},
+    "valid": true
+  },
+  {
+    "name": "invalid-binding-actorId--1",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": -1,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-actorId-2147483648",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 2147483648,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-incarnation-0",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 0,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-connectionEpoch-0",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 0,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-revision-0",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 0,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-world-new UUID",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "new UUID",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-map-",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-x-512",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 512,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-generation--1",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": -1,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-level-5",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 5,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-inventoryRevision-0",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 0,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-equipmentRevision-0",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 0,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-spRevision-0",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 0,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-skillsRevision-0",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 0
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid-binding-extra-1",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1,
+        "extra": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      },
+      "extra": 1
+    },
+    "valid": false
+  },
+  {
+    "name": "slot",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 4,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "target",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 512,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "target-extra",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10,
+        "z": 1
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "policy-null",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": null
+    },
+    "valid": false
+  },
+  {
+    "name": "policy-extra",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        },
+        "warp": {}
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "policy-warp-automation",
+    "mode": "warp",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [
+          {
+            "skillId": 55,
+            "level": 1,
+            "target": "self",
+            "hpBelowPercent": 100,
+            "spAbovePercent": 0,
+            "cooldownSeconds": 1
+          }
+        ],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong-mode-command",
+    "mode": "command",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong-mode-workflow",
+    "mode": "workflow",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong-mode-routine",
+    "mode": "routine",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong-mode-service",
+    "mode": "service",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong-mode-social",
+    "mode": "social",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong-mode-memo",
+    "mode": "memo",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "activation-no-slot-override",
+    "mode": "warp",
+    "request": {
+      "type": "warpActivate",
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      },
+      "slot": 3
+    },
+    "valid": false
+  },
+  {
+    "name": "preview-no-binding",
+    "mode": "warpPreview",
+    "request": {
+      "type": "warpGround",
+      "slot": 0,
+      "target": {
+        "x": 11,
+        "y": 10
+      },
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      },
+      "policy": {
+        "loadout": {
+          "enabled": false,
+          "autoAmmo": true,
+          "minAmmoStock": 0,
+          "ammoPreferences": [],
+          "restore": "conditionEnd",
+          "cooldownSeconds": 3
+        },
+        "combat": {
+          "mode": "selected",
+          "levelDifference": 1,
+          "rules": []
+        },
+        "loot": {
+          "ownership": "own",
+          "defaultAction": "pickup",
+          "rules": []
+        },
+        "recovery": {
+          "enabled": false,
+          "hpStart": 60,
+          "hpEnd": 85,
+          "spStart": 10,
+          "spEnd": 80,
+          "timeoutSeconds": 300
+        },
+        "escape": {
+          "enabled": false,
+          "hpBelowPercent": 20,
+          "mode": "random",
+          "method": "item",
+          "minStock": 0,
+          "cooldownSeconds": 60
+        },
+        "items": [],
+        "skills": [],
+        "equipment": [],
+        "allocation": {
+          "stats": [],
+          "skills": []
+        },
+        "follow": {
+          "name": "",
+          "distance": 4,
+          "lostSeconds": 10
+        },
+        "travel": {
+          "destinationMap": "",
+          "returnToLockMap": false,
+          "waypoints": [],
+          "loop": false
+        },
+        "limits": {
+          "minutes": 0,
+          "kills": 0,
+          "pickups": 0,
+          "weightPercent": 0
+        },
+        "respawn": {
+          "enabled": false,
+          "maxDeaths": 1
+        },
+        "schedule": {
+          "enabled": false,
+          "startHour": 0,
+          "endHour": 0
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "cancel-no-intent",
+    "mode": "warpCancel",
+    "request": {
+      "resume": true
+    },
+    "valid": false
+  },
+  {
+    "name": "no-policy",
+    "mode": "warp",
+    "request": {
+      "type": "warpActivate",
+      "preview": {
+        "world": "00000000-0000-4000-8000-000000000001",
+        "actorId": 0,
+        "incarnation": 1,
+        "connectionEpoch": 1,
+        "revision": 1,
+        "map": "prt_fild08",
+        "x": 10,
+        "y": 10,
+        "generation": 0,
+        "level": 4,
+        "inventoryRevision": 1,
+        "equipmentRevision": 1,
+        "spRevision": 1,
+        "skillsRevision": 1
+      }
+    },
+    "valid": false
+  }
+]

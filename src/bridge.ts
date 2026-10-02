@@ -9,6 +9,7 @@ import { featureCommand, validateExpandedAction } from './protocol-feature';
 import { worldCommand, validateWorldAction } from './world-protocol';
 import { socialCommand } from './social-protocol';
 import { memoCommand } from './memo-protocol';
+import { warpCommand, officialWarpSkill, warpInitializationPacket } from './warp-protocol';
 import { CompanionController, type CompanionSnapshot } from './controller';
 import { LoginController, loginDriver, loginReady, type LoginProfile, type LoginStatus, type UnityClient } from './login';
 import { currentMapInfo, loadMapCatalog, type MapCatalog } from './map-data';
@@ -21,7 +22,7 @@ interface BridgeWindow extends Window {
   __TAURI_INTERNALS__?: { invoke: (name: string, args: unknown) => Promise<unknown> };
   __RAYRAG__?: {
     control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard) => void;
-    perform: (action: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance', request: unknown) => void;
+    perform: (action: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance' | 'warp' | 'warpPreview' | 'warpCancel', request: unknown) => void;
     maintenance:(nonce:string,reserve:boolean|'commit')=>void;
     snapshot: () => CompanionSnapshot;
   };
@@ -34,6 +35,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   const maintenance=new MaintenanceLease();
   let maintenanceNonce:string|null=null;
   let receiveQueue=Promise.resolve();
+  let retryInitialization=()=>{};
   let officialUncertain=false;
   let officialRevision=0;
   const officialOwners=new Set<WebSocket>();
@@ -85,6 +87,14 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
     maintenance.assertDispatch();
     if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
     NativeSocket.prototype.send.call(active, Uint8Array.from(refineCommand(packet)));
+  }, wire => {
+    maintenance.assertDispatch();
+    if(active?.readyState!==NativeSocket.OPEN)throw new Error('Game connection is closed.');
+    NativeSocket.prototype.send.call(active,warpCommand(wire));
+  }, {
+    // A bounded uncertainty marker only. Never persist commands, cells or memo data.
+    read:()=>localStorage.getItem('rayrag.warp.uncertain.v1')!==null,
+    write:held=>{if(held)localStorage.setItem('rayrag.warp.uncertain.v1','held');else localStorage.removeItem('rayrag.warp.uncertain.v1');},
   });
   const engine = controller.engine;
   const publish = () => {
@@ -156,6 +166,8 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   };
 
   window.WebSocket = class extends NativeSocket {
+    private observedQueue=Promise.resolve();
+    private observationRevision=0;
     send(data: string | Blob | BufferSource): void {
       // Suppress every payload on the owned socket during final settlement,
       // before even inspecting opcodes. No replay/queue and no body logging.
@@ -176,6 +188,21 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
         // obsolete/opaque transport still fences updater availability above.
         try { controller.manualCommand(); publish(); } catch { /* Never prevent or replay the official send. */ }
       }
+      if (active===this && this.readyState===NativeSocket.OPEN && engine.connected && engine.compatible && page.buildUrl===VERIFIED_BUILD) {
+        const bytes=data instanceof ArrayBuffer?new Uint8Array(data):ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,data.byteLength):null;
+        if(bytes && ((bytes[0]===2&&bytes.length===1)||(bytes[0]===3&&bytes.length<=106)||(bytes[0]===29&&bytes.length<=8))){
+          const copy=bytes.slice();
+          // Mark external Warp synchronously; serialize initialization with
+          // inbound resource/memo evidence before accepting the Ready transcript.
+          if(officialWarpSkill(copy)){try{controller.observeOfficialPacket(copy);}catch{}}
+          else if(warpInitializationPacket(copy)){
+            const epoch=controller.connectionGeneration;
+            this.observationRevision++;
+            this.observedQueue=this.observedQueue.then(()=>{if(active===this&&epoch===controller.connectionGeneration)controller.observeOfficialPacket(copy);});
+            receiveQueue=this.observedQueue;
+          }
+        }
+      }
       super.send(data);
     }
     private readonly gameSocket:boolean;
@@ -192,10 +219,36 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
       active = this;
       let failed = false;
       let initialEnter=false;let fullResources=false;let enterCount=0;let reconciliationEligible=false;let reconciliationRevision:number|null=null;let readyOwn:string|null=null;
-      let refineResources:string|null=null;let refineBaselineConsumed=false;
+      let refineResources:string|null=null;let resetResources:string|null=null;let firstResources=false;let refineBaselineConsumed=false;
       let opcode = -1;
       let connectionGeneration = -1;
-      let queue = Promise.resolve();receiveQueue=queue;
+      let initializationRetryQueued=false;
+      const reconcileInitialization=(revision:number)=>{
+        if(revision!==this.observationRevision||active!==this||failed||this.readyState!==NativeSocket.OPEN||connectionGeneration!==controller.connectionGeneration||maintenance.blocked)return;
+        // A timer may recheck retained first-initialization evidence after grace
+        // or readiness changes. It never supplies missing reset/resource proof.
+        if(officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0&&reconciliationEligible&&reconciliationRevision===officialRevision&&fullResources&&readyOwn!==null&&readyOwn===JSON.stringify(engine.actorActionIdentity(undefined,true))){
+          if(!refineBaselineConsumed){
+            if(controller.warp.blocked){if(resetResources!==null&&controller.reconcileOfficialInitialization(resetResources))refineBaselineConsumed=true;}
+            else{refineBaselineConsumed=true;if(refineResources!==null)controller.reconcileOfficialRefineInitialization(refineResources);}
+          }
+          if(controller.settledForMaintenance()){
+            officialUncertain=false;officialOwners.clear();reconciliationEligible=false;reconciliationRevision=null;readyOwn=null;
+          }
+        }
+      };
+      retryInitialization=()=>{
+        if(active!==this||failed||maintenance.blocked||initializationRetryQueued)return;
+        initializationRetryQueued=true;
+        const generation=connectionGeneration,revision=this.observationRevision;
+        this.observedQueue=this.observedQueue.then(()=>{
+          initializationRetryQueued=false;
+          if(generation!==controller.connectionGeneration)return;
+          reconcileInitialization(revision);
+        }).catch(()=>{initializationRetryQueued=false;});
+        receiveQueue=this.observedQueue;
+      };
+      receiveQueue=this.observedQueue;
       this.addEventListener('open', () => {
         if (active !== this) return;
         controller.connect(page.buildUrl === VERIFIED_BUILD);
@@ -203,7 +256,8 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
       });
       this.addEventListener('message', event => {
         if (active !== this || failed) return;
-        queue = queue.then(async () => {
+        const revision=++this.observationRevision;
+        this.observedQueue = this.observedQueue.then(async () => {
           if (active !== this || failed) return;
           const value: unknown = event.data;
           const data = value instanceof ArrayBuffer ? new Uint8Array(value)
@@ -216,21 +270,13 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
           mutation();
           controller.receive(data, connectionGeneration);
           if(engine.actorActionIdentity(undefined,true)){this.gameplayReady=true;this.gameplayCharacter=engine.player?.name??null;}
-          if(data[0]===OP.enter){enterCount++;initialEnter=enterCount===1;fullResources=false;readyOwn=null;refineResources=null;refineBaselineConsumed=false;reconciliationEligible=initialEnter&&officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0;reconciliationRevision=reconciliationEligible?officialRevision:null;}
+          if(data[0]===OP.enter){enterCount++;initialEnter=enterCount===1;fullResources=false;readyOwn=null;refineResources=null;resetResources=null;firstResources=false;refineBaselineConsumed=false;reconciliationEligible=initialEnter&&officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0;reconciliationRevision=reconciliationEligible?officialRevision:null;}
           if(data[0]===OP.clear||data[0]===OP.map){reconciliationEligible=false;readyOwn=null;}
-          if(initialEnter&&data[0]===56){const events=decode(data);fullResources=events.some(e=>e.type==='inventory')&&events.some(e=>e.type==='skills')&&events.some(e=>e.type==='stats');if(!refineBaselineConsumed)refineResources=fullResources?controller.officialRefineResourceRevision():null;}
+          if(initialEnter&&data[0]===56&&!firstResources){firstResources=true;const events=decode(data);fullResources=events.some(e=>e.type==='inventory')&&events.some(e=>e.type==='skills')&&events.some(e=>e.type==='stats');
+            if(fullResources&&reconciliationEligible){refineResources=controller.officialRefineResourceRevision();resetResources=controller.officialInitializationResourceRevision();}}
           if(initialEnter&&data[0]===OP.spawn){const own=decode(data).find(e=>e.type==='spawn'&&e.entity.kind===0&&e.entity.id===engine.playerId);
             if(own?.type==='spawn'){const identity=engine.actorActionIdentity(undefined,true);readyOwn=fullResources&&own.entryType===1&&identity?JSON.stringify(identity):null;}}
-          // A new, complete initialization restores availability, never an old
-          // request's outcome. Same-socket map changes and timers cannot do this.
-          if(officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0&&reconciliationEligible&&reconciliationRevision===officialRevision&&fullResources&&readyOwn!==null&&readyOwn===JSON.stringify(engine.actorActionIdentity(undefined,true))){
-            // Consume the economic baseline once, independently of the updater's
-            // global settlement (which includes this very economic hold).
-            if(!refineBaselineConsumed){refineBaselineConsumed=true;if(refineResources!==null)controller.reconcileOfficialRefineInitialization(refineResources);}
-            if(controller.settledForMaintenance()){
-              officialUncertain=false;officialOwners.clear();reconciliationEligible=false;reconciliationRevision=null;readyOwn=null;
-            }
-          }
+          reconcileInitialization(revision);
           if (engine.player) { enteredWorld = true; login?.complete(); }
         }).catch(error => {
           if (active !== this) return;
@@ -238,7 +284,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
           const detail = error instanceof Error ? error.message.slice(0,80) : 'Decode error';
           controller.fail(`Packet ${opcode}: ${detail}. Reopen the game after updating Companion.`); publish();
         });
-        receiveQueue=queue;
+        receiveQueue=this.observedQueue;
       });
       this.addEventListener('close', () => {
         officialOwners.delete(this);
@@ -251,7 +297,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   page.__RAYRAG__ = {
     control(action, settings, escapeGuard, supplyGuard, recoveryGuard) {
       maintenance.assertDispatch();mutation();
-      if (action === 'heartbeat') { heartbeat = Date.now(); controller.heartbeat(true); return; }
+      if (action === 'heartbeat') { heartbeat = Date.now(); controller.heartbeat(true);retryInitialization();return; }
       if (action === 'stop') { cancelLogin(); stop('Stopped by you.'); return; }
       try {
         if (page.buildUrl !== VERIFIED_BUILD) throw new Error('This game build is not verified.');
@@ -309,6 +355,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
       login?.tick();
       if (controller.active && Date.now() - heartbeat > 6000) controller.heartbeat(false);
       controller.tick();
+      retryInitialization();
     } catch { controller.pause('Waiting after a connection error.'); }
     if (Date.now() - lastPublished >= 500) { lastPublished = Date.now(); publish(); }
   }, 100);
