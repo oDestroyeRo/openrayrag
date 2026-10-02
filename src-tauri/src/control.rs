@@ -506,12 +506,26 @@ pub(crate) fn validate_actor_predicate_for(value: &Value, allow_candidate: bool)
                 integer(condition, "skillId", 1, 255)?;
             }
         }
+        "actorHpPercent" | "actorSpPercent" => {
+            object(value, &["field", "actor", "operator", "value"])?;
+            finite(field(condition, "value")?, 0.0, 100.0)?;
+        }
         _ => return Err(invalid()),
     }
-    if !matches!(string(condition, "operator")?, "eq" | "ne") {
-        return Err(invalid());
+    let resource = matches!(kind, "actorHpPercent" | "actorSpPercent");
+    if resource {
+        if !matches!(
+            string(condition, "operator")?,
+            "lt" | "lte" | "eq" | "gte" | "gt"
+        ) {
+            return Err(invalid());
+        }
+    } else {
+        if !matches!(string(condition, "operator")?, "eq" | "ne") {
+            return Err(invalid());
+        }
+        boolean(condition, "value")?;
     }
-    boolean(condition, "value")?;
     let actor_value = field(condition, "actor")?;
     let actor = actor_value.as_object().ok_or_else(invalid)?;
     match string(actor, "scope")? {
@@ -547,7 +561,10 @@ fn validate_condition(value: &Value) -> Validation {
     let condition = value.as_object().ok_or_else(invalid)?;
     let kind = string(condition, "field")?;
     let operator = string(condition, "operator")?;
-    if matches!(kind, "actorStatus" | "actorCasting") {
+    if matches!(
+        kind,
+        "actorStatus" | "actorCasting" | "actorHpPercent" | "actorSpPercent"
+    ) {
         return validate_actor_predicate(value);
     }
     if kind == "map" {
@@ -1083,7 +1100,10 @@ mod tests {
 
 #[cfg(test)]
 mod automation_request_tests {
-    use super::{request_script, validate_action, validate_actor_predicate, validate_request};
+    use super::{
+        request_script, validate_action, validate_actor_predicate, validate_actor_predicate_for,
+        validate_request,
+    };
     use serde_json::{json, Value};
 
     #[test]
@@ -1337,6 +1357,29 @@ mod automation_request_tests {
             );
         }
         assert!(request_script("window.alert(1)", &json!({"type":"respawn"})).is_err());
+    }
+    #[test]
+    fn resource_predicates_share_the_typescript_schema() {
+        let cases: Value = serde_json::from_str(include_str!(
+            "../../src/data/actor-resource-condition-cases.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            assert_eq!(
+                validate_actor_predicate(&case["condition"]).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["condition"]
+            );
+            let mut value = routine();
+            value["rules"][0]["conditions"] = json!([case["condition"]]);
+            assert_eq!(
+                validate_request("routine", &value).is_ok(),
+                case["valid"].as_bool().unwrap()
+            );
+        }
+        let candidate = json!({"field":"actorHpPercent","actor":{"scope":"candidate"},"operator":"gt","value":0});
+        assert!(validate_actor_predicate_for(&candidate, true).is_ok());
     }
     #[test]
     fn actor_predicates_use_exact_typed_lifetime_bound_shapes() {

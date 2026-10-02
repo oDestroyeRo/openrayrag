@@ -33,6 +33,12 @@ describe('explicit zero actor UI inputs',()=>{
   expect(input('npc-id').value).toBe('');await button('Talk').emit('click');expect(command).not.toHaveBeenCalled();input('npc-id').value='0';await button('Talk').emit('click');expect(command).toHaveBeenLastCalledWith({type:'npcTalk',id:0});
   await button('＋ Add step').emit('click');await button('Start workflow').emit('click');expect(workflow).not.toHaveBeenCalled();input('workflow-npc').value='0';await button('Start workflow').emit('click');expect(workflow).toHaveBeenCalledWith(expect.objectContaining({npcId:0}));
  });
+ it('edits resource thresholds and displays source, freshness and unavailable reasons',async()=>{
+  vi.stubGlobal('document',{createElement:(tag:string)=>new Element(tag)});let at=1000;const o=new ActorObservations(()=>at);o.spawn({id:0,kind:0,classId:0,name:'Synthetic',level:1,hp:50,maxHp:100,x:1,y:1,dead:false,statuses:[]},0);o.frame();const editor=new ActorPredicateEditor(()=>o.snapshot(0,null,true),()=>{});editor.write([{field:'actorHpPercent',actor:{scope:'self'},operator:'lte',value:50}]);
+  const root=editor.root as unknown as Element;expect(editor.read()).toEqual([{field:'actorHpPercent',actor:{scope:'self'},operator:'lte',value:50}]);expect(root.all().some(n=>n.textContent.includes('HP 50.00% from spawn'))).toBe(true);
+  const threshold=root.all().find(n=>n.tag==='label'&&n.textContent==='Threshold %')!.children[0]!;threshold.value='25.5';await threshold.emit('input');expect(editor.read()![0]!.value).toBe(25.5);
+  at+=15001;o.frame();await threshold.emit('input');expect(root.all().some(n=>n.textContent.includes('15-second limit'))).toBe(true);threshold.value='';await threshold.emit('input');expect(Number.isNaN(editor.read()![0]!.value)).toBe(true);
+ });
  it('binds actor zero through the actual observed actor picker and leaves blank unbound',async()=>{
   vi.stubGlobal('document',{createElement:(tag:string)=>new Element(tag)});const o=new ActorObservations(()=>1000);o.spawn({id:0,kind:0,classId:0,name:'Synthetic',level:1,hp:10,maxHp:10,x:1,y:1,dead:false,statuses:[]});o.frame();const snap=o.snapshot(0,null,true);const editor=new ActorPredicateEditor(()=>snap,()=>{});editor.write([{field:'actorCasting',actor:{scope:'self'},operator:'eq',value:false}]);
   const root=editor.root as unknown as Element;const select=(label:string)=>root.all().find(n=>n.tag==='label'&&n.children.some(c=>c.textContent===label))!.children.find(n=>n.tag==='select')!;

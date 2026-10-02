@@ -63,7 +63,7 @@ const keys = (value: Record<string, unknown>, expected: string[]): boolean => {
 
 function validCondition(value: unknown): value is RoutineCondition {
   if (!record(value)) return false;
-  if (value.field==='actorStatus'||value.field==='actorCasting') return validActorPredicate(value);
+  if (value.field==='actorStatus'||value.field==='actorCasting'||value.field==='actorHpPercent'||value.field==='actorSpPercent') return validActorPredicate(value);
   if (value.field === 'map') return keys(value, ['field', 'operator', 'value'])
     && (value.operator === 'eq' || value.operator === 'ne') && mapCode(value.value);
   if (typeof value.operator !== 'string' || !numericOperators.includes(value.operator)) return false;
@@ -126,7 +126,7 @@ function compare(actual: number, operator: NumericOperator, expected: number): b
 }
 
 function conditionTrace(condition: RoutineCondition, observation: RoutineObservation): ConditionTrace {
-  if (condition.field==='actorStatus'||condition.field==='actorCasting') return evaluateActorPredicate(condition,observation.actors);
+  if (condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent') return evaluateActorPredicate(condition,observation.actors);
   let matched: boolean;
   if (condition.field === 'map') {
     if (!mapCode(observation.map)) return { condition: { ...condition }, state: 'unavailable', reason: 'Current map is unavailable.' };

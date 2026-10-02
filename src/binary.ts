@@ -42,7 +42,7 @@ export class BitReader {
     integer(maxBytes, 0, 65535);
     const count = this.u16();
     if (count > maxBytes) throw new Error('Oversized string');
-    return new TextDecoder('utf-8', { fatal: true }).decode(this.take(count));
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(this.take(count));
   }
   position(): { x: number; y: number } {
     const x = this.i16(); const y = this.i16();

@@ -19,7 +19,7 @@ describe('deployed Rebuild V8 protocol', () => {
     const kindOffset = 6 + 1 + 12 + 8 + 6;
     packet[kindOffset] = 0;
     packet[kindOffset + 2] = 0;
-    const event = decode(packet)[0];
+    const event = decode(packet.subarray(0,6+new DataView(packet.buffer).getInt32(2,true)))[0];
     expect(event).toMatchObject({ type: 'spawn', entity: { kind: 0, hp: 51 } });
     if (event?.type !== 'spawn') throw new Error('Expected spawn');
     expect(event.entity.sp).toBeUndefined();

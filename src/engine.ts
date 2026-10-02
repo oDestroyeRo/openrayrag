@@ -254,7 +254,7 @@ export class BotEngine {
     else { this.entities.delete(id);if(id===this.playerId)this.stop('Character left the field.'); }
   }
   private apply(e: GameEvent | FeatureEvent): void {
-    this.observations.apply(e);
+    this.observations.apply(e,undefined,this.player?.id??null);
     if (!['enter','map','spawn','remove','clear','stop','position','tracking','walk','attack','hit','death','resurrection','heal','drop','pickup'].includes(e.type)) {
       if(this.playerId!==null)this.character.apply(e as FeatureEvent,this.player?.id??null);
       const loadoutFailure=this.loadout.observe(e as FeatureEvent,this.character,automationSettings(this.settings).loadout.enabled);
@@ -297,7 +297,8 @@ export class BotEngine {
         const target=e.id===0?undefined:this.entities.get(e.id)??this.actors.get(e.id);this.serverTargetId=target&&!target.dead&&target.hp>0?e.id:null;break;
       }
       case 'enter':
-        this.stop('Preparing character.'); this.resetWorld(); this.playerId = e.id; this.map = e.map; break;
+        this.stop('Preparing character.'); this.resetWorld(); this.playerId = e.id; this.map = e.map;
+        this.observations.beginOwnInitialization(e.id); break;
       case 'map': {
         this.respawnArrival=this.player?{id:this.player.id,name:this.player.name,entry:1}:null;
         const respawning=this.automation.pendingAction?.type==='respawn';
@@ -324,7 +325,7 @@ export class BotEngine {
         if(this.strategyWait?.id===e.entity.id)this.strategyWait=null;
         this.strategies.remove(e.entity.id);this.revivableActors.delete(e.entity.id);
         if(this.serverTargetId===e.entity.id)this.serverTargetId=null;
-        this.observations.spawn(e.entity,this.playerId);
+        this.observations.spawn(e.entity,this.playerId,e.entryType);
         this.motions.delete(e.entity.id);
         // A spawn replaces this ID in both stores, including cross-kind reuse.
         this.entities.delete(e.entity.id);this.actors.delete(e.entity.id);
@@ -405,7 +406,7 @@ export class BotEngine {
         const entity = this.entities.get(e.id) ?? this.actors.get(e.id) ?? this.revivableActors.get(e.id);
         this.revivableActors.delete(e.id);
         if(entity?.kind===0&&e.id!==this.playerId&&this.actors.size<150)this.actors.set(e.id,entity);
-        if (entity) { entity.dead = false; entity.hp = Math.min(e.hp, entity.maxHp); Object.assign(entity, e.position);this.observations.spawn({...entity,statuses:undefined},this.playerId); }
+        if (entity) { entity.dead = false; entity.hp = Math.min(e.hp, entity.maxHp); Object.assign(entity, e.position);this.observations.spawn({...entity,statuses:undefined,partyId:undefined,partyName:undefined,sp:undefined,maxSp:undefined,maxHp:0},this.playerId); }
         if (e.id === this.playerId) { const resume = this.automation.pendingAction?.type === 'respawn'; this.automation.observe({type:'resurrection'},this.character,this.player?.id??null,true); this.stop('Character revived. Press Start when ready.'); this.runIntent = resume; }
         break;
       }

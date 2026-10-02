@@ -552,6 +552,7 @@ export class CompanionController {
     }
     const manualMovementReceipts=new Map(events.map(event=>[event,this.engine.manualMovementReceiptOwner(event)]));
     this.engine.receive(events);
+    this.world.partyActors.sync(this.world.party,this.world.map,this.engine.observations,this.engine.player?.id??null);
     const readyIdentity=this.engine.actorActionIdentity(),readyPlayer=this.engine.player;
     if(readyIdentity&&readyPlayer&&events.some(event=>event.type==='spawn'&&event.entity.id===readyPlayer.id&&event.entity.kind===0
       &&event.entity.id===this.ownArrival?.id&&event.entryType===this.ownArrival.entry&&!event.entity.dead&&event.entity.hp>0
@@ -614,6 +615,7 @@ export class CompanionController {
     for (const event of events) if (event.type === 'inventory' && event.cart !== undefined) this.world.replaceCart(event.cart);
     for (const event of worldEvents) {
       this.world.apply(event, this.engine.player?.id??null);
+      this.world.partyActors.observe(event,this.world.party,this.world.map,this.engine.observations,this.engine.player?.id??null);
       if (event.type === 'cartMoved') this.engine.character.applyCartWeights(event.cartWeight, event.currentWeight);
     }
     if(this.supplyReceipt)observeSupplyReceipt(this.supplyReceipt,worldEvents,this.supplyContext());
@@ -817,7 +819,7 @@ export class CompanionController {
       for (const rule of this.routineSpec?.rules ?? []) for (const condition of rule.conditions)
         if (condition.field === 'inventory') inventory[condition.itemId] = c.count(condition.itemId);
     }
-    const predicates=(this.routineSpec?.rules??[]).flatMap(rule=>rule.conditions.filter((condition):condition is ActorPredicate=>condition.field==='actorStatus'||condition.field==='actorCasting'));
+    const predicates=(this.routineSpec?.rules??[]).flatMap(rule=>rule.conditions.filter((condition):condition is ActorPredicate=>condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent'));
     return { actors:this.engine.actorObservation(predicates), map: this.engine.map, ...(p?.maxHp ? { hpPercent: p.hp / p.maxHp * 100 } : {}),
       ...(c.stats?.maxSp ? { spPercent: (c.stats.sp ?? 0) / c.stats.maxSp * 100 } : {}),
       ...(c.stats?.zeny !== undefined ? { zeny: c.stats.zeny } : {}), ...(c.inventoryKnown ? { inventory } : {}) };
