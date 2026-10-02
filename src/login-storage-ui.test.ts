@@ -1,17 +1,26 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BotEngine } from './engine';
 
-const ipc = vi.hoisted(() => ({ featureSettled: true, invoke: vi.fn(), listen: vi.fn(async () => () => {}) }));
+const ipc = vi.hoisted(() => ({ featureSettled: true, invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, isTauri: () => true }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: ipc.listen }));
 vi.mock('./feature-ui', async () => {
   const { DEFAULT_AUTOMATION } = await import('./settings');
   return { FeatureUi: class {
     private profile:string|null=null;
+    private held=false;
+    constructor(_host: HTMLElement, _hooks: unknown, mounts: { manualTools: HTMLElement }) {
+      const group=document.createElement('details');group.className='manual-group';group.id='synthetic-manual-group';
+      const title=document.createElement('summary');title.textContent='Synthetic manual tool';
+      const action=document.createElement('button');action.id='synthetic-manual-action';group.append(title,action);mounts.manualTools.append(group);
+    }
+
     selectedProfileId(){return this.profile;}
     restoreProfileSelection(id:string|null){this.profile=id;}
     write():void{}
     levelDifference(){return 1;}
-    active(): boolean { return false; }
+    render(status:{refine?:{blocked?:boolean}}):void{this.held=status.refine?.blocked===true;}
+    active(): boolean { return this.held; }
     serviceBlocked(): boolean { return false; }
     warpActivationReady(): boolean { return false; }
     settledForMaintenance(): boolean { return ipc.featureSettled; }
@@ -24,26 +33,43 @@ vi.mock('./feature-ui', async () => {
 // No browser, app data, real account or persistent frontend store is involved.
 class Element {
   value = ''; checked = false; disabled = false; hidden = false; textContent = ''; placeholder = '';
-  id = ''; className = ''; dataset:Record<string,string>={}; style: Record<string, string> = {}; width = 400; height = 400;
+  id = ''; className = ''; dataset:Record<string,string>={}; style = { width: '', setProperty() {} }; width = 400; height = 400;
+  attributes = new Map<string,string>(); children: Element[] = []; parentElement:Element|null=null;
+  ownerDocument = { createElement: (tag:string) => new Element(this.elements,tag) };
+  get tagName():string{return this.tag.toUpperCase();}
   classList = { toggle() {}, add() {}, remove() {} };
   listeners = new Map<string, Array<(event: { preventDefault(): void;target?:Element }) => unknown>>();
-  children: Element[] = [];
-  ownerDocument = { createElement: () => new Element(this.elements) };
   markup = '';
-  constructor(private readonly elements: Map<string, Element>) {}
+  constructor(private readonly elements: Map<string, Element>, readonly tag='div') {}
   set innerHTML(html: string) {
     this.markup = html;
     for (const match of html.matchAll(/<(\w+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)) {
-      const node = new Element(this.elements); node.id = match[3]!;
+      const node = new Element(this.elements,match[1]!); node.id = match[3]!;
+      node.className=/\bclass="([^"]*)"/.exec(match[2]!)?.[1]??'';
+      for(const key of ['page','bot']){const value=new RegExp(`data-client-${key}-nav="([^"]*)"`).exec(match[2]!)?.[1];if(value)node.dataset[key==='page'?'clientPageNav':'clientBotNav']=value;}
       node.checked = /\bchecked\b/.test(match[2]!); node.disabled = /\bdisabled\b/.test(match[2]!); node.hidden = /\bhidden\b/.test(match[2]!);
       node.value = /\bvalue="([^"]*)"/.exec(match[2]!)?.[1] ?? (match[1] === 'select' ? '0' : '');
       this.elements.set(node.id, node);
     }
   }
-  append(...children: Element[]): void { this.children.push(...children); for (const child of children) if (child.id) this.elements.set(child.id, child); }
-  replaceChildren(...children: Element[]): void { this.children = []; this.append(...children); }
-  querySelector(selector: string): Element | null { return selector.startsWith('#') ? this.elements.get(selector.slice(1)) ?? null : null; }
-  setAttribute(): void {}
+  append(...children:Element[]): void {for(const child of children){child.parentElement=this;this.children.push(child);if(child.id)this.elements.set(child.id,child);}}
+  replaceChildren(...children:Element[]): void {this.children=[];this.append(...children);}
+  get childElementCount():number{return this.children.length;}
+  querySelector(selector:string):Element|null {
+    if(selector==='main'||selector==='.client-toolbar'||selector==='.client-skip-link')return this.elements.get(selector)??null;
+    if(selector==='summary')return this.children.find(node=>node.tag==='summary')??null;
+    return selector.startsWith('#')?this.elements.get(selector.slice(1))??null:null;
+  }
+  querySelectorAll(selector:string):Element[] {
+    if(selector.includes('button[data-client-page-nav]'))return [...this.elements.values()].filter(node=>node.dataset.clientPageNav||node.dataset.clientBotNav).concat(this.elements.get('client-manual-index')?.children??[]);
+    if(selector.startsWith('details.manual-group'))return this.children.filter(node=>node.tag==='details'&&node.className.includes('manual-group'));
+    if(selector==='input,select,button,textarea')return [...new Set(this.elements.values())].filter(node=>['input','select','button','textarea'].includes(node.tag)).concat(this.elements.get('client-manual-index')?.children??[]);
+    return [];
+  }
+  setAttribute(name:string,value:string):void{this.attributes.set(name,value);}
+  getBoundingClientRect(){return{height:160};}
+  focus():void{} scrollIntoView():void{}
+
   getContext() { return { clearRect() {}, fillText() {} }; }
   addEventListener(type: string, callback: (event: { preventDefault(): void;target?:Element }) => unknown): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), callback]);
@@ -55,11 +81,12 @@ class Element {
   }
 }
 async function fixture(saved: { username: string; characterSlot: number; autoLogin: boolean } | null = null, readFails = false, savedForm:unknown=null) {
-  const elements = new Map<string, Element>(), root = new Element(elements), main = new Element(elements);
+  const elements = new Map<string, Element>(), root = new Element(elements), main = new Element(elements,'main');
+  elements.set('main',main);elements.set('.client-toolbar',new Element(elements,'header'));elements.set('.client-skip-link',new Element(elements,'a'));
   vi.useFakeTimers(); vi.stubGlobal('document', {
     querySelector: (selector: string) => selector === '#app' ? root : main,
-    querySelectorAll:()=>[],
-    getElementById: (id: string) => elements.get(id), createElement: () => new Element(elements),
+    querySelectorAll:(selector:string)=>main.querySelectorAll(selector),
+    getElementById: (id: string) => elements.get(id), createElement: (tag:string) => new Element(elements,tag),
   });
   ipc.featureSettled=true;ipc.invoke.mockReset(); ipc.listen.mockClear();
   ipc.invoke.mockImplementation(async (command: string,args?:{document?:{revision:number}}) => {
@@ -71,7 +98,7 @@ async function fixture(saved: { username: string; characterSlot: number; autoLog
   });
   vi.resetModules(); await import('./main');
   for (let i = 0; i < 40; i++) await Promise.resolve();
-  return { root, main, get: (id: string) => elements.get(id)!, calls: (command: string) => ipc.invoke.mock.calls.filter(call => call[0] === command) };
+  return { root, main, index:()=>elements.get('client-manual-index')!.children, get: (id: string) => elements.get(id)!, calls: (command: string) => ipc.invoke.mock.calls.filter(call => call[0] === command) };
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -181,4 +208,45 @@ it('defers the actual main updater while a refine preview or retained economic o
  });
  await vi.advanceTimersByTimeAsync(15000);expect(f.calls('update_reserve')).toEqual([]);expect(f.calls('update_install')).toEqual([]);
  ipc.featureSettled=true;await vi.advanceTimersByTimeAsync(15000);expect(f.calls('update_reserve')).toHaveLength(1);expect(f.calls('control_bot')).toEqual([]);
+});
+
+it('keeps shell navigation usable through a deferred installation without unlocking actions',async()=>{
+ const f=await fixture();let rejectInstall:((error:Error)=>void)|undefined;
+ ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
+  if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+  if(command==='save_current_form')return args!.document.revision;
+  if(command==='update_reserve')return 'c'.repeat(32);
+  if(command==='update_install')return new Promise((_resolve,reject)=>{rejectInstall=reject;});
+ });
+ await vi.advanceTimersByTimeAsync(15000);
+ expect(f.calls('update_install')).toHaveLength(1);
+ const tabs=['session','bot','manual','settings'].map(page=>f.get(`client-tab-${page}`));
+ const botTabs=['combat','recovery','travel','inventory','workflows'].map(section=>f.get(`client-bot-tab-${section}`));
+ expect([...tabs,...botTabs,...f.index()].every(button=>!button.disabled)).toBe(true);
+ expect(f.get('start').disabled).toBe(true);expect(f.get('open').disabled).toBe(true);expect(f.get('synthetic-manual-action').disabled).toBe(true);
+ const saves=f.calls('save_current_form').length;
+ await f.get('client-tab-settings').emit('click');expect(f.get('client-page-settings').hidden).toBe(false);
+ await f.index()[0]!.emit('click');expect(f.get('client-page-manual').hidden).toBe(false);
+ expect(f.calls('control_bot')).toEqual([]);expect(f.calls('save_current_form')).toHaveLength(saves);
+ rejectInstall!(new Error('Synthetic install interruption'));for(let i=0;i<20;i++)await Promise.resolve();
+ expect(f.calls('update_release')).toHaveLength(1);
+ expect([...tabs,...botTabs,...f.index()].every(button=>!button.disabled)).toBe(true);
+ expect(f.get('start').disabled).toBe(true);expect(f.get('synthetic-manual-action').disabled).toBe(true);
+});
+
+it('renders the fresh held owner before toolbar status and binds observed session readouts',async()=>{
+ const f=await fixture();const publish=ipc.listen.mock.calls.find(call=>call[0]==='game-status')![1];
+ const base=new BotEngine(()=>{}).snapshot();
+ const status={...base,sessionId:'synthetic-session',login:{phase:'idle',message:''},reconnectAvailable:false,connected:true,compatible:true,
+  player:{id:0,classId:4,kind:0,name:'Synthetic',level:30,hp:100,maxHp:100,x:1,y:1,dead:false,statuses:[]},
+  character:{...base.character,stats:{sp:75,maxSp:200}},deaths:2,reason:'Stopped by you.',
+  mapInfo:{code:'',name:'',source:'observed',monsters:[]},refine:{blocked:true,reason:'Waiting for the exact refine transaction.'}};
+ const saves=f.calls('save_current_form').length;
+ publish({payload:status});
+ expect(f.get('status').textContent).toBe('WAITING');expect(f.get('notice').textContent).toBe(status.refine.reason);
+ expect(f.get('sp-text').textContent).toBe('75 / 200');expect(f.get('sp-bar').style.width).toBe('37.5%');expect(f.get('death-count').textContent).toBe('2');
+ await f.get('client-tab-settings').emit('click');expect(f.get('notice').textContent).toBe(status.refine.reason);
+ expect(f.calls('save_current_form')).toHaveLength(saves);expect(f.calls('control_bot')).toEqual([]);
+ publish({payload:{...status,character:{...base.character,stats:null},refine:{blocked:false}}});
+ expect(f.get('status').textContent).toBe('READY');expect(f.get('sp-text').textContent).toBe('— / —');expect(f.get('sp-bar').style.width).toBe('0%');
 });

@@ -20,15 +20,15 @@ describe('explicit zero actor UI inputs',()=>{
  it('keeps blank unknown and rejects malformed numeric values',()=>{expect(actorInput('',true)).toBeUndefined();expect(actorInput('  ',true)).toBeUndefined();expect(()=>actorInput('')).toThrow();expect(actorInput('0')).toBe(0);for(const value of ['-1','1.5','Infinity','2147483648'])expect(()=>actorInput(value)).toThrow();});
  it('uses the real manual button callbacks: blank item has no target, explicit zero survives, blank target skill emits nothing',async()=>{
   vi.stubGlobal('document',{createElement:(tag:string)=>new Element(tag)});const panels=new Map(['combat','recovery','travel','inventory','workflows'].map(key=>[key,new Element('section')]));const command=vi.fn(async(_action:unknown)=>{}),notify=vi.fn();const view=Object.create(FeatureUi.prototype);
-  Object.assign(view,{panels,hooks:{command,notify},manualLocked:false,editor:()=>{}});Reflect.apply(Reflect.get(FeatureUi.prototype,'rules'),view,[]);
-  const nodes=panels.get('inventory')!.all();const target=nodes.find(n=>n.id==='manual-target')!;const button=(name:string)=>nodes.find(n=>n.tag==='button'&&n.textContent===name)!;
+  const manualTools=new Element('section');Object.assign(view,{panels,mounts:{manualTools,sessionDetails:new Element('div')},hooks:{command,notify},manualLocked:false,editor:()=>{}});Reflect.apply(Reflect.get(FeatureUi.prototype,'rules'),view,[]);
+  const nodes=manualTools.all();const target=nodes.find(n=>n.id==='manual-target')!;const button=(name:string)=>nodes.find(n=>n.tag==='button'&&n.textContent===name)!;
   expect(target.value).toBe('');await button('Use item').emit('click');expect(command).toHaveBeenLastCalledWith({type:'useItem',itemId:501});
   target.value='0';await button('Use item').emit('click');expect(command).toHaveBeenLastCalledWith({type:'useItem',itemId:501,target:0});await button('Target skill').emit('click');expect(command).toHaveBeenLastCalledWith({type:'skill',mode:'target',skillId:1,level:1,target:0});
   target.value='';const count=command.mock.calls.length;await button('Target skill').emit('click');expect(command).toHaveBeenCalledTimes(count);expect(notify).toHaveBeenLastCalledWith('Choose an observed actor ID.',true);
  });
  it('uses blank versus zero NPC and workflow inputs in the actual workflow panel',async()=>{
   vi.stubGlobal('document',{createElement:(tag:string)=>new Element(tag)});const panel=new Element('section');const command=vi.fn(async(_action:unknown)=>{}),workflow=vi.fn(async(_spec:unknown)=>{}),notify=vi.fn();const view=Object.create(FeatureUi.prototype);
-  Object.assign(view,{panels:new Map([['workflows',panel]]),hooks:{command,workflow,notify,map:()=>"prt_fild08"},manualLocked:false,status:{},locked:false});Reflect.apply(Reflect.get(FeatureUi.prototype,'workflows'),view,[]);
+  Object.assign(view,{panels:new Map([['workflows',panel]]),mounts:{manualTools:panel},hooks:{command,workflow,notify,map:()=>"prt_fild08"},manualLocked:false,status:{},locked:false});Reflect.apply(Reflect.get(FeatureUi.prototype,'workflows'),view,[]);
   const input=(id:string)=>panel.all().find(n=>n.id===id)!;const button=(name:string)=>panel.all().find(n=>n.tag==='button'&&n.textContent===name)!;
   expect(input('npc-id').value).toBe('');await button('Talk').emit('click');expect(command).not.toHaveBeenCalled();input('npc-id').value='0';await button('Talk').emit('click');expect(command).toHaveBeenLastCalledWith({type:'npcTalk',id:0});
   await button('＋ Add step').emit('click');await button('Start workflow').emit('click');expect(workflow).not.toHaveBeenCalled();input('workflow-npc').value='0';await button('Start workflow').emit('click');expect(workflow).toHaveBeenCalledWith(expect.objectContaining({npcId:0}));
