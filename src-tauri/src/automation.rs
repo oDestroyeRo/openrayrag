@@ -92,6 +92,12 @@ impl Settings {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AutomationSettings {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_party_heal",
+        skip_serializing_if = "Option::is_none"
+    )]
+    party_heal: Option<PartyHealSettings>,
     #[serde(default)]
     loadout: LoadoutSettings,
     combat: Combat,
@@ -766,6 +772,31 @@ struct AttackStrategyRule {
     )]
     conditions: Option<Vec<Value>>,
 }
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PartyHealSettings {
+    enabled: bool,
+    level: i32,
+    hp_below_percent: i32,
+    sp_reserve: i32,
+    cooldown_seconds: i32,
+    max_attempts: i32,
+}
+fn deserialize_party_heal<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<PartyHealSettings>, D::Error> {
+    PartyHealSettings::deserialize(d).map(Some)
+}
+impl PartyHealSettings {
+    fn valid(&self) -> bool {
+        (1..=10).contains(&self.level)
+            && (1..=100).contains(&self.hp_below_percent)
+            && self.sp_reserve >= 0
+            && (1..=3600).contains(&self.cooldown_seconds)
+            && (1..=100).contains(&self.max_attempts)
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum AttackStrategyBehavior {
@@ -953,11 +984,16 @@ fn unique_by<T, K: Eq + Hash>(items: &[T], key: impl Fn(&T) -> K) -> bool {
 
 impl AutomationSettings {
     fn validate(&self) -> Result<(), String> {
-        let valid = self.attack_strategies.as_ref().map_or(true, |rules| {
-            rules.len() <= 32
-                && unique_by(rules, |rule| rule.id.clone())
-                && rules.iter().all(AttackStrategyRule::valid)
-        }) && (-100..=100).contains(&self.combat.level_difference)
+        let valid = self
+            .party_heal
+            .as_ref()
+            .map_or(true, PartyHealSettings::valid)
+            && self.attack_strategies.as_ref().map_or(true, |rules| {
+                rules.len() <= 32
+                    && unique_by(rules, |rule| rule.id.clone())
+                    && rules.iter().all(AttackStrategyRule::valid)
+            })
+            && (-100..=100).contains(&self.combat.level_difference)
             && self.combat.rules.len() <= 64
             && unique_by(&self.combat.rules, |r| r.class_id)
             && self.combat.rules.iter().all(|r| {
@@ -1194,6 +1230,29 @@ mod tests {
         invalid["automation"]["loot"]["ownership"] = json!("own");
         invalid["automation"]["loot"]["lootAll"] = json!(true);
         assert!(!valid(invalid));
+    }
+
+    #[test]
+    fn party_heal_shared_schema_round_trip_and_bounds() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../src/data/party-heal-cases.json")).unwrap();
+        for case in cases {
+            let mut value = settings();
+            value["automation"] = automation();
+            if case["absent"] != json!(true) {
+                value["automation"]["partyHeal"] = case["value"].clone();
+            }
+            assert_eq!(
+                valid(value.clone()),
+                case["valid"] == json!(true),
+                "{}",
+                case["name"]
+            );
+            if case["valid"] == json!(true) {
+                let parsed: Settings = serde_json::from_value(value.clone()).unwrap();
+                assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+            }
+        }
     }
 
     #[test]

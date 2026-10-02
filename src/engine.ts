@@ -1,8 +1,9 @@
 import { ObservedThreats, type ThreatSnapshot } from './observed-threats';
 import { CastAvailability, type ObservedCast } from './cast-availability';
-import { matchesSkillExecution } from './skill-execution';
+import { matchesSkillExecution, matchesPartyHealExecution } from './skill-execution';
 import { PartyEngagements, type PartyEngagementSnapshot } from './party-engagement';
 import type { PartyActorBinding } from './party-actors';
+import { resourceFresh } from './actor-resources';
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { deathLimitGuidance } from './death-recovery';
 import { AttackStrategyPolicy, engagementIdentity, type StrategyChoice, type AttackStrategySnapshot, type EngagementIdentity } from './attack-strategy';
@@ -128,6 +129,28 @@ export class BotEngine {
   private dropCreatedAt = new Map<number, {at:number; drop:DropIdentity; engagements:ActionIdentity[]}>();
   private lootOwner:ActionIdentity|null=null;
 
+  private partySupport:{tick:()=>boolean;busy:()=>boolean}|null=null;
+  setPartySupport(tick:()=>boolean,busy:()=>boolean):void {this.partySupport={tick,busy};}
+  stationaryForPartySupport():boolean {return this.observedOwnCastSettled()&&this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled&&!this.loadout.blocked&&this.character.sitting!==true;}
+  partyHealReadiness(targetId:number,level:number,reserve:number):string|null {
+    const p=this.player,target=this.actors.get(targetId);
+    if(!p||p.dead||!target||target.kind!==0||target.id===p.id||target.id<=0||target.dead||target.hp<=0||!this.actorActionIdentity(targetId))return 'A current living party player is required.';
+    if(!this.stationaryForPartySupport())return 'Waiting for movement, attacks and feature actions to settle.';
+    if(!this.fieldContains(target))return 'Party member is outside the field lock area.';
+    const observations=this.actorObservation([...CAST_PREREQUISITES,BLIND_CONDITION]);
+    const sp=observations.actors.find(actor=>actor.id===p.id)?.sp;
+    if(!resourceFresh(sp,observations.at)||sp!.value!==this.character.stats?.sp)return 'Fresh observed own SP is required.';
+    const ready=castReadiness(41,level,this.character,observations,this.observedOwnCastSettled());
+    if(ready.state!=='ready')return ready.reason;
+    if(sp!.value!-ready.profile.spCost<reserve)return 'Party Heal would spend the configured SP reserve.';
+    if(!this.navigation()?.canCast(cell(p),cell(target),ready.profile.range))return 'Party member is outside stationary Heal range or line of sight.';
+    return null;
+  }
+  submitPartyHeal(targetId:number,level:number,reserve:number,reserved:(sequence:number,identity:ActionIdentity)=>void):void {
+    const reason=this.partyHealReadiness(targetId,level,reserve);if(reason)throw new Error(reason);
+    this.automation.submit({type:'skill',mode:'target',skillId:41,level,target:targetId},this.character,undefined,1,{receipt:matchesPartyHealExecution,reserved});this.lastAction=this.now();this.reason=this.automation.task().label;
+  }
+  reconcilePartyHeal(sequence:number,motion:number):void {this.automation.reconcileSkill(sequence,motion,1);}
   constructor(private readonly send: (action: Action) => void, private readonly now = Date.now,
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid,
     private readonly partyBinding: (entityId: number) => PartyActorBinding | null = () => null) { this.castAvailability=new CastAvailability(this.now);this.automation = new AutomationScheduler(a=>this.send(a),this.now,a=>this.actionIdentity(a)); this.observations=new ActorObservations(this.now);this.loadout=new LoadoutPolicy(this.now); }
@@ -198,7 +221,7 @@ export class BotEngine {
     const validated = validateSettings(settings);
     if(!continuing)this.acknowledgeLoadoutOverride();
     const p = this.player;
-    if(this.automation.busy||this.awaitsImplicitWalk()||this.loadout.startBlocked)throw new Error('Wait for the current action and movement to finish.');
+    if(this.partySupport?.busy()||this.automation.busy||this.awaitsImplicitWalk()||this.loadout.startBlocked)throw new Error('Wait for the current action and movement to finish.');
     if (!inSchedule(automationSettings(validated),this.now())) throw new Error('Outside the configured daily schedule.');
     if (!this.connected || !this.compatible || !p || p.kind !== 0 || !this.map) throw new Error('Enter a character in the verified game build first.');
     if(!p.dead&&!this.actorActionIdentity())throw new Error('Waiting for the current own actor lifetime to be observed.');
@@ -572,6 +595,7 @@ export class BotEngine {
       if(!p.dead)this.expirePending(now);
       return;
     }
+    if(this.partySupport?.busy()&&!this.automation.busy){this.reason='Waiting for an unresolved party Heal receipt.';return;}
     if (p.dead) { if(a.respawn.enabled && this.deaths <= a.respawn.maxDeaths && !this.automation.busy) { this.automation.submit({type:'respawn'},this.character); this.reason='Waiting for respawn confirmation.'; } return; }
     if(!this.actorActionIdentity()) {
       const intent=this.runIntent;this.stop('Waiting for the current own actor lifetime to be observed.');this.runIntent=intent;return;
@@ -662,6 +686,7 @@ export class BotEngine {
       }
       if(enemy){const guard=this.loadout.attackGuard(a,p,this.character);if(guard){this.stop(guard);return;}}
     }
+    if(this.stationaryForPartySupport()&&this.partySupport?.tick())return;
     if(a.attackStrategies?.length&&enemy&&this.pending?.type!=='pickup'&&this.route?.type!=='pickup'&&this.eligible(enemy,now,false)) {
       const strategy=this.strategyChoice(enemy);
       if(strategy.state==='wait') {
@@ -1136,7 +1161,7 @@ export class BotEngine {
     this.automation.settleSkill(event.motionSeconds,skillAfterCastSeconds(event.skillId));
   }
   /** Emergency escape may preempt walking/combat, but never an unresolved resource or cast. */
-  get featureActionsSettled(): boolean { return !this.automation.busy && this.loadout.equipmentSettled; }
+  get featureActionsSettled(): boolean { return !this.partySupport?.busy() && !this.automation.busy && this.loadout.equipmentSettled; }
   get actionResult(): ActionResult { return {...this.automation.result}; }
   get manualTargetActive():boolean {return this.manualTask!==null;}
   /** Movement readback can settle only the captured manual owner's lifetime. */
@@ -1245,9 +1270,9 @@ export class BotEngine {
       else this.finishManual('failed','Manual route ended without a verified destination.');
     }
   }
-  idleForActions(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&!this.loadout.blocked; }
+  idleForActions(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.partySupport?.busy()&&!this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&!this.loadout.blocked; }
   /** Installation is gated by sent owners, not HP or an equipment policy fault. */
-  settledForMaintenance(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled; }
+  settledForMaintenance(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.partySupport?.busy()&&!this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled; }
   /** Death recovery owns only the existing posture scheduler, never field decisions. */
   recoveryOnly(settings: Settings): { complete: boolean; reason: string } {
     const p=this.player,a=automationSettings(settings);

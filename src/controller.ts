@@ -1,4 +1,5 @@
 import { PartyFollowRuntime, type PartyFollowContext, type PartyFollowSnapshot } from './party-follow';
+import { PartyHealPolicy, partyHealCandidates, partyHpCondition, type PartyHealSnapshot } from './party-heal';
 import { deathLimitGuidance, farmingDestination, deathCycle, deathGuard, validateDeathRecoveryGuard, type DeathRecoveryGuard, type DeathCycle } from './death-recovery';
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { ManualSocket, type SocketContext, type SocketSnapshot } from './socket';
@@ -43,6 +44,7 @@ export interface CompanionSnapshot extends Snapshot {
   social: SocialSnapshot;
   memo: MemoSnapshot;
   socket: SocketSnapshot;
+  partyHeal?:PartyHealSnapshot;
 }
 function expanded(value: unknown): value is ExpandedAction {
   try { validateExpandedAction(value); return true; } catch { return false; }
@@ -63,6 +65,7 @@ interface Pending {
 export class CompanionController {
   readonly engine: BotEngine;
   readonly partyFollow:PartyFollowRuntime;
+  readonly partyHeal:PartyHealPolicy;
   readonly world = new WorldState();
   readonly workflow: NpcWorkflow;
   readonly routine: RoutineRuntime<ControllerAction>;
@@ -126,6 +129,7 @@ export class CompanionController {
     sendSocial: (action: ManualSocialAction) => void = () => { throw new Error('Manual social transport is unavailable.'); },
     sendMemo: (slot: MemoSlot) => void = () => { throw new Error('Manual memo transport is unavailable.'); },
     sendSocket: (action: SocketAction) => void = () => { throw new Error('Manual socket transport is unavailable.'); }) {
+    this.partyHeal=new PartyHealPolicy(now);
     this.engine = new BotEngine(action=>this.send(action), now, gridFor, entityId => {
       if (!this.world.party) return null;
       const members = [...this.world.party.members.values()].filter(member=>member.entityId===entityId);
@@ -133,6 +137,7 @@ export class CompanionController {
     });
     this.partyFollow=new PartyFollowRuntime(now);
     this.engine.partyFollowBinding=()=>this.partyFollow.visibleLeader(this.partyFollowContext());
+    this.engine.setPartySupport(()=>this.partyHealTick(),()=>this.partyHeal.busy);
     this.workflow = new NpcWorkflow(now);
     this.routine = new RoutineRuntime(validControllerAction, now, { actionTimeoutSeconds: actionConfirmationTimeout({ type: 'skill' }) / 1000 });
     this.travel = new TravelController(action=>this.send(action), now, gridFor, { context: () => {
@@ -164,6 +169,27 @@ export class CompanionController {
     if(action.type!=='respawn')this.quietUntil=Math.max(this.quietUntil,this.now()+2_000);
     this.transport(action);
   }
+  private partyHealTick():boolean {
+    const policy=this.requestedSettings?.automation?.partyHeal;
+    if(!this.partyHeal.available(policy,this.engine.observedOwnCastSettled()))return false;
+    const e=this.engine,p=e.player;
+    if(!policy||!p||!this.runRequested||!this.heartbeatHealthy||!this.movementSettled()||this.partyFollow.ownsTravel||this.returning||this.deathCycle||this.pending||this.featureReceipt||this.unresolvedWorld||this.workflowOutstanding||this.travel.active||this.service.active||this.workflow.snapshot().running||['running','waiting'].includes(this.routine.snapshot().state)||this.supply.ownsField||this.supply.uncertain||this.escape.busy||this.memo.blocked||this.socket.busy||this.social.busy||this.now()<this.fencedUntil||this.now()<this.yieldUntil||this.world.npc.id!==null||this.world.npc.mode!=='idle'||this.world.vending){this.partyHeal.wait('Waiting for higher-priority owners or physical movement.');return false;}
+    this.world.partyActors.sync(this.world.party,this.world.map,e.observations,p.id);
+    const bindings=[...(this.world.party?.members.keys()??[])].flatMap(id=>{const binding=this.world.partyActors.get(id);return binding?[binding]:[];});
+    const observations=e.actorObservation(bindings.map(binding=>partyHpCondition(binding,policy.hpBelowPercent)));
+    if(!this.partyHeal.resourcesReadBack(observations)){this.partyHeal.wait('Waiting for fresh own SP readback after Heal.');return false;}
+    const candidates=partyHealCandidates(bindings,e.actors,p.id,observations,policy.hpBelowPercent);
+    let reason='No fresh, living same-map party member is below the Heal threshold.';
+    for(const candidate of candidates){
+      const blocked=e.partyHealReadiness(candidate.binding.entityId,policy.level,policy.spReserve);if(blocked){reason=blocked;continue;}
+      // Repeat the authoritative binding check immediately before reservation.
+      const current=this.world.partyActors.get(candidate.binding.memberId);if(!current||JSON.stringify(current)!==JSON.stringify(candidate.binding))continue;
+      try {e.submitPartyHeal(candidate.binding.entityId,policy.level,policy.spReserve,(sequence,identity)=>this.partyHeal.reserve(sequence,identity,{type:'skill',mode:'target',skillId:41,level:policy.level,target:candidate.binding.entityId},candidate,policy.cooldownSeconds));}
+      catch {this.partyHeal.cancel('The transport or reservation failed.');e.stop('Party Heal send is unresolved.');}
+      return true;
+    }
+    this.partyHeal.wait(reason);return false;
+  }
   private resetMemoMovement():void {this.memoWalkPending=null;this.memoWalkEnd=null;this.memoMovementUnknown=false;}
   private movementSettled():boolean {
     const p=this.engine.player;
@@ -177,6 +203,7 @@ export class CompanionController {
   }
   get active(): boolean { return this.runRequested || this.executing; }
   connect(compatible: boolean): void {
+    this.partyHeal.cancel('The game transport changed.');
     this.ownArrival=null;this.readyOwn=null;this.enteredConnection=false;
     this.socketInitialization=null;
     this.resetMemoMovement();
@@ -239,12 +266,14 @@ export class CompanionController {
   stop(reason = 'Stopped by you.'): void {
     this.engine.castAvailability.stop(reason);
     this.supply.stop(reason);this.supplyIntent=null;
+    this.partyHeal.cancel(reason);
     this.requestedSettings = null; this.blockedReason = ''; this.waitingReason = '';
     this.yieldUntil = 0; this.retryAt = 0; this.retries = 0;
     this.pause(reason);
   }
   /** Retain the requested field run while yielding ownership of commands. */
   pause(reason: string, durationMs = 0): void {
+    this.partyHeal.cancel(reason);
     this.supply.interrupt(reason);this.supplyIntent=null;
     const externalActive = this.service.active || this.travel.active || this.workflow.snapshot().running || !!this.pending || this.escape.sent;
     const engineStops = this.engine.running || this.engine.manualTargetActive || this.engine.pendingFeatureAction?.type === 'skill';
@@ -256,6 +285,7 @@ export class CompanionController {
   }
   /** Only trusted input in the official game document calls this hook. */
   manualInput():void {
+    this.partyHeal.cancel('Manual game input interrupted local Heal intent.');
     const active=this.active;
     this.socket.externalInput();
     this.memo.cancel('Memo preview or intent canceled by manual game input. A transmitted update cannot replay.');
@@ -282,6 +312,10 @@ export class CompanionController {
   }
   private captureActionFailure(): void {
     const result = this.engine.actionResult; const action = this.engine.pendingFeatureAction;
+    if(this.partyHeal.owns(result.sequence)){
+      if(result.status==='failed')this.partyHeal.cancel(result.reason);
+      this.seenActionKey=`${result.sequence}:${result.status}`;return;
+    }
     if (action && this.featureReceipt?.sequence!==result.sequence) {
       this.featureReceipt = { sequence:result.sequence,identity:this.engine.pendingActionIdentity,action, count: action.type === 'useItem' ? this.engine.character.count(action.itemId) : 0,
         stats: this.engine.character.statsRevision, skills: this.engine.character.skillsRevision,
@@ -351,6 +385,8 @@ export class CompanionController {
     if (this.socket.busy || this.memo.blocked || this.active || this.engine.manualTargetOwned || this.engine.pendingFeatureAction)
       throw new Error('Stop the current automation or manual action before requesting a new run.');
     if(!this.travel.movementSettled(this.engine.map,this.engine.player))throw new Error('Waiting for canceled rendezvous movement to settle before Start.');
+    if(this.partyHeal.busy)throw new Error('Waiting for the previous party Heal execution receipt.');
+    this.partyHeal.newRun();
     this.supply.configure(settings,context,supplyGuard);
     this.engine.acknowledgeLoadoutOverride();
     this.engine.prepareRequestedRun(settings);this.cycleDeaths=this.engine.deaths;
@@ -450,6 +486,7 @@ export class CompanionController {
     if (mode === 'service') {
       const {service:definition,executionPolicy} = validateServiceExecution(input); this.requireReady();
       if(!this.travel.movementSettled(this.engine.map,this.engine.player))throw new Error('Wait for canceled rendezvous movement to settle.');
+      if(this.partyHeal.busy)throw new Error('Waiting for the previous party Heal execution receipt before running a service.');
       if(!this.engine.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
       if (this.partyFollow.ownsTravel || this.socket.busy || this.memo.blocked || this.social.busy || this.engine.manualTargetOwned || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
         || ['running','waiting'].includes(this.routine.snapshot().state) || this.unresolvedWorld || this.now() < this.fencedUntil
@@ -678,6 +715,16 @@ export class CompanionController {
           || (owner.receipt ? confirmVendingReceipt(owner.receipt, this.context())
             : owner.cart ? this.cartConfirmed(owner) : this.worldConfirmed(owner.action, worldEvents, owner))))
         this.unresolvedWorld = null;
+    }
+    const heal=this.partyHeal.observe(events,target=>this.engine.actorActionIdentity(target));
+    if(heal)this.engine.reconcilePartyHeal(heal.sequence,heal.motion);
+    // Consume conclusive readback while its captured own lifetime still exists,
+    // including after Stop or the finite allowance prevents another Heal tick.
+    if(this.partyHeal.awaitingSpReadback&&events.some(event=>event.type==='sp'||event.type==='stats'&&event.sp!==undefined))
+      this.partyHeal.resourcesReadBack(this.engine.actorObservation([]));
+    if(this.partyHeal.busy){
+      const state=this.partyHeal.snapshot(),binding=state.targetMemberId===null?null:this.world.partyActors.get(state.targetMemberId);
+      if(!binding||events.some(event=>event.type==='map'||event.type==='clear'||event.type==='death'||event.type==='remove'||event.type==='partyAffiliation')||worldEvents.some(event=>['partyJoined','partyLeft','partyMember','partyRemove','partyMap'].includes(event.type)))this.partyHeal.cancel('Party or actor lifetime evidence changed.');
     }
     this.reconcileFeature(events);
     if (events.some(event => event.type === 'requestFailure' || event.type === 'skillFailure') && this.pending) {
@@ -1181,6 +1228,7 @@ export class CompanionController {
     if(this.partyFollow.enabled&&this.requestedSettings&&!this.deathCycle&&!this.engine.player?.dead
       &&(this.escape.busy||this.escape.blocked||this.escape.wants(this.requestedSettings,this.escapeContext()))&&this.escapeTick())return;
     if(this.partyFollowTick())return;
+    if(this.partyHeal.busy&&!this.engine.pendingFeatureAction){this.waitingReason=this.partyHeal.snapshot().reason;this.engine.tick(false);return;}
     if(this.deathRecoveryTick())return;
     // Escape owns its own receipt rather than the scheduler's cost-only ACK.
     // It must run while a requested field run is already waiting below its HP floor.
@@ -1293,6 +1341,6 @@ export class CompanionController {
     return { ...snapshot, running: executing, runRequested: this.runRequested,
       state: executing ? 'running' : this.runRequested ? 'waiting' : 'idle',
       runIntent: this.runRequested, elapsedSeconds: this.runRequested ? Math.max(0, Math.floor((this.now() - this.started) / 1000)) : snapshot.elapsedSeconds,
-      world: this.world.snapshot(), workflow, routine, travel, service, partyFollow:this.partyFollow.snapshot(), escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),deathRecoveryGuard:this.deathCycle?deathGuard(this.deathCycle):undefined,social:this.social.snapshot(),memo:this.memo.snapshot(this.memoContext()),socket:this.socket.snapshot(this.socketContext()) };
+      world: this.world.snapshot(), workflow, routine, travel, service, partyFollow:this.partyFollow.snapshot(), escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),deathRecoveryGuard:this.deathCycle?deathGuard(this.deathCycle):undefined,social:this.social.snapshot(),memo:this.memo.snapshot(this.memoContext()),socket:this.socket.snapshot(this.socketContext()),partyHeal:this.partyHeal.snapshot() };
   }
 }

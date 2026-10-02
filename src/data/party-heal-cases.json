@@ -1,0 +1,294 @@
+[
+  {
+    "name": "absent",
+    "valid": true,
+    "absent": true
+  },
+  {
+    "name": "disabled",
+    "valid": true,
+    "value": {
+      "enabled": false,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "upper bounds",
+    "valid": true,
+    "value": {
+      "enabled": true,
+      "level": 10,
+      "hpBelowPercent": 100,
+      "spReserve": 2147483647,
+      "cooldownSeconds": 3600,
+      "maxAttempts": 100
+    }
+  },
+  {
+    "name": "enabled=1",
+    "valid": false,
+    "value": {
+      "enabled": 1,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "enabled=true",
+    "valid": false,
+    "value": {
+      "enabled": "true",
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "enabled=None",
+    "valid": false,
+    "value": {
+      "enabled": null,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "level=0",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 0,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "level=11",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 11,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "level=1.5",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1.5,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "hpBelowPercent=0",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 0,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "hpBelowPercent=101",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 101,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "hpBelowPercent=20.5",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 20.5,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "spReserve=-1",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": -1,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "spReserve=2147483648",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 2147483648,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "spReserve=1.5",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 1.5,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "cooldownSeconds=0",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 0,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "cooldownSeconds=3601",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3601,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "cooldownSeconds=1.5",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 1.5,
+      "maxAttempts": 20
+    }
+  },
+  {
+    "name": "maxAttempts=0",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 0
+    }
+  },
+  {
+    "name": "maxAttempts=101",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 101
+    }
+  },
+  {
+    "name": "maxAttempts=1.5",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 1.5
+    }
+  },
+  {
+    "name": "invalid shape 21",
+    "valid": false,
+    "value": null
+  },
+  {
+    "name": "invalid shape 22",
+    "valid": false,
+    "value": []
+  },
+  {
+    "name": "invalid shape 23",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20,
+      "targetId": 2
+    }
+  },
+  {
+    "name": "invalid shape 24",
+    "valid": false,
+    "value": {
+      "enabled": true,
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20,
+      "pending": true
+    }
+  },
+  {
+    "name": "invalid shape 25",
+    "valid": false,
+    "value": {
+      "level": 1,
+      "hpBelowPercent": 80,
+      "spReserve": 10,
+      "cooldownSeconds": 3,
+      "maxAttempts": 20
+    }
+  }
+]

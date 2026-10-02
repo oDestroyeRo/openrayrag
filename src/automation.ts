@@ -35,7 +35,7 @@ import type { CharacterState } from './character-state';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost, skillPrerequisites } from './game-catalog';
 import type { ExpandedAction, FeatureEvent, Attributes } from './protocol-feature';
 export interface AutomationTask { kind: string; label: string; pending: boolean; since: number | null }
-interface PendingFeature { identity?:ActionIdentity; afterCastSeconds:number; action: ExpandedAction; since: number; deadline: number; inventory: number; equipment: number; stats: number; skills: number; count: number; skillLevel: number; attributes: Attributes | null; equipmentReceipt?: (state: CharacterState)=>boolean }
+interface PendingFeature { identity?:ActionIdentity; afterCastSeconds:number; action: ExpandedAction; since: number; deadline: number; inventory: number; equipment: number; stats: number; skills: number; count: number; skillLevel: number; attributes: Attributes | null; equipmentReceipt?: (state: CharacterState)=>boolean; skillReceipt?:typeof matchesSkillExecution }
 export interface ActionResult { sequence: number; status: 'idle' | 'pending' | 'confirmed' | 'failed'; reason: string }
 // Pinned player spells include Magnus Exorcismus (12s), Storm Gust and Lord
 // of Vermilion (up to 15s). Allow a bounded cast and response margin. Equipment
@@ -73,22 +73,27 @@ export class AutomationScheduler {
   settleSkill(motionSeconds:number,afterCastSeconds:number):void {
     this.settlingUntil=Math.max(this.settlingUntil,this.now()+Math.max(0,motionSeconds,afterCastSeconds)*1000);
   }
+  reconcileSkill(sequence:number,motion:number,afterCast:number):void {
+    // Only this scheduler sequence may drain its canceled deadline.
+    if(this.sequence!==sequence||this.pending)return;
+    this.canceledUntil=0;this.settleSkill(motion,afterCast);
+  }
   reset(connection=false): void { this.ruleConditions.length=0; if(connection){this.settlingUntil=0;this.canceledUntil=0;} else if(this.pending)this.canceledUntil=Math.max(this.canceledUntil,this.pending.deadline); if(this.pending)this.result={sequence:this.sequence,status:'failed',reason:'Action canceled.'}; this.pending = null; this.recoverySince = null; this.resting = false; this.cooldown.clear(); }
   task(): AutomationTask {
     return { kind:this.pending?.action.type ?? (this.now()<this.canceledUntil?'settling':this.now()<this.settlingUntil?'skill':this.recovering?'recover':'idle'),
       label:this.pending ? `Waiting for ${this.pending.action.type} confirmation.` : this.now()<this.canceledUntil?'Waiting for the canceled action deadline.':this.now()<this.settlingUntil?'Waiting for skill motion to finish.':this.recovering?'Resting until HP and SP recover.':'Ready.',
       pending:this.busy,since:this.pending?.since ?? this.recoverySince };
   }
-  submit(action: ExpandedAction, state: CharacterState, equipmentReceipt?: (state: CharacterState)=>boolean, afterCastSeconds=0): void {
+  submit(action: ExpandedAction, state: CharacterState, equipmentReceipt?: (state: CharacterState)=>boolean, afterCastSeconds=0, reservation?:{receipt:typeof matchesSkillExecution; reserved:(sequence:number,identity:ActionIdentity)=>void}): void {
     if (this.busy) throw new Error('Wait for the current action confirmation.');
     const identity=this.identity?.(action);if(this.identity&&!identity)throw new Error('A current observed own and target identity is required.');
     const count = action.type === 'useItem' ? state.count(action.itemId) : 0;
     const skillLevel = action.type === 'allocateSkill' ? state.learned.get(action.skillId) ?? 0 : 0;
     const since=this.now();
-    this.pending = { ...(identity?{identity}:{}),action,since,equipmentReceipt,afterCastSeconds,deadline:since+actionConfirmationTimeout(action),inventory:state.inventoryRevision,equipment:state.equipmentRevision,
+    this.pending = { ...(identity?{identity}:{}),action,since,equipmentReceipt,skillReceipt:reservation?.receipt,afterCastSeconds,deadline:since+actionConfirmationTimeout(action),inventory:state.inventoryRevision,equipment:state.equipmentRevision,
       stats:state.statsRevision,skills:state.skillsRevision,count,skillLevel,attributes:state.stats?.attributes?.slice() as Attributes ?? null };
     this.result={sequence:++this.sequence,status:'pending',reason:`Waiting for ${action.type} confirmation.`};
-    try { this.send(action); } catch (error) { this.pending = null; this.result={sequence:this.sequence,status:'failed',reason:'Connection failed while sending action.'}; throw error; }
+    try { if(reservation){if(!identity)throw new Error('Observed identity required.');reservation.reserved(this.sequence,identity);} this.send(action); } catch (error) { this.pending = null; this.result={sequence:this.sequence,status:'failed',reason:'Connection failed while sending action.'}; throw error; }
   }
   observe(event: FeatureEvent | {type:'map'|'resurrection'}, state: CharacterState, playerId: number | null, respawnTransition=false): { confirmed: boolean; failure: string | null } {
     const pending = this.pending;
@@ -108,7 +113,7 @@ export class AutomationScheduler {
       case 'useItem': confirmed = event.type==='inventoryDelta'&&!event.add&&state.inventoryKnown&&state.inventoryRevision>pending.inventory&&state.count(action.itemId)<pending.count; break;
       case 'equip': confirmed = pending.equipmentReceipt ? (event.type==='equipment'||event.type==='inventory')&&pending.equipmentReceipt(state) : event.type==='equipment'&&event.bagId===action.bagId&&event.equipped===action.equipped; break;
       case 'skill':
-        confirmed = matchesSkillExecution(action,event,playerId);
+        confirmed = (pending.skillReceipt??matchesSkillExecution)(action,event,playerId);
         break;
       case 'allocateSkill': confirmed = (event.type==='learnedSkill'&&event.skillId===action.skillId&&event.level>pending.skillLevel) || (event.type==='skills'&&!!event.learned&&state.skillsRevision>pending.skills&&(state.learned.get(action.skillId)??0)>pending.skillLevel); break;
       case 'allocateStats': confirmed = event.type==='stats'&&!!event.attributes&&!!pending.attributes&&action.attributes.every((n,i)=>event.attributes![i]!>=pending.attributes![i]!+n); break;
