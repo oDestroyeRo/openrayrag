@@ -70,7 +70,7 @@ export function manualTargetSettings(request:ManualTargetRequest):Settings {
   const p=request.policy;
   return {...DEFAULT_SETTINGS,map:request.map,targets:[],loot:false,route_step:p.routeStep,route_avoidWalls:p.avoidWalls,route_randomWalk_maxRouteTime:p.walkSeconds,attackMaxRouteTime:p.approachSeconds,attackRouteMaxPathDistance:p.maxPathDistance,minHpPercent:p.minHpPercent,automation:{...structuredClone(DEFAULT_AUTOMATION),combat:{mode:'selected',levelDifference:p.levelDifference,rules:structuredClone(p.monsterRules)},loadout:{...DEFAULT_AUTOMATION.loadout,enabled:true,autoAmmo:false,minAmmoStock:p.minAmmoStock},...(p.mapPolicy?{mapPolicy:structuredClone(p.mapPolicy)}:{})}};
 }
-export function manualAmmoGuard(policy:ManualTargetPolicy,player:Entity,state:CharacterState|CharacterSnapshot):string|null {
+export function manualAmmoGuard(policy:Pick<ManualTargetPolicy,'minAmmoStock'>,player:Entity,state:CharacterState|CharacterSnapshot):string|null {
   if(!state.inventoryKnown||state.equipment.length<10)return 'Verify weapon and ammo inventory before attacking.';
   const inventory=state.inventory instanceof Map?state.inventory:new Map(state.inventory.map(item=>[item.bagId,item]));
   const weaponId=state.equipment[4]??0;if(!weaponId)return null;

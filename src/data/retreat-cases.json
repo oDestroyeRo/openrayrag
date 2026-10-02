@@ -1,0 +1,196 @@
+[
+  {
+    "name": "default disabled",
+    "valid": true,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 2,
+      "desiredDistance": 5,
+      "maxPathSteps": 12,
+      "maxAttempts": 3
+    }
+  },
+  {
+    "name": "enabled",
+    "valid": true,
+    "policy": {
+      "enabled": true,
+      "triggerDistance": 2,
+      "desiredDistance": 5,
+      "maxPathSteps": 12,
+      "maxAttempts": 3
+    }
+  },
+  {
+    "name": "minimum",
+    "valid": true,
+    "policy": {
+      "enabled": true,
+      "triggerDistance": 1,
+      "desiredDistance": 2,
+      "maxPathSteps": 1,
+      "maxAttempts": 1
+    }
+  },
+  {
+    "name": "maximum",
+    "valid": true,
+    "policy": {
+      "enabled": true,
+      "triggerDistance": 13,
+      "desiredDistance": 14,
+      "maxPathSteps": 20,
+      "maxAttempts": 10
+    }
+  },
+  {
+    "name": "null",
+    "valid": false,
+    "policy": null
+  },
+  {
+    "name": "array",
+    "valid": false,
+    "policy": []
+  },
+  {
+    "name": "missing",
+    "valid": false,
+    "policy": {
+      "enabled": true
+    }
+  },
+  {
+    "name": "invalid enabled",
+    "valid": false,
+    "policy": {
+      "enabled": "true",
+      "triggerDistance": 2,
+      "desiredDistance": 5,
+      "maxPathSteps": 12,
+      "maxAttempts": 3
+    }
+  },
+  {
+    "name": "invalid triggerDistance",
+    "valid": false,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 0,
+      "desiredDistance": 5,
+      "maxPathSteps": 12,
+      "maxAttempts": 3
+    }
+  },
+  {
+    "name": "invalid desiredDistance",
+    "valid": false,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 2,
+      "desiredDistance": 15,
+      "maxPathSteps": 12,
+      "maxAttempts": 3
+    }
+  },
+  {
+    "name": "invalid maxPathSteps",
+    "valid": false,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 2,
+      "desiredDistance": 5,
+      "maxPathSteps": 21,
+      "maxAttempts": 3
+    }
+  },
+  {
+    "name": "invalid maxAttempts",
+    "valid": false,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 2,
+      "desiredDistance": 5,
+      "maxPathSteps": 12,
+      "maxAttempts": 11
+    }
+  },
+  {
+    "name": "noninteger or negative triggerDistance",
+    "valid": false,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 1.5,
+      "desiredDistance": 5,
+      "maxPathSteps": 12,
+      "maxAttempts": 3
+    }
+  },
+  {
+    "name": "noninteger or negative desiredDistance",
+    "valid": false,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 2,
+      "desiredDistance": 2.5,
+      "maxPathSteps": 12,
+      "maxAttempts": 3
+    }
+  },
+  {
+    "name": "noninteger or negative maxPathSteps",
+    "valid": false,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 2,
+      "desiredDistance": 5,
+      "maxPathSteps": -1,
+      "maxAttempts": 3
+    }
+  },
+  {
+    "name": "noninteger or negative maxAttempts",
+    "valid": false,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 2,
+      "desiredDistance": 5,
+      "maxPathSteps": 12,
+      "maxAttempts": 0
+    }
+  },
+  {
+    "name": "reversed",
+    "valid": false,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 6,
+      "desiredDistance": 5,
+      "maxPathSteps": 12,
+      "maxAttempts": 3
+    }
+  },
+  {
+    "name": "equal",
+    "valid": false,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 5,
+      "desiredDistance": 5,
+      "maxPathSteps": 12,
+      "maxAttempts": 3
+    }
+  },
+  {
+    "name": "unknown key",
+    "valid": false,
+    "policy": {
+      "enabled": false,
+      "triggerDistance": 2,
+      "desiredDistance": 5,
+      "maxPathSteps": 12,
+      "maxAttempts": 3,
+      "unexpected": true
+    }
+  }
+]

@@ -20,7 +20,9 @@ import { acceptsMonster, acceptsLoot, inSchedule, monsterRule, lootRule, effecti
 import { CharacterState, type CharacterSnapshot, type StatefulEntity } from './character-state';
 import { validateExpandedAction, type ExpandedAction, type FeatureEvent } from './protocol-feature';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost, skillPrerequisites } from './game-catalog';
-import { normalAttackProfile } from './combat';
+import { attackDistance, normalAttackProfile } from './combat';
+import {RetreatLedger,planRetreat,IDLE_RETREAT,type RetreatTask,type RetreatSnapshot} from './retreat';
+import {retreatSettings} from './settings';
 import { AMMO_CATALOG, LoadoutPolicy, type LoadoutSnapshot } from './loadout';
 import { IDLE_MANUAL_TARGET, manualAmmoGuard, manualTargetSettings, manualStateBlocker, previewManualTarget, sameActionIdentity as sameManualIdentity, validateManualTargetRequest, type ManualTargetRequest, type ManualTargetSnapshot } from './manual-target';
 export { MAX_TARGETS, DEFAULT_SETTINGS, DEFAULT_AUTOMATION, validateSettings, validateAutomation } from './settings';
@@ -37,6 +39,7 @@ export interface Snapshot {
   attacks: number; kills: number; looted: number; target: string; log: LogEntry[]; navigation: NavigationStatus | null;
   attackStrategies:AttackStrategySnapshot; actorObservations: ActorObservationSnapshot; ruleConditions: PublishedConditionReport[];
   manualTarget:ManualTargetSnapshot; partyEngagement:PartyEngagementSnapshot;
+  retreat:RetreatSnapshot;
   loadout: LoadoutSnapshot; character: CharacterSnapshot; actors: Entity[]; task: AutomationTask; elapsedSeconds: number; deaths: number; runIntent: boolean; lootStats: Array<{itemId:number;count:number}>; actionResult: ActionResult;
 }
 export type Action = { type: 'attack' | 'pickup'; id: number } | { type: 'stop' } | { type: 'walk'; destination: Position } | LookAction | ExpandedAction;
@@ -88,6 +91,9 @@ export class BotEngine {
   private manualWalkFence=false;
   private manualRetiredMovement=false;
   private manualReceiptOwner:EngagementIdentity|null=null;
+  private readonly retreatLedger=new RetreatLedger();
+  private retreatTask:RetreatTask|null=null;
+  private retreatStatus:RetreatSnapshot={...IDLE_RETREAT};
   private routeStep = 10;
   private pending: { type: 'attack' | 'pickup'; id: number; since: number; progress: number; approachSince: number | null; direct: boolean; attackRange?: number; engagement?:EngagementIdentity|null; actorIdentity?:ActionIdentity|null; dropIdentity?:DropIdentity } | null = null;
   private foreignTargets = new Set<number>();
@@ -131,7 +137,7 @@ export class BotEngine {
 
   private partySupport:{tick:()=>boolean;busy:()=>boolean}|null=null;
   setPartySupport(tick:()=>boolean,busy:()=>boolean):void {this.partySupport={tick,busy};}
-  stationaryForPartySupport():boolean {return this.observedOwnCastSettled()&&this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled&&!this.loadout.blocked&&this.character.sitting!==true;}
+  stationaryForPartySupport():boolean {return this.observedOwnCastSettled()&&this.running&&!this.retreatOwned&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled&&!this.loadout.blocked&&this.character.sitting!==true;}
   partyHealReadiness(targetId:number,level:number,reserve:number):string|null {
     const p=this.player,target=this.actors.get(targetId);
     if(!p||p.dead||!target||target.kind!==0||target.id===p.id||target.id<=0||target.dead||target.hp<=0||!this.actorActionIdentity(targetId))return 'A current living party player is required.';
@@ -202,6 +208,7 @@ export class BotEngine {
   }
   fail(reason: string): void { this.stop(reason); this.compatible = false; }
   stop(reason = 'Stopped by you.'): void {
+    if(this.retreatTask)this.cancelRetreat(reason,false);
     const wasManual=!!this.manualTask||!!this.manualAttackFence||this.manualWalkFence;
     if(wasManual)this.finishManual('cancelled',reason,false);
     const wasRunning = this.running;
@@ -217,6 +224,7 @@ export class BotEngine {
     if (wasRunning || this.log[0]?.text !== reason) this.note(reason);
   }
   start(settings: Settings, continuing = false): void {
+    if(this.retreatOwned)throw new Error('Wait for retreat movement and target-clear reconciliation.');
     if(this.manualTargetOwned)throw new Error('Wait for the manual command and its Stop confirmation.');
     const validated = validateSettings(settings);
     if(!continuing)this.acknowledgeLoadoutOverride();
@@ -241,6 +249,7 @@ export class BotEngine {
     }
     this.route = null; this.leg = null; this.routeFailures = 0; this.routeStep = validated.route_step;
     this.settings = validated; this.combatConditions.clear();this.automation.reset(); this.loadout.newRun();
+    this.retreatStatus={...IDLE_RETREAT,...(retreatSettings(validated).enabled?{state:'watching',reason:'Watching an accepted normal ranged engagement for bounded retreat.'} as const:{})};
     this.pending = null; this.excluded.clear();
     if(!continuing||!sameActionIdentity(this.lootOwner,this.actorActionIdentity()))this.clearLootEvidence();
     else this.pruneLootEvidence();
@@ -287,7 +296,7 @@ export class BotEngine {
   stationaryForCastAvailability():boolean {
     this.advanceMovement();
     const feature=this.automation.pendingAction;
-    return !this.manualTargetOwned&&!this.pending&&!this.route&&!this.leg&&!this.awaitsImplicitWalk()&&!this.ownMotion()
+    return !this.retreatOwned&&!this.manualTargetOwned&&!this.pending&&!this.route&&!this.leg&&!this.awaitsImplicitWalk()&&!this.ownMotion()
       &&!this.loadout.blocked&&(!feature||feature.type==='skill'||feature.type==='useItem');
   }
   private observeOwnCast(event: GameEvent | FeatureEvent): void {
@@ -317,6 +326,8 @@ export class BotEngine {
     this.castAvailability.castChanged(this.observedOwnCast);
   }
   private resetWorld(preserveCharacter=false): void {
+    if(this.retreatTask)this.cancelRetreat('Retreat canceled after a world change.',false);
+    this.retreatLedger.clear();if(!preserveCharacter){this.retreatTask=null;this.retreatStatus={...IDLE_RETREAT};}
     if(this.manualTask)this.finishManual('failed','Manual command ended after a world change.',false);
     if(!preserveCharacter){this.manualAttackFence=null;this.manualWalkFence=false;this.manualRetiredMovement=false;this.manualReceiptOwner=null;}
     this.threats.reset();
@@ -330,12 +341,15 @@ export class BotEngine {
     this.clearLootEvidence();this.skillKills.clear();this.skillTargets.clear();this.pending = null;this.map='';this.playerId=null;
   }
   private removed(id: number, dead: boolean): void {
+    const retreatKill=this.retreatTask?.identity.targetId===id&&this.retreatTask.entry.accepted&&this.retreatOwnCurrent()?this.retreatTask.identity:null;
+    if(this.retreatTask?.identity.targetId===id)this.cancelRetreat('Retreat target left its observed lifetime.');
+    this.retreatLedger.remove(id);
     const skillKill=this.skillKills.get(id);
     // HP reaching zero invalidates predicate observations before the death
     // packet. Target replacement/departure already discards these owners;
     // the surviving credit must still belong to the current own lifetime.
     const killIdentity=this.pending?.type==='attack'&&this.pending.id===id&&this.selfOwnerCurrent(this.pending.actorIdentity)?this.pending.actorIdentity
-      :skillKill&&skillKill.until>=this.now()&&this.selfOwnerCurrent(skillKill.identity)?skillKill.identity:null;
+      :skillKill&&skillKill.until>=this.now()&&this.selfOwnerCurrent(skillKill.identity)?skillKill.identity:retreatKill;
     if(this.manualTask?.request.command.type==='attack'&&this.manualTask.request.command.target.id===id)this.finishManual(dead?'complete':'failed',dead?'Selected monster death confirmed.':'Selected monster left view.');
     if(this.strategyWait?.id===id)this.strategyWait=null;
     this.strategies.remove(id);this.combatConditions.delete(id);this.observations.remove(id);if(this.serverTargetId===id)this.serverTargetId=null;
@@ -363,6 +377,7 @@ export class BotEngine {
   }
   private apply(e: GameEvent | FeatureEvent): void {
     this.observations.apply(e,undefined,this.player?.id??null);
+    if(this.retreatTask&&(e.type==='castStart'||e.type==='castExtend')&&e.id===this.playerId&&this.actorActionIdentity())this.cancelRetreat('Own cast interrupted normal retreat; waiting for its observed settlement.',false);
     if (!['enter','map','spawn','remove','clear','stop','position','tracking','walk','attack','hit','death','resurrection','heal','drop','pickup'].includes(e.type)) {
       if(this.playerId!==null)this.character.apply(e as FeatureEvent,this.player?.id??null);
       const loadoutFailure=this.loadout.observe(e as FeatureEvent,this.character,automationSettings(this.settings).loadout.enabled);
@@ -400,6 +415,8 @@ export class BotEngine {
     }
     switch (e.type) {
       case 'changeTarget': {
+        if(e.id===0&&this.retreatTask&&(this.retreatOwnCurrent()||this.unsentRetreatRemovalCurrent()))this.retreatTask.cleared=true;
+        if(e.id!==0&&this.retreatTask){delete this.retreatTask.unsentRemoval;delete this.retreatTask.unsentArrival;}
         if(e.id===0&&this.manualAttackFence?.accepted&&this.manualReceiptCurrent())this.manualAttackFence=null;
         if(e.id!==0)this.acceptManualAttack(e.id);
         const target=e.id===0?undefined:this.entities.get(e.id)??this.actors.get(e.id);this.serverTargetId=target&&!target.dead&&target.hp>0?e.id:null;break;
@@ -408,6 +425,7 @@ export class BotEngine {
         this.stop('Preparing character.'); this.resetWorld(); this.playerId = e.id; this.map = e.map;
         this.observations.beginOwnInitialization(e.id); break;
       case 'map': {
+        this.prepareUnsentRetreatArrival(e.map,1);
         this.respawnArrival=this.player?{id:this.player.id,name:this.player.name,entry:1}:null;
         const respawning=this.automation.pendingAction?.type==='respawn';
         const resume=respawning||(!this.running&&this.runIntent);
@@ -417,6 +435,7 @@ export class BotEngine {
         this.resetWorld(true); this.playerId = id; this.map = e.map; this.respawnRefreshPending=respawning; break;
       }
       case 'clear': {
+        this.prepareUnsentRetreatArrival(this.map,2);
         this.respawnArrival=this.player?{id:this.player.id,name:this.player.name,entry:2}:null;
         const respawning = this.automation.pendingAction?.type === 'respawn';
         const resume = !this.running && this.runIntent;
@@ -428,6 +447,21 @@ export class BotEngine {
         this.resetWorld(true); this.playerId = id; this.map = map; this.respawnRefreshPending = respawning; break;
       }
       case 'spawn':
+        if(this.retreatTask&&e.entity.id===this.retreatTask.identity.selfId){
+          const task=this.retreatTask,arrival=task.unsentArrival,removal=task.unsentRemoval;
+          // Foreign actors are irrelevant. A replacement own lifetime cannot
+          // inherit the removed character's unused intent or transition proof.
+          if(removal&&!arrival||arrival&&(e.entity.name!==arrival.name||e.entity.kind!==0||e.entryType!==arrival.entry)){
+            delete task.unsentRemoval;delete task.unsentArrival;
+          }
+        }
+        if(this.retreatTask?.unsentArrival){
+          const task=this.retreatTask,arrival=task.unsentArrival!,own=e.entity;
+          if(this.map===arrival.map&&own.id===arrival.id&&own.name===arrival.name&&own.kind===0&&e.entryType===arrival.entry&&!own.dead&&own.hp>0
+            &&!task.walkSent&&!task.walkPending&&!this.leg&&!this.ownMotion()&&!this.implicitWalk)this.retreatTask=null;
+        }
+        if(this.retreatTask?.identity.targetId===e.entity.id)this.retreatTask.entry.accepted=false;
+        if(this.retreatTask&&(e.entity.id===this.playerId||e.entity.id===this.retreatTask.identity.targetId))this.cancelRetreat('Retreat actor lifetime changed.');
         if(this.manualTask&&(e.entity.id===this.playerId||this.manualTask.request.command.type==='attack'&&e.entity.id===this.manualTask.request.command.target.id))this.finishManual('failed','Observed actor lifetime changed.');
         if(this.entities.has(e.entity.id)||this.actors.has(e.entity.id))this.replaceActorOwnership(e.entity.id);
         if(this.strategyWait?.id===e.entity.id)this.strategyWait=null;
@@ -451,18 +485,34 @@ export class BotEngine {
         break;
       case 'tracking': break; // Minimap markers do not correct world movement.
       case 'stop':
+        if(e.id===this.playerId&&this.retreatTask&&this.retreatOwnCurrent()){
+          this.retreatTask.walkPending=false;
+          if(this.retreatTask.phase==='walking')this.cancelRetreat('Retreat walking was interrupted by the server.',false);
+        }
         if(e.id===this.playerId&&this.manualTask)this.finishManual('failed','Manual movement or attack was interrupted by the server.',false);
         if(e.id===this.playerId&&this.manualReceiptAdmitted())this.manualWalkFence=false;
         if (e.id === this.playerId&&this.manualReceiptAdmitted()) this.implicitWalk = null;
         this.motions.delete(e.id); this.interrupted(e.id);
         break;
       case 'walk': {
+        const retreatReceipt=!!this.retreatMovementReceiptOwner(e);
         const manualReceiptOwner=!!this.manualTask||!!this.manualAttackFence||this.manualWalkFence||this.manualRetiredMovement;
         const entity = this.entities.get(e.id) ?? this.actors.get(e.id);
         if (!entity) break;
         Object.assign(entity, walkPosition(e.walk, 0));
         this.motions.delete(e.id);
         if (!e.walk.locked && e.walk.cells.length > 1) this.motions.set(e.id, { walk: e.walk, at: this.now() });
+        if(retreatReceipt&&this.retreatTask){
+          const task=this.retreatTask;task.walkPending=false;
+          if(this.leg){
+            // Accepted occupancy detours count too; a replan never replenishes
+            // the cycle's already dispatched path allowance.
+            task.steps+=Math.max(0,e.walk.cells.length-this.leg.cells.length);
+            this.leg.destination={...e.walk.cells.at(-1)!};this.leg.cells=e.walk.cells;this.leg.acceptedUntil=this.now()+walkDuration(e.walk)+100;
+            if(task.steps>retreatSettings(this.settings).maxPathSteps)this.cancelRetreat('Accepted retreat walk exceeded the remaining path allowance.');
+          }
+        }
+        if(e.id===this.playerId&&this.retreatTask&&(!retreatReceipt||e.walk.locked))this.cancelRetreat('Retreat walk was locked or crossed unverified ground.');
         if (e.id === this.playerId && !this.running && this.automation.pendingAction?.type === 'skill') {
           this.stop('Manual skill triggered movement; waiting for it to settle.'); break;
         }
@@ -491,21 +541,45 @@ export class BotEngine {
         break;
       }
       case 'position': {
+        if(e.id===this.playerId&&this.retreatTask)this.cancelRetreat('Retreat position was corrected.');
         if(this.manualTask&&e.id===this.playerId)this.finishManual('failed','Character position was corrected; preview the command again.');
         this.motions.delete(e.id); this.interrupted(e.id);
         const entity = this.entities.get(e.id) ?? this.actors.get(e.id); if (entity) Object.assign(entity, e.position);
         if(this.running && e.id===this.playerId && !this.fieldContains(e.position))this.stop('Server correction left the configured field lock area.');
         break;
       }
-      case 'remove': this.removed(e.id, e.dead); break;
-      case 'death':
+      case 'remove': {
+        const task=this.retreatTask,p=this.player;
+        if(task&&e.id===task.identity.selfId){
+          delete task.unsentRemoval;delete task.unsentArrival;
+          // Own OutOfSight/Teleport removal precedes map/clear at the pin.
+          // Capture physical absence before removed() erases that evidence.
+          if((e.reason===0||e.reason===1)&&p?.kind===0&&!p.dead&&p.hp>0&&this.retreatOwnCurrent()
+            &&!task.walkSent&&!task.walkPending&&!this.leg&&!this.ownMotion()&&!this.implicitWalk)
+            task.unsentRemoval={id:p.id,name:p.name,map:this.map,world:task.identity.world,incarnation:task.identity.selfIncarnation,reason:e.reason};
+        }
+        this.removed(e.id,e.dead);break;
+      }
+      case 'death': {
+        const task=this.retreatTask;
+        // Player.Die clears its target before emitting Death. Retire only an
+        // unsent retreat intent, capturing physical ownership before cancellation
+        // and own-lifetime removal. A fatal Hit may already remove observations.
+        const retireUnsent=task&&e.id===this.playerId&&this.player?.kind===0&&!this.player.dead
+          &&task.identity.selfId===e.id&&task.identity.world===this.observations.context().world
+          &&!task.walkSent&&!task.walkPending&&!this.leg&&!this.ownMotion()&&!this.implicitWalk;
+        if(e.id===this.playerId&&task)this.cancelRetreat('Retreat canceled because the character died.');
+        if(retireUnsent)this.retreatTask=null;
         if(e.id===this.playerId&&this.manualTask)this.finishManual('failed','Character died.');
         this.observations.remove(e.id);if(e.id===this.playerId||this.serverTargetId===e.id)this.serverTargetId=null;
         this.motions.delete(e.id);
         if (e.id === this.playerId && this.player) { if(!this.player.dead) {this.player.dead = true; this.player.hp = 0; this.onDeath();} }
         else this.removed(e.id, true);
         break;
+      }
       case 'resurrection': {
+        if(this.retreatTask?.identity.targetId===e.id)this.retreatTask.entry.accepted=false;
+        if(this.retreatTask&&(e.id===this.playerId||e.id===this.retreatTask.identity.targetId))this.cancelRetreat('Retreat actor lifetime changed.');
         if(this.manualTask?.request.command.type==='attack'&&this.manualTask.request.command.target.id===e.id)this.finishManual('failed','Selected monster lifetime changed.');
         if(e.id===this.playerId)this.clearLootEvidence();
         else this.replaceActorOwnership(e.id);
@@ -519,9 +593,18 @@ export class BotEngine {
         break;
       }
       case 'attack': {
+        const normalIdentity=e.source===this.playerId?this.actorActionIdentity(e.target):null;
+        const normalEntry=normalIdentity?this.retreatLedger.get(normalIdentity):null;
+        if(normalEntry&&sameActionIdentity(normalEntry.identity,normalIdentity)&&(this.pending?.type==='attack'&&this.pending.id===e.target||this.retreatTask?.identity.targetId===e.target)){normalEntry.accepted=true;normalEntry.progress=this.now();}
+        if(e.source===this.playerId&&this.retreatTask&&sameActionIdentity(this.retreatTask.identity,normalIdentity)){
+          // An Attack is never an explicit Walk receipt. A late shot after an
+          // earlier target clear needs a new clear; Stop is retried only once.
+          this.retreatTask.cleared=false;
+          if(!this.retreatTask.stopRetried){this.retreatTask.stopRetried=true;this.send({type:'stop'});this.lastAction=this.now();}
+        }
         if(e.source===this.playerId)this.acceptManualAttack(e.target);
         if (e.source === this.playerId && e.target === this.implicitWalk?.targetId&&this.manualReceiptAdmitted()) this.implicitWalk = null;
-        const manualWalkOwner=e.source===this.playerId&&(this.manualTask?.request.command.type==='walk'||this.manualWalkFence||this.manualRetiredMovement&&this.motions.has(this.playerId));
+        const manualWalkOwner=e.source===this.playerId&&(this.manualTask?.request.command.type==='walk'||this.manualWalkFence||this.manualRetiredMovement&&this.motions.has(this.playerId)||!!this.retreatTask&&(this.retreatTask.walkPending||this.retreatTask.walkSent&&this.motions.has(this.playerId)));
         if(!manualWalkOwner)this.motions.delete(e.source);
         const entity = this.entities.get(e.source) ?? this.actors.get(e.source); if (entity&&!manualWalkOwner) Object.assign(entity, e.position);
         if (e.target === this.playerId && this.entities.get(e.source)?.kind === 1) this.aggressors.add(e.source);
@@ -575,6 +658,7 @@ export class BotEngine {
   tick(dispatchDecisions = true): void {
     const now = this.now();
     this.advanceMovement(); this.loadout.tick(); this.partyChanged();
+    this.retreatSettlement();
     const manualSkill = !this.running && this.automation.pendingAction?.type === 'skill';
     const actionTimeout = this.automation.timeout();
     if (actionTimeout) { if (manualSkill && this.connected) this.send({ type: 'stop' }); this.stop(actionTimeout); return; }
@@ -589,6 +673,7 @@ export class BotEngine {
     if (!inSchedule(a,now)) { this.stop('Daily schedule ended. Press Start during the next allowed period.'); return; }
     if ((a.limits.minutes && now - this.runStarted >= a.limits.minutes * 60000) || (a.limits.kills && this.kills - this.runKills >= a.limits.kills) || (a.limits.pickups && this.looted - this.runPickups >= a.limits.pickups)) { this.stop('Configured session limit reached.'); return; }
     if(!dispatchDecisions){
+      if(this.retreatTask)this.tickRetreat(now,false);
       // Panel input yields decisions, not ownership. Advance accepted legs and
       // their original deadlines without sending another walk, attack or cast.
       if(!p.dead&&this.route)this.routeTick(p,now,true);
@@ -605,6 +690,7 @@ export class BotEngine {
     const nav = this.navigation();
     if(!this.running)return;
     if (!nav || !nav.safe(p)) { this.stop('Character left verified walkable ground or entered a portal exclusion.'); return; }
+    if(this.retreatTask?.phase==='cancelled'){this.reason=this.retreatTask.reason;return;}
     if (this.awaitsImplicitWalk() && !this.pending?.direct) {
       // Cancellation holds movement ownership, but cannot extend a named
       // player's visibility deadline while waiting for its late walk reply.
@@ -639,6 +725,7 @@ export class BotEngine {
     }
     if(this.route?.type==='skill'){const target=this.entities.get(this.route.id!);if(!target||!this.eligible(target,now,false)){this.cancelRoute();this.reason='Attack skill target is no longer eligible.';return;}}
     if (this.automation.wantsRecovery(a,p,this.character)) {
+      if(this.retreatTask){this.cancelRetreat('Stopping retreat before recovery.');return;}
       const recoveryItem=this.automation.nextRecoveryItem(a,p,this.character,this.actorObservation(a.items.flatMap(r=>r.conditions??[])));
       if(recoveryItem.failure){this.stop(recoveryItem.failure);return;}
       if (this.pending || this.route || this.leg) { this.pending=null;const stoppingLeg=!!this.leg;this.cancelRoute();if(!stoppingLeg)this.send({type:'stop'});this.lastAction=now;this.reason='Stopping combat before recovery.';return; }
@@ -649,14 +736,14 @@ export class BotEngine {
       if(recovery.action)this.automation.submit(recovery.action,this.character);
       this.reason=this.automation.task().label;if(this.automation.recovering||this.automation.busy)return;
     }
-    if(this.character.sitting===true) {if(!this.ownMotion())this.automation.submit({type:'sit',sitting:false},this.character);return;}
+    if(this.character.sitting===true) {if(this.retreatTask){this.cancelRetreat('Stopping retreat before changing posture.');return;}if(!this.ownMotion())this.automation.submit({type:'sit',sitting:false},this.character);return;}
     let monsterChoice: { target: Entity; cells: Position[]; strategy?:StrategyChoice } | null | undefined;
     const chooseMonster = () => {
       if (monsterChoice === undefined) {const candidates=[...this.entities.values()].filter(e=>this.eligible(e,now));monsterChoice=a.attackStrategies?.length?this.bestStrategyRoute(p,candidates):this.bestRoute(p,candidates,e=>monsterRule(a,e.classId)?.priority??0,true);}
       return monsterChoice;
     };
     const needsEnemy = !!a.attackStrategies?.length || a.loadout.enabled || a.skills.some(rule => rule.target === 'enemy') || a.equipment.some(rule => rule.monsterClassId > 0);
-    const candidateEnemy=this.pending?.type==='attack'?this.entities.get(this.pending.id)??null:(this.route?.type==='attack'||this.route?.type==='skill')?this.entities.get(this.route.id!)??null:needsEnemy?chooseMonster()?.target??null:null;
+    const candidateEnemy=this.retreatTask?this.entities.get(this.retreatTask.identity.targetId!)??null:this.pending?.type==='attack'?this.entities.get(this.pending.id)??null:(this.route?.type==='attack'||this.route?.type==='skill')?this.entities.get(this.route.id!)??null:needsEnemy?chooseMonster()?.target??null:null;
     const enemy=candidateEnemy&&!candidateEnemy.dead&&candidateEnemy.hp>0&&this.observations.context(candidateEnemy.id).incarnation?candidateEnemy:null;
     const conditions=[...a.items,...a.skills,...a.equipment].flatMap(rule=>rule.conditions??[]);
     const observations=conditions.length?this.actorObservation(conditions):undefined;
@@ -664,6 +751,7 @@ export class BotEngine {
     const next=this.automation.next(a.loadout.enabled?{...featureSettings,equipment:[]}:featureSettings,p,this.character,enemy,observations);
     if(next.failure) {this.stop(next.failure);return;}
     if(next.action) {
+      if(this.retreatTask){this.cancelRetreat('Stopping retreat before the pending resource action.');return;}
       if(this.pending||this.route||this.leg) {this.pending=null;const stoppingLeg=!!this.leg;this.cancelRoute();if(!stoppingLeg)this.send({type:'stop'});this.lastAction=now;return;}
       if(!!this.ownMotion()||now-this.lastAction<ACTION_DELAY)return;
       this.automation.submit(next.action,this.character);this.reason=this.automation.task().label;return;
@@ -673,6 +761,7 @@ export class BotEngine {
       const planned=this.loadout.next(a,p,this.character,enemy,rule=>this.automation.conditionState(`Equipment ${rule.itemId}`,rule.conditions,observations));
       if(planned.failure){this.stop(planned.failure);return;}
       if(planned.change){
+        if(this.retreatTask){this.cancelRetreat('Stopping retreat before changing equipment.');return;}
         if(this.pending||this.route||this.leg||this.loadout.needsStop){
           this.fenceUnacknowledgedLeg();
           this.pending=null;this.route=null;this.leg=null;
@@ -689,6 +778,7 @@ export class BotEngine {
     if(this.stationaryForPartySupport()&&this.partySupport?.tick())return;
     if(a.attackStrategies?.length&&enemy&&this.pending?.type!=='pickup'&&this.route?.type!=='pickup'&&this.eligible(enemy,now,false)) {
       const strategy=this.strategyChoice(enemy);
+      if(this.retreatTask&&strategy.state!=='normal'){this.cancelRetreat('Stopping retreat for the applicable attack strategy.');return;}
       if(strategy.state==='wait') {
         if(this.pending?.type==='attack'){this.stopAttackForSkill(enemy.id,now);return;}
         this.strategyWait??={id:enemy.id,since:now};
@@ -714,6 +804,8 @@ export class BotEngine {
       }
       if(this.route?.type==='skill'){const since=this.route.since;this.pursue('attack',enemy.id,cell(enemy),[]);this.route!.since=since;}
     }
+    if(this.retreatTask){this.tickRetreat(now,true);return;}
+    if(this.pending?.type==='attack'&&this.beginRetreat(now))return;
     if (this.pending) {
       const target = this.entities.get(this.pending.id);
       const attackRange = normalAttackProfile(this.character).range;
@@ -808,6 +900,7 @@ export class BotEngine {
       engagements.push({...identity});
     };
     if(this.pending?.type==='attack')include(this.pending.actorIdentity);
+    if(this.retreatTask?.entry.accepted)include(this.retreatTask.identity);
     for(const skill of this.skillKills.values())if(skill.until>=this.now())include(skill.identity);
     this.dropCreatedAt.set(drop.id,{at:this.now(),drop:{itemId:drop.itemId,count:drop.count,x:drop.x,y:drop.y},engagements});
     if(this.dropCreatedAt.size>MAX_NEW_DROPS)this.dropCreatedAt.delete(this.dropCreatedAt.keys().next().value!);
@@ -972,6 +1065,7 @@ export class BotEngine {
     this.send({ type, id }); this.lastAction = this.now();
     this.pending = { type, id, since: this.now(), progress: this.now(), approachSince: direct ? approachStarted : null, direct,
       actorIdentity,...(type === 'attack' ? { engagement,attackRange: normalAttackProfile(this.character).range } : {dropIdentity:{...this.drops.get(id)!}}) };
+    if(type==='attack'&&!this.manualTask&&retreatSettings(this.settings).enabled){const entry=this.retreatLedger.dispatch(actorIdentity,this.now());if(entry){this.pending.since=entry.since;this.pending.progress=entry.progress;}}
     if (direct) this.implicitWalk = {targetId:id,until:this.now()+4000};
     this.reason = type === 'attack' ? `Attacking ${this.entities.get(id)?.name ?? 'selected monster'}.` : `Collecting item #${this.drops.get(id)?.itemId}.`;
     if (type === 'attack') this.attacks++;
@@ -985,6 +1079,7 @@ export class BotEngine {
   }
   /** A replacement spawn is a new lifetime, even without a preceding removal. */
   private replaceActorOwnership(id:number):void {
+    this.retreatLedger.remove(id);
     const own=id===this.playerId;
     if(own)this.clearLootEvidence();
     else for(const evidence of this.dropCreatedAt.values())evidence.engagements=evidence.engagements.filter(identity=>identity.targetId!==id);
@@ -1161,8 +1256,107 @@ export class BotEngine {
     this.automation.settleSkill(event.motionSeconds,skillAfterCastSeconds(event.skillId));
   }
   /** Emergency escape may preempt walking/combat, but never an unresolved resource or cast. */
-  get featureActionsSettled(): boolean { return !this.partySupport?.busy() && !this.automation.busy && this.loadout.equipmentSettled; }
+  get featureActionsSettled(): boolean { return !this.retreatOwned&&this.resourceActionsSettled; }
+  /** Escape may request cancellation first, then await the physical owner. */
+  get resourceActionsSettled(): boolean {return !this.partySupport?.busy()&&!this.automation.busy&&this.loadout.equipmentSettled;}
   get actionResult(): ActionResult { return {...this.automation.result}; }
+  private retreatOwnCurrent():boolean {
+    const owner=this.retreatTask?.identity;
+    return !!owner&&sameActionIdentity({world:owner.world,selfId:owner.selfId,selfIncarnation:owner.selfIncarnation},this.actorActionIdentity());
+  }
+  private prepareUnsentRetreatArrival(map:string,entry:1|2):void {
+    const task=this.retreatTask,p=this.player;
+    if(!task)return;
+    if(task.unsentArrival){delete task.unsentRemoval;delete task.unsentArrival;return;}
+    // ClearTarget may arrive after own removal. It binds only to captured
+    // old-life evidence, never to a fabricated actor or a later own lifetime.
+    const removal=this.unsentRetreatRemovalCurrent()?task.unsentRemoval:null;
+    if(removal?.reason===1&&entry!==2){delete task.unsentRemoval;return;}
+    if(task.cleared&&!task.walkSent&&!task.walkPending&&!this.leg&&!this.ownMotion()&&!this.implicitWalk
+      &&(removal||p?.kind===0&&!p.dead&&p.hp>0&&this.retreatOwnCurrent()))
+      task.unsentArrival={id:removal?.id??p!.id,name:removal?.name??p!.name,map,entry};
+  }
+  private unsentRetreatRemovalCurrent():boolean {
+    const task=this.retreatTask,removal=task?.unsentRemoval;
+    return !!task&&!!removal&&!task.unsentArrival&&!this.player&&this.playerId===removal.id&&this.map===removal.map
+      &&this.observations.context().world===removal.world&&task.identity.world===removal.world
+      &&task.identity.selfId===removal.id&&task.identity.selfIncarnation===removal.incarnation;
+  }
+  retreatMovementReceiptOwner(event:GameEvent):EngagementIdentity|null {
+    const owner=this.retreatTask?.identity;if(!owner||!this.retreatOwnCurrent())return null;
+    if(event.type==='stop'&&event.id===owner.selfId)return {world:owner.world,id:owner.selfId,incarnation:owner.selfIncarnation};
+    if(event.type==='walk'&&event.id===owner.selfId&&!event.walk.locked&&event.walk.cells.length<=21&&walkDuration(event.walk)<=15000&&this.navigation()?.validRoute(event.walk.cells))return {world:owner.world,id:owner.selfId,incarnation:owner.selfIncarnation};
+    return null;
+  }
+  get retreatOwned():boolean {this.advanceMovement();this.retreatSettlement();return !!this.retreatTask;}
+  private retreatSettlement():void {
+    const task=this.retreatTask;if(!task)return;
+    const now=this.now();
+    if(task.phase!=='cancelled'&&(now-task.entry.since>=90000||now-task.entry.progress>=12000||task.movementSince!==null&&now-task.movementSince>=this.settings.attackMaxRouteTime*1000))this.cancelRetreat('Retreat or original engagement deadline reached; skipping this actor for 30 seconds.');
+    if(this.leg?.acceptedUntil!==null&&this.leg?.acceptedUntil!==undefined&&now>=this.leg.acceptedUntil&&!this.ownMotion()){
+      if(!this.player||distance(this.player,this.leg.destination)!==0)this.cancelRetreat('Retreat movement did not reach its accepted endpoint.');
+      else this.leg=null;
+    }
+    if(task.phase==='cancelled'&&this.retreatOwnCurrent()&&task.cleared&&!task.walkPending&&!this.leg&&!this.ownMotion()&&!this.awaitsImplicitWalk())this.retreatTask=null;
+  }
+  private cancelRetreat(reason:string,sendStop=true):void {
+    const task=this.retreatTask;if(!task)return;
+    if(task.phase==='cancelled')return;
+    task.phase='cancelled';task.reason=reason;
+    this.fenceUnacknowledgedLeg();this.leg=null;this.route=null;this.pending=null;
+    this.excluded.set(task.identity.targetId!,this.now()+30000);
+    this.retreatStatus={state:'skipped',reason,targetId:task.identity.targetId!,attempts:task.entry.attempts,destination:{...task.destination},settling:true};
+    this.reason=reason;this.note(reason);
+    if(sendStop&&this.connected&&this.retreatOwnCurrent()&&this.observedOwnCastSettled()){this.loadout.requestStop(reason);this.send({type:'stop'});this.lastAction=this.now();}
+  }
+  private beginRetreat(now:number):boolean {
+    const policy=retreatSettings(this.settings),pending=this.pending,p=this.player;
+    if(!policy.enabled||!pending||pending.type!=='attack'||!pending.actorIdentity||!p||this.manualTargetOwned||!this.featureActionsSettled)return false;
+    const entry=this.retreatLedger.get(pending.actorIdentity),target=this.entities.get(pending.id),profile=normalAttackProfile(this.character);
+    if(!entry?.accepted||!target||!sameActionIdentity(entry.identity,this.actorActionIdentity(target.id)))return false;
+    if(profile.sourceRange===null||profile.range<=1||policy.desiredDistance>profile.range){this.retreatStatus={...IDLE_RETREAT,state:'watching',reason:'Retreat unavailable: desired distance needs a verified ranged normal profile.',targetId:target.id};return false;}
+    if(attackDistance(cell(p),cell(target))>policy.triggerDistance)return false;
+    const failure=manualAmmoGuard({minAmmoStock:automationSettings(this.settings).loadout.minAmmoStock},p,this.character);
+    const nav=this.navigation(),plan=nav&&!failure&&entry.attempts<policy.maxAttempts&&now-entry.since<90000&&now-entry.progress<12000?planRetreat(nav,cell(p),cell(target),profile.range,policy):null;
+    const reason=failure??(entry.attempts>=policy.maxAttempts?'Retreat allowance exhausted.':!plan?'No reachable retreat firing tile within the bounded search.':'Waiting for authoritative target clear and movement before retreat.');
+    this.retreatTask={identity:{...entry.identity},entry,targetPosition:cell(target),destination:plan?.destination??cell(p),cells:plan?.cells??[],phase:'stopping',cleared:false,walkPending:false,walkSent:false,stopRetried:false,steps:0,since:now,movementSince:null,reason};
+    this.pending=null;this.route=null;this.retreatStatus={state:'stopping',reason,targetId:target.id,attempts:entry.attempts,destination:plan?.destination??null,settling:false};
+    this.loadout.requestStop(reason);this.send({type:'stop'});this.lastAction=now;this.reason=reason;
+    if(!plan)this.cancelRetreat(reason+' Skipping this actor for 30 seconds.',false);
+    return true;
+  }
+  private tickRetreat(now:number,dispatch:boolean):void {
+    this.retreatSettlement();const task=this.retreatTask;if(!task)return;
+    this.reason=task.reason;if(task.phase==='cancelled')return;
+    const p=this.player,target=this.entities.get(task.identity.targetId!),policy=retreatSettings(this.settings),profile=normalAttackProfile(this.character),nav=this.navigation();
+    if(!p||!target||!sameActionIdentity(task.identity,this.actorActionIdentity(target.id))||!this.eligible(target,now,false)||!nav?.safe(p)||!policy.enabled||profile.sourceRange===null||profile.range<=1||policy.desiredDistance>profile.range){this.cancelRetreat('Retreat target, field or verified range changed.');return;}
+    const blocker=manualStateBlocker('attack',{owner:{world:task.identity.world,id:task.identity.selfId,incarnation:task.identity.selfIncarnation},character:this.character,observedOwnCastSettled:this.observedOwnCastSettled(),observations:this.actorObservation()});
+    if(blocker){this.cancelRetreat(blocker);return;}
+    const ammo=manualAmmoGuard({minAmmoStock:automationSettings(this.settings).loadout.minAmmoStock},p,this.character);
+    if(ammo){this.cancelRetreat(ammo);return;}
+    if(task.walkPending&&this.leg&&now-this.leg.since>4000){this.cancelRetreat('Retreat Walk was not acknowledged; no retry will be sent.');return;}
+    if(this.leg){if(this.leg.acceptedUntil===null||now<this.leg.acceptedUntil)return;if(distance(p,this.leg.destination)!==0){this.cancelRetreat('Retreat movement did not reach its accepted endpoint.');return;}this.leg=null;}
+    if(!task.cleared||this.ownMotion()||this.awaitsImplicitWalk()||!dispatch||this.automation.busy||!this.loadout.equipmentSettled||now-this.lastAction<ACTION_DELAY)return;
+    if(task.walkSent&&attackDistance(cell(p),cell(target))>=policy.desiredDistance&&nav.canAttack(cell(p),cell(target),profile.range)){
+      this.retreatTask=null;this.retreatStatus={state:'resumed',reason:'Retreat movement settled; resuming the same normal target.',targetId:target.id,attempts:task.entry.attempts,destination:cell(p),settling:false};
+      this.act('attack',target.id,false);return;
+    }
+    const remaining=policy.maxPathSteps-task.steps;
+    if(remaining<=0){this.cancelRetreat('Retreat path allowance exhausted; skipping this actor for 30 seconds.');return;}
+    if(distance(cell(target),task.targetPosition)!==0||!task.cells.some(c=>distance(c,p)===0)||!nav.canAttack(task.destination,cell(target),profile.range)){
+      const plan=planRetreat(nav,cell(p),cell(target),profile.range,policy,remaining);
+      if(!plan){this.cancelRetreat('No current retreat firing tile within the remaining path allowance.');return;}
+      task.cells=plan.cells;task.destination=plan.destination;task.targetPosition=cell(target);
+    }
+    const index=task.cells.findIndex(c=>distance(c,p)===0),cells=routeSegment(task.cells.slice(index),Math.min(this.settings.route_step,remaining,20));
+    if(cells.length<2||!nav.validRoute(cells)){this.cancelRetreat('Retreat route is no longer valid.');return;}
+    if(!task.walkSent){if(task.entry.attempts>=policy.maxAttempts){this.cancelRetreat('Retreat allowance exhausted.');return;}task.entry.attempts++;}
+    task.walkSent=true;task.walkPending=true;task.steps+=cells.length-1;task.movementSince??=now;task.phase='walking';
+    const destination={...cells.at(-1)!};this.leg={destination,cells,since:now,acceptedUntil:null};
+    task.reason=`Retreating from only monster #${target.id} · walking to ${destination.x}, ${destination.y}.`;
+    this.retreatStatus={state:'walking',reason:task.reason,targetId:target.id,attempts:task.entry.attempts,destination,settling:false};
+    this.send({type:'walk',destination});this.lastAction=now;this.reason=task.reason;
+  }
   get manualTargetActive():boolean {return this.manualTask!==null;}
   /** Movement readback can settle only the captured manual owner's lifetime. */
   manualMovementReceiptOwner(event:GameEvent):EngagementIdentity|null {
@@ -1270,9 +1464,9 @@ export class BotEngine {
       else this.finishManual('failed','Manual route ended without a verified destination.');
     }
   }
-  idleForActions(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.partySupport?.busy()&&!this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&!this.loadout.blocked; }
+  idleForActions(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.partySupport?.busy()&&!this.running&&!this.retreatOwned&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&!this.loadout.blocked; }
   /** Installation is gated by sent owners, not HP or an equipment policy fault. */
-  settledForMaintenance(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.partySupport?.busy()&&!this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled; }
+  settledForMaintenance(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.partySupport?.busy()&&!this.running&&!this.retreatOwned&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled; }
   /** Death recovery owns only the existing posture scheduler, never field decisions. */
   recoveryOnly(settings: Settings): { complete: boolean; reason: string } {
     const p=this.player,a=automationSettings(settings);
@@ -1377,6 +1571,7 @@ export class BotEngine {
     } : null;
     return {
       connected: this.connected, compatible: this.compatible, running: this.running, reason: this.reason,
+      retreat:{...this.retreatStatus,state:!retreatSettings(this.settings).enabled&&!this.retreatTask?'off':this.retreatStatus.state,settling:!!this.retreatTask&&this.retreatTask.phase==='cancelled',reason:(this.retreatTask?.reason??this.retreatStatus.reason)+(this.retreatTask?.phase==='cancelled'?' Waiting for '+(!this.retreatOwnCurrent()?'a fresh connection after the own lifetime changed':this.retreatTask.walkPending?'authoritative Walk or Stop readback':!this.retreatTask.cleared?'authoritative target clear':'accepted movement to settle')+'; no retreat is retried.':''),destination:this.retreatStatus.destination?{...this.retreatStatus.destination}:null},
       manualTarget:{...this.manualStatus,settling:!this.manualTask&&this.manualTargetOwned,reason:this.manualStatus.reason+(!this.manualTask&&this.manualTargetOwned?' Waiting for authoritative '+(this.manualReceiptOwner&&!this.manualReceiptCurrent()?'fresh connection after the character lifetime changed':this.manualAttackFence?'attack acceptance and target clear':this.manualWalkFence?'Walk or Stop acknowledgment':'accepted movement to finish')+'; nothing is retried.':''),goal:this.manualStatus.goal?{...this.manualStatus.goal}:null,target:this.manualStatus.target?{...this.manualStatus.target}:null},
       partyEngagement:this.partyEngagements.snapshot(automationSettings(this.settings).combat.partyEngagement===true),
       map: this.map, player: this.player ? { ...this.player } : null,

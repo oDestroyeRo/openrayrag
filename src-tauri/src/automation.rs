@@ -114,6 +114,12 @@ struct AutomationSettings {
         skip_serializing_if = "Option::is_none"
     )]
     attack_strategies: Option<Vec<AttackStrategyRule>>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_retreat",
+        skip_serializing_if = "Option::is_none"
+    )]
+    retreat: Option<RetreatSettings>,
     allocation: Allocation,
     follow: Follow,
     travel: Travel,
@@ -138,6 +144,30 @@ struct AutomationSettings {
         skip_serializing_if = "Option::is_none"
     )]
     map_policy: Option<MapPolicy>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RetreatSettings {
+    enabled: bool,
+    trigger_distance: u8,
+    desired_distance: u8,
+    max_path_steps: u8,
+    max_attempts: u8,
+}
+fn deserialize_retreat<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<RetreatSettings>, D::Error> {
+    RetreatSettings::deserialize(deserializer).map(Some)
+}
+impl RetreatSettings {
+    fn valid(&self) -> bool {
+        (1..=13).contains(&self.trigger_distance)
+            && (2..=14).contains(&self.desired_distance)
+            && self.desired_distance > self.trigger_distance
+            && (1..=20).contains(&self.max_path_steps)
+            && (1..=10).contains(&self.max_attempts)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1102,7 +1132,8 @@ impl AutomationSettings {
                 .as_ref()
                 .map_or(true, DispositionPolicy::valid)
             && self.supply.as_ref().map_or(true, SupplySettings::valid)
-            && self.map_policy.as_ref().map_or(true, MapPolicy::valid);
+            && self.map_policy.as_ref().map_or(true, MapPolicy::valid)
+            && self.retreat.as_ref().map_or(true, RetreatSettings::valid);
         if valid {
             Ok(())
         } else {
@@ -1182,6 +1213,31 @@ mod tests {
 
     fn valid(value: Value) -> bool {
         serde_json::from_value::<Settings>(value).is_ok_and(|settings| settings.validate().is_ok())
+    }
+
+    #[test]
+    fn optional_retreat_shared_contract() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../src/data/retreat-cases.json")).unwrap();
+        for case in cases {
+            let mut value = settings();
+            value["automation"] = automation();
+            value["automation"]["retreat"] = case["policy"].clone();
+            assert_eq!(
+                valid(value.clone()),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            if case["valid"] == true {
+                let parsed: Settings = serde_json::from_value(value.clone()).unwrap();
+                assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+            }
+        }
+        let mut old = settings();
+        old["automation"] = automation();
+        let parsed: Settings = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), old);
     }
 
     #[test]

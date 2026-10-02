@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FeatureUi } from './feature-ui';
-import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, DEFAULT_RETREAT } from './settings';
 
 // Exercise the actual field creation/read/write/lock paths. Unrelated feature
 // panels are stubbed so this fixture needs no browser or account-bearing main.
@@ -74,5 +74,19 @@ describe('discoverable canonical loot controls', () => {
     ui.lock(false, true); const own = structuredClone(DEFAULT_AUTOMATION); ui.write(own);
     expect(ui.read().loot.ownership).toBe('own'); expect(scope.value).toBe('own');
     scope.value = 'unverified'; expect(() => ui.read()).toThrow();
+  });
+});
+describe('opt-in normal retreat controls',()=>{
+  it('keeps default omission and displays one disabled group with exact bounds',()=>{
+    const {ui,combat}=setup();expect(ui.read()).not.toHaveProperty('retreat');
+    const toggle=combat.querySelector('[data-setting="retreat.enabled"]')!;expect(toggle.checked).toBe(false);
+    for(const [field,value] of Object.entries(DEFAULT_RETREAT))if(field!=='enabled')expect(combat.querySelector(`[data-setting="retreat.${field}"]`)!.value).toBe(String(value));
+    expect(combat.querySelectorAll('[data-setting="retreat.enabled"]')).toHaveLength(1);
+  });
+  it('reads/writes one strict policy, retains it while locked and rejects an invalid distance',()=>{
+    const {ui,combat}=setup(),automation=structuredClone(DEFAULT_AUTOMATION);automation.retreat={...DEFAULT_RETREAT,enabled:true,maxAttempts:1};ui.write(automation);
+    expect(ui.read().retreat).toEqual(automation.retreat);ui.lock(true,true);const toggle=combat.querySelector('[data-setting="retreat.enabled"]')!;expect(toggle.disabled).toBe(true);expect(toggle.checked).toBe(true);
+    ui.lock(false,true);combat.querySelector('[data-setting="retreat.desiredDistance"]')!.value='1';expect(()=>ui.read()).toThrow();
+    ui.write(DEFAULT_AUTOMATION);expect(ui.read()).not.toHaveProperty('retreat');expect(toggle.checked).toBe(false);
   });
 });

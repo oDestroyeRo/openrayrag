@@ -3,8 +3,9 @@ import { DEFAULT_MAP_POLICY } from './map-policy';
 import { describe, expect, it, vi } from 'vitest';
 import { CompanionController, type ControllerAction } from './controller';
 import { BotEngine, type Action } from './engine';
-import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_SETTINGS } from './settings';
-import { type Entity, type GameEvent, OP } from './protocol';
+import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT, DEFAULT_SETTINGS } from './settings';
+import { BUILTIN_SERVICES } from './npc-services';
+import { type Entity, type GameEvent, type Position, OP } from './protocol';
 import { type FeatureEvent, FEATURE_OP } from './protocol-feature';
 import { BitWriter } from './binary';
 import { WORLD_OP } from './world-protocol';
@@ -36,6 +37,285 @@ function ownPacket(e:Entity,entry:number):BitWriter {
   return new BitWriter().u8(OP.spawn).u8(entry).i32(body.length).take(body);
 }
 function policy() { return structuredClone(DEFAULT_AUTOMATION); }
+
+describe('normal ranged retreat controller ownership',()=>{
+  function retreat() {
+    const f=setup(),automation=policy();automation.retreat={...DEFAULT_RETREAT,enabled:true};
+    f.receive({type:'inventory',items:[{bagId:77,itemId:1701,type:2,count:1,guid:'bow'},{bagId:1750,itemId:1750,type:1,count:20},{bagId:601,itemId:601,type:1,count:4}],equipment:[0,0,0,0,77,0,0,0,0,0],ammoId:1750},{type:'skills',learned:[{skillId:1,level:2},{skillId:29,level:5}]});
+    f.controller.start({...settings,automation});f.step();
+    f.packet(new BitWriter().u8(OP.attack).i32(1).i32(2).i32(0).position(player));f.step();
+    expect(f.sent.map(a=>a.type)).toEqual(['attack','stop']);
+    return {...f,automation};
+  }
+  it('panel input advances deadlines without new decisions; an official manual command cancels',()=>{
+    const f=retreat();f.controller.manualInput();f.packet(new BitWriter().u8(FEATURE_OP.changeTarget).i32(0));f.advance(1900);expect(f.sent.map(a=>a.type)).toEqual(['attack','stop']);
+    f.advance(200);expect(f.sent.at(-1)?.type).toBe('walk');f.controller.manualCommand();
+    expect(f.controller.engine.snapshot().retreat).toMatchObject({state:'skipped',settling:true});expect(f.controller.runRequested).toBe(true);f.advance(5000);expect(f.sent.filter(a=>a.type==='walk')).toHaveLength(1);
+    expect(()=>f.controller.start({...settings,automation:f.automation})).toThrow();expect(f.controller.engine.settledForMaintenance()).toBe(false);
+  });
+  it('emergency escape cancels retreat, then waits for target clear before one resource request',()=>{
+    const f=retreat();f.automation.escape={...DEFAULT_ESCAPE,enabled:true,hpBelowPercent:60};
+    // The requested policy is immutable. Start with it before acceptance.
+    f.controller.stop();f.packet(new BitWriter().u8(FEATURE_OP.changeTarget).i32(0));f.controller.engine.receive([{type:'stop',id:1}]);
+    f.controller.start({...settings,automation:f.automation});f.step();f.packet(new BitWriter().u8(OP.attack).i32(1).i32(2).i32(0).position(player));f.step();
+    f.controller.engine.player!.hp=55;f.step();expect(f.controller.engine.snapshot().retreat.state).toBe('skipped');expect(f.sent.filter(a=>a.type==='useItem')).toHaveLength(0);
+    f.packet(new BitWriter().u8(FEATURE_OP.changeTarget).i32(0));f.advance(3000);
+    expect(f.sent.filter(a=>a.type==='useItem')).toEqual([{type:'useItem',itemId:601}]);expect(f.sent.filter(a=>a.type==='walk')).toHaveLength(0);
+  });
+});
+
+describe('retreat ownership with stationary availability',()=>{
+  function fixture(id:number,hp=100,rendezvous=false) {
+    let now=100_000;const sent:Array<Action|ControllerAction>=[];
+    const c=new CompanionController(action=>sent.push(action),()=>now,rendezvous?undefined:()=>grid);
+    const own={...player,id,classId:6,level:20,hp,sp:200,maxSp:200,...(rendezvous?{x:170,y:370}:{})};
+    const packet=(writer:BitWriter)=>c.receive(writer.finish());
+    c.connect(true);packet(new BitWriter().u8(OP.enter).i32(id).string('prt_fild08'));
+    packet(ownPacket(own,1));packet(ownPacket({...monster,x:own.x+1,y:own.y},0));
+    c.engine.receive([{type:'inventory',items:[{bagId:77,itemId:1701,type:2,count:1,guid:'bow',flags:0,refine:0,slots:[0,0,0,0]},
+      {bagId:1750,itemId:1750,type:1,count:20},{bagId:501,itemId:501,type:1,count:4},{bagId:601,itemId:601,type:1,count:4}],equipment:[0,0,0,0,77,0,0,0,0,0],ammoId:1750},
+      {type:'stats',level:20,hp,maxHp:100,sp:200,maxSp:200},{type:'skills',learned:[{skillId:1,level:2},{skillId:29,level:5},{skillId:42,level:1}]}]);
+    const automation=policy();automation.retreat={...DEFAULT_RETREAT,enabled:true};automation.respawn={enabled:true,maxDeaths:1};automation.recovery.enabled=false;
+    const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation};
+    const step=(ms=100)=>{now+=ms;c.tick();};
+    const advance=(ms:number)=>{while(ms>0){const part=Math.min(ms,100);step(part);ms-=part;}};
+    const attack=()=>packet(new BitWriter().u8(OP.attack).i32(id).i32(2).i32(0).position(c.engine.player!));
+    const clear=()=>packet(new BitWriter().u8(FEATURE_OP.changeTarget).i32(0));
+    const cast=()=>packet(new BitWriter().u8(FEATURE_OP.castStart).i32(id).i32(id).u8(42).u8(1).u8(6).position(c.engine.player!).f32(1).u8(0));
+    const result=()=>packet(new BitWriter().u8(FEATURE_OP.skill).u8(2).i32(id).i32(-1).i32(id).u8(42).u8(1).u8(0)
+      .position(c.engine.player!).i32(0).u8(0).u8(1).f32(0).f32(0).bool(false));
+    const look=(actor=id,head=1)=>packet(new BitWriter().u8(13).i32(actor).i16(-1).i16(5000).u8(6).u8(head));
+    const stopCast=()=>packet(new BitWriter().u8(FEATURE_OP.castStop).i32(id));
+    const walk=(cells:Position[],seconds=.1)=>{
+      const offsets=[[0,-1],[-1,-1],[-1,0],[-1,1],[0,1],[1,1],[1,0],[1,-1]],directions=cells.slice(1).map((cell,i)=>offsets.findIndex(([x,y])=>cell.x-cells[i]!.x===x&&cell.y-cells[i]!.y===y));
+      const packed=[];for(let i=0;i<directions.length;i+=2)packed.push(directions[i]!<<4|(directions[i+1]??0));
+      packet(new BitWriter().u8(OP.walk).i32(id).position(cells[0]!).f32(cells[0]!.x).f32(cells[0]!.y).f32(seconds).f32(seconds).u8(cells.length).take(Uint8Array.from(packed)).u8(0));
+    };
+    const start=()=>c.start(settings);
+    const engage=()=>{start();step();attack();step();expect(sent.map(action=>action.type)).toEqual(['attack','stop']);};
+    return {c,sent,settings,own,packet,step,advance,attack,clear,cast,result,look,stopCast,walk,start,engage};
+  }
+  function party(f:ReturnType<typeof fixture>,hp=100) {
+    const ally={...f.own,id:3,name:'Member',x:f.own.x+1,hp};
+    f.packet(ownPacket(ally,0));f.packet(new BitWriter().u8(OP.partyAffiliation).i32(3).u8(1).i32(5).string('Party').bool(true));
+    f.packet(new BitWriter().u8(WORLD_OP.partyAccept).u8(0).i32(5).string('Party').i32(1).i32(7).i32(3).i16(20).string('Member')
+      .u8(1).string('prt_fild08').i32(hp).i32(100).i32(200).i32(200));
+    f.c.engine.receive([{type:'skills',learned:[{skillId:1,level:2},{skillId:29,level:5},{skillId:42,level:1},{skillId:41,level:10}]}]);
+    f.settings.automation.partyHeal={...DEFAULT_PARTY_HEAL,enabled:true,cooldownSeconds:1};
+    f.settings.automation.follow={...f.settings.automation.follow,mode:'partyLeader',rendezvous:true,distance:8,lostSeconds:20};
+    const health=(value:number)=>f.packet(new BitWriter().u8(WORLD_OP.partyUpdate).u8(8).i32(7).i32(value).i32(100).i32(200).i32(200));
+    const depart=()=>f.packet(new BitWriter().u8(WORLD_OP.partyUpdate).u8(9).i32(7).string('prontera'));
+    const heals=()=>f.sent.filter(action=>action.type==='skill'&&action.skillId===41);
+    return {health,depart,heals};
+  }
+  const removalTransitions=[
+    {transition:'map',reason:0,clearFirst:false},
+    {transition:'map',reason:0,clearFirst:true},
+    {transition:'clear',reason:0,clearFirst:true},
+    {transition:'clear',reason:1,clearFirst:true},
+  ];
+  it.each([0,1].flatMap(id=>removalTransitions.map(order=>({id,...order}))))(
+    'retires own$id unused intent through actual Remove$reason/$transition; clearFirst=$clearFirst',({id,transition,reason,clearFirst})=>{
+    const f=fixture(id);f.start();f.step();f.attack();f.c.engine.kills=7;
+    expect(f.c.engine.snapshot().retreat).toMatchObject({state:'stopping',attempts:0});
+    if(clearFirst)f.clear();
+    f.packet(new BitWriter().u8(OP.remove).i32(id).u8(reason).f32(-1));expect(f.c.engine.player).toBeUndefined();
+    if(!clearFirst)f.clear();
+    expect(f.sent.filter(action=>action.type==='walk')).toEqual([]);expect(f.c.engine.retreatOwned).toBe(true);
+    const map=transition==='map'?'prontera':'prt_fild08',entry=transition==='map'?1:2;
+    f.packet(transition==='map'?new BitWriter().u8(OP.map).string(map):new BitWriter().u8(OP.clear));
+    expect(f.c.engine.retreatOwned).toBe(true);
+    f.packet(ownPacket(f.own,entry));expect(f.c.engine.retreatOwned).toBe(false);
+    expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:0,kills:7});
+    expect(f.sent.filter(action=>action.type==='attack')).toHaveLength(1);expect(f.sent.filter(action=>action.type==='walk'||action.type==='respawn')).toEqual([]);
+  });
+  it.each([0,1].flatMap(id=>['missing clear','unrelated removal','replacement before map','different name before map','different kind before map',
+    'different name arrival','different kind arrival','wrong entry','new transition','new target','Teleport then map'].map(scenario=>({id,scenario}))))(
+    'holds own$id removed intent when $scenario breaks its captured transition',({id,scenario})=>{
+    const f=fixture(id);f.start();f.step();f.attack();
+    if(scenario!=='missing clear')f.clear();
+    const reason=scenario==='unrelated removal'?4:scenario==='Teleport then map'?1:0;
+    f.packet(new BitWriter().u8(OP.remove).i32(id).u8(reason).f32(-1));
+    if(scenario==='replacement before map')f.packet(ownPacket(f.own,0));
+    if(scenario==='different name before map')f.packet(ownPacket({...f.own,name:'Other'},0));
+    if(scenario==='different kind before map')f.packet(ownPacket({...f.own,kind:1},0));
+    if(scenario==='new target'){f.packet(new BitWriter().u8(FEATURE_OP.changeTarget).i32(2));f.clear();}
+    f.packet(new BitWriter().u8(OP.map).string('prontera'));
+    if(scenario==='different name arrival')f.packet(ownPacket({...f.own,name:'Other'},1));
+    if(scenario==='different kind arrival')f.packet(ownPacket({...f.own,kind:1},1));
+    if(scenario==='wrong entry')f.packet(ownPacket(f.own,0));
+    if(scenario==='new transition')f.packet(new BitWriter().u8(OP.map).string('prt_fild08'));
+    f.packet(ownPacket(f.own,1));f.clear();f.advance(300);
+    expect(f.c.engine.retreatOwned).toBe(true);expect(f.c.engine.featureActionsSettled).toBe(false);
+    expect(f.sent.filter(action=>action.type==='walk'||action.type==='respawn')).toEqual([]);
+    expect(f.sent.filter(action=>action.type==='attack')).toHaveLength(1);expect(f.c.snapshot().deaths).toBe(0);
+  });
+  it.each([0,1])('does not bind foreign removal or old arrival after a new own%s Enter initialization',id=>{
+    const f=fixture(id);f.start();f.step();f.attack();const foreign=id===0?1:0;
+    f.packet(new BitWriter().u8(OP.remove).i32(foreign).u8(0).f32(-1));
+    f.packet(ownPacket(f.own,0));expect(f.c.engine.retreatOwned).toBe(true);
+    f.packet(new BitWriter().u8(OP.enter).i32(foreign).string('prontera'));f.clear();f.packet(ownPacket(f.own,1));
+    expect(f.c.engine.player).toBeUndefined();expect(f.c.engine.playerId).toBe(foreign);
+    expect(f.c.engine.running).toBe(false);expect(f.sent.filter(action=>action.type==='walk'||action.type==='respawn')).toEqual([]);
+  });
+  it.each([0,1].flatMap(id=>['map','clear'].map(transition=>({id,transition}))))(
+    'retires only own$id unsent retreat after ordered $transition and matching living arrival',({id,transition})=>{
+    const f=fixture(id);f.start();f.step();f.attack();f.c.engine.kills=7;
+    // ResetState/ClearTarget precedes both ChangeMaps and Warp RemoveAllEntities
+    // at the pinned source. No Walk or movement completion is invented here.
+    if(transition==='map')f.packet(new BitWriter().u8(OP.remove).i32(id).u8(0).f32(-1));
+    f.clear();
+    if(transition==='clear')f.packet(new BitWriter().u8(OP.remove).i32(id).u8(0).f32(-1));
+    expect(f.sent.filter(action=>action.type==='walk')).toEqual([]);
+    const map=transition==='map'?'prontera':'prt_fild08',entry=transition==='map'?1:2;
+    f.packet(transition==='map'?new BitWriter().u8(OP.map).string(map):new BitWriter().u8(OP.clear));
+    expect(f.c.engine.retreatOwned).toBe(true);expect(f.c.engine.featureActionsSettled).toBe(false);
+    f.packet(ownPacket({...f.own,id:id===0?1:0},entry));expect(f.c.engine.retreatOwned).toBe(true);
+    f.packet(ownPacket({...f.own,dead:true,hp:0},entry));expect(f.c.engine.retreatOwned).toBe(true);
+    f.packet(ownPacket(f.own,entry));expect(f.c.engine.retreatOwned).toBe(false);
+    expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:0,kills:7});
+    expect(f.sent.filter(action=>action.type==='attack')).toHaveLength(1);expect(f.sent.filter(action=>action.type==='walk'||action.type==='respawn')).toEqual([]);
+  });
+  it.each([0,1].flatMap(id=>['map','clear'].map(transition=>({id,transition}))))(
+    'does not infer old target-clear from own$id $transition and arrival alone',({id,transition})=>{
+    const f=fixture(id);f.engage();f.packet(transition==='map'?new BitWriter().u8(OP.map).string('prontera'):new BitWriter().u8(OP.clear));
+    f.packet(ownPacket(f.own,transition==='map'?1:2));f.advance(300);
+    expect(f.c.engine.retreatOwned).toBe(true);expect(f.c.engine.featureActionsSettled).toBe(false);
+    expect(f.sent.filter(action=>action.type==='walk'||action.type==='respawn')).toEqual([]);
+  });
+  it.each([0,1].flatMap(id=>[false,true].map(sentWalk=>({id,sentWalk}))))(
+    'retains own$id movement uncertainty across ordered map arrival; sentWalk=$sentWalk',({id,sentWalk})=>{
+    const f=fixture(id);f.engage();
+    if(sentWalk){f.clear();f.step();expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(1);}
+    else {f.walk([{x:100,y:100},{x:100,y:101}],2);f.clear();expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(0);}
+    f.packet(new BitWriter().u8(OP.remove).i32(id).u8(0).f32(-1));
+    f.packet(new BitWriter().u8(OP.map).string('prontera'));f.packet(ownPacket(f.own,1));f.advance(2300);
+    expect(f.c.engine.retreatOwned).toBe(true);expect(f.c.engine.featureActionsSettled).toBe(false);
+    expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(sentWalk?1:0);expect(f.sent.filter(action=>action.type==='attack')).toHaveLength(1);
+  });
+  it.each([0,1])('keeps needy party Heal behind own%s unsent and sent retreat ownership',id=>{
+    const f=fixture(id),p=party(f);f.engage();p.health(40);f.step();
+    expect(f.c.world.partyActors.get(7)).not.toBeNull();expect(f.c.engine.stationaryForPartySupport()).toBe(false);
+    expect(f.c.engine.partyHealReadiness(3,1,10)).toContain('movement');expect(p.heals()).toEqual([]);
+    f.clear();f.step();expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(1);
+    f.look();f.stopCast();f.advance(300);expect(f.c.engine.retreatOwned).toBe(true);
+    expect(f.c.engine.stationaryForPartySupport()).toBe(false);expect(p.heals()).toEqual([]);
+    expect(f.c.snapshot().partyHeal).toMatchObject({attempts:0,confirmed:0});
+  });
+  it.each([0,1])('retains unresolved own%s Heal ahead of retreat, Wing, service and party departure',id=>{
+    const f=fixture(id),p=party(f,40);f.settings.automation.escape={...DEFAULT_ESCAPE,enabled:true,hpBelowPercent:60};
+    f.start();f.step();expect(p.heals(),f.c.snapshot().partyHeal?.reason).toHaveLength(1);f.c.engine.kills=7;
+    f.c.manualCommand();f.look();f.stopCast();p.depart();
+    f.packet(new BitWriter().u8(OP.heal).i32(id).i32(0).i32(20).i32(100));f.advance(1500);
+    // The scheduler's finite timeout may retire its resource owner; the exact
+    // Heal receipt still owns the unresolved spend after that separate timeout.
+    for(let i=0;i<32;i++){f.step(1000);f.packet(new BitWriter().u8(OP.heal).i32(id).i32(0).i32(20).i32(100));}
+    expect(f.c.engine.pendingFeatureAction).toBeNull();
+    expect(f.c.engine.observedOwnCastSettled()).toBe(true);expect(f.c.engine.resourceActionsSettled).toBe(false);
+    expect(f.c.partyHeal.busy).toBe(true);expect(f.c.engine.retreatOwned).toBe(false);
+    expect(()=>f.c.perform('service',{service:BUILTIN_SERVICES[0],executionPolicy:DEFAULT_MAP_POLICY})).toThrow('party Heal');
+    expect(f.sent.filter(action=>action.type==='walk'||action.type==='attack'||action.type==='useItem'||action.type==='respawn')).toEqual([]);
+    expect(f.c.snapshot().partyFollow).toMatchObject({attemptUsed:false,ownsTravel:false});
+    expect(f.c.snapshot()).toMatchObject({runRequested:true,kills:7,partyHeal:{attempts:1,confirmed:0}});
+    f.packet(new BitWriter().u8(FEATURE_OP.skill).u8(1).i32(id).i32(-1).i32(3).u8(41).u8(1).u8(0)
+      .position(f.c.engine.player!).i32(-20).u8(2).u8(0).f32(0).f32(0).bool(false));
+    expect(f.c.partyHeal.busy).toBe(false);expect(f.c.snapshot().partyHeal).toMatchObject({attempts:1,confirmed:1});
+    expect(f.c.partyHeal.awaitingSpReadback).toBe(true);f.look();f.stopCast();
+    expect(f.c.partyHeal.awaitingSpReadback).toBe(true);f.packet(new BitWriter().u8(FEATURE_OP.sp).i32(187).i32(200));
+    expect(f.c.partyHeal.awaitingSpReadback).toBe(false);expect(p.heals()).toHaveLength(1);
+  });
+  it.each([0,1])('keeps party departure behind own%s retained retreat movement and then gives Travel priority',id=>{
+    const f=fixture(id,100,true),p=party(f);f.engage();f.clear();f.step();const cells=f.c.engine.snapshot().navigation!.leg;
+    expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(1);p.health(40);p.depart();f.look();f.stopCast();f.advance(300);
+    expect(f.c.engine.retreatOwned).toBe(true);expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(1);
+    expect(f.c.snapshot().partyFollow).toMatchObject({attemptUsed:false,ownsTravel:false});expect(p.heals()).toEqual([]);
+    f.walk(cells.slice(0,2));f.advance(400);expect(f.c.engine.retreatOwned).toBe(false);
+    expect(f.c.snapshot().partyFollow).toMatchObject({attemptUsed:true,ownsTravel:true,state:'travelling'});
+    expect(f.c.travel.snapshot().purpose).toBe('party-follow');expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(2);
+    expect(p.heals()).toEqual([]);expect(f.sent.filter(action=>action.type==='attack')).toHaveLength(1);
+    f.c.stop();f.advance(1000);expect(f.c.travel.movementSettled('prt_fild08',f.c.engine.player)).toBe(false);
+    expect(()=>f.c.start(f.settings)).toThrow('movement');expect(f.c.settledForMaintenance()).toBe(false);
+  });
+  it.each([0,1])('preserves cap1 after own%s unsent retreat Death with follow and Heal enabled',id=>{
+    const f=fixture(id),p=party(f);f.engage();f.c.engine.kills=7;
+    f.packet(new BitWriter().u8(OP.death).i32(id).position(f.c.engine.player!));f.advance(2300);
+    expect(f.sent.filter(action=>action.type==='respawn')).toHaveLength(1);expect(f.c.engine.retreatOwned).toBe(false);
+    expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:1,kills:7,partyFollow:{state:'cancelled'}});
+    f.packet(new BitWriter().u8(OP.clear));f.packet(ownPacket(f.own,2));f.advance(300);
+    expect(f.c.engine.player?.dead).toBe(false);expect(p.heals()).toEqual([]);
+    f.packet(new BitWriter().u8(OP.death).i32(id).position(f.c.engine.player!));f.advance(2300);
+    expect(f.sent.filter(action=>action.type==='respawn')).toHaveLength(1);expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:2,kills:7});
+    expect(f.c.snapshot().reason).toContain('Death limit reached');expect(f.settings.automation.respawn.maxDeaths).toBe(1);
+  });
+  it.each([0,1].flatMap(id=>[false,true].map(fatalHit=>({id,fatalHit}))))(
+    'releases own$id unsent retreat on actual Death, revives once and retains cap1; fatalHit=$fatalHit',({id,fatalHit})=>{
+    const f=fixture(id);f.engage();f.c.engine.kills=7;expect(f.c.engine.snapshot().retreat).toMatchObject({state:'stopping',attempts:0});
+    expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(0);
+    if(fatalHit){f.packet(new BitWriter().u8(OP.hit).i32(id).i32(100).position(f.c.engine.player!).u8(0));expect(f.c.engine.retreatOwned).toBe(true);}
+    f.packet(new BitWriter().u8(OP.death).i32(id).position(f.c.engine.player!));f.advance(2300);
+    expect(f.sent.filter(action=>action.type==='respawn')).toHaveLength(1);expect(f.c.engine.retreatOwned).toBe(false);
+    expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:1,kills:7});expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(0);
+    f.packet(new BitWriter().u8(OP.clear));f.packet(ownPacket(f.own,2));f.advance(300);
+    expect(f.c.engine.player?.dead).toBe(false);expect(f.c.engine.running).toBe(true);expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:1,kills:7});
+    f.packet(new BitWriter().u8(OP.death).i32(id).position(f.c.engine.player!));f.advance(2300);
+    expect(f.sent.filter(action=>action.type==='respawn')).toHaveLength(1);expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:2,kills:7});
+    expect(f.c.snapshot().reason).toContain('Death limit reached');expect(f.settings.automation.respawn.maxDeaths).toBe(1);
+  });
+  it.each([0,1])('does not retire own%s unsent retreat from foreign Death',id=>{
+    const f=fixture(id),foreign=id===0?1:0;f.engage();f.packet(ownPacket({...player,id:foreign},0));
+    f.packet(new BitWriter().u8(OP.death).i32(foreign).position(player));f.advance(2300);
+    expect(f.c.engine.retreatOwned).toBe(true);expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:0});
+    expect(f.sent.filter(action=>action.type==='respawn'||action.type==='walk')).toHaveLength(0);
+  });
+  it.each([0,1])('retains own%s sent retreat Walk uncertainty across Death and late Stop/target clear',id=>{
+    const f=fixture(id);f.engage();f.clear();f.step();expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(1);
+    f.packet(new BitWriter().u8(OP.death).i32(id).position(f.c.engine.player!));f.clear();f.packet(new BitWriter().u8(OP.stop).i32(id));f.advance(6300);
+    expect(f.c.engine.retreatOwned).toBe(true);expect(f.sent.filter(action=>action.type==='respawn')).toHaveLength(0);
+    expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(1);expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:1});
+  });
+  it.each([0,1])('preserves own%s accepted physical movement even before the first explicit retreat Walk',id=>{
+    const f=fixture(id);f.engage();f.walk([{x:100,y:100},{x:100,y:101}],2);
+    expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(0);
+    f.packet(new BitWriter().u8(OP.death).i32(id).position(f.c.engine.player!));f.advance(2300);
+    f.clear();f.packet(new BitWriter().u8(OP.stop).i32(id));f.packet(new BitWriter().u8(OP.death).i32(id).position(f.c.engine.player!));f.advance(300);
+    expect(f.c.engine.retreatOwned).toBe(true);expect(f.sent.filter(action=>action.type==='respawn')).toHaveLength(0);
+    expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:1});
+  });
+  it.each([0,1])('keeps canceled own%s target-clear settlement exclusive to retreat',id=>{
+    const f=fixture(id);f.engage();f.c.engine.deaths=1;f.c.engine.kills=7;f.cast();f.result();f.advance(6300);
+    expect(f.c.engine.retreatOwned).toBe(true);expect(f.sent.filter(action=>action.type==='look')).toHaveLength(0);
+    expect(f.c.engine.stationaryForCastAvailability()).toBe(false);expect(f.c.engine.observedOwnCastSettled()).toBe(false);
+    f.stopCast();expect(f.c.engine.observedOwnCastSettled()).toBe(true);expect(f.c.engine.retreatOwned).toBe(true);
+    f.clear();expect(f.c.engine.retreatOwned).toBe(false);expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:1,kills:7});
+  });
+  it.each([0,1])('keeps own%s Look and cast results separate from a canceled retreat Walk receipt',id=>{
+    const f=fixture(id);f.engage();f.clear();f.step();const cells=f.c.engine.snapshot().navigation!.leg;
+    expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(1);f.cast();f.result();f.advance(2300);
+    expect(f.sent.filter(action=>action.type==='look')).toHaveLength(0);f.look(id===0?1:0);expect(f.c.engine.observedCast).not.toBeNull();
+    f.look();f.stopCast();expect(f.c.engine.observedOwnCastSettled()).toBe(false);f.advance(199);expect(f.c.engine.retreatOwned).toBe(true);
+    f.step(1);expect(f.c.engine.observedOwnCastSettled()).toBe(true);expect(f.c.engine.retreatOwned).toBe(true);
+    f.attack();f.clear();f.c.stop();f.stopCast();expect(f.c.runRequested).toBe(false);expect(f.c.settledForMaintenance()).toBe(false);
+    f.walk(cells.slice(0,2),2);f.advance(1999);expect(f.c.settledForMaintenance()).toBe(false);f.advance(201);
+    expect(f.c.engine.retreatOwned).toBe(false);expect(f.c.settledForMaintenance()).toBe(true);
+    expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(1);expect(f.sent.filter(action=>action.type==='attack')).toHaveLength(1);
+  });
+  it.each([0,1])('drains own%s six-Look input debt before normal attack and retreat, without StopCast shortening it',id=>{
+    const f=fixture(id);f.start();f.c.engine.deaths=1;f.c.engine.kills=7;f.cast();f.advance(6300);
+    expect(f.sent.filter(action=>action.type==='look')).toHaveLength(6);f.look();f.stopCast();f.advance(799);
+    expect(f.c.engine.observedOwnCastSettled()).toBe(false);expect(f.sent.filter(action=>action.type==='attack'||action.type==='walk')).toHaveLength(0);
+    f.step(1);expect(f.c.engine.observedOwnCastSettled()).toBe(true);expect(f.sent.filter(action=>action.type==='attack')).toHaveLength(1);
+    f.attack();f.step();f.clear();f.step();expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(1);
+    expect(f.c.engine.snapshot().retreat.attempts).toBe(1);expect(f.c.snapshot()).toMatchObject({runRequested:true,deaths:1,kills:7});
+  });
+  it.each([0,1])('does not acknowledge own%s pending item from Look or StopCast with retreat enabled',id=>{
+    const f=fixture(id,80);f.settings.automation.items=[{itemId:501,resource:'hp',belowPercent:90,minStock:0,cooldownSeconds:10}];f.start();f.step();
+    expect(f.sent.filter(action=>action.type==='useItem')).toHaveLength(1);const sequence=f.c.engine.actionResult.sequence;
+    f.cast();f.advance(1300);expect(f.sent.filter(action=>action.type==='look')).toHaveLength(1);f.look();f.stopCast();f.advance(300);
+    expect(f.c.engine.actionResult).toMatchObject({sequence,status:'pending'});expect(f.c.engine.retreatOwned).toBe(false);
+    f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false));
+    expect(f.c.engine.actionResult).toMatchObject({sequence,status:'confirmed'});expect(f.sent.filter(action=>action.type==='useItem')).toHaveLength(1);
+  });
+});
 
 describe('official game panel input', () => {
   it('keeps an opener receipt and target strategy through panel input, then attacks after exact skill motion', () => {
