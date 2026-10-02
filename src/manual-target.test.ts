@@ -289,8 +289,8 @@ describe('combined actor-zero manual wire ownership',()=>{
       expect(()=>f.c.perform('command',request)).toThrow();expect(f.c.engine.manualTargetOwned).toBe(false);expect(f.sent).toEqual([]);
     }
   });
-  it.each([0,1])('rechecks known conflicts between own %s admission and dispatch',self=>{
-    for(const state of ['npc','vending','sit','cast'] as const)for(const kind of ['walk','attack'] as const){if(state==='sit'&&kind==='walk')continue;const f=wire(self,2),request=f.request();if(kind==='walk')request.command={type:'walk',destination:{x:104,y:100}};f.c.perform('command',request);knownState(f,self,state);f.step();
+  it.each([0,1])('rechecks known interaction conflicts between own %s admission and dispatch',self=>{
+    for(const state of ['npc','vending','sit'] as const)for(const kind of ['walk','attack'] as const){if(state==='sit'&&kind==='walk')continue;const f=wire(self,2),request=f.request();if(kind==='walk')request.command={type:'walk',destination:{x:104,y:100}};f.c.perform('command',request);knownState(f,self,state);f.step();
       expect(f.c.engine.manualTargetActive).toBe(false);expect(f.sent.every(a=>a.type==='stop')).toBe(true);expect(f.c.engine.idleForActions()).toBe(true);expect(f.c.runRequested).toBe(false);
     }
   });

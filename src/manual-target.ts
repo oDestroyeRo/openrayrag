@@ -86,14 +86,16 @@ export interface ManualPreviewContext {
   map:string; player:Entity|null; owner:EngagementIdentity|null; target:Entity|null;
   targetIdentity:EngagementIdentity|null; character:CharacterState|CharacterSnapshot;
   observations?:ActorObservationSnapshot; foreignTarget?:boolean; interactionBusy?:boolean;
+  /** Engine admission can supply its receipt-bound cast fence; other callers keep observation defaults. */
+  observedOwnCastSettled?:boolean;
 }
 export function sameActionIdentity(a:EngagementIdentity|null,b:EngagementIdentity|null):boolean {return !!a&&!!b&&a.world===b.world&&a.id===b.id&&a.incarnation===b.incarnation;}
 /** Known rejection states block dispatch; unknown spawn casting does not imply idle. */
-export function manualStateBlocker(kind:'walk'|'attack',c:Pick<ManualPreviewContext,'owner'|'character'|'observations'|'interactionBusy'>):string|null {
+export function manualStateBlocker(kind:'walk'|'attack',c:Pick<ManualPreviewContext,'owner'|'character'|'observations'|'interactionBusy'|'observedOwnCastSettled'>,checkCast=true):string|null {
   if(c.interactionBusy)return 'Finish the NPC or vending interaction before a manual command.';
   if(kind==='attack'&&c.character.sitting===true)return 'Stand before attacking a monster.';
   const own=c.observations?.actors.find(actor=>actor.id===c.owner?.id&&actor.incarnation===c.owner.incarnation);
-  return own?.cast.state==='casting'?'Wait for the observed own cast to complete or be canceled.':null;
+  return checkCast&&(c.observedOwnCastSettled===false||c.observedOwnCastSettled===undefined&&own?.cast.state==='casting')?'Wait for the observed own cast to complete or be canceled.':null;
 }
 export function previewManualTarget(request:ManualTargetRequest,c:ManualPreviewContext,gridFor:(map:string)=>WalkGrid|null=searchGrid):Position[] {
   const p=c.player,policy=request.policy,area=policy.mapPolicy??DEFAULT_MAP_POLICY;

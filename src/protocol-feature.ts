@@ -8,7 +8,7 @@ export const FEATURE_OP = {
   sit: 14, skill: 29, skillImpact: 30, skillFailure: 31, featureError: 32, experience: 34, sp: 39,
   serverEvent: 91, currency: 40, respawn: 41, requestFailure: 42, targeted: 43, useItem: 47,
   equipment: 48, inventoryDelta: 50, stats: 56, learnedSkill: 57,
-  allocateStats: 58, status: 61, removeStatus: 62, inventoryItem: 63, grantedSkills: 98, maskedSkill: 104,
+  allocateStats: 58, status: 61, removeStatus: 62, inventoryItem: 63, grantedSkills: 98, maskedSkill: 104, resetMotion: 111,
 } as const;
 
 export type Attributes = [number, number, number, number, number, number];
@@ -34,6 +34,7 @@ export type FeatureEvent =
   | { type: 'castStart'; id: number; skillId: number; level: number; position: Position; remainingSeconds: number; flags: number; target?: number; targetPosition?: Position; size?: number }
   | { type: 'castExtend'; id: number; deltaSeconds: number }
   | { type: 'castStop'; id: number }
+  | { type: 'resetMotion'; id: number }
   | { type:'serverEvent'; event:number; value:number; text:string }
   | { type: 'changeTarget'; id: number }
   | ({ type: 'stats' } & PlayerStats)
@@ -192,6 +193,7 @@ function parseFeatures(data: Uint8Array): FeatureEvent[] | null {
     case FEATURE_OP.castExtend: events=[{type:'castExtend',id:actorId(r.i32()),deltaSeconds:r.f32()}];break;
     case FEATURE_OP.changeTarget: events=[{type:'changeTarget',id:bounded(r.i32(),0,0x7fffffff,'current target')}];break;
     case FEATURE_OP.castStop: events=[{type:'castStop',id:actorId(r.i32())}];break;
+    case FEATURE_OP.resetMotion: events=[{type:'resetMotion',id:actorId(r.i32())}];break;
     case FEATURE_OP.stats: return readStats(r, data.length === 145);
     case FEATURE_OP.sit: events = [{ type: 'sit', id: actorId(r.i32()), sitting: r.bool() }]; break;
     case FEATURE_OP.sp: { const sp = r.i32(); const maxSp = r.i32(); health(sp, maxSp, 'SP'); events = [{ type: 'sp', sp, maxSp }]; break; }

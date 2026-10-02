@@ -18,6 +18,7 @@ export interface TravelPlanningContext {
 }
 export interface TravelPlanningOptions {
   context?: () => TravelPlanningContext;
+  dispatchReady?: () => boolean;
   scheduler?: PlanningOptions['scheduler'];
   plan?: typeof routeBetweenMapsAsync;
 }
@@ -264,6 +265,7 @@ export class TravelController {
       return;
     }
     if (now - this.lastAction < 300) return;
+    if(this.planningOptions.dispatchReady?.()===false){this.reason='Waiting for the current character action to settle before travel.';return;}
     const cells = routeSegment(this.route, this.stepSize);
     this.leg = { cells, since: now, acceptedUntil: null, nudged: false };
     this.installedStart = null;

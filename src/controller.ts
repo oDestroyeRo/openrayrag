@@ -11,7 +11,7 @@ import type { ManualSocialAction } from './social-protocol';
 import { ManualMemo, type MemoContext, type MemoSnapshot } from './memo';
 import type { MemoSlot } from './memo-protocol';
 import { canMemoMap } from './memo-map-catalog';
-import { BotEngine, type Action, type Snapshot } from './engine';
+import { BotEngine, OWN_CAST_WAIT_REASON, type Action, type Snapshot } from './engine';
 import { decode } from './protocol';
 import { validateExpandedAction, type ExpandedAction } from './protocol-feature';
 import { validateSettings, automationSettings, type Settings } from './settings';
@@ -131,7 +131,7 @@ export class CompanionController {
       const identity = this.engine.actorActionIdentity();
       return { identity: identity ? JSON.stringify([this.connectionEpoch, this.world.generation, identity]) : null,
         map: this.engine.map, player: this.engine.player };
-    } });
+    }, dispatchReady:()=>this.engine.observedOwnCastSettled() });
     this.service = new NpcServiceRuntime(this.travel, now, gridFor);
     this.escape = new EmergencyEscape(now);
     this.supply = new SupplyTripRuntime({next:(context,goals,policy)=>nextSupplyAction(context,goals,policy,this.requestedSettings?.automation?.supply!,{storageFull:this.supplyStorageFull}),confirm:confirmSupplyReceipt},now);
@@ -306,17 +306,18 @@ export class CompanionController {
     if (this.now() - this.lastFrame > 15_000) throw new Error('Game status is stale.');
   }
   settledForMaintenance():boolean {
-    const e=this.engine,cast=e.observations.snapshot(e.playerId,null,e.connected,[],false).actors.find(row=>row.id===e.playerId)?.cast;
+    const e=this.engine;
     const stationary=this.movementSettled();
     return stationary&&e.connected&&e.compatible&&!!e.actorActionIdentity(undefined,true)
       &&!this.runRequested&&!this.returning&&!this.pending&&!this.featureReceipt&&!this.workflowOutstanding&&!this.unresolvedWorld
       &&!this.travel.active&&!this.service.active&&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)
       &&!this.supply.ownsField&&!this.supply.uncertain&&!this.escape.busy&&!this.memo.blocked&&!this.socket.busy&&!this.social.busy
       &&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture&&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil
-      &&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending&&cast?.state!=='casting'&&e.settledForMaintenance();
+      &&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending&&e.settledForMaintenance();
   }
   private requireIdle(): void {
     this.requireReady();
+    if(!this.engine.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
     if (this.deathCycle?.guard.uncertain || this.deathCycle?.posture || this.socket.busy || this.memo.blocked || this.active || this.escape.busy || this.supply.uncertain || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
   }
   start(input: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard): void {
@@ -364,13 +365,12 @@ export class CompanionController {
   }
   private socketContext(floors:ReadonlyMap<number,number>=this.socketFloors??socketStockFloors(automationSettings(this.engine.settings))): SocketContext {
     const e=this.engine,c=e.character,p=e.player,actor=e.actorActionIdentity();
-    const casting=e.observations.snapshot(e.playerId,null,e.connected,[],false).actors.find(row=>row.id===e.playerId)?.cast.state==='casting';
     const stationary=this.movementSettled();
     const identity=actor?JSON.stringify([actor.world,actor.selfId,actor.selfIncarnation]):'';
     const init=this.socketInitialization;if(init&&identity&&init.identity===null)init.identity=identity;
     const readbackKey=identity?(init?.identity===identity?init.key:identity):init?.identity===null?init.key:null;
     return {ready:!!identity&&!!p&&!p.dead&&p.hp>0&&e.connected&&e.compatible&&!!e.map&&this.now()-this.lastFrame<=15_000,
-      settled:!casting&&stationary&&!this.memo.blocked&&!this.returning&&!this.runRequested&&!e.running&&!this.pending&&!this.featureReceipt&&!this.unresolvedWorld&&!this.workflowOutstanding
+      settled:stationary&&!this.memo.blocked&&!this.returning&&!this.runRequested&&!e.running&&!this.pending&&!this.featureReceipt&&!this.unresolvedWorld&&!this.workflowOutstanding
         &&!this.social.busy&&!this.escape.busy&&!this.supply.ownsField&&!this.supply.uncertain&&!this.service.active&&!this.travel.active
         &&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)&&e.featureActionsSettled&&e.idleForActions()
         &&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil&&this.heartbeatHealthy&&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending,
@@ -427,6 +427,7 @@ export class CompanionController {
     }
     if (mode === 'service') {
       const {service:definition,executionPolicy} = validateServiceExecution(input); this.requireReady();
+      if(!this.engine.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
       if (this.socket.busy || this.memo.blocked || this.social.busy || this.engine.manualTargetOwned || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
         || ['running','waiting'].includes(this.routine.snapshot().state) || this.unresolvedWorld || this.now() < this.fencedUntil
         || this.engine.pendingFeatureAction || this.featureReceipt || this.supply.uncertain)
@@ -462,6 +463,7 @@ export class CompanionController {
   }
   private worldOwnerCurrent(owner:Pending):boolean {return !owner.actorIdentity||sameActionIdentity(owner.actorIdentity,this.engine.actorActionIdentity(owner.actorIdentity.targetId));}
   private dispatch(input: ControllerAction, routineId: number | null): void {
+    if(!this.engine.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
     if (this.escape.busy) throw new Error('Waiting for emergency escape to settle.');
     if (this.now() < this.fencedUntil) throw new Error('Waiting for the previous action deadline.');
     const binding = { generation: this.generation, worldGeneration: this.world.generation,
@@ -725,6 +727,14 @@ export class CompanionController {
   /** Internal ownership handoff preserves the field intent and counters. */
   private supplyTick():boolean {
     const context=this.supplyContext();this.supply.observe(context);
+    if(!this.engine.observedOwnCastSettled()) {
+      if(!this.supply.ownsField&&!this.supply.uncertain)return false;
+      // Observe existing receipt and trip deadlines without reserving a new intent.
+      if(this.service.active)this.service.tick(this.serviceContext());
+      else if(this.travel.active)this.travel.tick(this.engine.map,this.engine.player);
+      if(this.workflow.snapshot().running)this.workflow.tick(this.context());
+      this.waitingReason=OWN_CAST_WAIT_REASON;return this.supply.ownsField||this.supply.uncertain;
+    }
     if(!this.supply.ownsField&&!this.supply.uncertain&&this.requestedSettings&&context.position&&(!mapAllowed(mapPolicy(this.requestedSettings),context.map)||!insideLockArea(mapPolicy(this.requestedSettings),context.map,context.position)))return false;
     if(!this.supply.uncertain)this.supplyReceipt=null;
     if(this.supplyIntent?.type==='action'&&!this.supply.uncertain&&this.supply.snapshot().state==='closing'){this.supplyIntent=null;this.workflow.cancel('Supply transaction confirmed.');}
@@ -929,8 +939,7 @@ export class CompanionController {
     if(p.dead)return fail('Character died again during recovery or return. The previous cycle will not restart.');
     if(!this.deathOwnReady())return wait('Waiting for the ready living-own arrival before recovery or return.');
     if(cycle.guard.phase==='recovery'){
-      const casting=this.engine.observations.snapshot(this.engine.playerId,null,this.engine.connected,[],false).actors.find(row=>row.id===this.engine.playerId)?.cast.state==='casting';
-      if(casting)return wait('Waiting for the observed own cast to settle before recovery.');
+      if(!this.engine.observedOwnCastSettled())return wait(OWN_CAST_WAIT_REASON);
       if(a.recovery.enabled){
         let recovery;
         try{recovery=this.engine.recoveryOnly(settings);}catch{return fail('Recovery posture send is uncertain. No repeat request will be sent.');}
@@ -950,12 +959,12 @@ export class CompanionController {
       if(this.travel.active)this.pause('Waiting for HP and a living character before travelling.');
       return fail('Return interrupted by unavailable or low HP. The original return deadline will not restart.');
     }
-    if(!this.engine.idleForActions())return wait('Waiting for previous movement and posture to settle before return.');
     if(this.travel.active){
       this.travel.tick(this.engine.map,p);const result=this.travel.snapshot();
       if(result.state==='failed')return fail(result.reason);
       return wait(result.reason);
     }
+    if(!this.engine.idleForActions())return wait('Waiting for previous movement and posture to settle before return.');
     if(this.travel.snapshot().state==='failed'&&this.travelSettings)return fail(this.travel.snapshot().reason);
     this.travelSettings=null;
     const policy=mapPolicy(settings),destination=a.travel.returnToLockMap?cycle.guard.destination:(policy.lockArea?.map||this.engine.map);
@@ -987,6 +996,7 @@ export class CompanionController {
     if (this.blockedReason) { this.wait(this.blockedReason); return; }
     if (!this.heartbeatHealthy) { this.wait('Waiting for the client connection.'); return; }
     if (now < this.yieldUntil) { this.wait('Yielding briefly to manual game input.'); return; }
+    if(!this.engine.observedOwnCastSettled()){this.waitingReason=this.engine.reason=OWN_CAST_WAIT_REASON;return;}
     if (now < this.fencedUntil || !this.engine.idleForActions()) { this.wait('Waiting for the previous action and movement to settle.'); return; }
     if (!this.engine.connected) { this.wait('Waiting for the game to reconnect.'); return; }
     if (!this.engine.compatible) { this.wait('Waiting for a verified game build and protocol.'); return; }
