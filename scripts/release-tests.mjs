@@ -625,6 +625,58 @@ test("artifact restore checks the actual ZIP digest before extracting", async ()
   }
 });
 
+test("Actions ZIP requests use the JSON API media type before a credential-free binary redirect", async () => {
+  const original = global.fetch;
+  const calls = [];
+  const location = "https://synthetic.blob.core.windows.net/artifact.zip";
+  global.fetch = async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (String(url).endsWith("/actions/artifacts/1002")) {
+      return new Response(
+        JSON.stringify({
+          id: 1002,
+          expired: false,
+          digest: artifact(2).digest,
+          workflow_run: { id: 102, head_sha: id(2).sourceSha },
+        }),
+        { status: 200 },
+      );
+    }
+    if (String(url).endsWith("/actions/artifacts/1002/zip")) {
+      // Mirror the hosted endpoint's 415 when binary handling is confused with Accept.
+      return options.headers.Accept === "application/vnd.github+json"
+        ? new Response(null, { status: 302, headers: { location } })
+        : new Response(null, { status: 415 });
+    }
+    assert.equal(String(url), location);
+    return new Response("different ZIP bytes", { status: 200 });
+  };
+  try {
+    // Reaching checksum verification proves the redirected response remained bytes.
+    await assert.rejects(
+      new GitHubReleaseApi("synthetic-token").restoreArtifact(
+        artifact(2),
+        id(2),
+        "/not-used",
+      ),
+      /ZIP checksum/,
+    );
+    assert.equal(calls.length, 3);
+    for (const call of calls.slice(0, 2)) {
+      assert.equal(call.options.headers.Accept, "application/vnd.github+json");
+      assert.equal(
+        call.options.headers.Authorization,
+        "Bearer synthetic-token",
+      );
+      assert.equal(call.options.redirect, "manual");
+    }
+    assert.equal(calls[2].options.headers, undefined);
+    assert.equal(calls[2].options.body, undefined);
+  } finally {
+    global.fetch = original;
+  }
+});
+
 test("download credentials never follow a CDN redirect and unknown hosts reject", async () => {
   const original = global.fetch,
     seen = [];
@@ -643,6 +695,9 @@ test("download credentials never follow a CDN redirect and unknown hosts reject"
       ).toString(),
       "asset",
     );
+    assert.equal(seen[0].headers.Accept, "application/octet-stream");
+    assert.equal(seen[0].headers.Authorization, "Bearer synthetic-token");
+    assert.equal(seen[0].redirect, "manual");
     assert.equal(seen[1].headers, undefined);
     location = "https://untrusted.invalid/asset";
     await assert.rejects(
