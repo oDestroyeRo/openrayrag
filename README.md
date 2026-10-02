@@ -98,13 +98,13 @@ After arrival, the field run stays requested and waits for HP recovery above the
 
 ## Accounts and compatibility
 
-Credentials are session-only by default. **Save in macOS Keychain** explicitly enables persistent account storage. **Sign in when app opens** restores that saved account and character slot at launch. **Forget saved login** removes the Keychain entry and its launch preference. The local controller never retrieves the saved password or writes credentials into configuration, profile exports, browser storage or logs. Leave the game's own Remember Password option off.
+Credentials are session-only by default. **Save login on this Mac** explicitly saves one native profile in the application data directory. The directory has user-only access (0700), and the file has user-only read/write access (0600). The app does not encrypt this file. **Sign in when app opens** restores the saved account and character slot at launch. **Forget local saved login** removes that profile and its launch preference. The local controller never retrieves the saved password or writes credentials into configuration, profile exports, browser storage or logs. Leave the game's own Remember Password option off. See [local login storage](docs/LOCAL_LOGIN.md).
 
-A successful sign-in through Companion retains the login profile only in native memory for that game session, allowing reconnection without enabling Keychain storage. A running field bot retries network loss with increasing delays and resumes the same character only after a new verified session is ready. A manually opened game without a Companion login has no session credentials to retry. The optional reconnect checkbox also permits reconnection while field combat is stopped; it does not create a run request.
+A successful sign-in through Companion retains the login profile in native memory for that game session, allowing reconnection without enabling local storage. A running field bot retries network loss with increasing delays and resumes the same character only after a new verified session is ready. A manually opened game without a Companion login has no session credentials to retry. The optional reconnect checkbox also permits reconnection while field combat is stopped; it does not create a run request.
 
-Authentication rejection or an absent character requires a new explicit sign-in rather than repeated attempts. Stop cancels queued retries and automatic run resume. Closing the game clears the session profile and run request; Keychain entries remain until explicitly forgotten. An explicit sign-in starts with combat stopped unless an already requested field run is waiting for recovery. Close the current game before switching characters. Shop/storage/vending/workflow and point-spending requests with uncertain outcomes are never replayed on reconnect.
+Authentication rejection or an absent character requires a new explicit sign-in rather than repeated attempts. Stop cancels queued retries and automatic run resume. Closing the game clears the session profile and run request; the local saved profile remains until explicitly forgotten. Existing Keychain entries from earlier versions are left untouched: the app does not read, migrate, update or delete them. Enter your credentials once to save a local profile. An explicit sign-in starts with combat stopped unless an already requested field run is waiting for recovery. Close the current game before switching characters. Shop/storage/vending/workflow and point-spending requests with uncertain outcomes are never replayed on reconnect.
 
-The adapter is restricted to `https://websea01.rayrag.com/`, `wss://gamesea01.rayrag.com/ws` and **`Build_2569-09-01-01-55`**. Changed or malformed supported protocols prevent commands until a valid state is available. The remote game window can report bounded status and claim or cancel an explicitly queued login; it cannot read Keychain credentials. Controller commands belong to the bundled local window. No shell or filesystem plugin is exposed to the game.
+The adapter is restricted to `https://websea01.rayrag.com/`, `wss://gamesea01.rayrag.com/ws` and **`Build_2569-09-01-01-55`**. Changed or malformed supported protocols prevent commands until a valid state is available. The remote game window can report bounded status and claim or cancel an explicitly queued login; it cannot read the local saved profile. Controller commands belong to the bundled local window. No shell or filesystem plugin is exposed to the game.
 
 See [protocol evidence](docs/PROTOCOL.md) and the [OpenKore feature inventory](docs/OPENKORE_FEATURES.md). The inventory describes implemented portions and remaining gaps across 39 families; it does not claim full OpenKore parity. RO-specific transports, XKore/Poseidon and privileged GM/debug actions are outside this client's player-automation scope. Guild/friends/clan, private whispers and automatic social replies, refining, warp casting, full crafting, direct player trade, richer skill range and kiting, and third-party plugins still need implementation or a matching verified game contract.
 
@@ -118,10 +118,10 @@ cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 npm run app:build
 ```
 
-`check` builds the frontend and injected bridge, typechecks TypeScript, runs behavioral/protocol/login tests and Rust boundary tests, and runs Clippy. Tests use synthetic events and a public monster fixture; no unattended account test is bundled. An optional Keychain integration check creates and removes a synthetic entry:
+`check` builds the frontend and injected bridge, typechecks TypeScript, runs behavioral/protocol/login tests and Rust boundary tests, and runs Clippy. Tests use synthetic events and a public monster fixture; no unattended account test is bundled. Local-login persistence tests use isolated synthetic temporary directories, never the real saved profile or Keychain:
 
 ```sh
-cargo test --manifest-path src-tauri/Cargo.toml keychain_round_trip -- --ignored
+cargo test --manifest-path src-tauri/Cargo.toml login::
 ```
 
 Compare route work and local decision time against the version before the targeting optimization:

@@ -31,11 +31,12 @@ root.innerHTML = `
           <label>Character<select id="character-slot"><option value="0">Slot 1</option><option value="1">Slot 2</option><option value="2">Slot 3</option></select></label>
         </div>
         <div class="signin-options">
-          <label><input id="remember-login" type="checkbox" /> Save in macOS Keychain</label>
+          <label><input id="remember-login" type="checkbox" /> Save login on this Mac</label>
           <label><input id="auto-login" type="checkbox" disabled /> Sign in when app opens</label>
           <label><input id="auto-reconnect" type="checkbox" disabled /> Reconnect after connection loss</label>
-          <button id="forget-login" type="button" class="text-button" hidden>Forget saved login</button>
+          <button id="forget-login" type="button" class="text-button" hidden>Forget local saved login</button>
         </div>
+        <p class="hint">Saved credentials use a local file with user-only access. The app does not encrypt them.</p>
         <p id="reconnect-help" class="hint">A running bot reconnects with this session login and resumes when your character is ready.</p>
         <div class="signin-actions"><p id="login-help" class="hint">Select an existing slot. Sign-in enters the field with combat stopped.</p><button id="signin" type="submit" class="primary">Sign in & enter</button></div>
       </form>
@@ -78,7 +79,7 @@ root.innerHTML = `
         <div class="activity-title">ACTIVITY <span id="target-label">No active target</span></div><ol id="log" class="log"><li class="empty">Session activity will appear here.</li></ol>
       </section>
     </div>
-    <footer><span><i class="small-dot"></i> Session stays on this Mac</span><span>Passwords stay in memory unless you choose macOS Keychain</span></footer>
+    <footer><span><i class="small-dot"></i> Session stays on this Mac</span><span>Passwords stay in memory unless you save locally</span></footer>
   </main>`;
 
 function element<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
@@ -343,7 +344,7 @@ element('forget-login').addEventListener('click', () => void perform(async () =>
   showSavedLogin(null);
   element<HTMLInputElement>('remember-login').checked = false;
   element<HTMLInputElement>('auto-login').checked = false;
-  message('Saved login removed from macOS Keychain.');
+  message('Local saved login and app-open sign-in preference removed.');
 }));
 
 async function perform(action: () => Promise<unknown>): Promise<void> {
@@ -518,7 +519,10 @@ if (native) {
       element<HTMLInputElement>('auto-login').checked = profile.autoLogin;
       if (profile.autoLogin) await signIn();
     }
-  } catch { message('Saved login could not be read from Keychain. You can enter your account manually.', true); }
+  } catch {
+    element<HTMLButtonElement>('forget-login').hidden = false;
+    message('Local saved login could not be read. Forget it or enter your account manually.', true);
+  }
   finally { accountReady = true; }
   updateButtons();
   })();
@@ -540,7 +544,7 @@ if (native) {
         .catch(error => {
           if (generation !== loginGeneration) return;
           previousSession = undefined; loginBusy = false;
-          if (typeof error === 'string' && /(?:sign in|account|keychain)/i.test(error)) reconnect.observe(false, false, 'failed', Date.now(), 'Explicit sign-in required.');
+          if (typeof error === 'string' && /(?:sign in|account)/i.test(error)) reconnect.observe(false, false, 'failed', Date.now(), 'Explicit sign-in required.');
           else reconnect.networkFailure(Date.now());
           message(reconnect.requiresSignIn ? 'Waiting for you to sign in again before resuming.' : 'Reconnect could not open the game. Waiting before trying again.', true); updateButtons();
         }).finally(() => { if (pendingLogin === task) pendingLogin = null; });

@@ -3,8 +3,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{Manager, WebviewWindow};
 
-const KEYCHAIN_SERVICE: &str = "com.rayrag.companion.login";
-const KEYCHAIN_ACCOUNT: &str = "sea01";
+#[path = "local_login_store.rs"]
+mod local_store;
 const VERIFIED_BUILD: &str = "Build_2569-09-01-01-55";
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -214,49 +214,58 @@ impl LoginState {
 
 pub(crate) type SharedLogin = Mutex<LoginState>;
 
-fn load_profile() -> Result<Option<LoginProfile>, String> {
-    match security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT) {
-        Ok(bytes) => {
-            let profile: LoginProfile = serde_json::from_slice(&bytes)
-                .map_err(|_| "Saved login is invalid. Forget it and enter your account again.")?;
-            profile.validate()?;
-            Ok(Some(profile))
-        }
-        Err(error) if error.code() == -25300 => Ok(None), // errSecItemNotFound
-        Err(_) => Err("Could not read the saved login from macOS Keychain.".into()),
-    }
+fn login_store(app: &tauri::AppHandle) -> Result<local_store::LocalLoginStore, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Local saved login is unavailable.")?;
+    Ok(local_store::LocalLoginStore::new(directory))
 }
 
 #[tauri::command]
 pub(crate) async fn saved_login(window: WebviewWindow) -> Result<Option<SavedLogin>, String> {
     super::require_window(&window, "main")?;
-    Ok(load_profile()?.map(|profile| SavedLogin {
-        username: profile.username,
-        character_slot: profile.character_slot,
-        auto_login: profile.auto_login,
-    }))
+    Ok(login_store(window.app_handle())?
+        .load()?
+        .map(|profile| SavedLogin {
+            username: profile.username,
+            character_slot: profile.character_slot,
+            auto_login: profile.auto_login,
+        }))
 }
 
 #[tauri::command]
 pub(crate) async fn forget_login(window: WebviewWindow) -> Result<(), String> {
     super::require_window(&window, "main")?;
-    match security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-    {
-        Ok(()) => Ok(()),
-        Err(error) if error.code() == -25300 => Ok(()),
-        Err(_) => Err("Could not remove the saved login from macOS Keychain.".into()),
-    }
+    login_store(window.app_handle())?.forget()
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct LoginRequest {
-    // Null credentials mean reuse the Keychain entry. Its password never returns
+    // Null credentials mean reuse the local profile. Its password never returns
     // to the controller webview.
     credentials: Option<LoginProfile>,
     character_slot: u8,
     remember: bool,
     auto_login: bool,
+}
+
+fn resolve_profile(
+    request: LoginRequest,
+    load: impl FnOnce() -> Result<Option<LoginProfile>, String>,
+) -> Result<LoginProfile, String> {
+    if request.auto_login && !request.remember {
+        return Err("Save the login on this Mac to sign in when the app opens.".into());
+    }
+    let mut profile = match request.credentials {
+        Some(profile) => profile,
+        None => load()?.ok_or("Enter your account or save a login first.")?,
+    };
+    profile.character_slot = request.character_slot;
+    profile.auto_login = request.auto_login;
+    profile.validate()?;
+    Ok(profile)
 }
 
 #[tauri::command]
@@ -266,30 +275,16 @@ pub(crate) async fn login_game(
     request: LoginRequest,
 ) -> Result<(), String> {
     super::require_window(&window, "main")?;
-    if request.auto_login && !request.remember {
-        return Err("Save the login in Keychain to sign in when the app opens.".into());
-    }
-    let mut profile = match request.credentials {
-        Some(profile) => profile,
-        None => load_profile()?.ok_or("Enter your account or save a login first.")?,
-    };
-    profile.character_slot = request.character_slot;
-    profile.auto_login = request.auto_login;
-    profile.validate()?;
+    let remember = request.remember;
+    let profile = resolve_profile(request, || login_store(&app)?.load())?;
     let state = app.state::<SharedLogin>();
     {
         let mut state = state.lock().map_err(|_| "Login state is unavailable.")?;
         if state.in_world {
             return Err("Close the current game before signing in to another character.".into());
         }
-        if request.remember {
-            let bytes = serde_json::to_vec(&profile).map_err(|_| "Invalid login settings.")?;
-            security_framework::passwords::set_generic_password(
-                KEYCHAIN_SERVICE,
-                KEYCHAIN_ACCOUNT,
-                &bytes,
-            )
-            .map_err(|_| "Could not save the login in macOS Keychain.")?;
+        if remember {
+            login_store(&app)?.save(&profile)?;
         }
         if state.session_profile.as_ref().is_some_and(|previous| {
             previous.username != profile.username
@@ -435,6 +430,64 @@ mod tests {
         };
         let json = serde_json::to_value(info).unwrap();
         assert!(json.get("password").is_none());
+    }
+
+    #[test]
+    fn session_only_new_credentials_do_not_access_persistence() {
+        let request = LoginRequest {
+            credentials: Some(profile()),
+            character_slot: 2,
+            remember: false,
+            auto_login: false,
+        };
+        let resolved = resolve_profile(request, || {
+            panic!("session-only input must not access local persistence")
+        })
+        .unwrap();
+        assert_eq!(resolved.character_slot, 2);
+        assert!(!resolved.auto_login);
+        let request = LoginRequest {
+            credentials: Some(profile()),
+            character_slot: 0,
+            remember: false,
+            auto_login: true,
+        };
+        assert!(resolve_profile(request, || panic!(
+            "invalid remember opt-in must not access persistence"
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn saved_reuse_keeps_password_native_and_overrides_requested_slot_and_preference() {
+        let saved = profile();
+        let request = LoginRequest {
+            credentials: None,
+            character_slot: 1,
+            remember: false,
+            auto_login: false,
+        };
+        let resolved = resolve_profile(request, || Ok(Some(saved.clone()))).unwrap();
+        assert_eq!(resolved.username, saved.username);
+        assert_eq!(resolved.password, saved.password);
+        assert_eq!(resolved.character_slot, 1);
+        assert!(!resolved.auto_login);
+        let request = LoginRequest {
+            credentials: None,
+            character_slot: 0,
+            remember: true,
+            auto_login: true,
+        };
+        let resolved = resolve_profile(request, || Ok(Some(saved))).unwrap();
+        assert_eq!(resolved.character_slot, 0);
+        assert!(resolved.auto_login);
+        let request = LoginRequest {
+            credentials: None,
+            character_slot: 0,
+            remember: false,
+            auto_login: false,
+        };
+        assert!(resolve_profile(request, || Ok(None)).is_err());
     }
 
     #[test]
@@ -823,23 +876,5 @@ mod tests {
         state.close();
         assert_ne!(state.generation, generation);
         assert!(state.pending.is_none());
-    }
-
-    #[test]
-    #[ignore = "Writes and deletes one synthetic entry in the local macOS Keychain"]
-    fn keychain_round_trip() {
-        let service = format!("com.rayrag.companion.test.{}", std::process::id());
-        let data = b"synthetic-test-only";
-        security_framework::passwords::set_generic_password(&service, "test", data).unwrap();
-        let read = security_framework::passwords::get_generic_password(&service, "test");
-        let cleanup = security_framework::passwords::delete_generic_password(&service, "test");
-        assert_eq!(read.unwrap(), data);
-        cleanup.unwrap();
-        assert_eq!(
-            security_framework::passwords::get_generic_password(&service, "test")
-                .unwrap_err()
-                .code(),
-            -25300
-        );
     }
 }

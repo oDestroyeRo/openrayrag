@@ -12,7 +12,7 @@ OpenKore file/line references below all refer to the pinned commit. The Rayrag a
 
 | # | Family | Coverage | Rayrag implementation and remaining gap | OpenKore reference at pin |
 | --- | --- | --- | --- | --- |
-| 1 | Login, character selection, credential profiles | Partial | Official-client sign-in, occupied-slot selection, session-only credentials and optional Keychain/launch login. Multiple saved account credentials and named account switching are not implemented; Session login is retained only in native memory for reconnect. | `control/config.txt:4-56, src/Commands.pm:1873` |
+| 1 | Login, character selection, credential profiles | Partial | Official-client sign-in, occupied-slot selection, session-only credentials and an opt-in native local profile/launch login. Local credentials use user-only file access and are not encrypted by the app. Multiple saved account credentials and named account switching are not implemented; session login remains in native memory for reconnect. | `control/config.txt:4-56, src/Commands.pm:1873` |
 | 2 | Configuration profiles, import/export, validation, aliases | Partial | Up to 20 versioned map/character settings profiles; strict import/export, fresh imported IDs and explicit apply. Profiles exclude secrets and run state. OpenKore file syntax, aliases and automatic profile switching are not implemented. | `src/Settings.pm:491, plugins/profiles/profiles.pl:29, control/config.txt:131-136` |
 | 3 | Auto attack, retaliation, engagement selection | Implemented subset | Selected, retaliate, both and off modes; authoritative actor targeting, finite pursuit and failed-target cooldown. Run intent survives temporary interruption and requires Stop/window close to cancel. | `control/config.txt:70-106, src/AI/CoreLogic.pm:3273, src/AI/Attack.pm:240` |
 | 4 | Monster policies, priority, level/HP/SP gates | Partial | Species attack/ignore rules, ordered priority and configurable level difference; HP/SP resource gates for supported actions. Bounded status/casting predicates cover self, current server target and observed actor lifetimes; monster rules also have a separate candidate scope. Broader per-species aggression and enemy HP/SP gates remain gaps. | `control/mon_control.txt:1-39, control/priority.txt:1-17` |
@@ -75,7 +75,7 @@ Direct player trading, guild/friend/clan, pets and other companions, quest logs/
 - Fixed origin, socket and build gating precede gameplay commands; malformed supported data blocks action until validated state exists.
 - Client Stop and window close cancel run intent. Temporary interruption may retain intent while invalidating pending work; it must not repeat an uncertain resource transaction.
 - Movement keeps one outstanding leg because the protocol has no request IDs. Walking permission is not evidence of projectile line of sight.
-- Credentials are owned by native login state/optional Keychain, never settings profiles, exports, telemetry or fixtures.
+- Credentials are owned by native login state/optional local saved profile, never settings profiles, exports or telemetry. Tests use only synthetic accounts.
 - New features remain opt-in and preserve current user choices.
 
 ## Verification before release
