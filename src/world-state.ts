@@ -111,7 +111,7 @@ export class WorldState {
       case 'partyMember':
         if (this.party && (this.party.members.size < 32 || this.party.members.has(event.member.memberId))) this.party.members.set(event.member.memberId, { ...event.member }); break;
       case 'partyRemove':
-        if (playerId!==null&&playerId>0&&this.party?.members.get(event.memberId)?.entityId === playerId) this.party = null;
+        if (playerId!==null&&playerId>=0&&this.party?.members.get(event.memberId)?.entityId === playerId) this.party = null;
         else this.party?.members.delete(event.memberId); break;
       case 'partyLeader':
         if (this.party) for (const member of this.party.members.values()) member.leader = member.memberId === event.memberId;

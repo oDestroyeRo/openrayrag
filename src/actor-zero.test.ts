@@ -76,12 +76,13 @@ describe('field-specific actor-zero wire contracts',()=>{
   expect(()=>validateWorldAction({type:'partyCreate',name:'Synthetic',inviteId:0})).toThrow();
   for(const action of [{type:'partyAccept',partyId:0},{type:'partyLeader',memberId:0},{type:'storage',operation:'deposit',bagId:0,count:1}])expect(()=>validateWorldAction(action)).toThrow();
  });
- it('preserves zero NPC focus and vendor scalars without guessing offline party ownership',()=>{
+ it('preserves zero NPC/vendor scalars and retires ambiguous party state on known own-zero removal',()=>{
   expect(decodeWorld(Uint8Array.of(77,0,0,0,0,0,1))).toEqual([{type:'npcFocus',id:0,focus:true}]);
   expect(decodeWorld(new BitWriter().u8(107).i32(0).string('Synthetic').i32(0).finish())).toEqual([{type:'vendingViewed',id:0,name:'Synthetic',entries:[]}]);
   const s=setup();s.c.world.apply({type:'partyJoined',partyId:3,name:'Synthetic',login:true,members:[{memberId:1,entityId:0,name:'Offline',level:-1,leader:true}]});
   expect(worldActionBlockers({type:'partyLeave'},s.c.context()).join(' ')).toContain('ambiguous');
-  s.c.world.apply({type:'partyRemove',memberId:1},0);expect(s.c.world.party).not.toBeNull();
+  // The official client clears the association for a removed EntityId matching own0; this never authorizes an offline-zero member.
+  s.c.world.apply({type:'partyRemove',memberId:1},0);expect(s.c.world.party).toBeNull();
  });
 });
 

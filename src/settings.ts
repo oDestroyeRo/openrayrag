@@ -20,7 +20,7 @@ export const DEFAULT_ESCAPE: EscapeSettings = { enabled: false, hpBelowPercent: 
 export interface LoadoutSettings { enabled: boolean; autoAmmo: boolean; minAmmoStock: number; ammoPreferences: Array<{itemId:number}>; restore: 'conditionEnd' | 'never'; cooldownSeconds: number }
 export interface AutomationSettings {
   loadout: LoadoutSettings;
-  combat: { mode: 'off' | 'selected' | 'retaliate' | 'both'; levelDifference: number; rules: MonsterRule[] };
+  combat: { mode: 'off' | 'selected' | 'retaliate' | 'both'; levelDifference: number; partyEngagement?: boolean; rules: MonsterRule[] };
   loot: { ownership: 'own' | 'all'; defaultAction: 'pickup' | 'ignore'; rules: LootRule[] };
   recovery: { enabled: boolean; hpStart: number; hpEnd: number; spStart: number; spEnd: number; timeoutSeconds: number };
   escape?: EscapeSettings;
@@ -47,7 +47,7 @@ export interface Settings {
 export const DEFAULT_LOADOUT: LoadoutSettings = { enabled:false, autoAmmo:true, minAmmoStock:0, ammoPreferences:[], restore:'conditionEnd', cooldownSeconds:3 };
 export const DEFAULT_AUTOMATION: AutomationSettings = {
   loadout: DEFAULT_LOADOUT,
-  combat: { mode: 'selected', levelDifference: 1, rules: [] },
+  combat: { mode: 'selected', levelDifference: 1, partyEngagement: false, rules: [] },
   loot: { ownership: 'own', defaultAction: 'pickup', rules: [] },
   recovery: { enabled: false, hpStart: 60, hpEnd: 85, spStart: 10, spEnd: 80, timeoutSeconds: 300 },
   escape: { ...DEFAULT_ESCAPE },
@@ -96,7 +96,7 @@ export function validateAutomation(a: AutomationSettings): AutomationSettings {
     if (a.loadout === undefined) a = {...a,loadout:structuredClone(DEFAULT_LOADOUT)};
     strictKeys(a.loadout,['enabled','autoAmmo','minAmmoStock','ammoPreferences','restore','cooldownSeconds']);
     for(const r of a.loadout.ammoPreferences) strictKeys(r,['itemId']);
-    strictKeys(a.combat,['mode','levelDifference','rules']); strictKeys(a.loot,['ownership','defaultAction','rules']);
+    strictKeys(a.combat,['mode','levelDifference','rules','partyEngagement']); strictKeys(a.loot,['ownership','defaultAction','rules']);
     strictKeys(a.recovery,['enabled','hpStart','hpEnd','spStart','spEnd','timeoutSeconds']); strictKeys(a.allocation,['stats','skills']);
     strictKeys(a.follow,['name','distance','lostSeconds']); strictKeys(a.travel,['destinationMap','returnToLockMap','waypoints','loop']);
     strictKeys(a.limits,['minutes','kills','pickups','weightPercent']); strictKeys(a.respawn,['enabled','maxDeaths']); strictKeys(a.schedule,['enabled','startHour','endHour']);
@@ -110,6 +110,7 @@ export function validateAutomation(a: AutomationSettings): AutomationSettings {
     if (typeof a.loadout.enabled !== 'boolean' || typeof a.loadout.autoAmmo !== 'boolean'
       || !bounded(a.loadout.minAmmoStock,0,9999) || !bounded(a.loadout.cooldownSeconds,1,3600)
       || !['conditionEnd','never'].includes(a.loadout.restore) || !list(a.loadout.ammoPreferences,40,r=>id(r.itemId),r=>r.itemId)
+      || a.combat.partyEngagement !== undefined && typeof a.combat.partyEngagement !== 'boolean'
       || !['off','selected','retaliate','both'].includes(a.combat.mode) || !bounded(a.combat.levelDifference,-100,100)
       || !list(a.combat.rules,64,r=>id(r.classId)&&['attack','ignore'].includes(r.action)&&bounded(r.priority,-100,100),r=>r.classId)
       || !['own','all'].includes(a.loot.ownership) || !['pickup','ignore'].includes(a.loot.defaultAction)

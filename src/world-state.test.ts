@@ -60,6 +60,10 @@ describe('server-owned world state', () => {
     expect(world.party?.members.get(5)).toMatchObject({ map: 'prontera', hp: 50, sp: 10 });
     world.apply({ type: 'partyRemove', memberId: 5 }, 100); expect(world.party).toBeNull();
   });
+  it('clears the whole party on known own-zero removal but does not treat offline zero as positive membership',()=>{
+    for(const self of [null,1,0]){const world=new WorldState();world.apply({type:'partyJoined',partyId:3,name:'Helpers',login:false,members:[member,{...member,memberId:8,entityId:0,name:'Own'}]});
+      world.apply({type:'partyRemove',memberId:8},self);if(self===0)expect(world.party).toBeNull();else expect([...world.party!.members.keys()]).toEqual([5]);}
+  });
   it('tracks actual vending sales and clears an ended viewed store', () => {
     const world = new WorldState(); world.replaceCart([item(10)]);
     world.apply({ type: 'vendingStarted', name: 'Supplies', rows: [{ id: 512, count: 4, price: 30 }] });

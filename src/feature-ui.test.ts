@@ -30,3 +30,8 @@ it('bounds actor telemetry and never freshens the last observed game frame durin
 });
 
 it('bounds attack strategy ledger telemetry without allowing non-finite counts',()=>{expect(validFeatureStatus({attackStrategies:{pending:false,truncated:false,entries:[{id:2,normalStarted:false,rules:[{id:'open',attempts:1,uses:0,uncertain:true}]}]}})).toBe(true);expect(validFeatureStatus({attackStrategies:{entries:[{rules:[{attempts:NaN}]}]}})).toBe(false);expect(validFeatureStatus({attackStrategies:{entries:Array(2049).fill(null)}})).toBe(false);});
+
+it('bounds party engagement diagnostics without exposing affiliation or permitting invalid counts',()=>{
+ expect(validFeatureStatus({partyEngagement:{enabled:true,accepted:1,blocked:2,reasons:['Party engagement unavailable: revoked party membership.']}})).toBe(true);
+ for(const change of [{partyId:5},{enabled:1},{accepted:NaN},{accepted:151},{accepted:-1},{blocked:150,accepted:1},{reasons:Array(5).fill('unknown')},{reasons:['x'.repeat(161)]}])expect(validFeatureStatus({partyEngagement:{enabled:true,accepted:0,blocked:0,reasons:[],...change}})).toBe(false);
+});

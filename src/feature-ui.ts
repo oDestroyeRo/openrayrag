@@ -52,6 +52,7 @@ function isAction(input: unknown): input is Record<string,unknown> { try { check
 const fields: Record<Section, Field[]> = {
   combat: [
     { path:'combat.mode', label:'Combat mode', options:[['selected','Selected monsters'],['retaliate','Retaliate only'],['both','Selected + retaliation'],['off','Combat off']] },
+    { path:'combat.partyEngagement',label:'Join monsters engaged by verified visible party members',kind:'checkbox' },
     { path:'combat.levelDifference', label:'Maximum levels above you', min:-100, max:100 },
     { path:'loot.ownership',label:'Pickup scope',options:[['own','Only drops from your kills'],['all','Loot all nearby drops']] },
   ],
@@ -182,6 +183,10 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
   }
   if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','supply','supplyGuard','deathRecoveryGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies','manualTarget'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
   if(object(value.travel).policy!==undefined){try{validateMapPolicy(object(value.travel).policy);}catch{return false;}}
+  if(value.partyEngagement!==undefined) {
+    const p=object(value.partyEngagement);
+    if(Object.keys(p).length!==4||Object.keys(p).some(key=>!['enabled','accepted','blocked','reasons'].includes(key))||typeof p.enabled!=='boolean'||!Number.isInteger(p.accepted)||!Number.isInteger(p.blocked)||Number(p.accepted)<0||Number(p.blocked)<0||Number(p.accepted)+Number(p.blocked)>150||!Array.isArray(p.reasons)||p.reasons.length>4||!p.reasons.every(reason=>typeof reason==='string'&&reason.length<=160))return false;
+  }
   if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
   if(value.social!==undefined&&!validSocialSnapshot(value.social))return false;
   if(value.memo!==undefined&&!validMemoSnapshot(value.memo))return false;
@@ -341,6 +346,8 @@ export class FeatureUi {
   private rules(): void {
     this.editor('combat','combat.rules','Monster policies & priority',[idColumn('classId','Monster class ID'),{key:'action',label:'Action',options:[['attack','Attack'],['ignore','Ignore']]},priority],{classId:1002,action:'attack',priority:0},64);
     this.note('combat','Ignore rules apply when their conditions match; known-false ignores fall back to selected combat. Unknown conditions block that class. Attack conditions also guard selected species. Higher priority wins among eligible targets.');
+    this.note('combat','Party engagement is off by default. It requires a current, living, visible party member with verified affiliation on this map. Offline, duplicate, missing or stale membership, indirect damage, outside attackers and revoked claims remain excluded. Party participation does not grant your kill or drop credit.');
+    const partyState=document.createElement('div');partyState.id='party-engagement-state';partyState.className='telemetry-summary';this.panel('combat').append(partyState);
     this.editor('combat','attackStrategies','Ordered attack skills by species',[{key:'id',label:'Stable rule ID',kind:'text'},{key:'speciesIds',label:'Monster species IDs · comma separated',kind:'ids'},{key:'skillId',label:'Verified actor skill',options:[['11','Fire Bolt'],['12','Cold Bolt'],['16','Lightning Bolt']]},{key:'level',label:'Level',min:1,max:10},{key:'behavior',label:'Use',options:[['opener','Before first normal attack'],['repeat','Repeat during engagement']]},{key:'maxAttempts',label:'Maximum dispatch attempts per actor',min:1,max:100},{key:'maxUses',label:'Maximum confirmed uses per actor',min:1,max:100},{key:'cooldownSeconds',label:'Cooldown seconds',min:1,max:3600}],{id:'opening-bolt',speciesIds:[4000],skillId:11,level:1,behavior:'opener',maxAttempts:1,maxUses:1,cooldownSeconds:3},32);
     this.note('combat','An empty attack strategy list uses ordinary combat. Earlier matching rules win, even when two rules use the same skill. Opener means before this controller first sends a normal attack at that observed actor. Attempts and confirmations survive Stop/Start and target switches. An unresolved cast cannot be retried on that actor lifetime. Unknown prerequisites wait up to 30 seconds, then skip that actor for 30 seconds while retaining run intent. Only the three bolt skills have automatic cast positioning; combos, kiting, party support and automatic ground AoE remain unavailable.');
     const strategyState=document.createElement('div');strategyState.id='attack-strategy-state';strategyState.className='telemetry-summary';strategyState.hidden=true;this.panel('combat').append(strategyState);
@@ -597,6 +604,8 @@ export class FeatureUi {
   }
   render(value: unknown): void {
     this.status=object(value);if(this.routePreview&&(this.routePreview.identity!==this.previewIdentity()||this.routePreview.evidence!==this.routePreview.current?.()))this.cancelRoutePreview();const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
+    const engagement=object(s.partyEngagement);const reasons=Array.isArray(engagement.reasons)?engagement.reasons.map(text):[];
+    this.host.querySelector<HTMLElement>('#party-engagement-state')!.textContent=engagement.enabled===true?`Party exception active · ${number(engagement.accepted)??0} verified engagements · ${number(engagement.blocked)??0} excluded${reasons.length?'\n'+reasons.join('\n'):''}`:'Party exception is off; outside engagements remain excluded.';
     const strategyState=this.host.querySelector<HTMLElement>('#attack-strategy-state')!;const strategy=object(s.attackStrategies);const engagements=Array.isArray(strategy.entries)?strategy.entries:[];strategyState.hidden=engagements.length===0;strategyState.textContent=engagements.slice(0,8).map(entry=>{const actor=object(entry);const rules=Array.isArray(actor.rules)?actor.rules:[];return `Actor #${number(actor.id)??'?'} · ${actor.normalStarted===true?'normal attack started':'opener window open'}`+rules.slice(0,32).map(value=>{const rule=object(value);return `\n  ${text(rule.id)} · ${number(rule.attempts)??'?'} attempts · ${number(rule.uses)??'?'} confirmed${rule.uncertain===true?' · unresolved':rule.rejected===true?' · rejected':''}`;}).join('');}).join('\n')+(strategy.truncated===true?'\nAdditional actor ledgers omitted from display.':'');
     this.social.render(s);
     this.memo.render(s);
