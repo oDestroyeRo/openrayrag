@@ -1,5 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {DEFAULT_SETTINGS,DEFAULT_AUTOMATION,DEFAULT_ESCAPE,validateSettings,type Settings} from './settings';
+import { CurrentForm, formDocument, type FormDocument } from './current-form';
 const settings=():Settings=>({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation:structuredClone(DEFAULT_AUTOMATION)});
 describe('automation settings boundary',()=>{
   it('preserves optional disposition absence and validates its strict schema',()=>{const value=settings();expect(validateSettings(value).automation).not.toHaveProperty('disposition');value.automation!.disposition={maxSpend:0,rules:[{itemId:501,keep:1,minimum:2,desired:3,maximum:4,store:true,sell:false,cart:false,restock:'storage',allowUnique:false}]};expect(validateSettings(value).automation!.disposition).toEqual(value.automation!.disposition);for(const invalid of [null,{maxSpend:0,rules:[{...value.automation!.disposition.rules[0],password:'excluded'}]},{maxSpend:0,rules:[{...value.automation!.disposition.rules[0],maximum:2}]}]){const changed=structuredClone(value);Object.assign(changed.automation!,{disposition:invalid});expect(()=>validateSettings(changed)).toThrow();}});
@@ -32,4 +33,46 @@ describe('loadout settings migration and bounds',()=>{
   const checked=validateSettings(value);value.automation!.loadout.ammoPreferences[0]!.itemId=1752;expect(checked.automation!.loadout.ammoPreferences[0]!.itemId).toBe(1751);
   for(const bad of [{minAmmoStock:10000},{minAmmoStock:-1},{cooldownSeconds:0},{restore:'always'},{enabled:'yes'},{password:'excluded'},{ammoPreferences:[{itemId:1750},{itemId:1750}]},{ammoPreferences:[{itemId:1750,guid:'forbidden'}]}])expect(()=>validateSettings({...value,automation:{...value.automation!,loadout:{...value.automation!.loadout,...bad}}} as Settings)).toThrow();
  });
+});
+
+
+import threatEscapeCases from './data/threat-escape-cases.json';
+import { escapeSettings } from './settings';
+import { validateEscapeResumeGuard } from './escape';
+describe('shared threat escape policy and ephemeral guard boundary', () => {
+  it.each(threatEscapeCases)('$name', test => {
+    const check = () => test.kind === 'guard' ? validateEscapeResumeGuard(test.value as never)
+      : validateSettings({ ...settings(), automation: { ...settings().automation!, escape: test.value as never } });
+    if (test.valid) expect(check).not.toThrow(); else expect(check).toThrow();
+    if (test.kind === 'policy') {
+      const form = () => formDocument({ version: 1, revision: 0, selectedProfileId: null,
+        settings: { ...settings(), map: '', targets: [], automation: { ...settings().automation!, escape: test.value } } });
+      if (test.valid) expect(form).not.toThrow(); else expect(form).toThrow();
+    }
+  });
+  it('keeps omitted threat fields on the original HP path and excludes episode state from profiles', () => {
+    const value = settings(); value.automation!.escape = { enabled: true, hpBelowPercent: 20, mode: 'random', method: 'item', minStock: 0, cooldownSeconds: 60 };
+    expect(escapeSettings(validateSettings(value))).toMatchObject({ hpEnabled: true, threatEnabled: false, threatCount: 3, threatWindowSeconds: 10 });
+    expect(() => validateSettings({ ...value, automation: { ...value.automation!, escape: { ...value.automation!.escape, recovery: { hpPercent: 100, threatCount: 1, quietSeconds: 60 } } } } as never)).toThrow();
+  });
+  it('round-trips configured escape and resource-condition policies through the stopped current form', async () => {
+    const input = settings(); input.map = ''; input.targets = [];
+    input.automation!.escape = { ...DEFAULT_ESCAPE, enabled: true, hpEnabled: false, threatEnabled: true, threatCount: 64, threatWindowSeconds: 60 };
+    input.automation!.items = [{ itemId: 501, resource: 'hp', belowPercent: 80, minStock: 0, cooldownSeconds: 1,
+      conditions: [{ field: 'actorSpPercent', actor: { scope: 'self' }, operator: 'gte', value: 25.5 }] }];
+    let saved: FormDocument | null = null;
+    const form = new CurrentForm(() => ({ settings: input, selectedProfileId: 'threat-profile' }), async value => { saved = structuredClone(value); return value.revision; });
+    const flushed = await form.flush();
+    const restored = new CurrentForm(() => ({ settings: DEFAULT_SETTINGS, selectedProfileId: null }), async value => value.revision);
+    let applied: FormDocument | null = null;
+    restored.restore(JSON.parse(JSON.stringify(saved)), value => { applied = value; });
+    expect(applied).toEqual(flushed); expect(flushed.settings.automation!.escape).toEqual(input.automation!.escape);
+    expect(flushed.settings.automation!.items).toEqual(input.automation!.items);
+    expect(() => validateSettings(flushed.settings)).toThrow();
+    for (const runtime of [{ recovery: { hpPercent: 100, threatCount: 1, quietSeconds: 60 } }, { pending: true }, { actorId: 0 }]) {
+      Object.assign(input.automation!.escape!, runtime);
+      await expect(form.flush()).rejects.toThrow(); expect(saved).toEqual(flushed);
+      for (const key of Object.keys(runtime)) delete (input.automation!.escape as unknown as Record<string, unknown>)[key];
+    }
+  });
 });

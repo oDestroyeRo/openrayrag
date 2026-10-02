@@ -1,0 +1,516 @@
+[
+  {
+    "name": "legacy HP-only policy",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60
+    },
+    "valid": true
+  },
+  {
+    "name": "hpEnabled true",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "hpEnabled": true
+    },
+    "valid": true
+  },
+  {
+    "name": "hpEnabled false",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "hpEnabled": false
+    },
+    "valid": true
+  },
+  {
+    "name": "hpEnabled null",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "hpEnabled": null
+    },
+    "valid": false
+  },
+  {
+    "name": "hpEnabled 1",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "hpEnabled": 1
+    },
+    "valid": false
+  },
+  {
+    "name": "threatEnabled true",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatEnabled": true
+    },
+    "valid": true
+  },
+  {
+    "name": "threatEnabled false",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatEnabled": false
+    },
+    "valid": true
+  },
+  {
+    "name": "threatEnabled null",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatEnabled": null
+    },
+    "valid": false
+  },
+  {
+    "name": "threatEnabled \"true\"",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatEnabled": "true"
+    },
+    "valid": false
+  },
+  {
+    "name": "threatCount 1",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatCount": 1
+    },
+    "valid": true
+  },
+  {
+    "name": "threatCount 64",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatCount": 64
+    },
+    "valid": true
+  },
+  {
+    "name": "threatCount 0",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatCount": 0
+    },
+    "valid": false
+  },
+  {
+    "name": "threatCount 65",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatCount": 65
+    },
+    "valid": false
+  },
+  {
+    "name": "threatCount 1.5",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatCount": 1.5
+    },
+    "valid": false
+  },
+  {
+    "name": "threatCount null",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatCount": null
+    },
+    "valid": false
+  },
+  {
+    "name": "threatWindowSeconds 1",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatWindowSeconds": 1
+    },
+    "valid": true
+  },
+  {
+    "name": "threatWindowSeconds 60",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatWindowSeconds": 60
+    },
+    "valid": true
+  },
+  {
+    "name": "threatWindowSeconds 0",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatWindowSeconds": 0
+    },
+    "valid": false
+  },
+  {
+    "name": "threatWindowSeconds 61",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatWindowSeconds": 61
+    },
+    "valid": false
+  },
+  {
+    "name": "threatWindowSeconds 1.5",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatWindowSeconds": 1.5
+    },
+    "valid": false
+  },
+  {
+    "name": "threatWindowSeconds null",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "threatWindowSeconds": null
+    },
+    "valid": false
+  },
+  {
+    "name": "actorId 0",
+    "kind": "policy",
+    "value": {
+      "enabled": true,
+      "hpBelowPercent": 20,
+      "mode": "random",
+      "method": "item",
+      "minStock": 0,
+      "cooldownSeconds": 60,
+      "actorId": 0
+    },
+    "valid": false
+  },
+  {
+    "name": "old guard",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600
+    },
+    "valid": true
+  },
+  {
+    "name": "captured upper bound guard",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 100,
+        "threatCount": 64,
+        "quietSeconds": 60
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "HP-only guard",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 46,
+        "threatCount": 0,
+        "quietSeconds": 0
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "invalid captured {'hpPercent': 0}",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 0,
+        "threatCount": 64,
+        "quietSeconds": 60
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid captured {'hpPercent': 101}",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 101,
+        "threatCount": 64,
+        "quietSeconds": 60
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid captured {'hpPercent': 1.5}",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 1.5,
+        "threatCount": 64,
+        "quietSeconds": 60
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid captured {'threatCount': -1}",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 100,
+        "threatCount": -1,
+        "quietSeconds": 60
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid captured {'threatCount': 65}",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 100,
+        "threatCount": 65,
+        "quietSeconds": 60
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid captured {'quietSeconds': 61}",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 100,
+        "threatCount": 64,
+        "quietSeconds": 61
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid captured {'quietSeconds': 0}",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 100,
+        "threatCount": 64,
+        "quietSeconds": 0
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid captured {'threatCount': 0}",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 100,
+        "threatCount": 0,
+        "quietSeconds": 60
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid captured {'actorId': 0}",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 100,
+        "threatCount": 64,
+        "quietSeconds": 60,
+        "actorId": 0
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "incomplete recovery null",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": null
+    },
+    "valid": false
+  },
+  {
+    "name": "incomplete recovery {}",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {}
+    },
+    "valid": false
+  },
+  {
+    "name": "incomplete recovery []",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": []
+    },
+    "valid": false
+  },
+  {
+    "name": "incomplete recovery {\"hpPercent\": 100, \"threatCount\": 1}",
+    "kind": "guard",
+    "value": {
+      "latched": true,
+      "cooldownSeconds": 3600,
+      "recovery": {
+        "hpPercent": 100,
+        "threatCount": 1
+      }
+    },
+    "valid": false
+  }
+]

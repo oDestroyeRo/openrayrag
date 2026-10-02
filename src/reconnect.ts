@@ -1,7 +1,7 @@
 import { deathLimitGuidance, farmingDestination, validateDeathRecoveryGuard, type DeathRecoveryGuard } from './death-recovery';
 import { validateSettings, type Settings } from './settings';
 import { validateSupplyResumeGuard, type SupplyResumeGuard } from './supply-trip';
-import type { EscapeResumeGuard, EscapeSnapshot } from './escape';
+import { CONSERVATIVE_ESCAPE_RECOVERY, escapeRecovery, validateEscapeResumeGuard, type EscapeRecovery, type EscapeResumeGuard, type EscapeSnapshot } from './escape';
 
 const INITIAL_DELAY = 5_000;
 const MAX_DELAY = 60_000;
@@ -69,7 +69,7 @@ export interface RunSession {
 }
 export interface ResumeRequest { generation: number; sessionId: string; settings: Settings; escapeGuard?: EscapeResumeGuard; supplyGuard?:SupplyResumeGuard; deathRecoveryGuard?:DeathRecoveryGuard }
 const MAX_ESCAPE_GUARDS = 64;
-interface RetainedEscape { session: string; cooldownUntil: number; latched: boolean }
+interface RetainedEscape { session: string; cooldownUntil: number; latched: boolean; recovery?: EscapeRecovery }
 
 /** Only field settings survive game-page reloads; workflows and passwords do not. */
 export class PersistentFieldRun {
@@ -144,12 +144,21 @@ export class PersistentFieldRun {
       if (name) {
         let guard = this.escapeGuards.get(name);
         if (!guard && (status.escape.latched || status.escape.pending) && this.escapeGuards.size < MAX_ESCAPE_GUARDS) {
-          guard = { session: status.sessionId, cooldownUntil: 0, latched: true }; this.escapeGuards.set(name,guard);
+          guard = { session: status.sessionId, cooldownUntil: 0, latched: false }; this.escapeGuards.set(name,guard);
         }
         if (!guard && (status.escape.latched || status.escape.pending)) this.escapeOverflowUncertain = true;
         // A blank new page cannot erase an earlier page's spent episode.
         if (guard && (status.sessionId === guard.session || status.escape.latched || status.escape.pending)) {
           guard.cooldownUntil = Math.max(guard.cooldownUntil, this.now() + status.escape.cooldownSeconds * 1000);
+          if (status.escape.recovery) {
+            try { validateEscapeResumeGuard({ cooldownSeconds: 0, latched: true, recovery: status.escape.recovery });
+              const incoming = status.escape.recovery, previous = guard.recovery ?? CONSERVATIVE_ESCAPE_RECOVERY;
+              guard.recovery = guard.latched
+                ? { hpPercent: Math.max(previous.hpPercent, incoming.hpPercent),
+                  threatCount: previous.threatCount && incoming.threatCount ? Math.min(previous.threatCount, incoming.threatCount) : previous.threatCount || incoming.threatCount,
+                  quietSeconds: Math.max(previous.quietSeconds, incoming.quietSeconds) } : { ...incoming };
+            } catch { /* Invalid telemetry cannot weaken a retained episode. */ }
+          }
           guard.session = status.sessionId; guard.latched = status.escape.latched || status.escape.pending;
         }
       }
@@ -178,12 +187,11 @@ export class PersistentFieldRun {
     return '';
   }
   guardForStart(settings: Settings, character: string, sessionId: string): EscapeResumeGuard | undefined {
-    if (!settings.automation?.escape?.enabled) return undefined;
     this.pruneEscapeGuards();
     const guard = this.escapeGuards.get(character);
-    if (!guard) return this.escapeOverflowUncertain || this.escapeGuards.size >= MAX_ESCAPE_GUARDS ? { latched: true, cooldownSeconds: 3600 } : undefined;
+    if (!guard) return (settings.automation?.escape?.enabled || this.escapeOverflowUncertain) && (this.escapeOverflowUncertain || this.escapeGuards.size >= MAX_ESCAPE_GUARDS) ? { latched: true, cooldownSeconds: 3600 } : undefined;
     if (sessionId === guard.session || !guard.latched && guard.cooldownUntil <= this.now()) return undefined;
-    return { latched: true, cooldownSeconds: Math.max(0, Math.min(3600, Math.ceil((guard.cooldownUntil - this.now()) / 1000))) };
+    return { latched: true, cooldownSeconds: Math.max(0, Math.min(3600, Math.ceil((guard.cooldownUntil - this.now()) / 1000))), ...(guard.recovery ? { recovery: { ...guard.recovery } } : {}) };
   }
   supplyGuardForStart(settings:Settings,character:string,sessionId:string,automatic=false):SupplyResumeGuard|undefined {
     const old=this.supplyGuards.get(character);
@@ -238,9 +246,10 @@ export class PersistentFieldRun {
     }
     // The last bridge publication may precede a consumed wing. Any automatic
     // page reload starts disarmed until fresh self HP and resources reconcile.
-    const escapeGuard = settings.automation?.escape?.enabled
-      ? { latched: true, cooldownSeconds: Math.max(settings.automation.escape.cooldownSeconds,
-        this.guardForStart(settings,this.character,status.sessionId)?.cooldownSeconds ?? 0) } : undefined;
+    const retained = this.guardForStart(settings, this.character, status.sessionId);
+    const escapeGuard = retained || settings.automation?.escape?.enabled
+      ? { ...(retained ?? { recovery: escapeRecovery(settings) }), latched: true,
+        cooldownSeconds: Math.max(settings.automation?.escape?.enabled ? settings.automation.escape.cooldownSeconds : 0, retained?.cooldownSeconds ?? 0) } : undefined;
     const supplyGuard=this.supplyGuardForStart(settings,this.character,status.sessionId,true);
     const deathRecoveryGuard=this.deathGuardForStart(settings,this.character,status.sessionId,true);
     if(deathRecoveryGuard&&status.player.dead===false&&deathRecoveryGuard.phase!=='failed'){

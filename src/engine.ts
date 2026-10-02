@@ -1,3 +1,4 @@
+import { ObservedThreats, type ThreatSnapshot } from './observed-threats';
 import { matchesSkillExecution } from './skill-execution';
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { deathLimitGuidance } from './death-recovery';
@@ -103,6 +104,7 @@ export class BotEngine {
   runIntent = false;
   readonly character = new CharacterState();
   readonly observations: ActorObservations;
+  private readonly threats = new ObservedThreats();
   private observedOwnCast: { identity: ActionIdentity; action: Extract<ExpandedAction, { type: 'skill' }> } | null = null;
   private readonly strategies=new AttackStrategyPolicy();
   private strategyWait:{id:number;since:number}|null=null;
@@ -218,8 +220,31 @@ export class BotEngine {
     this.advanceMovement();
     this.lastFrame = this.now();
     this.observations.frame();
-    for (const event of events) { this.apply(event);this.observeOwnCast(event); }
+    const observedAt = this.now();
+    for (const event of events) {
+      this.apply(event);
+      this.observeOwnCast(event);
+      // Apply in wire order: a later spawn must never lend its lifetime to an earlier attack.
+      const own = this.threatOwnIdentity();
+      this.threats.snapshot(60, own, this.now(), id => this.threatIdentity(id));
+      if (event.type === 'attack' && event.target === this.playerId && own) {
+        const source = this.entities.get(event.source), identity = this.threatIdentity(event.source);
+        if (source?.kind === 1 && !source.dead && source.hp > 0 && !identity) this.threats.unavailable(observedAt);
+        this.threats.observe(event.source, event.target, own, identity, observedAt, this.now(), id => this.threatIdentity(id));
+      }
+    }
     this.observations.frame();
+  }
+  private threatOwnIdentity(): ActionIdentity | null {
+    const own = this.player;
+    return own && !own.dead && own.hp > 0 && own.maxHp > 0 ? this.actorActionIdentity() : null;
+  }
+  private threatIdentity(id: number): ActionIdentity | null {
+    const actor = this.entities.get(id);
+    return actor?.kind === 1 && !actor.dead && actor.hp > 0 ? this.actorActionIdentity(id) : null;
+  }
+  observedThreats(windowSeconds: number): ThreatSnapshot {
+    return this.threats.snapshot(windowSeconds, this.threatOwnIdentity(), this.now(), id => this.threatIdentity(id));
   }
   /** A cast timer or adjustment cannot prove completion. Initial unknown state
    * creates no fence; observed casts require source-backed availability evidence. */
@@ -245,6 +270,7 @@ export class BotEngine {
   private resetWorld(preserveCharacter=false): void {
     if(this.manualTask)this.finishManual('failed','Manual command ended after a world change.',false);
     if(!preserveCharacter){this.manualAttackFence=null;this.manualWalkFence=false;this.manualRetiredMovement=false;this.manualReceiptOwner=null;}
+    this.threats.reset();
     this.observedOwnCast = null;
     this.observations.reset();this.strategies.reset();this.strategyWait=null;this.serverTargetId=null;this.combatConditions.clear();this.revivableActors.clear();
     this.loadout.reset(preserveCharacter);

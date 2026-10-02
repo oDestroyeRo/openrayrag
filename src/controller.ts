@@ -846,7 +846,9 @@ export class CompanionController {
       || (this.world.npc.mode !== 'idle' || this.world.npc.id !== null || this.world.vending ? 'Finish the NPC or vending interaction before escape.' : '')
       || (this.characterName && this.engine.player?.name !== this.characterName ? 'Waiting for the originally selected character.' : '')
       || (!this.gridFor(this.engine.map) ? `Verified walkability is not available for ${this.engine.map}.` : '');
-    return { connected: this.engine.connected, compatible: this.engine.compatible, fresh: this.now() - this.lastFrame <= 15_000,
+    return { connected: this.engine.connected, compatible: this.engine.compatible, fresh: this.now() >= this.lastFrame && this.now() - this.lastFrame <= 15_000,
+      identity: this.engine.actorActionIdentity(), threats: seconds => this.engine.observedThreats(seconds), movementSettled: this.engine.idleForActions() && this.movementSettled(),
+      castSettled: this.engine.observedOwnCastSettled(),
       map: this.engine.map, playerId: this.engine.playerId, player: this.engine.player, character: this.engine.character,
       connection: this.connectionEpoch, ready: !blocker && this.heartbeatHealthy && this.now() >= this.yieldUntil, blocker };
   }

@@ -14,8 +14,9 @@ export interface EquipmentRule { itemId: number; hpBelowPercent: number; monster
 export interface EscapeSettings {
   enabled: boolean; hpBelowPercent: number; mode: 'random' | 'save'; method: 'item' | 'skill';
   minStock: number; cooldownSeconds: number;
+  hpEnabled?: boolean; threatEnabled?: boolean; threatCount?: number; threatWindowSeconds?: number;
 }
-export const DEFAULT_ESCAPE: EscapeSettings = { enabled: false, hpBelowPercent: 20, mode: 'random', method: 'item', minStock: 0, cooldownSeconds: 60 };
+export const DEFAULT_ESCAPE: EscapeSettings = { enabled: false, hpBelowPercent: 20, mode: 'random', method: 'item', minStock: 0, cooldownSeconds: 60, hpEnabled: true, threatEnabled: false, threatCount: 3, threatWindowSeconds: 10 };
 export interface LoadoutSettings { enabled: boolean; autoAmmo: boolean; minAmmoStock: number; ammoPreferences: Array<{itemId:number}>; restore: 'conditionEnd' | 'never'; cooldownSeconds: number }
 export interface AutomationSettings {
   loadout: LoadoutSettings;
@@ -70,14 +71,18 @@ function strictKeys(v: unknown, keys: string[]): void {
   if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).some(k=>!keys.includes(k))) throw new Error('Unknown settings field.');
 }
 export function automationSettings(settings: Settings): AutomationSettings { return settings.automation ?? DEFAULT_AUTOMATION; }
-export function escapeSettings(settings: Settings): EscapeSettings { return automationSettings(settings).escape ?? DEFAULT_ESCAPE; }
+export function escapeSettings(settings: Settings): EscapeSettings { return { ...DEFAULT_ESCAPE, ...automationSettings(settings).escape }; }
 export function validateAutomation(a: AutomationSettings): AutomationSettings {
   try {
     strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies','mapPolicy']);
     if (Object.hasOwn(a,'mapPolicy')) validateMapPolicy(a.mapPolicy);
     if (Object.hasOwn(a,'supply')) validateSupplySettings(a.supply);
     const escape = a.escape === undefined ? DEFAULT_ESCAPE : a.escape;
-    strictKeys(escape,['enabled','hpBelowPercent','mode','method','minStock','cooldownSeconds']);
+    strictKeys(escape,['enabled','hpBelowPercent','mode','method','minStock','cooldownSeconds','hpEnabled','threatEnabled','threatCount','threatWindowSeconds']);
+    if (Object.hasOwn(escape,'hpEnabled') && typeof escape.hpEnabled !== 'boolean'
+      || Object.hasOwn(escape,'threatEnabled') && typeof escape.threatEnabled !== 'boolean'
+      || Object.hasOwn(escape,'threatCount') && !bounded(escape.threatCount!,1,64)
+      || Object.hasOwn(escape,'threatWindowSeconds') && !bounded(escape.threatWindowSeconds!,1,60)) throw new Error();
     if (typeof escape.enabled !== 'boolean' || !bounded(escape.hpBelowPercent,1,95) || !['random','save'].includes(escape.mode)
       || !['item','skill'].includes(escape.method) || !bounded(escape.minStock,0,9999) || !bounded(escape.cooldownSeconds,1,3600)) throw new Error();
     if (Object.hasOwn(a,'disposition')) validateDispositionPolicy(a.disposition);
