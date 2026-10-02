@@ -11,6 +11,7 @@ import { GridNavigator, NAVIGATION_MAPS, searchGrid } from './navigation';
 import { validNavigationStatus } from './navigation-status';
 import { MapTargets } from './targets';
 import { normalAttackProfile } from './combat';
+import { canStartField, settingsWithFieldMap } from './field-controls';
 import './style.css';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
@@ -193,7 +194,8 @@ function message(text: string, error = false): void {
   element('notice').classList.toggle('error', error);
 }
 function settings(): Settings {
-  return {
+  const automation=features.read();
+  return settingsWithFieldMap({
     map: targets.map, targets: targets.ids,
     radius: Number(element<HTMLInputElement>('radius').value),
     minHpPercent: Number(element<HTMLInputElement>('min-hp').value),
@@ -204,16 +206,17 @@ function settings(): Settings {
     route_randomWalk_maxRouteTime: Number(element<HTMLInputElement>('route-time').value),
     attackRouteMaxPathDistance: Number(element<HTMLInputElement>('attack-distance').value),
     attackMaxRouteTime: Number(element<HTMLInputElement>('attack-time').value),
-    automation: features.read(),
-  };
+    automation,
+  });
 }
 function updateButtons(): void {
   const fresh = Date.now() - receivedAt < 7000;
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
-  let valid = false;
-  try { validateSettings(settings()); valid=true; configHelp.textContent=''; }
+  let checked:Settings|null = null;
+  try { checked=validateSettings(settings()); configHelp.textContent=''; }
   catch(error) { configHelp.textContent=ready && error instanceof Error ? error.message : ''; }
-  startButton.disabled = busy || stopping || loginBusy || !ready || runActive() || !valid || !latest?.navigation?.ready;
+  startButton.disabled = !canStartField({native,fresh,busy,stopping,loginBusy,runActive:runActive(),connected:latest?.connected===true,compatible:latest?.compatible===true,
+    map:latest?.map??'',player:latest?.player??null,settings:checked});
   stopButton.disabled = stopping || !gameOpen && !fieldRun.requested && !loginBusy;
   openButton.disabled = !accountReady || busy || stopping || loginBusy;
   element<HTMLButtonElement>('signin').disabled = !native || !accountReady || busy || stopping || loginBusy || !!(latest?.connected && latest.player);

@@ -10,13 +10,19 @@ const BRIDGE: &str = include_str!("../generated/game-bridge.js");
 // Bounded inventory, cart and storage snapshots can each contain 600 items.
 const MAX_STATUS_BYTES: usize = 500_000;
 
-fn supported_map(map: &str) -> bool {
+fn navigation_maps() -> &'static serde_json::Map<String, serde_json::Value> {
     static MAPS: OnceLock<serde_json::Map<String, serde_json::Value>> = OnceLock::new();
     MAPS.get_or_init(|| {
         serde_json::from_str(include_str!("../../src/data/navigation-maps.json"))
             .expect("Bundled navigation catalog must be valid")
     })
-    .contains_key(map)
+}
+fn supported_map(map: &str) -> bool {
+    navigation_maps().contains_key(map)
+}
+fn map_dimensions(map: &str) -> Option<(u64, u64)> {
+    let grid = navigation_maps().get(map)?;
+    Some((grid.get("width")?.as_u64()?, grid.get("height")?.as_u64()?))
 }
 
 fn require_window(window: &WebviewWindow, label: &str) -> Result<(), String> {

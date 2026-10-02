@@ -3,11 +3,37 @@ import {BotEngine,DEFAULT_AUTOMATION,DEFAULT_SETTINGS,type Action,type Settings}
 import type {Entity,GameEvent} from './protocol';
 import type {FeatureEvent,SkillResult} from './protocol-feature';
 import {GridNavigator,type WalkGrid} from './navigation';
+import {DEFAULT_MAP_POLICY} from './map-policy';
 const player:Entity={id:1,kind:0,classId:2,name:'Mage',level:10,hp:100,maxHp:100,sp:200,maxSp:200,x:2,y:2,dead:false,statuses:[]};
 const monster:Entity={id:2,kind:1,classId:4000,name:'Monster',level:1,hp:100,maxHp:100,x:9,y:2,dead:false,statuses:[]};
 const grid:WalkGrid={width:30,height:30,walkable:p=>p.x!==6,seeThrough:()=>true};
 function setup(mapGrid=grid){let time=100_000;const sent:Action[]=[];const engine=new BotEngine(action=>sent.push(action),()=>time,()=>mapGrid);engine.connect(true);engine.receive([{type:'enter',id:1,map:'prt_fild08'},{type:'spawn',entity:{...player}},{type:'spawn',entity:{...monster}}]);engine.receive([{type:'inventory',items:[],equipment:Array(10).fill(0),ammoId:-1},{type:'skills',learned:[{skillId:11,level:10},{skillId:12,level:10},{skillId:16,level:10},{skillId:19,level:10}]}]);const settings:Settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],radius:20,attackMaxRouteTime:10,automation:structuredClone(DEFAULT_AUTOMATION)};settings.automation!.attackStrategies=[{id:'open',speciesIds:[4000],skillId:11,level:1,behavior:'opener',maxAttempts:2,maxUses:1,cooldownSeconds:1}];const receive=(e:GameEvent|FeatureEvent)=>engine.receive([e]);const step=(ms=100)=>{time+=ms;engine.tick();};const result=(extra:Partial<SkillResult>={}):SkillResult=>({type:'skillResult',mode:'target',source:1,target:2,skillId:11,level:1,position:{x:2,y:2},motionSeconds:0,indirect:false,...extra});return {engine,sent,settings,step,receive,result};}
 describe('owned attack skill geometry and receipts',()=>{
+ it('requires a learned skill target inside the field rectangle even across a snipable barrier',()=>{
+  const {engine,sent,settings,step}=setup();
+  settings.automation!.mapPolicy={...structuredClone(DEFAULT_MAP_POLICY),lockArea:{map:'prt_fild08',minX:0,minY:0,maxX:8,maxY:10}};
+  engine.start(settings);step();expect(sent).toEqual([]);
+  engine.stop();sent.length=0;settings.automation!.mapPolicy.lockArea!.maxX=9;
+  engine.start(settings);step();expect(sent).toEqual([{type:'skill',mode:'target',skillId:11,level:1,target:2}]);
+ });
+ it.each(['boundary','timeout'] as const)('does not acknowledge an explicit skill approach with a late attack after %s',cause=>{
+  const {engine,sent,settings,step,receive}=setup({width:30,height:30,walkable:()=>true});
+  settings.route_avoidWalls=false;
+  settings.automation!.mapPolicy={...structuredClone(DEFAULT_MAP_POLICY),lockArea:{map:'prt_fild08',minX:0,minY:0,maxX:20,maxY:10}};
+  receive({type:'position',id:2,position:{x:17,y:2}});engine.start(settings);step();expect(sent[0]!.type).toBe('walk');
+  if(cause==='boundary'){receive({type:'position',id:2,position:{x:21,y:2}});step();}
+  else step(4100);
+  expect(sent.at(-1)).toEqual({type:'stop'});
+  for(const target of [2,0]){
+   receive({type:'attack',source:1,target,position:{x:2,y:2}});step(100);
+   expect(sent.map(action=>action.type)).toEqual(['walk','stop']);
+   expect(()=>engine.start(settings)).toThrow('Wait');expect(()=>engine.manualAction({type:'sit',sitting:false})).toThrow('wait');
+  }
+  engine.stop();const stopped=sent.length;
+  const cells=[{x:2,y:2},{x:3,y:2}];receive({type:'walk',id:1,walk:{origin:cells[0]!,cells,secondsPerCell:2,firstSeconds:2,locked:false}});
+  step(1000);expect(sent).toHaveLength(stopped);expect(engine.idleForActions()).toBe(false);
+  step(1200);expect(engine.idleForActions()).toBe(true);
+ });
  it('selects a spell-reachable monster across a snipable barrier even when ordinary attacks cannot reach it',()=>{const {engine,sent,settings,step}=setup();engine.start(settings);step();expect(sent).toEqual([{type:'skill',mode:'target',skillId:11,level:1,target:2}]);expect(engine.snapshot().attackStrategies.entries[0]!.rules[0]).toMatchObject({attempts:1,uses:0,uncertain:true});});
  it('confirms once only after direct source/skill/level/mode/actor execution and waits source after-cast delay',()=>{const {engine,sent,settings,step,receive,result}=setup();engine.start(settings);step();for(const wrong of [{source:3},{skillId:12},{level:2},{mode:'self' as const},{target:3},{indirect:true}])receive(result(wrong));receive({type:'castStart',id:1,skillId:11,level:1,position:{x:2,y:2},remainingSeconds:1,flags:0,target:2});expect(engine.snapshot().attackStrategies.entries[0]!.rules[0]!.uses).toBe(0);receive(result());receive(result());expect(engine.snapshot().attackStrategies.entries[0]!.rules[0]!.uses).toBe(1);step(500);expect(sent).toHaveLength(1);step(600);expect(sent).toHaveLength(1);});
  it('sends opener before normal attack and never uses a normal-click chase for cast positioning',()=>{const {engine,sent,settings,step,receive,result}=setup({width:30,height:30,walkable:()=>true});engine.start(settings);step();expect(sent[0]!.type).toBe('skill');receive(result());step(1100);expect(sent[1]).toEqual({type:'attack',id:2});expect(engine.snapshot().attackStrategies.entries[0]!.normalStarted).toBe(true);});

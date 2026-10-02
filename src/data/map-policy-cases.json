@@ -1,0 +1,431 @@
+[
+  {
+    "name": "unrestricted legacy",
+    "valid": true,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "inclusive zero rectangle",
+    "valid": true,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [],
+      "lockArea": {
+        "map": "prt_fild08",
+        "minX": 0,
+        "minY": 0,
+        "maxX": 399,
+        "maxY": 399
+      }
+    }
+  },
+  {
+    "name": "weighted finite fractional penalties",
+    "valid": true,
+    "policy": {
+      "mode": "weighted",
+      "allow": [],
+      "deny": [],
+      "penalties": [
+        {
+          "map": "prontera",
+          "cost": 0.5
+        },
+        {
+          "map": "prt_fild08",
+          "cost": 1000000
+        }
+      ],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "overlap resolves to deny",
+    "valid": true,
+    "policy": {
+      "mode": "legacy",
+      "allow": [
+        "prontera"
+      ],
+      "deny": [
+        "prontera"
+      ],
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "allow unknown",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [
+        "unknown"
+      ],
+      "deny": [],
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "allow duplicates",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [
+        "prontera",
+        "prontera"
+      ],
+      "deny": [],
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "allow non-array",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": {},
+      "deny": [],
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "allow null",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": null,
+      "deny": [],
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "allow non-string",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [
+        1
+      ],
+      "deny": [],
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "deny unknown",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [
+        "unknown"
+      ],
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "deny duplicates",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [
+        "prontera",
+        "prontera"
+      ],
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "deny non-array",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": {},
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "deny null",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": null,
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "deny non-string",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [
+        1
+      ],
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "unknown mode",
+    "valid": false,
+    "policy": {
+      "mode": "cheapest",
+      "allow": [],
+      "deny": [],
+      "penalties": [],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "penalty negative",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [
+        {
+          "map": "prontera",
+          "cost": -1
+        }
+      ],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "penalty too high",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [
+        {
+          "map": "prontera",
+          "cost": 1000000.1
+        }
+      ],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "penalty string",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [
+        {
+          "map": "prontera",
+          "cost": "1"
+        }
+      ],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "penalty unknown",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [
+        {
+          "map": "unknown",
+          "cost": 0
+        }
+      ],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "penalty duplicate",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [
+        {
+          "map": "prontera",
+          "cost": 0
+        },
+        {
+          "map": "prontera",
+          "cost": 1
+        }
+      ],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "penalty unknown fields",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [
+        {
+          "map": "prontera",
+          "cost": 0,
+          "password": "reject"
+        }
+      ],
+      "lockArea": null
+    }
+  },
+  {
+    "name": "rectangle actual width",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [],
+      "lockArea": {
+        "map": "prontera",
+        "minX": 0,
+        "minY": 0,
+        "maxX": 320,
+        "maxY": 399
+      }
+    }
+  },
+  {
+    "name": "rectangle negative",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [],
+      "lockArea": {
+        "map": "prontera",
+        "minX": -1,
+        "minY": 0,
+        "maxX": 319,
+        "maxY": 399
+      }
+    }
+  },
+  {
+    "name": "rectangle fraction",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [],
+      "lockArea": {
+        "map": "prontera",
+        "minX": 0.1,
+        "minY": 0,
+        "maxX": 319,
+        "maxY": 399
+      }
+    }
+  },
+  {
+    "name": "rectangle reversed",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [],
+      "lockArea": {
+        "map": "prontera",
+        "minX": 10,
+        "minY": 0,
+        "maxX": 0,
+        "maxY": 399
+      }
+    }
+  },
+  {
+    "name": "rectangle unknown map",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [],
+      "lockArea": {
+        "map": "unknown",
+        "minX": 0,
+        "minY": 0,
+        "maxX": 319,
+        "maxY": 399
+      }
+    }
+  },
+  {
+    "name": "rectangle unknown field",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [],
+      "lockArea": {
+        "map": "prontera",
+        "minX": 0,
+        "minY": 0,
+        "maxX": 319,
+        "maxY": 399,
+        "enabled": true
+      }
+    }
+  },
+  {
+    "name": "unknown root fields",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": [],
+      "lockArea": null,
+      "username": "reject"
+    }
+  },
+  {
+    "name": "missing nullable area",
+    "valid": false,
+    "policy": {
+      "mode": "legacy",
+      "allow": [],
+      "deny": [],
+      "penalties": []
+    }
+  },
+  {
+    "name": "null policy",
+    "valid": false,
+    "policy": null
+  }
+]

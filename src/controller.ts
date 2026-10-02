@@ -1,4 +1,5 @@
 import { matchesSkillExecution } from './skill-execution';
+import { insideLockArea, lockEntry, mapAllowed, mapPolicy } from './map-policy';
 import type { ActorPredicate } from './actor-observations';
 import { ManualSocial, type SocialContext, type SocialSnapshot } from './social';
 import type { ManualSocialAction } from './social-protocol';
@@ -14,7 +15,7 @@ import { TravelController, type TravelSnapshot } from './travel-controller';
 import { inSchedule, actionConfirmationTimeout } from './automation';
 import { searchGrid, type WalkGrid } from './navigation';
 import type { InventoryItem } from './protocol-feature';
-import { NpcServiceRuntime, validateServiceRequest, observeServiceReceipt, confirmServiceReceipt, type ServiceContext, type ServiceReceipt, type ServiceSnapshot } from './npc-services';
+import { NpcServiceRuntime, validateServiceExecution, observeServiceReceipt, confirmServiceReceipt, type ServiceContext, type ServiceReceipt, type ServiceSnapshot } from './npc-services';
 import { ITEM_CATALOG } from './game-catalog';
 import { SupplyTripRuntime, validateSupplyResumeGuard, type SupplyContext, type SupplyIntent, type SupplySnapshot, type SupplyResumeGuard } from './supply-trip';
 import { nextSupplyAction, type SupplyPhaseEvidence } from './supply-plan';
@@ -74,7 +75,6 @@ export class CompanionController {
   private returnSettings: Settings | null = null;
   private returning = false;
   private requestedSettings: Settings | null = null;
-  private runInitialized = false;
   private retryAt = 0;
   private retries = 0;
   private yieldUntil = 0;
@@ -245,7 +245,8 @@ export class CompanionController {
       throw new Error('Stop the current automation or manual action before requesting a new run.');
     this.supply.configure(settings,context,supplyGuard);
     this.engine.acknowledgeLoadoutOverride();
-    this.requestedSettings = settings; this.runInitialized = false; this.characterName = this.engine.player?.name ?? null; this.featureReceipt = null;
+    this.engine.prepareRequestedRun(settings);
+    this.requestedSettings = settings; this.characterName = this.engine.player?.name ?? null; this.featureReceipt = null;
     this.started = this.now(); this.lastTick = this.now(); this.retryAt = 0; this.retries = 0;
     this.blockedReason = ''; this.waitingReason = 'Preparing the requested run.';
     this.seenActionKey = `${this.engine.actionResult.sequence}:${this.engine.actionResult.status}`;
@@ -277,14 +278,14 @@ export class CompanionController {
   perform(mode: 'command' | 'workflow' | 'routine' | 'service' | 'social', input: unknown): void {
     if (mode === 'social') { this.requireIdle(); this.social.dispatch(input, this.socialContext()); return; }
     if (mode === 'service') {
-      const definition = validateServiceRequest(input); this.requireReady();
+      const {service:definition,executionPolicy} = validateServiceExecution(input); this.requireReady();
       if (this.social.busy || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
         || ['running','waiting'].includes(this.routine.snapshot().state) || this.unresolvedWorld || this.now() < this.fencedUntil
         || this.engine.pendingFeatureAction || this.featureReceipt || this.supply.uncertain)
         throw new Error('Wait for the current transaction or unresolved escape/action before running a service.');
       // Explicit service visits replace field intent; they never install a supply-trip policy.
       this.requestedSettings = null; this.returnSettings = null; this.returning = false; this.travelSettings = null;
-      this.engine.stop('Preparing the requested NPC service.'); this.service.start(definition,this.serviceContext());
+      this.engine.stop('Preparing the requested NPC service.'); this.service.start(definition,this.serviceContext(),executionPolicy);
       this.started = this.now(); this.lastTick = this.now(); this.workflowOutstanding = null; this.workflowDeadline = 0;
       return;
     }
@@ -511,6 +512,7 @@ export class CompanionController {
   /** Internal ownership handoff preserves the field intent and counters. */
   private supplyTick():boolean {
     const context=this.supplyContext();this.supply.observe(context);
+    if(!this.supply.ownsField&&!this.supply.uncertain&&this.requestedSettings&&context.position&&(!mapAllowed(mapPolicy(this.requestedSettings),context.map)||!insideLockArea(mapPolicy(this.requestedSettings),context.map,context.position)))return false;
     if(!this.supply.uncertain)this.supplyReceipt=null;
     if(this.supplyIntent?.type==='action'&&!this.supply.uncertain&&this.supply.snapshot().state==='closing'){this.supplyIntent=null;this.workflow.cancel('Supply transaction confirmed.');}
     if(this.supplyIntent&&!this.supply.accepts(this.supplyIntent.id)){
@@ -536,7 +538,7 @@ export class CompanionController {
         }
         if(!this.supplyServiceStarted){
           const definition=serviceByContractId(intent.contractId);if(!definition)throw new Error('Verified supply service is unavailable.');
-          this.service.start(definition,this.serviceContext());this.supplyServiceStarted=true;
+          this.service.start(definition,this.serviceContext(),mapPolicy(this.requestedSettings!));this.supplyServiceStarted=true;
         }
         const action=this.service.tick(this.serviceContext());if(action)this.send(action);
         if(['failed','cancelled'].includes(this.service.snapshot().state))throw new Error(this.service.snapshot().reason);
@@ -585,15 +587,16 @@ export class CompanionController {
         if(this.travel.active){this.travel.tick(this.engine.map,p);if(this.travel.snapshot().state==='failed')throw new Error(this.travel.snapshot().reason);return true;}
         if(this.travel.snapshot().state==='failed')throw new Error(this.travel.snapshot().reason);
         if(!p)throw new Error('Return character is unavailable.');
-        if(this.engine.map!==intent.map){this.travel.start(this.engine.map,p,intent.map,this.requestedSettings!.route_step,this.requestedSettings!.route_avoidWalls);return true;}
+        if(this.engine.map!==intent.map){this.travel.start(this.engine.map,p,intent.map,this.requestedSettings!.route_step,this.requestedSettings!.route_avoidWalls,mapPolicy(this.requestedSettings!),'return');return true;}
         if(Math.floor(p.x)!==intent.position.x||Math.floor(p.y)!==intent.position.y){
           if(this.supplyReturnApproach)throw new Error('Supply return did not reach the captured work cell.');
-          this.supplyReturnApproach=true;this.travel.startApproach(intent.map,p,intent.position,this.requestedSettings!.route_step);return true;
+          this.supplyReturnApproach=true;this.travel.startApproach(intent.map,p,intent.position,this.requestedSettings!.route_step,mapPolicy(this.requestedSettings!),'return');return true;
         }
         this.supply.acknowledge(intent.id,'confirmed',this.supplyContext());if(this.supply.snapshot().state==='complete')this.supplyIntent=null;return true;
       }
+      if(!context.position||!mapAllowed(mapPolicy(intent.settings),context.map)||!insideLockArea(mapPolicy(intent.settings),context.map,context.position))throw new Error('Supply return must reach the captured allowed field area.');
       this.supply.acknowledge(intent.id,'confirmed',context);this.supplyIntent=null;
-      this.engine.resumeRequested({...intent.settings,map:context.map});this.runInitialized=true;this.waitingReason='';return true;
+      this.engine.resumeRequested({...intent.settings,map:intent.settings.automation?.mapPolicy?.lockArea?intent.settings.map:context.map});this.waitingReason='';return true;
     }catch(error){this.supplyFailure(error instanceof Error?error.message:'Supply stage failed without confirmation.');return true;}finally{this.sendingSupply=false;}
   }
   private observation(): RoutineObservation {
@@ -678,20 +681,27 @@ export class CompanionController {
     }
     if (now < this.retryAt) return;
     try {
-      const destination = this.returning && this.returnSettings ? this.returnSettings.map : policy.travel.destinationMap;
+      const executionPolicy=mapPolicy(settings);
+      const destination = executionPolicy.lockArea?.map ?? (this.returning && this.returnSettings ? this.returnSettings.map : policy.travel.destinationMap);
       if (!player.dead && destination && destination !== this.engine.map) {
-        this.travel.start(this.engine.map, player, destination, settings.route_step, settings.route_avoidWalls);
+        this.travel.start(this.engine.map, player, destination, settings.route_step, settings.route_avoidWalls,executionPolicy,this.returning?'return':'travel');
         this.travelSettings = settings; this.waitingReason = ''; this.retries = 0;
       } else {
         const ground = this.gridFor(this.engine.map);
         if (!player.dead && ground?.walkable({ x: Math.floor(player.x), y: Math.floor(player.y) })
           && ground.portals?.some(area => Math.abs(player.x - area.x) <= area.halfWidth && Math.abs(player.y - area.y) <= area.halfHeight)) {
-          this.travel.start(this.engine.map, player, this.engine.map, settings.route_step, settings.route_avoidWalls);
+          this.travel.start(this.engine.map, player, this.engine.map, settings.route_step, settings.route_avoidWalls,executionPolicy);
           this.travelSettings = settings; this.waitingReason = ''; return;
         }
-        const bound = { ...settings, map: this.engine.map };
-        if (this.runInitialized) this.engine.resumeRequested(bound);
-        else { this.engine.start(bound, true); this.runInitialized = true; }
+        if(!player.dead&&!mapAllowed(executionPolicy,this.engine.map))throw new Error('Current map is forbidden; choose an allowed destination for departure.');
+        if(!player.dead&&!insideLockArea(executionPolicy,this.engine.map,player)){
+          const target=ground&&lockEntry(this.engine.map,player,ground,executionPolicy);
+          if(!target)throw new Error('No reachable safe cell inside the field lock area.');
+          this.travel.startApproach(this.engine.map,player,target,settings.route_step,executionPolicy,'field-entry');
+          this.travelSettings=settings;this.waitingReason='';return;
+        }
+        const bound = { ...settings, map: executionPolicy.lockArea ? settings.map : this.engine.map };
+        this.engine.resumeRequested(bound);
         this.returnSettings = policy.travel.returnToLockMap && (policy.respawn.enabled || policy.escape?.enabled) ? structuredClone(settings) : null;
         this.returning = false; this.travelSettings = null; this.waitingReason = ''; this.retries = 0;
       }

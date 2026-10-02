@@ -1,5 +1,6 @@
 import { AttackStrategyPolicy, engagementIdentity, type StrategyChoice, type AttackStrategySnapshot, type EngagementIdentity } from './attack-strategy';
 import { castReadiness, skillAfterCastSeconds, CAST_PREREQUISITES, BLIND_CONDITION, AUTOMATIC_ATTACK_SKILLS, MANUAL_GROUND_SKILL } from './cast-policy';
+import { fieldGrid, insideLockArea, mapAllowed, mapPolicy, policyIdentity } from './map-policy';
 import { ActorObservations, type ActorObservationSnapshot, type ActorPredicate, type PredicateTrace, type PublishedConditionReport, evaluateActorPredicate, publishConditionReports } from './actor-observations';
 import { type Drop, type Entity, type GameEvent, type Position, type Walk } from './protocol';
 
@@ -52,7 +53,7 @@ export class BotEngine {
   private navigationMap = '';
   private route: RouteTask | null = null;
   private leg: RouteLeg | null = null;
-  private implicitWalk: { targetId: number; until: number } | null = null;
+  private implicitWalk: { targetId: number|null; until: number } | null = null;
   private routeFailures = 0;
   private routeStep = 10;
   private pending: { type: 'attack' | 'pickup'; id: number; since: number; progress: number; approachSince: number | null; direct: boolean; attackRange?: number; engagement?:EngagementIdentity|null } | null = null;
@@ -89,11 +90,13 @@ export class BotEngine {
 
   constructor(private readonly send: (action: Action) => void, private readonly now = Date.now,
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) { this.automation = new AutomationScheduler(a=>this.send(a),this.now); this.observations=new ActorObservations(this.now);this.loadout=new LoadoutPolicy(this.now); }
-  private navigation(): GridNavigator | null {
-    if (this.navigationMap !== this.map) {
+  private navigation(settings: Settings = this.settings): GridNavigator | null {
+    const policy=mapPolicy(settings), identity=`${this.map}:${policyIdentity(policy)}`;
+    if (this.navigationMap !== identity) {
+      if(this.running && this.navigationMap) this.stop('Field map policy changed; restart with the new policy.');
       const grid = this.gridFor(this.map);
-      this.navigator = grid ? new GridNavigator(grid) : null;
-      this.navigationMap = this.map;
+      this.navigator = grid ? new GridNavigator(fieldGrid(this.map,grid,policy)) : null;
+      this.navigationMap = identity;
     }
     this.navigator?.time(this.now());
     return this.navigator;
@@ -120,6 +123,7 @@ export class BotEngine {
   fail(reason: string): void { this.stop(reason); this.compatible = false; }
   stop(reason = 'Stopped by you.'): void {
     const wasRunning = this.running;
+    this.fenceUnacknowledgedLeg();
     const reserveStop = automationSettings(this.settings).loadout.enabled && this.loadout.requestStop(reason);
     this.loadout.cancel();this.strategies.cancel();this.strategyWait=null;
     const pendingSkill = this.automation.pendingAction?.type === 'skill';
@@ -137,13 +141,20 @@ export class BotEngine {
     if(this.automation.busy||this.awaitsImplicitWalk()||this.loadout.startBlocked)throw new Error('Wait for the current action and movement to finish.');
     if (!inSchedule(automationSettings(validated),this.now())) throw new Error('Outside the configured daily schedule.');
     if (!this.connected || !this.compatible || !p || p.kind !== 0 || !this.map) throw new Error('Enter a character in the verified game build first.');
-    if (validated.map !== this.map) throw new Error('Map changed. Choose monsters on the current map before starting.');
+    const respawnOnly=p.dead&&continuing&&automationSettings(validated).respawn.enabled;
+    if (!respawnOnly && validated.map !== this.map) throw new Error('Map changed. Choose monsters on the current map before starting.');
     if ((!p.dead && (p.maxHp <= 0 || p.hp / p.maxHp * 100 <= settings.minHpPercent))
       || (p.dead && (!continuing || !automationSettings(validated).respawn.enabled))) throw new Error('Recover above the HP stop limit before starting.');
     this.advanceMovement();
-    const navigation = this.navigation();
-    if (!navigation) throw new Error(`Verified walkability is not available for ${this.map}.`);
-    if (!navigation.safe(p)) throw new Error('Move onto open ground away from portals before starting.');
+    if(respawnOnly&&this.deaths>automationSettings(validated).respawn.maxDeaths)throw new Error('Death limit reached; waiting for revival.');
+    // A dead character cannot enter the field. Its authorized respawn owner is
+    // admitted here; the alive tick still requires the physical field boundary.
+    if(!respawnOnly){
+      if(!mapAllowed(mapPolicy(validated),this.map) || !insideLockArea(mapPolicy(validated),this.map,p)) throw new Error('Enter the allowed field lock area before starting.');
+      const navigation = this.navigation(validated);
+      if (!navigation) throw new Error(`Verified walkability is not available for ${this.map}.`);
+      if (!navigation.safe(p)) throw new Error('Move onto open ground away from portals before starting.');
+    }
     this.route = null; this.leg = null; this.routeFailures = 0; this.routeStep = validated.route_step;
     this.settings = validated; this.combatConditions.clear();this.automation.reset(); this.loadout.newRun();
     this.pending = null; this.excluded.clear();
@@ -184,7 +195,7 @@ export class BotEngine {
       if (!dead && this.pending.direct && this.pending.approachSince !== null) { this.send({ type: 'stop' }); this.lastAction = this.now(); }
       this.pending = null;
     }
-    if (this.route?.id === id) this.cancelRoute();
+    if (this.route?.id === id) {if(this.route.type==='follow')this.followLostAt??=this.now();this.cancelRoute();}
     this.skillKills.delete(id); this.skillTargets.delete(id); this.foreignTargets.delete(id); this.aggressors.delete(id); this.actors.delete(id);
     if (id === this.playerId && dead && entity) { const alreadyDead=entity.dead;entity.dead=true;entity.hp=0;if(!alreadyDead)this.onDeath(); }
     else { this.entities.delete(id);if(id===this.playerId)this.stop('Character left the field.'); }
@@ -296,7 +307,9 @@ export class BotEngine {
       }
       case 'position': {
         this.motions.delete(e.id); this.interrupted(e.id);
-        const entity = this.entities.get(e.id) ?? this.actors.get(e.id); if (entity) Object.assign(entity, e.position); break;
+        const entity = this.entities.get(e.id) ?? this.actors.get(e.id); if (entity) Object.assign(entity, e.position);
+        if(this.running && e.id===this.playerId && !this.fieldContains(e.position))this.stop('Server correction left the configured field lock area.');
+        break;
       }
       case 'remove': this.removed(e.id, e.dead); break;
       case 'death':
@@ -370,15 +383,22 @@ export class BotEngine {
     if (p.maxHp <= 0 || p.hp / p.maxHp * 100 <= this.settings.minHpPercent) { this.stop('HP reached the stop limit. Recover manually.'); return; }
     if (a.limits.weightPercent) { const stats=this.character.stats; if(stats?.weight===undefined||!stats.maxWeight) { this.stop('Weight is unavailable for the configured weight limit.');return; } if(stats.weight/stats.maxWeight*100>=a.limits.weightPercent) { this.stop('Configured weight limit reached.');return; } }
     const nav = this.navigation();
+    if(!this.running)return;
     if (!nav || !nav.safe(p)) { this.stop('Character left verified walkable ground or entered a portal exclusion.'); return; }
     if (this.awaitsImplicitWalk() && !this.pending?.direct) {
+      // Cancellation holds movement ownership, but cannot extend a named
+      // player's visibility deadline while waiting for its late walk reply.
+      if(a.follow.name){
+        if([...this.actors.values()].some(e=>e.kind===0&&e.name===a.follow.name&&!e.dead))this.followLostAt=null;
+        else {this.followLostAt??=now;if(now-this.followLostAt>=a.follow.lostSeconds*1000){this.stop('Follow target is no longer visible.');return;}}
+      }
       this.reason = 'Waiting for the previous monster approach to acknowledge before another action.'; return;
     }
     this.killedAt = this.killedAt.filter(k => now - k.at < 30000);
     if (this.automation.busy) { this.reason=this.automation.task().label; return; }
     if(this.pending?.type==='attack') {
       const target=this.entities.get(this.pending.id);
-      if(target&&monsterRule(a,target.classId)?.conditions?.length&&!this.eligible(target,now,false)) {
+      if(target&&(!this.fieldContains(target)||monsterRule(a,target.classId)?.conditions?.length&&!this.eligible(target,now,false))) {
         // Stop the owned auto-attack, keeping an unresolved server approach fenced
         // until its walk/stop reply or the existing bounded wait settles it.
         if(!this.motions.has(this.playerId))this.implicitWalk ??= {targetId:this.pending.id,until:now+4000};
@@ -388,7 +408,7 @@ export class BotEngine {
     }
     if(this.route?.type==='attack'||this.route?.type==='skill') {
       const target=this.entities.get(this.route.id!);
-      if(target&&monsterRule(a,target.classId)?.conditions?.length&&!this.eligible(target,now,false)) {
+      if(target&&(!this.fieldContains(target)||monsterRule(a,target.classId)?.conditions?.length&&!this.eligible(target,now,false))) {
         this.cancelRoute();this.reason='Monster conditions no longer permit this approach.';this.note(this.reason);return;
       }
     }
@@ -428,7 +448,7 @@ export class BotEngine {
       if(planned.failure){this.stop(planned.failure);return;}
       if(planned.change){
         if(this.pending||this.route||this.leg||this.loadout.needsStop){
-          if(this.leg?.acceptedUntil===null)this.implicitWalk??={targetId:this.pending?.id??0,until:now+4000};
+          this.fenceUnacknowledgedLeg();
           this.pending=null;this.route=null;this.leg=null;
           this.loadout.requestStop('Waiting for target clear before changing equipment.');
           this.send({type:'stop'});this.lastAction=now;return;
@@ -447,7 +467,6 @@ export class BotEngine {
         this.strategyWait??={id:enemy.id,since:now};
         if(this.strategyWait.id!==enemy.id)this.strategyWait={id:enemy.id,since:now};
         if(now-this.strategyWait.since>=30_000){
-          if(this.leg?.acceptedUntil===null)this.implicitWalk??={targetId:enemy.id,until:now+4000};
           this.cancelRoute();this.excluded.set(enemy.id,now+30_000);this.strategyWait=null;
           this.reason=strategy.reason+' Waited 30 seconds; skipping this actor for 30 seconds.';this.note(this.reason);return;
         }
@@ -505,14 +524,14 @@ export class BotEngine {
     // Keep a chosen pursuit stable; a moving target is replanned after the current leg.
     if (this.route && (this.route.type === 'attack' || this.route.type === 'pickup')) {
       const target = this.route.type === 'attack' ? this.entities.get(this.route.id!) : this.drops.get(this.route.id!);
-      if (!target || (this.route.type === 'attack' && !this.eligible(target as Entity, now, false))) { this.cancelRoute(); return; }
+      if (!target || !this.fieldContains(target) || (this.route.type === 'attack' && !this.eligible(target as Entity, now, false))) { this.cancelRoute(); return; }
       if (distance(cell(target), this.route.destination) !== 0) { this.route.destination = cell(target); this.route.cells = []; }
       this.routeTick(p, now); return;
     }
     if (now - this.lastAction < ACTION_DELAY) return;
     const available = (id: number) => (this.excluded.get(id) ?? 0) <= now;
     if (this.settings.loot) {
-      const candidates = [...this.drops.values()].filter(d => available(d.id) && distance(p, d) <= this.settings.radius
+      const candidates = [...this.drops.values()].filter(d => this.fieldContains(d) && available(d.id) && distance(p, d) <= this.settings.radius
         && acceptsLoot(a,d.itemId) && (a.loot.ownership === 'all' || this.killedAt.some(k => distance(k, d) <= 3 && (this.dropCreatedAt.get(d.id) ?? -Infinity) >= k.at)));
       const choice = this.bestRoute(p, candidates, d=>lootRule(a,d.itemId)?.priority ?? 0);
       if (choice) { this.pursue('pickup', choice.target.id, cell(choice.target), choice.cells); this.routeTick(p, now); return; }
@@ -536,15 +555,17 @@ export class BotEngine {
       this.routeTick(p, now);
     } else this.reason = 'Waiting for a reachable matching monster.';
   }
+  private fieldContains(p:Position):boolean {const policy=mapPolicy(this.settings);return mapAllowed(policy,this.map)&&insideLockArea(policy,this.map,p);}
   private eligible(e: Entity, now: number, acquiring = true): boolean {
     const automation=automationSettings(this.settings);const conditions=monsterRule(automation,e.classId)?.conditions;
     const observations=conditions?.length?this.actorObservation(conditions,this.currentTargetId,e.id):undefined;
     if(conditions?.length&&(this.combatConditions.has(e.id)||this.combatConditions.size<32))this.combatConditions.set(e.id,{rule:`Monster ${e.classId} · actor ${e.id}`,conditions:conditions.map(condition=>evaluateActorPredicate(condition,observations))});
-    return e.kind === 1 && !e.dead && e.hp > 0 && acceptsMonster(automation,e,this.player!,this.settings.targets,this.aggressors.has(e.id),observations)
+    return this.fieldContains(e) && e.kind === 1 && !e.dead && e.hp > 0 && acceptsMonster(automation,e,this.player!,this.settings.targets,this.aggressors.has(e.id),observations)
       && (!acquiring || distance(this.player!, e) <= this.settings.radius) && !this.foreignTargets.has(e.id)
       && (this.excluded.get(e.id) ?? 0) <= now;
   }
   private plan(from: Position, to: Position, range: number, goal: 'walk' | 'attack' | 'cast' = 'walk'): Position[] | null {
+    if(!this.fieldContains(to))return null;
     return this.navigation()?.plan(cell(from), cell(to), {
       range, goal, maxDistance: this.settings.attackRouteMaxPathDistance, avoidWalls: this.settings.route_avoidWalls,
     }) ?? null;
@@ -630,9 +651,14 @@ export class BotEngine {
     if (id === this.playerId) { this.leg = null; if (this.route) this.route.cells = []; }
   }
   private cancelRoute(): void {
-    if(this.route?.type==='skill'&&this.leg?.acceptedUntil===null)this.implicitWalk??={targetId:this.route.id??0,until:this.now()+4000};
+    this.fenceUnacknowledgedLeg();
     if (this.leg && this.running) { this.send({ type: 'stop' }); this.lastAction = this.now(); }
     this.leg = null; this.route = null;
+  }
+  private fenceUnacknowledgedLeg(): void {
+    // Attack replies have no request identity and cannot confirm an explicit
+    // Walk. Only a direct monster-click approach owns an attack-matchable fence.
+    if(this.leg?.acceptedUntil===null)this.implicitWalk??={targetId:null,until:this.now()+4000};
   }
   private advanceMovement(): void {
     const now = this.now();
@@ -644,7 +670,7 @@ export class BotEngine {
   }
   private failRoute(): void {
     if (!this.route) return;
-    if(this.route.type==='skill'&&this.leg?.acceptedUntil===null)this.implicitWalk??={targetId:this.route.id??0,until:this.now()+4000};
+    if(this.route.type==='skill')this.fenceUnacknowledgedLeg();
     if (this.leg) this.navigator?.temporaryBlocked(this.leg.destination, this.now() + 30000);
     this.leg = null; this.route.cells = []; this.routeFailures++;
     this.routeStep = Math.max(1, Math.floor(this.routeStep / 2)); this.lastAction = this.now();
@@ -655,6 +681,7 @@ export class BotEngine {
     const route = this.route;
     const nav = this.navigation();
     if (!route || !nav) return;
+    if(!this.fieldContains(route.destination)){this.cancelRoute();this.reason='Destination left the configured field lock area.';return;}
     const navigationTask = !['attack','skill','pickup'].includes(route.type);
     const limit = navigationTask ? this.settings.route_randomWalk_maxRouteTime : this.settings.attackMaxRouteTime;
     if (route.since !== null && now - route.since >= limit * 1000) {
@@ -729,16 +756,22 @@ export class BotEngine {
     this.send({ type: 'walk', destination }); this.lastAction = now;
     this.reason = `${route.type === 'search' ? 'Searching' : route.type === 'attack'||route.type==='skill' ? 'Approaching monster' : 'Approaching loot'} · walking to ${destination.x}, ${destination.y}.`;
   }
+  /** Capture finite budgets at explicit Start without admitting field actions. */
+  prepareRequestedRun(input:Settings):void {
+    if(this.running||this.automation.pendingAction)throw new Error('Stop the current run and wait for its action before requesting another.');
+    this.settings=validateSettings(input);
+    // Entry travel is part of the requested run, including deaths and elapsed time.
+    // This does not release movement/resource fences or authorize field actions.
+    this.deaths=0;this.runStarted=this.now();this.runKills=this.kills;this.runPickups=this.looted;this.waypointIndex=0;
+  }
   /** Resume an already requested run without resetting its finite budgets. */
   resumeRequested(input: Settings = this.settings): void {
     if (this.running || !this.idleForActions()) throw new Error('Wait for movement and actions to finish.');
     const previous = { deaths: this.deaths, started: this.runStarted, kills: this.runKills,
       pickups: this.runPickups, waypoint: this.waypointIndex };
     this.start(input, true);
-    if (previous.started) {
-      this.deaths = previous.deaths; this.runStarted = previous.started;
-      this.runKills = previous.kills; this.runPickups = previous.pickups; this.waypointIndex = previous.waypoint;
-    }
+    this.deaths = previous.deaths;
+    if(previous.started){this.runStarted = previous.started;this.runKills = previous.kills;this.runPickups = previous.pickups;this.waypointIndex = previous.waypoint;}
     this.reason = 'Resumed the requested run.'; this.note(this.reason);
   }
   resumeAfterReturn(input: Settings = this.settings): void {
@@ -823,6 +856,7 @@ export class BotEngine {
       this.followLostAt??=now;if(now-this.followLostAt>=follow.lostSeconds*1000)this.stop('Follow target is no longer visible.');
       else this.reason='Waiting for the named follow target.';return;
     }
+    if(!this.fieldContains(actor)){if(this.route?.type==='follow')this.cancelRoute();this.reason='Follow target is outside the field lock area.';return;}
     this.followLostAt=null;
     if(distance(p,actor)<=follow.distance) {if(this.route?.type==='follow')this.cancelRoute();this.reason='Within follow distance.';return;}
     if(!this.route||this.route.type!=='follow')this.route={type:'follow',id:actor.id,destination:cell(actor),cells:[],since:null};
@@ -833,6 +867,7 @@ export class BotEngine {
     const travel=automationSettings(this.settings).travel;
     if(this.waypointIndex>=travel.waypoints.length) {if(travel.loop)this.waypointIndex=0;else {this.reason='Waypoint route completed.';return;}}
     const waypoint=travel.waypoints[this.waypointIndex]!;
+    if(!this.fieldContains(waypoint)){this.stop('Waypoint is outside the field lock area.');return;}
     if(waypoint.map!==this.map){this.stop('Next waypoint is on another map; use the travel workflow.');return;}
     if(!this.route||this.route.type!=='waypoint')this.route={type:'waypoint',destination:{x:waypoint.x,y:waypoint.y},cells:[],since:null};
     this.routeTick(p,now);

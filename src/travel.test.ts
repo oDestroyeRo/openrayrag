@@ -1,3 +1,4 @@
+import { DEFAULT_MAP_POLICY } from './map-policy';
 import { expect, it } from 'vitest';
 import { distance, searchGrid, type PortalArea, type WalkGrid } from './navigation';
 import { type Position } from './protocol';
@@ -216,4 +217,52 @@ it('invalidates cached paths and ACK corridors if an evicted custom grid snapsho
   blocked = true;
   expect(planner.planPortalApproach('a',from,selected)).toBeNull();
   expect(planner.travelNavigator('a',route)).toBeNull();
+});
+
+it('keeps complete default TravelStep arrays exactly equivalent to explicit unrestricted legacy policy',()=>{
+  const planner=new TravelPlanner();
+  for(const [from,p,to]of [['prt_fild08',{x:169,y:193},'prontera'],['prt_fild08',{x:169,y:193},'payon'],['moc_fild02',{x:77,y:338},'morocc']] as const){
+    const expected=planner.routeBetweenMaps(from,p,to);expect(planner.routeBetweenMaps(from,p,to,true,DEFAULT_MAP_POLICY)).toEqual(expected);
+  }
+});
+it('filters denied destinations/intermediates with deny precedence and departure-only forbidden origins',()=>{
+  const edges=[edge('a','b',2,3),edge('b','d',7,3),edge('a','c',7,3),edge('c','d',7,3),edge('b','a',2,5)];const planner=fixture(edges);
+  const policy={...DEFAULT_MAP_POLICY,allow:['b','c','d'],deny:['b']};
+  expect(planner.routeBetweenMaps('a',{x:1,y:3},'d',false,policy)!.map(s=>s.portal.toMap)).toEqual(['c','d']);
+  expect(planner.routeBetweenMaps('a',{x:1,y:3},'a',false,policy)).toBeNull();
+  expect(planner.routeBetweenMaps('a',{x:1,y:3},'b',false,policy)).toBeNull();
+  expect(planner.routeBetweenMaps('a',{x:1,y:3},'d',false,{...policy,deny:['b','c']})).toBeNull();
+});
+it('weighted nonnegative departing-map penalties can choose a longer sequence while legacy remains fewest-crossings',()=>{
+  const edges=[edge('a','b',2,3),edge('b','d',7,3),edge('a','c',7,3),edge('c','e',7,3),edge('e','d',7,3)];const planner=fixture(edges);
+  const policy={...DEFAULT_MAP_POLICY,mode:'weighted' as const,penalties:[{map:'b',cost:2000}]};
+  expect(planner.routeBetweenMaps('a',{x:1,y:3},'d',false,policy)!.map(s=>s.portal.toMap)).toEqual(['c','e','d']);
+  expect(planner.routeBetweenMaps('a',{x:1,y:3},'d',false,{...policy,mode:'legacy'})!.map(s=>s.portal.toMap)).toEqual(['b','d']);
+  expect(planner.routeBetweenMaps('a',{x:1,y:3},'d',false,{...policy,deny:['c']})!.map(s=>s.portal.toMap)).toEqual(['b','d']);
+});
+it('weighted search includes verified terminal escape cost before deciding the winning arrival',()=>{
+  const first=edge('a','b',2,3,1,3),second=edge('a','b',2,5,6,3),planner=fixture([first,second],()=>false,{b:[{x:1,y:3,halfWidth:2,halfHeight:2}]});
+  expect(planner.routeBetweenMaps('a',{x:1,y:3},'b',false)![0]!.portal.id).toBe(first.id);
+  const result=planner.routeBetweenMaps('a',{x:1,y:3},'b',false,{...DEFAULT_MAP_POLICY,mode:'weighted'})!;
+  expect(result[0]!.portal.id).toBe(second.id);expect(result[0]!.arrivalEscape).toEqual([second.arrival]);
+});
+it('weighted labels retain a costlier low-hop arrival when the cheaper label cannot finish under the64-hop cap',()=>{
+  const edges=[edge('a','expensive',7,3),edge('expensive','hub',7,3),edge('a','p0',2,3)];
+  for(let i=0;i<60;i++)edges.push(edge(`p${i}`,`p${i+1}`,7,3));
+  edges.push(edge('p60','hub',7,3),edge('hub','d',7,3),edge('hub','x',2,5),edge('x','y',7,3),edge('y','d',7,3));
+  const planner=fixture(edges,(map,p)=>map==='hub'&&p.x===4),policy={...DEFAULT_MAP_POLICY,mode:'weighted' as const,penalties:[{map:'expensive',cost:20000}]};
+  expect(planner.routeBetweenMaps('a',{x:1,y:3},'d',false,policy)!.map(s=>s.portal.toMap)).toEqual(['expensive','hub','x','y','d']);
+});
+it('weighted cycles and warmed physical caches cannot override a changed exclusion policy',()=>{
+  const edges=[edge('a','b',2,3),edge('b','a',2,5),edge('b','d',7,3),edge('a','c',7,3),edge('c','d',7,3)],planner=fixture(edges),policy={...DEFAULT_MAP_POLICY,mode:'weighted' as const};
+  const first=planner.routeBetweenMaps('a',{x:1,y:3},'d',false,policy)!;expect(first.length).toBeLessThan(4);
+  const denied=first[0]!.portal.toMap;expect(planner.routeBetweenMaps('a',{x:1,y:3},'d',false,{...policy,deny:[denied]})!.some(s=>s.portal.toMap===denied)).toBe(false);
+  expect(planner.routeBetweenMaps('a',{x:1,y:3},'d',false,policy)).toEqual(first);
+});
+it('uses conservative fractional bounds without rounding the winning actual weighted score',()=>{
+  const edges=[edge('a','b',2,3),edge('b','d',7,3),edge('a','c',2,5),edge('c','d',7,3)],planner=fixture(edges);
+  for(const [b,c] of [[.9999,.0001],[1000000,999999.9999],[.0001,.9999]]){
+    const policy={...DEFAULT_MAP_POLICY,mode:'weighted' as const,penalties:[{map:'b',cost:b!},{map:'c',cost:c!}]};
+    expect(planner.routeBetweenMaps('a',{x:1,y:4},'d',false,policy)![0]!.portal.toMap).toBe(b!<c!?'b':'c');
+  }
 });
