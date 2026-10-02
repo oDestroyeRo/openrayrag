@@ -1,4 +1,5 @@
 import { ObservedThreats, type ThreatSnapshot } from './observed-threats';
+import { CastAvailability, type ObservedCast } from './cast-availability';
 import { matchesSkillExecution } from './skill-execution';
 import { PartyEngagements, type PartyEngagementSnapshot } from './party-engagement';
 import type { PartyActorBinding } from './party-actors';
@@ -8,7 +9,7 @@ import { AttackStrategyPolicy, engagementIdentity, type StrategyChoice, type Att
 import { castReadiness, skillAfterCastSeconds, CAST_PREREQUISITES, BLIND_CONDITION, AUTOMATIC_ATTACK_SKILLS, MANUAL_GROUND_SKILL } from './cast-policy';
 import { fieldGrid, insideLockArea, mapAllowed, mapPolicy, policyIdentity } from './map-policy';
 import { ActorObservations, type ActorObservationSnapshot, type ActorPredicate, type PredicateTrace, type PublishedConditionReport, evaluateActorPredicate, publishConditionReports } from './actor-observations';
-import { type Drop, type Entity, type GameEvent, type Position, type Walk } from './protocol';
+import { type Drop, type Entity, type GameEvent, type Position, type Walk, type LookAction } from './protocol';
 
 import { walkDuration, walkPosition } from './movement';
 import { GridNavigator, routeSegment, searchGrid, distance, minimumRouteCost, type NavigationSummary, type WalkGrid } from './navigation';
@@ -37,8 +38,8 @@ export interface Snapshot {
   manualTarget:ManualTargetSnapshot; partyEngagement:PartyEngagementSnapshot;
   loadout: LoadoutSnapshot; character: CharacterSnapshot; actors: Entity[]; task: AutomationTask; elapsedSeconds: number; deaths: number; runIntent: boolean; lootStats: Array<{itemId:number;count:number}>; actionResult: ActionResult;
 }
-export type Action = { type: 'attack' | 'pickup'; id: number } | { type: 'stop' } | { type: 'walk'; destination: Position } | ExpandedAction;
-export const OWN_CAST_WAIT_REASON = 'Waiting for the observed own cast to settle. Some triggered results are ambiguous; after casting finishes, walking in game can confirm readiness.';
+export type Action = { type: 'attack' | 'pickup'; id: number } | { type: 'stop' } | { type: 'walk'; destination: Position } | LookAction | ExpandedAction;
+export const OWN_CAST_WAIT_REASON = 'Waiting for the observed own cast to settle. Some triggered results are ambiguous; bounded stationary recovery checks for authoritative availability.';
 // Pinned equipment/card procs can emit these execution shapes with indirect=false.
 // A queued proc can survive equipment removal, so current gear cannot rule it out.
 function unmarkedProcCanMatch(action:Extract<ExpandedAction,{type:'skill'}>):boolean {
@@ -108,7 +109,9 @@ export class BotEngine {
   readonly character = new CharacterState();
   readonly observations: ActorObservations;
   private readonly threats = new ObservedThreats();
-  private observedOwnCast: { identity: ActionIdentity; action: Extract<ExpandedAction, { type: 'skill' }> } | null = null;
+  private observedOwnCast: ObservedCast & { action: Extract<ExpandedAction, { type: 'skill' }> } | null = null;
+  readonly castAvailability:CastAvailability;
+  private castRevision=0;
   private readonly strategies=new AttackStrategyPolicy();
   private strategyWait:{id:number;since:number}|null=null;
   private readonly automation: AutomationScheduler;
@@ -126,7 +129,7 @@ export class BotEngine {
 
   constructor(private readonly send: (action: Action) => void, private readonly now = Date.now,
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid,
-    private readonly partyBinding: (entityId: number) => PartyActorBinding | null = () => null) { this.automation = new AutomationScheduler(a=>this.send(a),this.now,a=>this.actionIdentity(a)); this.observations=new ActorObservations(this.now);this.loadout=new LoadoutPolicy(this.now); }
+    private readonly partyBinding: (entityId: number) => PartyActorBinding | null = () => null) { this.castAvailability=new CastAvailability(this.now);this.automation = new AutomationScheduler(a=>this.send(a),this.now,a=>this.actionIdentity(a)); this.observations=new ActorObservations(this.now);this.loadout=new LoadoutPolicy(this.now); }
   private navigation(settings: Settings = this.settings): GridNavigator | null {
     const policy=mapPolicy(settings), identity=`${this.map}:${policyIdentity(policy)}`;
     if (this.navigationMap !== identity) {
@@ -163,11 +166,13 @@ export class BotEngine {
     this.log.length = Math.min(50, this.log.length);
   }
   connect(compatible: boolean): void {
+    this.castAvailability.connectionChanged();
     this.resetWorld(); this.connected = true; this.compatible = compatible;
     this.reason = compatible ? 'Sign in and enter a character to prepare the bot.' : 'This game build is not verified.';
     this.note(this.reason);
   }
   disconnect(): void {
+    this.castAvailability.connectionChanged();
     this.running = false; this.connected = false; this.compatible = false;
     this.resetWorld(); this.reason = 'Game disconnected. Sign in again, then press Start.'; this.note(this.reason);
   }
@@ -253,30 +258,46 @@ export class BotEngine {
   }
   /** A cast timer or adjustment cannot prove completion. Initial unknown state
    * creates no fence; observed casts require source-backed availability evidence. */
-  observedOwnCastSettled(): boolean { return this.observedOwnCast === null; }
+  observedOwnCastSettled(): boolean { return this.observedOwnCast === null&&this.castAvailability.cooldownSettled(); }
+  get observedCast():ObservedCast|null {return this.observedOwnCast?{...this.observedOwnCast,identity:{...this.observedOwnCast.identity}}:null;}
+  stationaryForCastAvailability():boolean {
+    this.advanceMovement();
+    const feature=this.automation.pendingAction;
+    return !this.manualTargetOwned&&!this.pending&&!this.route&&!this.leg&&!this.awaitsImplicitWalk()&&!this.ownMotion()
+      &&!this.loadout.blocked&&(!feature||feature.type==='skill'||feature.type==='useItem');
+  }
   private observeOwnCast(event: GameEvent | FeatureEvent): void {
     const identity = this.actorActionIdentity();
+    this.castAvailability.observe(event,this.player);
     if (this.observedOwnCast && !sameActionIdentity(this.observedOwnCast.identity, identity)) this.observedOwnCast = null;
-    if (!identity) return;
+    if (!identity){this.castAvailability.castChanged(this.observedOwnCast);return;}
     if (event.type === 'castStart' && event.id === identity.selfId) {
       const skill = { type: 'skill' as const, skillId: event.skillId, level: event.level };
       const action: Extract<ExpandedAction, { type: 'skill' }> = event.targetPosition
         ? { ...skill, mode: 'ground', position: { ...event.targetPosition } }
         : event.target !== undefined && event.target >= 0 && event.target !== identity.selfId
           ? { ...skill, mode: 'target', target: event.target } : { ...skill, mode: 'self' };
-      this.observedOwnCast = { identity, action };
+      this.observedOwnCast = { identity, action,revision:++this.castRevision,capturedAt:this.now(),remainingSeconds:event.remainingSeconds,
+        facing:event.facing,ambiguous:unmarkedProcCanMatch(action) };
+      this.castAvailability.capture(this.observedOwnCast);
+    } else if(event.type==='look'&&event.id===identity.selfId&&event.head!==0&&this.castAvailability.nonVending) {
+      // Normal release FIFO places older emitted Look before a newer CastStart.
+      // An accepted non-center own Look is availability, not a skill/item ACK.
+      this.observedOwnCast=null;this.castAvailability.available();
     } else if (this.observedOwnCast && (event.type === 'castStop' && event.id === identity.selfId
       // StartWalk is emitted only after TryMove admits movement; it does not ACK a resource owner.
       || event.type === 'walk' && event.id === identity.selfId
       // At the pinned source, only CounterAttack.Process emits ResetMotion, after FinishCasting.
       || event.type === 'resetMotion' && event.id === identity.selfId && this.observedOwnCast.action.skillId === 31 && this.observedOwnCast.action.mode === 'self'
       || !unmarkedProcCanMatch(this.observedOwnCast.action) && matchesSkillExecution(this.observedOwnCast.action, event, identity.selfId))) this.observedOwnCast = null;
+    this.castAvailability.castChanged(this.observedOwnCast);
   }
   private resetWorld(preserveCharacter=false): void {
     if(this.manualTask)this.finishManual('failed','Manual command ended after a world change.',false);
     if(!preserveCharacter){this.manualAttackFence=null;this.manualWalkFence=false;this.manualRetiredMovement=false;this.manualReceiptOwner=null;}
     this.threats.reset();
     this.observedOwnCast = null;
+    this.castAvailability.castChanged(null);
     this.observations.reset();this.strategies.reset();this.strategyWait=null;this.serverTargetId=null;this.combatConditions.clear();this.revivableActors.clear();
     this.loadout.reset(preserveCharacter);
     if(!preserveCharacter)this.respawnRefreshPending=false;
@@ -572,7 +593,7 @@ export class BotEngine {
     if(!this.observedOwnCastSettled()) {
       this.expirePending(now);
       if(this.route)this.routeTick(p,now,true);
-      this.reason=OWN_CAST_WAIT_REASON;return;
+      this.reason=this.observedOwnCast?this.castAvailability.reason||OWN_CAST_WAIT_REASON:'Waiting for stationary input cooldown to settle.';return;
     }
     if (this.automation.busy) { this.reason=this.automation.task().label; return; }
     if(this.pending?.type==='attack') {

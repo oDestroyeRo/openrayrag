@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { isOfficialGameplayCommand } from './official-input';
+import { isOfficialGameplayCommand, isOfficialLookCommand, couldOwnOfficialGameplay } from './official-input';
 
 describe('pinned official outgoing command ownership', () => {
+  it('classifies only the Look opcode for manual grace without inspecting or retaining its private body',()=>{
+    const bytes=new Uint8Array([3,13,255,255,7]);
+    expect(isOfficialLookCommand(bytes.subarray(1,4))).toBe(true);expect(couldOwnOfficialGameplay(bytes.subarray(1,4))).toBe(true);
+    expect(isOfficialLookCommand(new DataView(bytes.buffer,1,2))).toBe(true);
+    for(const data of [bytes,new Uint8Array(),new Uint8Array([7]),'13',{},new Blob([bytes])])expect(isOfficialLookCommand(data)).toBe(false);
+  });
   it.each([
     ['movement', [7,8,9,19,21,41,110,111]], ['combat', [11,14,29,33,104]],
     ['character and resources', [45,47,48,57,58,59,62,63,90,94,97,112]],

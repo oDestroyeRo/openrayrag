@@ -1,4 +1,4 @@
-import { BitReader } from './binary';
+import { BitReader, BitWriter } from './binary';
 import {actorId,optionalWireActorId} from './actor-identity';
 import { decodeFeatures, FEATURE_OP } from './protocol-feature';
 import type { FeatureEvent } from './protocol-feature';
@@ -14,12 +14,13 @@ export const SOCKET_URL = 'wss://gamesea01.rayrag.com/ws';
 export const VERIFIED_BUILD = 'Build_2569-09-01-01-55';
 export const OP = {
   enter: 3, spawn: 6, walk: 7, move: 10, attack: 11, remove: 15,
-  clear: 16, map: 18, stop: 19, stopImmediate: 20, hit: 23,
+  look:13, clear: 16, map: 18, stop: 19, stopImmediate: 20, hit: 23,
   partyAffiliation: 103, death: 36, heal: 37, resurrection: 46, tracking: 60, drop: 81, pickup: 82,
   ...FEATURE_OP,
 } as const;
 
 export interface Position { x: number; y: number }
+export interface LookAction {type:'look';direction:number;head:number}
 export interface Entity extends Position {
   id: number; classId: number; name: string; kind: number; level: number;
   hp: number; maxHp: number; dead: boolean;
@@ -29,6 +30,7 @@ export interface Entity extends Position {
 export interface Walk { origin: Position; cells: Position[]; secondsPerCell: number; firstSeconds: number; locked: boolean }
 export interface Drop extends Position { id: number; itemId: number; count: number; isNew: boolean }
 export type GameEvent = FeatureEvent | SocialEvent | MemoEvent
+  | {type:'look';id:number;lookAt:Position;direction:number;head:number}
   | { type: 'partyAffiliation'; id: number; partyId: number; partyName: string }
   | { type: 'enter'; id: number; map: string }
   | { type: 'map'; map: string }
@@ -190,6 +192,12 @@ export function decode(data: Uint8Array): GameEvent[] {
   const memo = decodeMemo(data);
   if (memo !== null) return memo;
   switch (opcode) {
+    case OP.look: {
+      if(data.length!==11)throw new Error('Invalid Look packet length');
+      const id=actorId(r.i32()),lookAt={x:r.i16(),y:r.i16()},direction=r.u8(),head=r.u8();
+      if(direction>7||head>2)throw new Error('Invalid Look facing');
+      return [{type:'look',id,lookAt,direction,head}];
+    }
     case OP.partyAffiliation: {
       const party = new BitReader(data);party.u8();const id = actorId(party.i32());const joined=party.u8();
       if(joined!==0&&joined!==1)throw new Error('Invalid party affiliation');
@@ -273,4 +281,12 @@ export function walkCommand(destination: Position): Uint8Array<ArrayBuffer> {
   const result = new Uint8Array(5); result[0] = OP.walk;
   const view = new DataView(result.buffer); view.setInt16(1, x, true); view.setInt16(3, y, true);
   return result;
+}
+
+export function lookCommand(action:LookAction):Uint8Array<ArrayBuffer> {
+  const fields=['type','direction','head'];
+  if(typeof action!=='object'||action===null||Array.isArray(action)||!fields.every(key=>Object.hasOwn(action,key))
+    ||Object.keys(action).some(key=>!fields.includes(key))||action.type!=='look'||!Number.isInteger(action.direction)||action.direction<0||action.direction>7
+    ||!Number.isInteger(action.head)||action.head<0||action.head>2)throw new Error('Invalid Look action');
+  return new BitWriter().u8(OP.look).u8(action.direction).u8(action.head).finish();
 }

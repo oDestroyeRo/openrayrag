@@ -228,6 +228,7 @@ export class CompanionController {
 
   }
   stop(reason = 'Stopped by you.'): void {
+    this.engine.castAvailability.stop(reason);
     this.supply.stop(reason);this.supplyIntent=null;
     this.requestedSettings = null; this.blockedReason = ''; this.waitingReason = '';
     this.yieldUntil = 0; this.retryAt = 0; this.retries = 0;
@@ -257,9 +258,13 @@ export class CompanionController {
     }
   }
   manualCommand():void {
+    this.engine.castAvailability.cancel('Official game input stopped automatic cast recovery.');
     this.quietUntil=Math.max(this.quietUntil,this.now()+2_000);
     this.manualInput();
     if(this.active)this.pause('Yielding to an official game action.',2_000);
+  }
+  officialLook():void {
+    this.manualInput();this.engine.castAvailability.cancel('Official Look input stopped automatic cast recovery.');
   }
   heartbeat(healthy: boolean): void {
     this.heartbeatHealthy = healthy;
@@ -349,6 +354,7 @@ export class CompanionController {
     this.runKills = this.engine.kills; this.runPickups = this.engine.looted;
     this.supplyStorageFull=null;this.supplyIntent=null;this.supplyCloseSent=false;this.supplyReturnApproach=false;
     if (escapeGuard) this.escape.restoreOnReconnect(settings, escapeGuard, this.escapeContext());
+    this.engine.castAvailability.allowRun();
     this.tick();
   }
 
@@ -621,6 +627,7 @@ export class CompanionController {
     this.travel.observe(events);
     for (const event of events) if (event.type === 'inventory' && event.cart !== undefined) this.world.replaceCart(event.cart);
     for (const event of worldEvents) {
+      this.engine.castAvailability.observeWorld(event);
       if(event.type==='partyJoined'||event.type==='partyLeft')this.engine.partyMembershipChanged();
       else if(event.type==='partyMember')this.engine.partyMembershipChanged(event.member.memberId);
       else if(event.type==='partyRemove'||event.type==='partyMap')this.engine.partyMembershipChanged(event.memberId);
@@ -1067,7 +1074,7 @@ export class CompanionController {
     this.social.tick();
     this.memo.tick(this.memoContext());
     this.socket.tick(this.socketContext());
-    if(this.socket.busy)return;
+    if(this.socket.busy){this.engine.castAvailability.cancel('Manual socket ownership stopped automatic cast recovery.');return;}
     this.escape.update(this.escapeContext());
     if (this.active && this.lastTick && now - this.lastTick > 5_000) {
       this.lastTick = now; this.pause('Waiting for fresh state after the Mac or game paused.', 1_000); return;
@@ -1095,6 +1102,7 @@ export class CompanionController {
           ? 'Waiting for a verified game build and protocol.' : 'Waiting for a fresh server update.'); return;
       }
     }
+    this.castAvailabilityTick();
     if(now<this.yieldUntil){
       // Poll receipts, movement and absolute deadlines while held keys keep
       // extending the grace period. The engine's clock must not look asleep.
@@ -1176,6 +1184,26 @@ export class CompanionController {
       }
     }
     this.resumeRun();
+  }
+  private castAvailabilityTick():void {
+    const e=this.engine,cast=e.observedCast;if(!cast)return;
+    // Retained resource and physical clocks run before escape/death early returns.
+    e.tick(false);this.captureActionFailure();this.syncWorkflowOwner();
+    const feature=e.pendingFeatureAction;
+    const pendingResource=this.pending?.engineSequence!==undefined&&['skill','useItem'].includes(this.pending.action.type);
+    const exclusive=!this.socket.busy&&!this.memo.blocked&&!this.social.busy&&!this.service.active&&!this.travel.active
+      &&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)
+      &&(!this.pending||pendingResource)&&!this.workflowOutstanding&&!this.unresolvedWorld&&!this.supply.ownsField&&!this.supply.uncertain
+      &&!this.escape.sent&&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture
+      &&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending&&this.movementSettled()
+      &&e.stationaryForCastAvailability()&&(!feature||feature.type==='skill'||feature.type==='useItem');
+    const ready=this.heartbeatHealthy&&e.connected&&e.compatible&&!!e.player&&!e.player.dead&&e.player.hp>0
+      &&e.actorActionIdentity()!==null&&this.now()>=this.lastFrame&&this.now()-this.lastFrame<=15_000
+      &&this.now()>=this.yieldUntil&&this.now()>=this.fencedUntil;
+    const action=e.castAvailability.take({cast:e.observedCast,requested:this.runRequested,ready,exclusive,
+      reason:'Another command owner stopped automatic stationary cast recovery.'});
+    if(action)try {this.transport(action);} catch {e.castAvailability.cancel('Stationary availability send was uncertain. Waiting for authoritative availability.');}
+    if(e.observedCast&&e.castAvailability.reason){this.waitingReason=e.castAvailability.reason;e.reason=this.waitingReason;}
   }
   snapshot(): CompanionSnapshot {
     const snapshot = this.engine.snapshot();

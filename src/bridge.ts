@@ -1,9 +1,9 @@
 import type { DeathRecoveryGuard } from './death-recovery';
 import { MaintenanceLease } from './maintenance';
 import { socketCommand } from './socket-protocol';
-import { couldOwnOfficialGameplay, isOfficialGameplayCommand } from './official-input';
+import { couldOwnOfficialGameplay, isOfficialGameplayCommand, isOfficialLookCommand } from './official-input';
 import { type Settings } from './engine';
-import { command, walkCommand, decode, OP, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
+import { command, walkCommand, lookCommand, decode, OP, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
 import { featureCommand, validateExpandedAction } from './protocol-feature';
 import { worldCommand, validateWorldAction } from './world-protocol';
 import { socialCommand } from './social-protocol';
@@ -60,7 +60,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   const controller = new CompanionController(action => {
     maintenance.assertDispatch();
     if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
-    const packet = action.type === 'walk' ? walkCommand(action.destination)
+    const packet = action.type === 'look'?lookCommand(action):action.type === 'walk' ? walkCommand(action.destination)
       : action.type === 'attack' || action.type === 'pickup' || action.type === 'stop'
         ? command(action.type, 'id' in action ? action.id : undefined)
         : (() => {
@@ -159,6 +159,10 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
         officialRevision++;officialUncertain=true;
         if(officialOwners.size<32||officialOwners.has(this))officialOwners.add(this);else officialOwnerOverflow=true;
         mutation();
+      }
+      if (active === this && this.readyState === NativeSocket.OPEN && engine.connected && engine.compatible && page.buildUrl === VERIFIED_BUILD
+        &&engine.actorActionIdentity()&&isOfficialLookCommand(data)) {
+        try {controller.officialLook();publish();} catch { /* Never prevent or replay the official send. */ }
       }
       if (active === this && this.readyState === NativeSocket.OPEN && engine.connected && engine.compatible && page.buildUrl === VERIFIED_BUILD
         && engine.actorActionIdentity(undefined,true) && isOfficialGameplayCommand(data)) {

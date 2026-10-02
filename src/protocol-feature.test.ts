@@ -181,9 +181,9 @@ describe('normal expanded client commands', () => {
 describe('source actor cast and owner target packets',()=>{
   it('decodes target and area casts without treating them as skill results',()=>{
     const target=new Fixture().u8(24).i32(123).i32(-1).u8(20).u8(5).u8(7).position(10,20).f32(3.5).u8(15).finish();
-    expect(decode(target)).toEqual([{type:'castStart',id:123,target:-1,skillId:20,level:5,position:{x:10,y:20},remainingSeconds:3.5,flags:15}]);
+    expect(decode(target)).toEqual([{type:'castStart',id:123,target:-1,skillId:20,level:5,facing:7,position:{x:10,y:20},remainingSeconds:3.5,flags:15}]);
     const area=new Fixture().u8(25).i32(123).position(30,40).u8(20).u8(5).u8(9).u8(0).position(10,20).f32(3.5).u8(3).finish();
-    expect(decode(area)).toEqual([{type:'castStart',id:123,targetPosition:{x:30,y:40},size:9,skillId:20,level:5,position:{x:10,y:20},remainingSeconds:3.5,flags:3}]);
+    expect(decode(area)).toEqual([{type:'castStart',id:123,targetPosition:{x:30,y:40},size:9,skillId:20,level:5,facing:0,position:{x:10,y:20},remainingSeconds:3.5,flags:3}]);
   });
   it('decodes signed cast-time deltas, stop and authoritative owner target clear',()=>{
     expect(decode(new Fixture().u8(26).i32(123).f32(-1.5).finish())).toEqual([{type:'castExtend',id:123,deltaSeconds:-1.5}]);
