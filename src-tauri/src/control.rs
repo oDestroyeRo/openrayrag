@@ -751,6 +751,44 @@ fn validate_social(value: &Value) -> Validation {
     Ok(())
 }
 
+fn validate_refine(value: &Value, preview: bool) -> Validation {
+    let fields = if preview {
+        vec![
+            "targetBagId",
+            "catalystBagId",
+            "policy",
+            "maxSpend",
+            "minZeny",
+        ]
+    } else {
+        vec![
+            "targetBagId",
+            "catalystBagId",
+            "policy",
+            "maxSpend",
+            "minZeny",
+            "previewToken",
+        ]
+    };
+    let request = object(value, &fields)?;
+    integer(request, "targetBagId", 1, 2_147_483_647)?;
+    integer(request, "catalystBagId", 0, 0)?;
+    integer(request, "maxSpend", 0, 2_000_000_000)?;
+    integer(request, "minZeny", 0, 2_147_483_647)?;
+    crate::automation::validate_manual_protection_policy(field(request, "policy")?)?;
+    if !preview {
+        let token = string(request, "previewToken")?;
+        if token.len() != 32
+            || !token
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
 fn validate_socket(request: &Value, commit: bool) -> Validation {
     let keys = if commit {
         vec!["targetBagId", "cardBagId", "previewToken", "policy"]
@@ -915,6 +953,20 @@ pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
         "memo" => validate_memo(request),
         "socketPreview" => validate_socket(request, false),
         "socket" => validate_socket(request, true),
+        "refinePreview" => validate_refine(request, true),
+        "refine" => validate_refine(request, false),
+        "refineAdvance" => {
+            let request = object(request, &["promptToken"])?;
+            let token = string(request, "promptToken")?;
+            if token.len() != 32
+                || !token
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(invalid());
+            }
+            Ok(())
+        }
         _ => Err("Unknown bot action.".into()),
     }
 }
@@ -1496,5 +1548,46 @@ mod socket_tests {
                     .starts_with("window.__RAYRAG__?.perform("));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod refine_tests {
+    use super::{request_script, validate_request};
+    use serde_json::{json, Value};
+    #[test]
+    fn shares_strict_refine_corpus_and_excludes_automatic_documents() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../src/data/refine-request-cases.json")).unwrap();
+        for case in cases {
+            let mode = case["mode"].as_str().unwrap();
+            let request = &case["request"];
+            assert_eq!(
+                validate_request(mode, request).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            for other in ["command", "workflow", "routine", "service", "social"] {
+                assert!(validate_request(other, request).is_err());
+            }
+            let routine = json!({"name":"No refine automation","durationSeconds":10,"maxActions":1,"rules":[{"name":"Rejected","priority":0,"cooldownSeconds":1,"maxRuns":1,"conditions":[{"field":"hpPercent","operator":"lt","value":100}],"action":request}]});
+            assert!(validate_request("routine", &routine).is_err());
+            if case["valid"].as_bool().unwrap() {
+                assert!(request_script(mode, request)
+                    .unwrap()
+                    .starts_with("window.__RAYRAG__?.perform("));
+            }
+        }
+    }
+    #[test]
+    fn rejects_oversized_otherwise_valid_refine_protection_policy() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../src/data/refine-request-cases.json")).unwrap();
+        let mut request = cases[0]["request"].clone();
+        request["policy"]["combat"]["rules"] = json!((0..64).map(|i| json!({"classId":4000+i,"action":"attack","priority":0,"conditions":(0..16).map(|_|json!({"field":"actorStatus","actor":{"scope":"self"},"statusId":6,"operator":"eq","value":false})).collect::<Vec<_>>()})).collect::<Vec<_>>());
+        assert!(crate::automation::validate_manual_protection_policy(&request["policy"]).is_ok());
+        assert!(serde_json::to_vec(&request).unwrap().len() > 65_536);
+        assert!(validate_request("refinePreview", &request).is_err());
     }
 }

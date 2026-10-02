@@ -143,6 +143,9 @@ fn control_bot(
             | "memo"
             | "socketPreview"
             | "socket"
+            | "refinePreview"
+            | "refine"
+            | "refineAdvance"
     ) {
         return Err("Unknown bot action.".into());
     }
@@ -159,6 +162,9 @@ fn control_bot(
             | "memo"
             | "socketPreview"
             | "socket"
+            | "refinePreview"
+            | "refine"
+            | "refineAdvance"
     ) && settings.is_some()
     {
         return Err("Use start to apply automation settings.".into());
@@ -187,6 +193,9 @@ fn control_bot(
             | "memo"
             | "socketPreview"
             | "socket"
+            | "refinePreview"
+            | "refine"
+            | "refineAdvance"
     ) {
         control::request_script(
             &action,

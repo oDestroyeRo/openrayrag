@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const ipc = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(async () => () => {}) }));
+const ipc = vi.hoisted(() => ({ featureSettled: true, invoke: vi.fn(), listen: vi.fn(async () => () => {}) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, isTauri: () => true }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: ipc.listen }));
 vi.mock('./feature-ui', async () => {
@@ -13,6 +13,7 @@ vi.mock('./feature-ui', async () => {
     levelDifference(){return 1;}
     active(): boolean { return false; }
     serviceBlocked(): boolean { return false; }
+    settledForMaintenance(): boolean { return ipc.featureSettled; }
     read() { return structuredClone(DEFAULT_AUTOMATION); }
     lock(): void {}
   }, validFeatureStatus: () => true };
@@ -55,7 +56,7 @@ async function fixture(saved: { username: string; characterSlot: number; autoLog
     querySelectorAll:()=>[],
     getElementById: (id: string) => elements.get(id), createElement: () => new Element(elements),
   });
-  ipc.invoke.mockReset(); ipc.listen.mockClear();
+  ipc.featureSettled=true;ipc.invoke.mockReset(); ipc.listen.mockClear();
   ipc.invoke.mockImplementation(async (command: string,args?:{document?:{revision:number}}) => {
     if(command==='current_form')return savedForm;
     if(command==='save_current_form')return args?.document?.revision;
@@ -163,4 +164,16 @@ describe('unsent account draft update fence',()=>{
 
 it('opens the manual release through a fixed native command without gameplay commands',async()=>{
  const f=await fixture();await f.get('update-download').emit('click');expect(f.calls('update_open_release')).toEqual([['update_open_release']]);expect(f.calls('control_bot')).toEqual([]);
+});
+
+it('defers the actual main updater while a refine preview or retained economic owner is unsettled',async()=>{
+ const f=await fixture();ipc.featureSettled=false;
+ ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
+  if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+  if(command==='save_current_form')return args!.document.revision;
+  if(command==='update_reserve')return 'b'.repeat(32);
+  if(command==='update_install')return true;
+ });
+ await vi.advanceTimersByTimeAsync(15000);expect(f.calls('update_reserve')).toEqual([]);expect(f.calls('update_install')).toEqual([]);
+ ipc.featureSettled=true;await vi.advanceTimersByTimeAsync(15000);expect(f.calls('update_reserve')).toHaveLength(1);expect(f.calls('control_bot')).toEqual([]);
 });

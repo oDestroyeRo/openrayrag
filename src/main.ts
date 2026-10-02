@@ -166,6 +166,7 @@ let targetOrder = '';
 const features = new FeatureUi(document.querySelector<HTMLElement>('main')!, {
   settings, apply: applySettings, map: () => targets.map, character: () => latest?.player?.name ?? '',
   command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request), memo: request => featureRequest('memo',request), socketPreview:request=>featureRequest('socketPreview',request),socket:request=>featureRequest('socket',request),
+  refinePreview: request => featureRequest('refinePreview',request), refine: request => featureRequest('refine',request), refineAdvance: promptToken => featureRequest('refineAdvance',{promptToken}),
   notify: message,stop:()=>stopButton.click(), changed: () => { formChanged(); targets.setLevelDifference(features.levelDifference()); renderTargets(); updateButtons(); },
 });
 const currentForm = new CurrentForm(() => ({settings:formSettings(),selectedProfileId:features.selectedProfileId()}),
@@ -189,7 +190,7 @@ function restoreForm(d:FormDocument):void {
 }
 function mainSettledForUpdate():boolean {
   return accountReady&&currentForm.initialized&&!accountDraft()&&!updateBusy&&!busy&&!stopping&&!loginBusy&&!heartbeatPending&&!pendingLogin&&!pendingResume&&!pendingService&&!pendingManual&&!pendingLimitStop
-    &&!limitStopPending&&!runActive()&&!fieldRun.requested&&!reconnect.waitingUntil;
+    &&!limitStopPending&&features.settledForMaintenance()&&!runActive()&&!fieldRun.requested&&!reconnect.waitingUntil;
 }
 async function pollUpdate():Promise<void>{
   if(!native||updatePolling||updateBusy)return;updatePolling=true;

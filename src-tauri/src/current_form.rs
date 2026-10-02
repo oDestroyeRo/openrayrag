@@ -144,7 +144,16 @@ mod tests {
     fn document_excludes_credentials_and_intent() {
         let d = document(0);
         let mut v = serde_json::to_value(d).unwrap();
-        for key in ["password", "username", "running", "runRequested"] {
+        for key in [
+            "password",
+            "username",
+            "running",
+            "runRequested",
+            "refine",
+            "previewToken",
+            "refineReceipt",
+            "refineConfirmation",
+        ] {
             v[key] = true.into();
             assert!(parse(&serde_json::to_vec(&v).unwrap()).is_err());
             v.as_object_mut().unwrap().remove(key);

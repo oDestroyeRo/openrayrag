@@ -1,6 +1,7 @@
 import { validPartyFollowSnapshot } from './party-follow';
 import { validPartyHealSnapshot } from './party-heal';
 import { validateDeathRecoveryGuard } from './death-recovery';
+import { RefineUi, validRefineSnapshot } from './refine-ui';
 import { DEFAULT_MAP_POLICY, insideLockArea, mapPolicy, policySummary, validateMapPolicy } from './map-policy';
 import { ManualTargetUi } from './manual-target-ui';
 import { routeBetweenMapsAsync } from './travel';
@@ -30,6 +31,7 @@ interface Hooks {
   settings(): Settings; apply(settings: Settings): void; map(): string; character(): string;
   command(action: Record<string, unknown>): Promise<unknown>;
   workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>; social(spec: unknown): Promise<unknown>; memo(spec: unknown): Promise<unknown>; socketPreview?(spec:unknown):Promise<unknown>; socket?(spec:unknown):Promise<unknown>;
+  refinePreview?(spec: unknown): Promise<unknown>; refine?(spec: unknown): Promise<unknown>; refineAdvance?(promptToken: string): Promise<unknown>;
   notify(text: string, error?: boolean): void; changed(): void;
   stop?():void;
 }
@@ -212,6 +214,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
   if(value.social!==undefined&&!validSocialSnapshot(value.social))return false;
   if(value.memo!==undefined&&!validMemoSnapshot(value.memo))return false;
   if(value.socket!==undefined&&!validSocketSnapshot(value.socket))return false;
+  if(value.refine!==undefined&&!validRefineSnapshot(value.refine))return false;
   if(value.ruleConditions!==undefined&&!bounded(value.ruleConditions,0))return false;
   const barter = object(value.world).barter;
   return barter === undefined || Array.isArray(barter) && barter.every(entry => {
@@ -270,6 +273,7 @@ export class FeatureUi {
   private readonly social: SocialUi;
   private readonly memo: MemoUi;
   private readonly socket: SocketUi;
+  private readonly refine: RefineUi;
   constructor(private readonly host: HTMLElement, private readonly hooks: Hooks) {
     let storage: Pick<Storage,'getItem'|'setItem'>;
     try { storage = localStorage; } catch { storage = {getItem:()=>null,setItem:()=>{throw new Error('Profile storage is unavailable.');}}; }
@@ -305,7 +309,8 @@ export class FeatureUi {
     this.social = new SocialUi(action => this.hooks.social(action), (message, error) => this.hooks.notify(message, error)); this.panel('workflows').append(this.social.root);
     this.memo = new MemoUi(request=>this.hooks.memo(request),(message,error)=>this.hooks.notify(message,error));this.panel('travel').append(this.memo.root);
     this.socket=new SocketUi(request=>this.hooks.socketPreview?.(request)??Promise.reject(new Error('Socket preview unavailable.')),request=>this.hooks.socket?.(request)??Promise.reject(new Error('Socket action unavailable.')),(message,error)=>this.hooks.notify(message,error),()=>this.read());this.panel('inventory').append(this.socket.root);
-    this.host.addEventListener('input',()=>this.socket.policyChanged());this.host.addEventListener('change',()=>this.socket.policyChanged());
+    this.host.addEventListener('input',()=>{this.socket.policyChanged();this.refine.policyChanged();});this.host.addEventListener('change',()=>{this.socket.policyChanged();this.refine.policyChanged();});
+    this.refine = new RefineUi(() => this.read(), request => this.hooks.refinePreview?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), request => this.hooks.refine?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), promptToken => this.hooks.refineAdvance?.(promptToken) ?? Promise.reject(new Error('Refining transport unavailable.')), (message, error) => this.hooks.notify(message, error)); this.panel('inventory').append(this.refine.root);
     for (const [id,catalog] of [['itemId',ITEM_CATALOG],['skillId',SKILL_CATALOG]] as const) {
       const list=document.createElement('datalist');list.id=`${id}-catalog`;
       for(const [value,entry]of Object.entries(catalog)){const option=document.createElement('option');option.value=value;option.label=entry.name;list.append(option);}this.host.append(list);
@@ -635,13 +640,14 @@ export class FeatureUi {
     this.dispositionEditor.lock(config);
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-manual]'))button.disabled=manual;
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-service]'))button.disabled=service;
-    this.social.lock(manual);
+    this.social.lock(manual);this.refine.lock(manual);
     this.memo.lock(manual);this.socket.lock(manual);this.manualTargets.lock(manual);
   }
-  serviceBlocked(): boolean { return object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
-  clearSocial(): void { delete this.status.social; this.social.clear(); delete this.status.socket; this.socket.clear(); }
+  settledForMaintenance(): boolean { return this.refine.settledForMaintenance(); }
+  serviceBlocked(): boolean { return object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
+  clearSocial(): void { delete this.status.social; this.social.clear(); delete this.status.socket; this.socket.clear();delete this.status.refine;this.refine.clear(); }
   clearMemo(): void { delete this.status.memo; this.memo.clear(); }
-  active(): boolean { return object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
+  active(): boolean { return object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
   private observation(): RoutineObservation {
     const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:this.hooks.map(),elapsedSeconds:0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;
@@ -658,6 +664,7 @@ export class FeatureUi {
     this.memo.render(s);
     this.socket.render(s.socket);
     this.manualTargets.render(s);
+    this.refine.render(s);
     const conditionState=this.host.querySelector<HTMLElement>('#actor-condition-state')!;const traces=Array.isArray(s.ruleConditions)?s.ruleConditions:[];conditionState.hidden=traces.length===0;conditionState.textContent=traces.slice(0,32).map(entry=>{const rule=object(entry);const conditions=Array.isArray(rule.conditions)?rule.conditions:[];return text(rule.rule)+(rule.truncated===true?' · additional evidence omitted':'')+conditions.map(condition=>{const trace=object(condition);return '\n  '+text(trace.state)+' · '+text(trace.reason);}).join('');}).join('\n');
     if(this.dispositionPlan){try{const settings=this.read();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
     const follow=object(s.partyFollow);this.host.querySelector<HTMLElement>('#party-follow-state')!.textContent=follow.state&&follow.state!=='disabled'?`${text(follow.state)} · ${text(follow.reason)}${follow.destination?' · '+text(follow.destination):''} · ${Math.ceil(number(follow.remainingSeconds)??0)}s remaining`:'';
