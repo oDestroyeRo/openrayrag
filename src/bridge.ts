@@ -1,4 +1,5 @@
 import { socketCommand } from './socket-protocol';
+import { isOfficialGameplayCommand } from './official-input';
 import { type Settings } from './engine';
 import { command, walkCommand, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
 import { featureCommand, validateExpandedAction } from './protocol-feature';
@@ -130,6 +131,16 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   };
 
   window.WebSocket = class extends NativeSocket {
+    send(data: string | Blob | BufferSource): void {
+      if (active === this && this.readyState === NativeSocket.OPEN && engine.connected && engine.compatible && page.buildUrl === VERIFIED_BUILD
+        && engine.actorActionIdentity(undefined,true)
+        && isOfficialGameplayCommand(data)) {
+        // Our transports call the native prototype directly. Only the official
+        // client enters here, before its action takes ownership of the game.
+        try { controller.manualCommand(); publish(); } catch { /* Never prevent or replay the official send. */ }
+      }
+      super.send(data);
+    }
     constructor(url: string | URL, protocols?: string | string[]) {
       super(url, protocols);
       if (String(url) !== SOCKET_URL) return;
