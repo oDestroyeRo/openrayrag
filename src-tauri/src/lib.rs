@@ -53,15 +53,24 @@ async fn open_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), S
     result
 }
 
-fn open_game_window(app: &tauri::AppHandle) -> Result<(), String> {
+#[tauri::command]
+async fn close_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
+    require_window(&window, "main")?;
+    let _permit = maintenance::admit(&app)?;
     if let Some(game) = app.get_webview_window("game") {
-        game.show().map_err(|_| "Could not show the game.")?;
-        return game
-            .set_focus()
-            .map_err(|_| "Could not focus the game.".into());
+        game.destroy()
+            .map_err(|_| "Could not disconnect the game.".to_string())?;
+    }
+    Ok(())
+}
+
+fn open_game_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if app.get_webview_window("game").is_some() {
+        return Ok(());
     }
     WebviewWindowBuilder::new(app, "game", WebviewUrl::External(GAME_URL.parse().unwrap()))
-        .title("Rayrag · Game")
+        .title("Rayrag · Connection")
+        .visible(false)
         .inner_size(1360.0, 880.0)
         .min_inner_size(1000.0, 720.0)
         .incognito(true)
@@ -327,6 +336,7 @@ pub fn run() {
             updater::update_final_ack,
             updater::update_open_release,
             open_game,
+            close_game,
             control_bot,
             bridge_status,
             login::login_game,

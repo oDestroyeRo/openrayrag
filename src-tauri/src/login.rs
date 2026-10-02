@@ -314,7 +314,6 @@ pub(crate) async fn login_game(
 fn reopen_game(app: &tauri::AppHandle) -> Result<(), String> {
     let result = if let Some(game) = app.get_webview_window("game") {
         game.navigate(super::GAME_URL.parse().unwrap())
-            .and_then(|()| game.set_focus())
             .map_err(|_| "Could not reopen the game.".to_string())
     } else {
         super::open_game_window(app)
@@ -358,7 +357,6 @@ pub(crate) async fn reconnect_game(
     _permit.authorize_navigation();
     let result = game
         .navigate(super::GAME_URL.parse().unwrap())
-        .and_then(|()| game.set_focus())
         .map_err(|_| "Could not reopen the game.".to_string());
     if result.is_err() {
         _permit.cancel_navigation();

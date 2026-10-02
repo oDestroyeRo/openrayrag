@@ -33,19 +33,26 @@ export function mountClientShell(root: HTMLElement): ClientShell {
         <div class="client-toolbar-heading">
           <div class="client-brand"><h1>rayrag</h1><span>Companion</span><small id="client-version">macOS · preview</small></div>
           <div class="client-session-identity"><strong id="character">No character connected</strong><span id="status" class="pill">OFFLINE</span></div>
-          <p id="location">Your adventure starts in the game window.</p>
+          <p id="location">Connect an account to load your character.</p>
         </div>
         <div class="actions run-controls">
           <button id="start" type="button" class="primary" disabled>${icon('<path d="m8 5 11 7-11 7V5Z"/>')}Start bot</button>
           <button id="stop" type="button" class="client-stop" disabled>${icon('<rect x="6" y="6" width="12" height="12" rx="1"/>')}Stop</button>
-          <button id="open" type="button" class="secondary">Open game ${openIcon}</button>
+          <button id="disconnect" type="button" class="secondary" title="Closes the connection; cannot undo server actions" disabled>Disconnect</button>
+          <button id="open" type="button" class="secondary">Connect account ${openIcon}</button>
         </div>
-        <div id="notice" class="notice" role="status" aria-live="polite">Open the game, sign in, and select a character to begin.</div>
+        <div id="notice" class="notice" role="status" aria-live="polite">Connect an account and select a character. The bot starts only when you choose Start.</div>
         <p id="config-help" class="hint" role="status" aria-live="polite"></p>
+        <div class="console-character-bar" aria-label="Character monitor">
+          <div class="health"><div><span>HP</span><b id="hp-text">— / —</b></div><div class="health-track"><i id="hp-bar"></i></div></div>
+          <div class="health"><div><span>SP</span><b id="sp-text">— / —</b></div><div class="health-track client-sp-track"><i id="sp-bar"></i></div></div>
+          <dl class="console-character-stats"><div><dt>Base / job level</dt><dd id="console-levels">— / —</dd></div><div><dt>Weight</dt><dd id="console-weight">— / —</dd></div><div><dt>Zeny</dt><dd id="console-zeny">—</dd></div><div><dt>Deaths / cap</dt><dd><span id="death-count">—</span> / <span id="death-cap">—</span></dd></div></dl>
+          <p id="console-experience" class="console-experience">Base EXP — · Job EXP —</p>
+        </div>
       </header>
 
       <nav class="client-page-nav" role="tablist" aria-label="Companion pages">
-        <button id="client-tab-session" type="button" role="tab" data-client-page-nav="session" aria-controls="client-page-session" aria-selected="true">${sessionIcon}Session</button>
+        <button id="client-tab-session" type="button" role="tab" data-client-page-nav="session" aria-controls="client-page-session" aria-selected="true">${sessionIcon}Console</button>
         <button id="client-tab-bot" type="button" role="tab" data-client-page-nav="bot" aria-controls="client-page-bot" aria-selected="false" tabindex="-1">${botIcon}Bot</button>
         <button id="client-tab-manual" type="button" role="tab" data-client-page-nav="manual" aria-controls="client-page-manual" aria-selected="false" tabindex="-1">${toolsIcon}Manual tools</button>
         <button id="client-tab-settings" type="button" role="tab" data-client-page-nav="settings" aria-controls="client-page-settings" aria-selected="false" tabindex="-1">${settingsIcon}Settings</button>
@@ -53,30 +60,37 @@ export function mountClientShell(root: HTMLElement): ClientShell {
 
       <div class="client-pages">
         <section id="client-page-session" class="client-page" role="tabpanel" aria-labelledby="client-tab-session">
-          <div class="client-page-heading"><h2 id="client-page-session-title" tabindex="-1">Session</h2><p>Character health, map and recent activity.</p></div>
-          <section class="session-card panel" aria-labelledby="client-session-overview-title">
-            <div class="panel-title"><h3 id="client-session-overview-title">Current session</h3></div>
-            <div class="client-resource-grid">
-              <div class="health"><div><span>HEALTH</span><b id="hp-text">— / —</b></div><div class="health-track"><i id="hp-bar"></i></div></div>
-              <div class="health"><div><span>SP</span><b id="sp-text">— / —</b></div><div class="health-track client-sp-track"><i id="sp-bar"></i></div></div>
-            </div>
-            <dl class="client-death-status"><div><dt>Deaths</dt><dd id="death-count">—</dd></div><div><dt>Death cap</dt><dd id="death-cap">—</dd></div></dl>
-            <div class="stats"><div><strong id="attacks">0</strong><span>Targets engaged</span></div><div><strong id="kills">0</strong><span>Monsters defeated</span></div><div><strong id="looted">0</strong><span>Pickups confirmed</span></div><div><strong id="nearby">0</strong><span>Monsters nearby</span></div></div>
-            <p id="session-details" class="session-details">Session time, experience and task state appear after connection.</p>
-          </section>
-          <div class="client-session-grid">
-            <section class="panel activity" aria-labelledby="client-field-title">
-              <div class="panel-title"><h3 id="client-field-title">In the field</h3><span id="map-label">WAITING</span></div>
-              <div class="radar-wrap"><canvas id="radar" width="400" height="400" aria-label="Map collision: blocked terrain, walkable ground, portal exclusions and planned route"></canvas><div class="radar-label"><span class="legend-dot you"></span>You <span class="legend-dot mob"></span>Monster <span class="legend-dot drop"></span>Loot</div></div>
+          <div class="client-page-heading console-heading"><div><h2 id="client-page-session-title" tabindex="-1">Bot console</h2><p>Your field, inventory and action history in one workspace.</p></div><p id="console-lock" class="hint">Connect a verified character to use manual controls.</p></div>
+          <div class="bot-console-grid">
+            <section class="panel activity console-map" aria-labelledby="client-field-title">
+              <div class="panel-title"><h3 id="client-field-title">Current field</h3><span id="map-label">WAITING</span></div>
+              <div class="radar-wrap"><canvas id="radar" width="400" height="400" aria-label="Collision map. Click verified walkable ground to walk once; keyboard coordinates are below."></canvas><div class="radar-label"><span class="legend-dot you"></span>You <span class="legend-dot mob"></span>Monster <span class="legend-dot drop"></span>Loot</div></div>
               <p id="navigation-info" class="navigation-info">Enter a supported map to inspect walkability.</p>
-              <div class="map-legend"><span class="terrain-key"></span>Blocked <span class="walkable-key"></span>Walkable <span class="portal-key"></span>Portal exclusion <span class="route-key"></span>Planned route</div>
-              <div id="monster-list" class="monster-list">No monsters in sight.</div>
+              <div class="map-legend"><span class="terrain-key"></span>Blocked <span class="walkable-key"></span>Walkable <span class="portal-key"></span>Portal exclusion <span class="route-key"></span>Route</div>
+              <form id="console-walk-form" class="console-walk"><label for="console-walk-x">X<input id="console-walk-x" type="number" min="0" max="511" step="1" value="0" required /></label><label for="console-walk-y">Y<input id="console-walk-y" type="number" min="0" max="511" step="1" value="0" required /></label><button id="console-walk" type="submit" class="secondary" disabled>Walk once</button></form>
+              <p id="console-action" class="hint" role="status" aria-live="polite">Stop the bot before a manual action. Clicks never change your bot settings.</p>
+              <p id="console-target-result" class="hint">No bounded command observed.</p>
             </section>
-            <section class="panel" aria-labelledby="client-activity-title">
-              <div class="panel-title"><h3 id="client-activity-title">Activity</h3><span id="target-label">No active target</span></div>
-              <ol id="log" class="log"><li class="empty">Session activity will appear here.</li></ol>
+            <section class="panel console-nearby" aria-labelledby="console-nearby-title">
+              <div class="panel-title"><h3 id="console-nearby-title">Nearby</h3><span id="nearby">0</span></div>
+              <h4>Monsters</h4><div id="monster-list" class="monster-list">No monsters in sight.</div>
+              <h4>Ground items</h4><div id="console-drops" class="console-list">No drops observed.</div>
+              <button id="console-loot-settings" type="button" class="text-button">Configure bot pickup</button>
+              <p class="hint">Pickups use the bot's loot policy and confirmed receipts.</p>
+            </section>
+            <section class="panel console-inventory" aria-labelledby="console-inventory-title">
+              <div class="panel-title"><h3 id="console-inventory-title">Inventory</h3><span id="console-stock-count">Not observed</span></div>
+              <label for="console-item">Observed item<select id="console-item" disabled><option value="">Choose an item</option></select></label>
+              <p id="console-item-info" class="hint">Inventory appears after a verified character connects.</p>
+              <button id="console-use-item" type="button" class="secondary" disabled>Use one item</button>
+              <button id="console-item-tools" type="button" class="text-button">Skills, equipment & targeted items</button>
+              <p id="console-item-result" class="hint" role="status" aria-live="polite">No item request sent.</p>
+              <p id="console-latest-action" class="hint">No controller action receipt observed.</p>
+              <div class="console-run-metrics"><div><strong id="attacks">0</strong><span>Engaged</span></div><div><strong id="kills">0</strong><span>Defeated</span></div><div><strong id="looted">0</strong><span>Pickups confirmed</span></div></div>
+              <p id="session-details" class="session-details">Session time and task state appear after connection.</p>
             </section>
           </div>
+          <section class="panel console-activity" aria-labelledby="client-activity-title"><div class="panel-title"><h3 id="client-activity-title">Activity</h3><span id="target-label">No active target</span></div><ol id="log" class="log"><li class="empty">Session activity will appear here.</li></ol></section>
           <div id="client-session-details" class="client-session-details"></div>
         </section>
 
@@ -99,7 +113,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
             </fieldset>
             <div class="field-row"><label for="radius">Monster scan radius</label><output id="radius-value">12 cells</output></div><input id="radius" type="range" min="1" max="20" value="12" />
             <label class="toggle-row" for="loot"><div>Collect loot<small>Use Pickup scope below to choose own drops or all nearby drops</small></div><input id="loot" type="checkbox" checked role="switch" /></label>
-            <p class="footnote">Click or type in the game to pause briefly. The bot waits through low HP, map changes and connection loss. Stop cancels the run.</p>
+            <p class="footnote">The bot waits through low HP, map changes and connection loss. Stop cancels the run; manual console actions require a stopped bot.</p>
           </section>
           <section id="client-bot-recovery" class="panel settings feature-panel" data-section="recovery" role="tabpanel" aria-labelledby="client-bot-tab-recovery" hidden>
             <div class="panel-title"><h3 id="client-bot-recovery-title" tabindex="-1">Recovery</h3></div>
