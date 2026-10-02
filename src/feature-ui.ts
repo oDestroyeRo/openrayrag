@@ -1,5 +1,5 @@
 import { DEFAULT_MAP_POLICY, insideLockArea, mapPolicy, policySummary, validateMapPolicy } from './map-policy';
-import { routeBetweenMaps } from './travel';
+import { routeBetweenMapsAsync } from './travel';
 import {actorId} from './actor-identity';
 import { SocketUi, validSocketSnapshot } from './socket-ui';
 import { ActorPredicateEditor, actorSnapshotAt } from './actor-predicate-ui';
@@ -13,7 +13,7 @@ import { validateExpandedAction } from './protocol-feature';
 import { validateWorldAction } from './world-protocol';
 import { validateWorkflowSpec } from './workflows';
 import { NpcServiceStore } from './npc-service-store';
-import { BUILTIN_SERVICES, previewService, validateServiceRequest } from './npc-services';
+import { BUILTIN_SERVICES, previewServiceAsync, validateServiceRequest } from './npc-services';
 import type { Entity } from './protocol';
 import { dryRunRoutine, validateRoutineSpec, type RoutineObservation } from './routines';
 import { DEFAULT_SUPPLY } from './supply-trip';
@@ -193,6 +193,42 @@ export class FeatureUi {
   private dispositionEditor!: RuleEditor;
   private dispositionPlan: DispositionPlan | null = null;
   private attackStrategiesPresent = false;
+  private routePreview: { abort: AbortController; identity: string; settings: string; output: HTMLElement; current?: () => string; evidence?: string } | null = null;
+  private previewIdentity(): string {
+    const p = object(this.status.player), observations = object(this.status.actorObservations);
+    const actors = Array.isArray(observations.actors) ? observations.actors.map(object) : [];
+    return JSON.stringify([this.hooks.map(), this.status.sessionId, this.status.connectionId, object(this.status.world).generation, this.status.connected, this.status.compatible,
+      observations.world, actors.find(actor => actor.id === p.id)?.incarnation,
+      p.id, p.dead, typeof p.x === 'number' ? Math.floor(p.x) : null, typeof p.y === 'number' ? Math.floor(p.y) : null,
+      this.hooks.settings().route_avoidWalls]);
+  }
+  private servicePreviewEvidence(): string {
+    const character = object(this.status.character), stats = object(character.stats);
+    const stock = Array.isArray(character.inventory) ? character.inventory.map(object).map(row => [row.itemId,row.count]) : null;
+    const mastery = Array.isArray(character.learned) ? character.learned.map(object).find(row => row.skillId === 1)?.level : null;
+    const npcs = Array.isArray(this.status.actors) ? this.status.actors.map(object).filter(actor => actor.kind === 2 || actor.kind === 4)
+      .map(actor => [actor.id,actor.kind,actor.classId,actor.name,actor.x,actor.y,actor.dead]) : null;
+    return JSON.stringify([character.inventoryKnown,stats.zeny,character.skillsKnown,mastery,stock,npcs]);
+  }
+  private cancelRoutePreview(reason = 'Preview cancelled. Generate a new preview from current state.'): void {
+    const request = this.routePreview;
+    if (!request) return;
+    this.routePreview = null; request.abort.abort(); request.output.textContent = reason;
+  }
+  private async previewRoute(output: HTMLElement, calculate: (signal: AbortSignal) => Promise<string>, current?: () => string): Promise<void> {
+    this.cancelRoutePreview();
+    const request = { abort: new AbortController(), identity: this.previewIdentity(), settings: JSON.stringify(this.read()), output, current, evidence: current?.() };
+    this.routePreview = request; output.textContent = 'Planning verified route… Preview sends no commands.';
+    try {
+      const result = await calculate(request.abort.signal);
+      if (this.routePreview !== request) return;
+      if (request.identity !== this.previewIdentity() || request.settings !== JSON.stringify(this.read()) || request.evidence !== request.current?.()) { this.cancelRoutePreview(); return; }
+      this.routePreview = null; output.textContent = result;
+    } catch (error) {
+      if (this.routePreview !== request) return;
+      this.routePreview = null; output.textContent = error instanceof Error ? error.message : 'Route preview failed.';
+    }
+  }
   private readonly social: SocialUi;
   private readonly memo: MemoUi;
   private readonly socket: SocketUi;
@@ -227,7 +263,9 @@ export class FeatureUi {
       const list=document.createElement('datalist');list.id=`${id}-catalog`;
       for(const [value,entry]of Object.entries(catalog)){const option=document.createElement('option');option.value=value;option.label=entry.name;list.append(option);}this.host.append(list);
     }
-    this.host.addEventListener('input',event => { if ((event.target as HTMLElement).dataset.setting || (event.target as HTMLElement).id.startsWith('map-policy-')) this.hooks.changed(); });
+    this.host.addEventListener('change', () => this.cancelRoutePreview());
+    this.host.addEventListener('click', event => { if ((event.target as HTMLElement).closest('#stop, #start')) this.cancelRoutePreview(); });
+    this.host.addEventListener('input',event => { this.cancelRoutePreview(); if ((event.target as HTMLElement).dataset.setting || (event.target as HTMLElement).id.startsWith('map-policy-')) this.hooks.changed(); });
     this.write(DEFAULT_AUTOMATION);
   }
   private panel(section: Section): HTMLElement { return this.panels.get(section)!; }
@@ -272,10 +310,17 @@ export class FeatureUi {
     this.note('travel','Separate map codes with commas or spaces. Deny wins. Cardinal steps cost 10, diagonals 14 plus wall avoidance; weighted crossings cost 200 plus the departing-map penalty and include final arrival escape. Legacy ignores penalties. Field targets must stay inside the rectangle. Service travel can leave it; field work waits for a verified return. Server transitions can still place you outside.');
     const output=document.createElement('p');output.id='map-policy-preview';output.className='telemetry-summary';panel.append(output);
     const button=document.createElement('button');button.type='button';button.className='secondary compact';button.dataset.config='true';button.textContent='Preview map policy and route';
-    button.addEventListener('click',()=>{try{const a=this.read(),policy=mapPolicy({automation:a}),p=object(this.status.player),destination=policy.lockArea?.map||a.travel.destinationMap;
-      let route='No destination selected.';if(destination&&typeof p.x==='number'&&typeof p.y==='number'){const steps=routeBetweenMaps(this.hooks.map(),{x:Math.floor(p.x),y:Math.floor(p.y)},destination,this.hooks.settings().route_avoidWalls,policy);route=steps?`Route: ${[this.hooks.map(),...steps.map(s=>s.portal.toMap)].join(' → ')}`:'No allowed verified route. Search is bounded to 64 crossings and 4096 states.';}
-      output.textContent=policySummary(policy,this.hooks.map())+'\n'+route;
-    }catch(error){output.textContent=error instanceof Error?error.message:'Invalid map policy.';}});panel.append(button);
+    button.addEventListener('click',()=>{void this.previewRoute(output,async signal => {
+      const a=this.read(),policy=mapPolicy({automation:a}),p=object(this.status.player),destination=policy.lockArea?.map||a.travel.destinationMap,map=this.hooks.map();
+      let route='No destination selected.';
+      if(destination&&typeof p.x==='number'&&typeof p.y==='number') {
+        const steps=await routeBetweenMapsAsync(map,{x:Math.floor(p.x),y:Math.floor(p.y)},destination,this.hooks.settings().route_avoidWalls,policy,{signal});
+        route=steps?`Route: ${[map,...steps.map(s=>s.portal.toMap)].join(' → ')}`:'No allowed verified route. Search is bounded to 64 crossings and 4096 states.';
+      }
+      return policySummary(policy,map)+'\n'+route;
+    }).catch(error=>{output.textContent=error instanceof Error?error.message:'Invalid map policy.';});});
+    const cancel=document.createElement('button');cancel.type='button';cancel.className='secondary compact';cancel.textContent='Cancel route preview';cancel.addEventListener('click',()=>this.cancelRoutePreview());
+    panel.append(button,cancel);
   }
   private dispositionOutput(): HTMLElement { return this.host.querySelector<HTMLElement>('#disposition-preview')!; }
   private note(section: Section, message: string): void { const p = document.createElement('p'); p.className = 'hint'; p.textContent = message; this.panel(section).append(p); }
@@ -471,16 +516,16 @@ export class FeatureUi {
     const documents=document.createElement('textarea');documents.className='routine-document';documents.rows=5;documents.maxLength=256000;documents.setAttribute('aria-label','Import or export service document');
     const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Import & export services';details.append(summary,documents);panel.append(details);
     const refresh=(selected?:string)=>{select.replaceChildren();for(const service of BUILTIN_SERVICES){const option=document.createElement('option');option.value='preset:'+service.id;option.textContent='Preset · '+service.name;select.append(option);}for(const service of this.services.list()){const option=document.createElement('option');option.value='saved:'+service.id;option.textContent='Saved · '+service.name;select.append(option);}if(selected)select.value=selected;};
-    const show=()=>{const [kind,id]=select.value.split(':');const service=(kind==='saved'?this.services.list():BUILTIN_SERVICES).find(s=>s.id===id);if(service)editor.value=JSON.stringify(service,null,2);preview.textContent='Choose Preview to inspect this visit.';};
+    const show=()=>{this.cancelRoutePreview();const [kind,id]=select.value.split(':');const service=(kind==='saved'?this.services.list():BUILTIN_SERVICES).find(s=>s.id===id);if(service)editor.value=JSON.stringify(service,null,2);preview.textContent='Choose Preview to inspect this visit.';};
     const button=(name:string,action:()=>unknown,manual=false)=>{const b=document.createElement('button');b.type='button';b.className=manual?'primary compact':'secondary compact';b.textContent=name;if(manual)b.dataset.service='true';else b.dataset.config='true';b.addEventListener('click',()=>void this.operation(async()=>action(),manual?this.serviceLocked:this.locked,manual));buttons.append(b);};
-    button('Preview',()=>{
+    button('Preview',()=>this.previewRoute(preview,async signal=>{
       const status=this.status,c=object(status.character),p=object(status.player),stats=object(c.stats);const stock:Record<string,number>={};
       if(Array.isArray(c.inventory))for(const raw of c.inventory){const row=object(raw);if(typeof row.itemId==='number'&&typeof row.count==='number')stock[row.itemId]=(stock[row.itemId]??0)+row.count;}
       const actors:Entity[]=Array.isArray(status.actors)?status.actors.map(object).filter(a=>typeof a.id==='number'&&typeof a.x==='number'&&typeof a.y==='number'&&typeof a.kind==='number'&&typeof a.name==='string').map(a=>({id:Number(a.id),x:Number(a.x),y:Number(a.y),kind:Number(a.kind),name:text(a.name),classId:Number(a.classId),level:Number(a.level),hp:Number(a.hp),maxHp:Number(a.maxHp),dead:a.dead===true})):[];
       const skill=Array.isArray(c.learned)?c.learned.map(object).find(skill=>skill.skillId===1):undefined;
-      const result=previewService(JSON.parse(editor.value),{map:this.hooks.map(),player:typeof p.x==='number'&&typeof p.y==='number'?{x:p.x,y:p.y}:null,actors,inventoryKnown:c.inventoryKnown===true,zeny:number(stats.zeny),basicSkillLevel:c.skillsKnown===true?number(skill?.level)??0:null,stock},validateMapPolicy(this.read().mapPolicy));
-      preview.textContent=[result.available?'Verified contract':'Unavailable draft',result.summary,...result.reasons].filter(Boolean).join('\n');
-    });
+      const result=await previewServiceAsync(JSON.parse(editor.value),{map:this.hooks.map(),player:typeof p.x==='number'&&typeof p.y==='number'?{x:p.x,y:p.y}:null,actors,inventoryKnown:c.inventoryKnown===true,zeny:number(stats.zeny),basicSkillLevel:c.skillsKnown===true?number(skill?.level)??0:null,stock},validateMapPolicy(this.read().mapPolicy),{signal});
+      return [result.available?'Verified contract':'Unavailable draft',result.summary,...result.reasons].filter(Boolean).join('\n');
+    },()=>JSON.stringify([editor.value,this.servicePreviewEvidence()])));
     button('Save / update',()=>{const existing=select.value.startsWith('saved:')?select.value.slice(6):undefined;const saved=this.services.save(JSON.parse(editor.value),existing);refresh('saved:'+saved.id);show();return 'NPC service saved on this Mac.';});
     button('Delete saved',()=>{if(!select.value.startsWith('saved:'))throw new Error('Choose a saved service.');this.services.remove(select.value.slice(6));refresh();show();return 'Saved NPC service deleted.';});
     button('Export saved',()=>{if(!select.value.startsWith('saved:'))throw new Error('Choose a saved service.');documents.value=this.services.export(select.value.slice(6));details.open=true;});
@@ -526,17 +571,17 @@ export class FeatureUi {
     this.social.lock(manual);
     this.memo.lock(manual);this.socket.lock(manual);
   }
-  serviceBlocked(): boolean { return object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
+  serviceBlocked(): boolean { return ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
   clearSocial(): void { delete this.status.social; this.social.clear(); delete this.status.socket; this.socket.clear(); }
   clearMemo(): void { delete this.status.memo; this.memo.clear(); }
-  active(): boolean { return object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
+  active(): boolean { return ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
   private observation(): RoutineObservation {
     const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:this.hooks.map(),elapsedSeconds:0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;
     const character=object(this.status.character);if(character.inventoryKnown===true&&Array.isArray(character.inventory)){const counts:Record<number,number>={};for(const entry of character.inventory){const row=object(entry);const id=number(row.itemId);const count=number(row.count);if(id!==null&&count!==null)counts[id]=(counts[id]??0)+count;}result.inventory=counts;}return result;
   }
   render(value: unknown): void {
-    this.status=object(value);const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
+    this.status=object(value);if(this.routePreview&&(this.routePreview.identity!==this.previewIdentity()||this.routePreview.evidence!==this.routePreview.current?.()))this.cancelRoutePreview();const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
     const strategyState=this.host.querySelector<HTMLElement>('#attack-strategy-state')!;const strategy=object(s.attackStrategies);const engagements=Array.isArray(strategy.entries)?strategy.entries:[];strategyState.hidden=engagements.length===0;strategyState.textContent=engagements.slice(0,8).map(entry=>{const actor=object(entry);const rules=Array.isArray(actor.rules)?actor.rules:[];return `Actor #${number(actor.id)??'?'} · ${actor.normalStarted===true?'normal attack started':'opener window open'}`+rules.slice(0,32).map(value=>{const rule=object(value);return `\n  ${text(rule.id)} · ${number(rule.attempts)??'?'} attempts · ${number(rule.uses)??'?'} confirmed${rule.uncertain===true?' · unresolved':rule.rejected===true?' · rejected':''}`;}).join('');}).join('\n')+(strategy.truncated===true?'\nAdditional actor ledgers omitted from display.':'');
     this.social.render(s);
     this.memo.render(s);
@@ -553,7 +598,7 @@ export class FeatureUi {
     const policyOutput=this.host.querySelector<HTMLElement>('#map-policy-preview')!;const travel=object(s.travel);
     try {
       let telemetry='';
-      if(['walking','transition','complete','failed','cancelled'].includes(text(travel.state)))telemetry=policySummary(validateMapPolicy(travel.policy??DEFAULT_MAP_POLICY),this.hooks.map())+'\n'+text(travel.state)+' · '+text(travel.purpose)+' · '+text(travel.reason);
+      if(['planning','walking','transition','complete','failed','cancelled'].includes(text(travel.state)))telemetry=policySummary(validateMapPolicy(travel.policy??DEFAULT_MAP_POLICY),this.hooks.map())+'\n'+text(travel.state)+' · '+text(travel.purpose)+' · '+text(travel.reason);
       else {const policy=mapPolicy(this.hooks.settings());if(policy.lockArea&&typeof player.x==='number'&&typeof player.y==='number')telemetry=policySummary(policy,this.hooks.map())+'\n'+(insideLockArea(policy,this.hooks.map(),{x:player.x,y:player.y})?'Inside field lock area.':'Outside field lock area; field actions wait.');}
       if(telemetry&&policyOutput.dataset.telemetry!==telemetry)policyOutput.textContent=telemetry;
       policyOutput.dataset.telemetry=telemetry;

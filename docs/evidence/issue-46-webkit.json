@@ -1,0 +1,150 @@
+{
+  "runtime": "Native Safari WebKit on macOS",
+  "transport": "Offline fixture with no socket and in-memory send spy",
+  "fixtureSha256": "6fcfc4ff130ddabad96e8bd7533d604249c96a2c04643f4b7d1a7248aeb19e7a",
+  "inputStop": {
+    "state": "cancelled",
+    "reason": "Travel stopped by you.",
+    "inputAt": {
+      "at": 217,
+      "state": "planning",
+      "value": "responsive"
+    },
+    "stopAt": {
+      "at": 314,
+      "latencyMs": 0
+    },
+    "elapsedMs": 314,
+    "maxSliceMs": 8,
+    "maxSchedulingDelayMs": 13,
+    "maxTickDelayMs": 9,
+    "slices": 28,
+    "commands": []
+  },
+  "precisionNote": "Values are page performance timer readings; 0ms is below reported timer resolution, not a zero-cost guarantee.",
+  "measurementFixtureSha256": "bf39370491ab0d95f757c5b53a74d89700463671fee41e90c93e9956475a8a87",
+  "measurements": [
+    {
+      "mode": "legacy",
+      "destination": "prontera",
+      "cache": "cold",
+      "totalMs": 54,
+      "maxSliceMs": 8,
+      "maxSchedulingDelayMs": 0,
+      "maxTickDelayMs": 0,
+      "slices": 7
+    },
+    {
+      "mode": "legacy",
+      "destination": "prontera",
+      "cache": "repeated",
+      "totalMs": 2,
+      "maxSliceMs": 1,
+      "maxSchedulingDelayMs": 1,
+      "maxTickDelayMs": 0,
+      "slices": 1
+    },
+    {
+      "mode": "legacy",
+      "destination": "payon",
+      "cache": "cold",
+      "totalMs": 642,
+      "maxSliceMs": 8,
+      "maxSchedulingDelayMs": 8,
+      "maxTickDelayMs": 9,
+      "slices": 49
+    },
+    {
+      "mode": "legacy",
+      "destination": "payon",
+      "cache": "repeated",
+      "totalMs": 5,
+      "maxSliceMs": 0,
+      "maxSchedulingDelayMs": 5,
+      "maxTickDelayMs": 0,
+      "slices": 1
+    },
+    {
+      "mode": "legacy",
+      "destination": "geffen",
+      "cache": "cold",
+      "totalMs": 641,
+      "maxSliceMs": 8,
+      "maxSchedulingDelayMs": 8,
+      "maxTickDelayMs": 8,
+      "slices": 48
+    },
+    {
+      "mode": "legacy",
+      "destination": "geffen",
+      "cache": "repeated",
+      "totalMs": 7,
+      "maxSliceMs": 1,
+      "maxSchedulingDelayMs": 6,
+      "maxTickDelayMs": 0,
+      "slices": 1
+    },
+    {
+      "mode": "weighted",
+      "destination": "prontera",
+      "cache": "cold",
+      "totalMs": 112,
+      "maxSliceMs": 8,
+      "maxSchedulingDelayMs": 8,
+      "maxTickDelayMs": 4,
+      "slices": 11
+    },
+    {
+      "mode": "weighted",
+      "destination": "prontera",
+      "cache": "repeated",
+      "totalMs": 40,
+      "maxSliceMs": 1,
+      "maxSchedulingDelayMs": 8,
+      "maxTickDelayMs": 0,
+      "slices": 5
+    },
+    {
+      "mode": "weighted",
+      "destination": "payon",
+      "cache": "cold",
+      "totalMs": 5181,
+      "maxSliceMs": 8,
+      "maxSchedulingDelayMs": 9,
+      "maxTickDelayMs": 9,
+      "slices": 406
+    },
+    {
+      "mode": "weighted",
+      "destination": "payon",
+      "cache": "repeated",
+      "totalMs": 4569,
+      "maxSliceMs": 8,
+      "maxSchedulingDelayMs": 9,
+      "maxTickDelayMs": 11,
+      "slices": 363
+    },
+    {
+      "mode": "weighted",
+      "destination": "geffen",
+      "cache": "cold",
+      "totalMs": 2123,
+      "maxSliceMs": 8,
+      "maxSchedulingDelayMs": 9,
+      "maxTickDelayMs": 8,
+      "slices": 168
+    },
+    {
+      "mode": "weighted",
+      "destination": "geffen",
+      "cache": "repeated",
+      "totalMs": 1958,
+      "maxSliceMs": 8,
+      "maxSchedulingDelayMs": 9,
+      "maxTickDelayMs": 9,
+      "slices": 152
+    }
+  ],
+  "completion": "Completed 12/12; no gameplay commands.",
+  "limits": "Offline Safari/WebKit fixture of real routing owner and kernel. This is not a live game traversal or a guarantee of total route speed; complex weighted plans remain multi-second."
+}

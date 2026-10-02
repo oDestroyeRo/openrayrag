@@ -1,3 +1,4 @@
+import { completePlanning, runPlanning, type PlanningOptions, type PlanningWork } from './route-planning';
 import { DEFAULT_MAP_POLICY, mapAllowed, PORTAL_COST, type MapPolicy } from './map-policy';
 import catalog from './data/travel-portals.json';
 import { GridNavigator, MAX_MAP_DIMENSION, searchGrid, type PortalArea, type WalkGrid } from './navigation';
@@ -31,6 +32,11 @@ const sameArrival = (a: PortalEdge, b: PortalEdge) => a.toMap === b.toMap
   && a.arrival.x === b.arrival.x && a.arrival.y === b.arrival.y;
 interface Cell { state: number; cost: number; priority: number }
 interface Path { cells: Position[]; cost: number }
+function* copyCells(cells: readonly Position[], end = cells.length): PlanningWork<Position[]> {
+  const copy: Position[] = [];
+  for (let i = 0; i < end; i++) { if (i % 128 === 0) yield 'route-copy'; copy.push({ ...cells[i]! }); }
+  return copy;
+}
 
 /** Small generic heap, used for bounded cell and world searches. */
 class Heap<T> {
@@ -74,11 +80,19 @@ class MapCells {
     this.count = grid.width * grid.height;
     this.tiles = new Uint8Array(this.count);
     this.clearance = new Uint8Array(this.count);
-    for (let cell = 0; cell < this.count; cell++) if (grid.walkable(this.position(cell))) this.tiles[cell] = 2;
-    areas.forEach((area, owner) => {
+  }
+  *initialize(): PlanningWork<void> {
+    const { grid, areas } = this;
+    for (let cell = 0; cell < this.count; cell++) {
+      if (cell % 128 === 0) yield 'map-analysis';
+      if (grid.walkable(this.position(cell))) this.tiles[cell] = 2;
+    }
+    let areaCells = 0;
+    for (const [owner, area] of areas.entries()) {
       for (let y = Math.max(0, area.y - area.halfHeight); y <= Math.min(grid.height - 1, area.y + area.halfHeight); y++) {
         for (let x = Math.max(0, area.x - area.halfWidth); x <= Math.min(grid.width - 1, area.x + area.halfWidth); x++) {
           const cell = x + y * grid.width;
+          if (areaCells++ % 128 === 0) yield 'map-analysis';
           if (!this.tiles[cell]) continue;
           this.tiles[cell] = 1;
           const list = this.owners.get(cell) ?? [];
@@ -86,8 +100,8 @@ class MapCells {
           this.owners.set(cell, list);
         }
       }
-    });
-    this.analyzeClearance();
+    }
+    yield* this.analyzeClearance();
   }
   index(p: Position): number {
     return Number.isInteger(p.x) && Number.isInteger(p.y) && p.x >= 0 && p.y >= 0
@@ -95,16 +109,17 @@ class MapCells {
   }
   position(cell: number): Position { return { x: cell % this.grid.width, y: Math.floor(cell / this.grid.width) }; }
   safe(p: Position): boolean { return this.tiles[this.index(p)] === 2; }
-  private analyzeClearance(): void {
+  private *analyzeClearance(): PlanningWork<void> {
     this.clearance.fill(5);
     const queue = new Int32Array(this.count);
     let head = 0;
     let tail = 0;
-    for (let cell = 0; cell < this.count; cell++) if (this.tiles[cell] !== 2) {
-      this.clearance[cell] = 0;
-      queue[tail++] = cell;
+    for (let cell = 0; cell < this.count; cell++) {
+      if (cell % 128 === 0) yield 'map-analysis';
+      if (this.tiles[cell] !== 2) { this.clearance[cell] = 0; queue[tail++] = cell; }
     }
     for (let cell = 0; cell < this.count; cell++) {
+      if (cell % 128 === 0) yield 'map-analysis';
       const p = this.position(cell);
       if (this.tiles[cell] === 2 && (p.x === 0 || p.y === 0 || p.x === this.grid.width - 1 || p.y === this.grid.height - 1)) {
         this.clearance[cell] = 1;
@@ -112,6 +127,7 @@ class MapCells {
       }
     }
     while (head < tail) {
+      if (head % 128 === 0) yield 'map-analysis';
       const cell = queue[head++]!;
       const nextDistance = this.clearance[cell]! + 1;
       if (nextDistance >= 5) continue;
@@ -158,7 +174,8 @@ export class TravelPlanner {
       this.byMap.set(edge.fromMap, list);
     }
   }
-  private mapCells(map: string): MapCells | null {
+  private mapCells(map: string): MapCells | null { return completePlanning(this.mapCellsWork(map)); }
+  private *mapCellsWork(map: string): PlanningWork<MapCells | null> {
     const cached = this.maps.get(map);
     if (cached) {
       this.maps.delete(map); this.maps.set(map, cached);
@@ -171,6 +188,10 @@ export class TravelPlanner {
     if (areas.some(a => ![a.x,a.y,a.halfWidth,a.halfHeight].every(Number.isInteger)
       || a.halfWidth < 0 || a.halfHeight < 0)) return null;
     const cells = new MapCells(grid, areas);
+    yield* cells.initialize();
+    // Another yielded query may have installed this map while analysis ran.
+    const installed = this.maps.get(map);
+    if (installed) return installed;
     this.maps.set(map, cells);
     this.mapCellCount += cells.count;
     // A custom grid provider may change between snapshots. Do not reuse a
@@ -194,7 +215,10 @@ export class TravelPlanner {
       && sameArea(e.area, edge.area) && sameArrival(e, edge));
   }
   private search(map: string, from: Position, edge: PortalEdge | null, avoidWalls: boolean): Path | null {
-    const mapCells = this.mapCells(map);
+    return completePlanning(this.searchWork(map, from, edge, avoidWalls));
+  }
+  private *searchWork(map: string, from: Position, edge: PortalEdge | null, avoidWalls: boolean): PlanningWork<Path | null> {
+    const mapCells = yield* this.mapCellsWork(map);
     if (!mapCells || (edge && !this.edgeKnown(map, edge))) return null;
     const key = `${map}:${from.x}:${from.y}:${edge?.id ?? 'escape'}:${avoidWalls ? 1 : 0}`;
     const cached = this.paths.get(key);
@@ -202,10 +226,11 @@ export class TravelPlanner {
       this.paths.delete(key); this.paths.set(key,cached);
       return cached.path;
     }
-    const path = this.findPath(map,mapCells,from,edge,avoidWalls);
+    const path = yield* this.findPath(map,mapCells,from,edge,avoidWalls);
     // Cache exact, collision-checked approaches rather than bypassing planning
     // for nearby positions. Bound both the number of entries and stored cells.
-    if (!path || path.cells.length <= 60_000) {
+    if (this.maps.get(map) === mapCells && (!path || path.cells.length <= 60_000)) {
+      this.pathCells -= this.paths.get(key)?.path?.cells.length ?? 0;
       this.paths.set(key,{ map,path }); this.pathCells += path?.cells.length ?? 0;
       while (this.paths.size > 128 || this.pathCells > 60_000) {
         const first = this.paths.keys().next().value!;
@@ -215,7 +240,7 @@ export class TravelPlanner {
     }
     return path;
   }
-  private findPath(map: string, mapCells: MapCells, from: Position, edge: PortalEdge | null, avoidWalls: boolean): Path | null {
+  private *findPath(map: string, mapCells: MapCells, from: Position, edge: PortalEdge | null, avoidWalls: boolean): PlanningWork<Path | null> {
     const { count, tiles, clearance, owners } = mapCells;
     const start = mapCells.index(from);
     if (start < 0 || !tiles[start]) return null;
@@ -246,7 +271,9 @@ export class TravelPlanner {
     costs[initial] = 0;
     open.push({ state: initial, cost: 0, priority: heuristic(from) });
     let current: Cell | undefined;
+    let visited = 0;
     while ((current = open.pop())) {
+      if (visited++ % 128 === 0) yield 'local-search';
       if (closed[current.state] || costs[current.state] !== current.cost) continue;
       closed[current.state] = 1;
       const cell = current.state % count;
@@ -254,7 +281,10 @@ export class TravelPlanner {
       const escaped = current.state >= count;
       if ((!edge && tiles[cell] === 2) || (edge && escaped && entry(cell))) {
         const cells: Position[] = [];
-        for (let state = current.state; state >= 0; state = parents[state]!) cells.push(mapCells.position(state % count));
+        for (let state = current.state; state >= 0; state = parents[state]!) {
+          if (cells.length % 128 === 0) yield 'local-search';
+          cells.push(mapCells.position(state % count));
+        }
         return { cells: cells.reverse(), cost: current.cost };
       }
       for (const [dx,dy] of directions) {
@@ -305,15 +335,17 @@ export class TravelPlanner {
     if (this.navigators.size > 4) this.navigators.delete(this.navigators.keys().next().value!);
     return navigator;
   }
-  private distancesTo(toMap: string, policy: MapPolicy = DEFAULT_MAP_POLICY, origin = ''): Map<string, number> {
+  private *distancesTo(toMap: string, policy: MapPolicy = DEFAULT_MAP_POLICY, origin = ''): PlanningWork<Map<string, number>> {
     const incoming = new Map<string, string[]>();
     for (const edge of this.edges) {
+      yield 'heuristic';
       if ((!this.allowSameMap && edge.fromMap === edge.toMap) || !mapAllowed(policy,edge.toMap) || (!mapAllowed(policy,edge.fromMap) && edge.fromMap !== origin)) continue;
       const maps = incoming.get(edge.toMap) ?? []; maps.push(edge.fromMap); incoming.set(edge.toMap, maps);
     }
     const distances = new Map([[toMap,0]]);
     const queue = [toMap];
     for (let head = 0; head < queue.length; head++) for (const map of incoming.get(queue[head]!) ?? []) {
+      yield 'heuristic';
       if (distances.has(map)) continue;
       distances.set(map, distances.get(queue[head]!)! + 1); queue.push(map);
     }
@@ -321,11 +353,18 @@ export class TravelPlanner {
   }
   /** Fewest reachable portal crossings, then least collision-aware walking cost. */
   routeBetweenMaps(fromMap: string, from: Position, toMap: string, avoidWalls = true, policy: MapPolicy = DEFAULT_MAP_POLICY): TravelStep[] | null {
+    return completePlanning(this.routeWork(fromMap, from, toMap, avoidWalls, policy));
+  }
+  /** Detached input is shared by the native UI and injected bridge. */
+  routeBetweenMapsAsync(fromMap: string, from: Position, toMap: string, avoidWalls = true, policy: MapPolicy = DEFAULT_MAP_POLICY, options: PlanningOptions = {}): Promise<TravelStep[] | null> {
+    return runPlanning(this.routeWork(fromMap, { ...from }, toMap, avoidWalls, structuredClone(policy)), options);
+  }
+  private *routeWork(fromMap: string, from: Position, toMap: string, avoidWalls: boolean, policy: MapPolicy): PlanningWork<TravelStep[] | null> {
     if (!mapAllowed(policy,toMap)) return null;
-    if (policy.mode === 'weighted') return this.weightedRoute(fromMap,from,toMap,avoidWalls,policy);
-    if (!this.mapCells(fromMap) || !this.mapCells(toMap) || !this.planArrivalEscape(fromMap, from, avoidWalls)) return null;
+    if (policy.mode === 'weighted') return yield* this.weightedRoute(fromMap,from,toMap,avoidWalls,policy);
+    if (!(yield* this.mapCellsWork(fromMap)) || !(yield* this.mapCellsWork(toMap)) || !(yield* this.searchWork(fromMap, from, null, avoidWalls))) return null;
     if (fromMap === toMap) return [];
-    const distances = this.distancesTo(toMap,policy,fromMap);
+    const distances = yield* this.distancesTo(toMap,policy,fromMap);
     if (!distances.has(fromMap)) return null;
     const key = (map: string, p: Position) => `${map}:${p.x}:${p.y}`;
     const initial: WorldNode = { key: key(fromMap,from), map: fromMap, position: { ...from }, hops: 0,
@@ -336,6 +375,7 @@ export class TravelPlanner {
     let current: WorldNode | undefined;
     let expanded = 0;
     while ((current = open.pop())) {
+      yield 'world-search';
       if (current.pending) {
         // Validate an edge only when its minimum crossings and geometric
         // walking lower bound could beat the next fully verified route.
@@ -343,9 +383,9 @@ export class TravelPlanner {
         if (best.get(parent.key) !== parent) continue;
         const previous = best.get(current.key);
         if (previous && (previous.hops < current.hops || previous.hops === current.hops && previous.cost <= current.cost)) continue;
-        const approach = this.search(parent.map,parent.position,current.pending,avoidWalls);
+        const approach = yield* this.searchWork(parent.map,parent.position,current.pending,avoidWalls);
         if (!approach) continue;
-        const target = this.mapCells(current.map);
+        const target = yield* this.mapCellsWork(current.map);
         if (!target || !target.tiles[target.index(current.position)]) continue;
         const cost = parent.cost + approach.cost;
         if (previous && previous.hops === current.hops && previous.cost <= cost) continue;
@@ -357,16 +397,17 @@ export class TravelPlanner {
       if (best.get(current.key) !== current) continue;
       if (++expanded > 4096 || current.hops > 64) return null;
       if (current.map === toMap) {
-        const finalEscape = this.planArrivalEscape(current.map, current.position, avoidWalls);
+        const escape = yield* this.searchWork(current.map, current.position, null, avoidWalls);
+        const finalEscape = escape ? yield* copyCells(escape.cells) : null;
         if (!finalEscape) continue;
         const steps: TravelStep[] = [];
         for (let node: WorldNode | null = current; node?.step; node = node.parent)
-          steps.push({ ...node.step,cells: node.step.cells.map(p => ({ ...p })),arrivalEscape: [] });
+          steps.push({ ...node.step,cells: yield* copyCells(node.step.cells),arrivalEscape: [] });
         steps.reverse();
         for (let i = 0; i < steps.length; i++) {
           const next = steps[i + 1]?.cells;
           if (!next) { steps[i]!.arrivalEscape = finalEscape; continue; }
-          const target = this.mapCells(steps[i]!.portal.toMap)!;
+          const target = (yield* this.mapCellsWork(steps[i]!.portal.toMap))!;
           const exit = next.findIndex(p => target.safe(p));
           if (exit < 0) return null;
           steps[i]!.arrivalEscape = next.slice(0, exit + 1);
@@ -395,28 +436,29 @@ export class TravelPlanner {
    * label which still has enough crossings available. Physical searches/cache
    * remain policy independent; every graph edge is checked against this snapshot.
    */
-  private weightedRoute(fromMap:string,from:Position,toMap:string,avoidWalls:boolean,policy:MapPolicy):TravelStep[]|null {
-    if (!this.mapCells(fromMap) || !this.mapCells(toMap) || !this.search(fromMap,from,null,avoidWalls)) return null;
+  private *weightedRoute(fromMap:string,from:Position,toMap:string,avoidWalls:boolean,policy:MapPolicy):PlanningWork<TravelStep[]|null> {
+    if (!(yield* this.mapCellsWork(fromMap)) || !(yield* this.mapCellsWork(toMap)) || !(yield* this.searchWork(fromMap,from,null,avoidWalls))) return null;
     if(fromMap===toMap)return [];
     type Label={key:string;map:string;position:Position;score:number;estimate:number;hops:number;sequence:number;parent:Label|null;step:Omit<TravelStep,'arrivalEscape'>|null;terminal?:Path;pending?:PortalEdge};
     const key=(map:string,p:Position)=>`${map}:${p.x}:${p.y}`;
     let sequence=0,expanded=0;
     const labels=new Map<string,Label[]>();
-    const remaining=this.weightedPotential(toMap,policy);
+    const remaining=yield* this.weightedPotential(toMap,policy);
     const initialEstimate=remaining(fromMap,from);if(!Number.isFinite(initialEstimate))return null;
     const heap=new Heap<Label>((a,b)=>a.estimate<b.estimate||(a.estimate===b.estimate&&(a.score<b.score||a.score===b.score&&(a.hops<b.hops||a.hops===b.hops&&a.sequence<b.sequence))));
     const first:Label={key:key(fromMap,from),map:fromMap,position:{...from},score:0,estimate:initialEstimate,hops:0,sequence:sequence++,parent:null,step:null};
     labels.set(first.key,[first]);heap.push(first);
     const penalties=new Map(policy.penalties.map(p=>[p.map,p.cost]));
-    const distances=this.distancesTo(toMap,policy,fromMap);
+    const distances=yield* this.distancesTo(toMap,policy,fromMap);
     let current:Label|undefined;
     while((current=heap.pop())){
+      yield 'world-search';
       if(current.pending){
         const parent=current.parent!;
         if(!labels.get(parent.key)?.includes(parent))continue;
         const previous=labels.get(current.key)??[];
         if(previous.some(l=>l.score<=current!.score&&l.hops<=current!.hops))continue;
-        const approach=this.search(parent.map,parent.position,current.pending,avoidWalls);if(!approach)continue;
+        const approach=yield* this.searchWork(parent.map,parent.position,current.pending,avoidWalls);if(!approach)continue;
         const score=parent.score+approach.cost+PORTAL_COST+(penalties.get(parent.map)??0);
         const next:Label={...current,score,estimate:Math.floor(score)+remaining(current.map,current.position),pending:undefined,step:{portal:current.pending,cells:approach.cells}};
         if(previous.some(l=>l.score<=next.score&&l.hops<=next.hops))continue;
@@ -424,28 +466,28 @@ export class TravelPlanner {
       }
       if(current.terminal){
         const steps:TravelStep[]=[];
-        for(let node:Label|null=current.parent;node?.step;node=node.parent)steps.push({...node.step,cells:node.step.cells.map(p=>({...p})),arrivalEscape:[]});
+        for(let node:Label|null=current.parent;node?.step;node=node.parent)steps.push({...node.step,cells:yield* copyCells(node.step.cells),arrivalEscape:[]});
         steps.reverse();
         for(let i=0;i<steps.length;i++){
           const next=steps[i+1]?.cells;
-          if(!next){steps[i]!.arrivalEscape=current.terminal.cells.map(p=>({...p}));continue;}
-          const target=this.mapCells(steps[i]!.portal.toMap)!,exit=next.findIndex(p=>target.safe(p));
+          if(!next){steps[i]!.arrivalEscape=yield* copyCells(current.terminal.cells);continue;}
+          const target=(yield* this.mapCellsWork(steps[i]!.portal.toMap))!,exit=next.findIndex(p=>target.safe(p));
           if(exit<0)return null;
-          steps[i]!.arrivalEscape=next.slice(0,exit+1).map(p=>({...p}));
+          steps[i]!.arrivalEscape=yield* copyCells(next,exit+1);
         }
         return steps;
       }
       if(!labels.get(current.key)?.includes(current))continue;
       if(++expanded>4096)return null;
       if(current.map===toMap){
-        const escape=this.search(current.map,current.position,null,avoidWalls);
+        const escape=yield* this.searchWork(current.map,current.position,null,avoidWalls);
         if(escape)heap.push({...current,score:current.score+escape.cost,estimate:current.score+escape.cost,sequence:sequence++,parent:current,terminal:escape});
         continue;
       }
       if(current.hops>=64)continue;
       for(const edge of this.byMap.get(current.map)??[]){
         if((!this.allowSameMap&&edge.fromMap===edge.toMap)||!mapAllowed(policy,edge.toMap)||!distances.has(edge.toMap)||current.hops+1+distances.get(edge.toMap)!>64)continue;
-        const target=this.mapCells(edge.toMap);if(!target||!target.tiles[target.index(edge.arrival)])continue;
+        const target=yield* this.mapCellsWork(edge.toMap);if(!target||!target.tiles[target.index(edge.arrival)])continue;
         const dx=Math.max(0,Math.abs(current.position.x-edge.area.x)-edge.area.halfWidth),dy=Math.max(0,Math.abs(current.position.y-edge.area.y)-edge.area.halfHeight);
         const score=current.score+10*Math.max(dx,dy)+4*Math.min(dx,dy)+PORTAL_COST+(penalties.get(current.map)??0),bound=remaining(edge.toMap,edge.arrival);
         if(!Number.isFinite(bound))continue;
@@ -469,7 +511,7 @@ export class TravelPlanner {
    * catalog bounds this temporary graph, which is discarded
    * after the query rather than retaining another planner per policy.
    */
-  private weightedPotential(toMap:string,policy:MapPolicy):(map:string,p:Position)=>number {
+  private *weightedPotential(toMap:string,policy:MapPolicy):PlanningWork<(map:string,p:Position)=>number> {
     const key=(map:string,p:Position)=>`${map}:${p.x}:${p.y}`;
     const penalties=new Map(policy.penalties.map(p=>[p.map,Math.floor(p.cost)]));
     const departures=(map:string)=>(this.byMap.get(map)??[]).filter(e=>(this.allowSameMap||e.fromMap!==e.toMap)&&mapAllowed(policy,e.toMap));
@@ -478,9 +520,10 @@ export class TravelPlanner {
       return 10*Math.max(dx,dy)+4*Math.min(dx,dy)+PORTAL_COST+(penalties.get(map)??0);
     };
     const arrivals=new Map<string,{map:string;position:Position}>();
-    for(const edges of this.byMap.values())for(const e of edges)if(mapAllowed(policy,e.toMap))arrivals.set(key(e.toMap,e.arrival),{map:e.toMap,position:e.arrival});
+    for(const edges of this.byMap.values())for(const e of edges) { yield 'heuristic'; if(mapAllowed(policy,e.toMap))arrivals.set(key(e.toMap,e.arrival),{map:e.toMap,position:e.arrival}); }
     const reverse=new Map<string,Array<{key:string;cost:number}>>();
     for(const [origin,a] of arrivals)for(const edge of departures(a.map)){
+      yield 'heuristic';
       const destination=key(edge.toMap,edge.arrival),incoming=reverse.get(destination)??[];
       incoming.push({key:origin,cost:cost(a.map,a.position,edge)});reverse.set(destination,incoming);
     }
@@ -489,8 +532,10 @@ export class TravelPlanner {
     for(const [id,a] of arrivals)if(a.map===toMap){distances.set(id,0);heap.push({key:id,cost:0});}
     let current:{key:string;cost:number}|undefined;
     while((current=heap.pop())){
+      yield 'heuristic';
       if(distances.get(current.key)!==current.cost)continue;
       for(const edge of reverse.get(current.key)??[]){
+        yield 'heuristic';
         const distance=current.cost+edge.cost;
         if(distance<(distances.get(edge.key)??Infinity)){distances.set(edge.key,distance);heap.push({key:edge.key,cost:distance});}
       }
@@ -516,3 +561,6 @@ export const planPortalApproach = (map: string, from: Position, edge: PortalEdge
 export const planArrivalEscape = (map: string, from: Position, avoidWalls = true): Position[] | null =>
   planner.planArrivalEscape(map,from,avoidWalls);
 export const travelNavigator = (map: string, cells: readonly Position[]): GridNavigator | null => planner.travelNavigator(map,cells);
+
+export const routeBetweenMapsAsync = (fromMap: string, from: Position, toMap: string, avoidWalls = true, policy: MapPolicy = DEFAULT_MAP_POLICY, options: PlanningOptions = {}): Promise<TravelStep[] | null> =>
+  planner.routeBetweenMapsAsync(fromMap, from, toMap, avoidWalls, policy, options);

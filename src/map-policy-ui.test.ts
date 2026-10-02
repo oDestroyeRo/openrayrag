@@ -7,14 +7,20 @@ function setup(settings=()=>DEFAULT_SETTINGS){
   const nodes=new Map<string,{textContent:string;dataset:Record<string,string>;value:string;hidden:boolean}>();
   const host={querySelector:(key:string)=>{if(!nodes.has(key))nodes.set(key,{textContent:'',dataset:{actors:''},value:'',hidden:false});return nodes.get(key)!;}};
   const view=Object.create(FeatureUi.prototype);Object.assign(view,{host,hooks:{settings,map:()=> 'prt_fild08'},status:{},dispositionPlan:null,social:{render:()=>{}},memo:{render:()=>{}},socket:{render:()=>{}}});
-  return {render:(status:unknown)=>FeatureUi.prototype.render.call(view,status),output:host.querySelector('#map-policy-preview'),session:host.querySelector('#session-details')};
+  return {view,render:(status:unknown)=>FeatureUi.prototype.render.call(view,status),output:host.querySelector('#map-policy-preview'),session:host.querySelector('#session-details')};
 }
 describe('map policy status rendering',()=>{
-  it.each(['complete','failed','cancelled'])('publishes terminal %s without a rectangle and preserves a later preview',state=>{
+  it.each(['planning','complete','failed','cancelled'])('publishes terminal %s without a rectangle and preserves a later preview',state=>{
     const ui=setup();const travel={state:'walking',policy:{...DEFAULT_MAP_POLICY,mode:'weighted'},purpose:'travel',reason:'Approaching a portal.'};
     ui.render({travel});expect(ui.output.textContent).toContain('Approaching a portal.');
     const terminal={...travel,state,reason:'Terminal travel result.'};ui.render({travel:terminal});expect(ui.output.textContent).toContain(`${state} · travel · Terminal travel result.`);
     ui.output.textContent='Fresh explicit preview.';ui.render({travel:terminal});expect(ui.output.textContent).toBe('Fresh explicit preview.');
+  });
+  it('keeps Start, manual and service ownership controls blocked during planning',()=>{
+    const ui=setup();ui.render({travel:{state:'planning',policy:DEFAULT_MAP_POLICY,purpose:'travel',reason:'Planning'}});
+    expect(ui.view.active()).toBe(true);expect(ui.view.serviceBlocked()).toBe(true);
+    ui.render({travel:{state:'cancelled',policy:DEFAULT_MAP_POLICY,purpose:'travel',reason:'Stopped'}});
+    expect(ui.view.active()).toBe(false);expect(ui.view.serviceBlocked()).toBe(false);
   });
   it('keeps rendering current telemetry while settings validation throws during an edit',()=>{
     const ui=setup(()=>{throw new Error('Unknown allowed map: partial-entry');});

@@ -1,18 +1,42 @@
-import { DEFAULT_MAP_POLICY, insideLockArea, mapAllowed, type MapPolicy } from './map-policy';
+import type { PlanningOptions } from './route-planning';
+import { DEFAULT_MAP_POLICY, insideLockArea, mapAllowed, policyIdentity, type MapPolicy } from './map-policy';
 import type { Entity, GameEvent, Position, Walk } from './protocol';
 import type { Action } from './engine';
 import { distance, GridNavigator, routeSegment, searchGrid, type WalkGrid } from './navigation';
 import { walkDuration } from './movement';
-import { planArrivalEscape, planPortalApproach, routeBetweenMaps, travelNavigator, type TravelStep } from './travel';
+import { planArrivalEscape, planPortalApproach, routeBetweenMaps, routeBetweenMapsAsync, travelNavigator, type TravelStep } from './travel';
 
 export interface TravelSnapshot {
-  state: 'idle' | 'walking' | 'transition' | 'complete' | 'failed' | 'cancelled';
+  state: 'idle' | 'planning' | 'walking' | 'transition' | 'complete' | 'failed' | 'cancelled';
   destination: string; reason: string; policy: MapPolicy; purpose: 'travel' | 'service' | 'return' | 'field-entry'; remainingMaps: string[]; route: Position[]; leg: Position[];
+}
+export interface TravelPlanningContext {
+  /** Connection, world and observed own-actor lifetime, independent of actor ID reuse. */
+  identity: string | null;
+  map: string;
+  player: Entity | undefined;
+}
+export interface TravelPlanningOptions {
+  context?: () => TravelPlanningContext;
+  scheduler?: PlanningOptions['scheduler'];
+  plan?: typeof routeBetweenMapsAsync;
+}
+interface PlanningRequest {
+  generation: number;
+  abort: AbortController;
+  identity: string | null;
+  start: Position;
+  policy: string;
 }
 const cell = (p: Position): Position => ({ x: Math.floor(p.x), y: Math.floor(p.y) });
 
 /** Owns movement only while the field engine is stopped. Never infers a map transition from elapsed time. */
 export class TravelController {
+  private planning: PlanningRequest | null = null;
+  private generation = 0;
+  private executionIdentity: string | null = null;
+  private installedStart: Position | null = null;
+  private latest: { map: string; player: Entity | undefined } = { map: '', player: undefined };
   private policy:MapPolicy=DEFAULT_MAP_POLICY;
   private purpose:TravelSnapshot['purpose']='travel';
   private state: TravelSnapshot['state'] = 'idle';
@@ -34,21 +58,48 @@ export class TravelController {
   private approachNav: GridNavigator | null = null;
   private approachTarget: Position | null = null;
   private leg: { cells: Position[]; since: number; acceptedUntil: number | null; nudged: boolean } | null = null;
-  constructor(private readonly send: (action: Action) => void, private readonly now = Date.now, private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) {}
-  get active(): boolean { return this.state === 'walking' || this.state === 'transition'; }
+  constructor(private readonly send: (action: Action) => void, private readonly now = Date.now, private readonly gridFor: (map: string) => WalkGrid | null = searchGrid, private readonly planningOptions: TravelPlanningOptions = {}) {}
+  get active(): boolean { return this.state === 'planning' || this.state === 'walking' || this.state === 'transition'; }
 
   start(map: string, player: Entity, destination: string, stepSize: number, avoidWalls: boolean, policy:MapPolicy=DEFAULT_MAP_POLICY, purpose:TravelSnapshot['purpose']='travel'): void {
     if (this.active) throw new Error('Stop the current trip first.');
     if (!Number.isInteger(stepSize) || stepSize < 1 || stepSize > 20) throw new Error('Invalid travel step size.');
     if(!mapAllowed(policy,destination))throw new Error('The destination map is forbidden by the map policy.');
-    const steps = routeBetweenMaps(map, cell(player), destination, avoidWalls,policy);
-    if (!steps) throw new Error(`No verified route connects this position to the destination under the map policy.${!mapAllowed(policy,map)?' Current map is forbidden: departure only; reentry is prohibited.':''}`);
+    const steps = policy.mode === 'weighted' ? null : routeBetweenMaps(map, cell(player), destination, avoidWalls,policy);
+    if (policy.mode !== 'weighted' && !steps) throw new Error(`No verified route connects this position to the destination under the map policy.${!mapAllowed(policy,map)?' Current map is forbidden: departure only; reentry is prohibited.':''}`);
     this.policy=structuredClone(policy);this.purpose=purpose;
     this.approachNav = null; this.approachTarget = null;
-    this.steps = steps; this.destination = destination; this.map = map; this.playerId = player.id;
+    this.steps = steps ?? []; this.destination = destination; this.map = map; this.playerId = player.id;
     this.stepSize = stepSize; this.avoidWalls = avoidWalls; this.since = this.now(); this.deadline = this.now() + 20_000;
     this.leg = null; this.awaitingSpawn = false; this.finalEscape = false; this.lastAction = 0;
     this.consecutiveNudges = 0; this.nudgeNavigator = null;
+    this.latest = { map, player }; this.installedStart = null;
+    this.executionIdentity = this.planningOptions.context?.().identity ?? null;
+    if (policy.mode === 'weighted') {
+      const context = this.planningOptions.context?.();
+      if (context && (!context.identity || context.map !== map || !context.player || context.player.dead || context.player.id !== player.id || distance(cell(context.player), cell(player)) !== 0)) {
+        this.state = 'failed'; this.reason = 'A current own actor lifetime is required for route planning.'; return;
+      }
+      const request: PlanningRequest = { generation: ++this.generation, abort: new AbortController(), identity: context?.identity ?? null, start: cell(player), policy: policyIdentity(this.policy) };
+      this.planning = request; this.route = []; this.state = 'planning';
+      this.reason = `Planning a verified route to ${destination}. Stop cancels planning.`;
+      // Ownership is visible before the planner can schedule its first slice.
+      try {
+        void (this.planningOptions.plan ?? routeBetweenMapsAsync)(map, request.start, destination, avoidWalls, this.policy,
+          { signal: request.abort.signal, scheduler: this.planningOptions.scheduler }).then(result => {
+          if (this.planning !== request || request.generation !== this.generation) return;
+          if (!this.planningCurrent(request)) { this.cancel('Route planning state changed. Choose the destination again.', true); return; }
+          if (!result) { this.cancel('No verified route connects this position to the destination under the map policy.', true); return; }
+          this.planning = null; this.steps = result; this.installedStart = { ...request.start };
+          const current = this.planningOptions.context?.() ?? this.latest;
+          this.plan(current.player!, result[0]?.cells);
+        }).catch(error => {
+          if (request.generation === this.generation)
+            this.cancel(error instanceof Error ? error.message : 'Route planning failed.', true);
+        });
+      } catch (error) { this.cancel(error instanceof Error ? error.message : 'Route planning failed.', true); }
+      return;
+    }
     this.state = 'walking'; this.plan(player);
   }
 
@@ -65,17 +116,25 @@ export class TravelController {
     const route = nav.plan(cell(player),destination,{avoidWalls:true});
     if (!route?.length || route.length > 512) throw new Error('The final approach is unreachable or exceeds 512 cells.');
     this.policy=structuredClone(policy);this.purpose=purpose;
+    this.installedStart = null; this.executionIdentity = this.planningOptions.context?.().identity ?? null;
     this.approachNav = nav; this.approachTarget = destination; this.consecutiveNudges = 0; this.nudgeNavigator = null; this.steps = []; this.destination = map; this.map = map; this.playerId = player.id;
     this.stepSize = stepSize; this.route = route; this.finalEscape = true; this.leg = null; this.awaitingSpawn = false;
     this.since = this.now(); this.lastAction = 0; this.state = 'walking'; this.reason = purpose==='field-entry'?'Entering the field lock area.':'Approaching the NPC on verified ground.';
   }
 
-  private plan(player: Entity): void {
+  private planningCurrent(request: PlanningRequest): boolean {
+    const context = this.planningOptions.context?.() ?? this.latest;
+    return !request.abort.signal.aborted && this.state === 'planning' && this.map === context.map
+      && !!context.player && !context.player.dead && context.player.id === this.playerId
+      && distance(cell(context.player), request.start) === 0 && request.policy === policyIdentity(this.policy)
+      && (!this.planningOptions.context || (context as TravelPlanningContext).identity === request.identity);
+  }
+  private plan(player: Entity, verified?: Position[]): void {
     const step = this.steps[0];
-    const route = this.approachNav
+    const route = verified ?? (this.approachNav
       ? this.approachTarget ? this.approachNav.plan(cell(player), this.approachTarget, { avoidWalls: true }) : null
       : step ? planPortalApproach(this.map, cell(player), step.portal, this.avoidWalls)
-        : planArrivalEscape(this.map, cell(player), this.avoidWalls);
+        : planArrivalEscape(this.map, cell(player), this.avoidWalls));
     if (!route?.length || this.approachNav && route.length > 512) {
       this.cancel(this.approachNav ? 'The final approach is unreachable or exceeds 512 cells.' : 'Arrival or next portal is unreachable on verified ground.', true); return;
     }
@@ -89,6 +148,13 @@ export class TravelController {
   observe(events: GameEvent[]): void {
     for (const event of events) {
       if (!this.active) return;
+      if (this.state === 'planning') {
+        if (event.type === 'map' || event.type === 'enter' || event.type === 'clear'
+          || event.type === 'spawn' && event.entity.id === this.playerId
+          || 'id' in event && event.id === this.playerId && ['remove','death','walk','position','stop'].includes(event.type))
+          this.cancel('Route planning state changed. Choose the destination again.', true);
+        continue;
+      }
       if (event.type === 'death' && event.id === this.playerId) { this.cancel('Travel stopped because the character died.', true); continue; }
       if (event.type === 'enter') { this.cancel('Travel stopped because the game session changed.', true); continue; }
       if (event.type === 'map') {
@@ -105,6 +171,7 @@ export class TravelController {
       } else if (event.type === 'spawn' && event.entity.id === this.playerId && this.awaitingSpawn) {
         const expected = this.steps[0]?.portal.arrival;
         if (!expected || distance(expected, event.entity) > 6) { this.cancel('Portal arrival did not match its verified destination.', true); continue; }
+        this.executionIdentity = this.planningOptions.context?.().identity ?? null;
         this.awaitingSpawn = false; this.steps.shift(); this.plan(event.entity);
       } else if (event.type === 'walk' && event.id === this.playerId) {
         if (this.acceptNudge(event.walk)) continue;
@@ -158,14 +225,22 @@ export class TravelController {
     return Math.abs(p.x - a.x) <= a.halfWidth && Math.abs(p.y - a.y) <= a.halfHeight;
   }
   tick(map: string, player: Entity | undefined): void {
+    this.latest = { map, player };
     if (!this.active) return;
     const now = this.now();
     if (this.approachNav && now - this.since > 300_000) { this.cancel('Final NPC approach reached its five-minute limit.', true); return; }
     if (now - this.since > 1_200_000) { this.cancel('Travel reached its twenty-minute limit.', true); return; }
+    if (this.planning) {
+      if (!this.planningCurrent(this.planning)) this.cancel('Route planning state changed. Choose the destination again.', true);
+      return;
+    }
     if (this.state === 'transition') {
       if (now > this.deadline) this.cancel('The planned map transition was not confirmed. No retry was sent.', true);
       return;
     }
+    const context = this.planningOptions.context?.();
+    if (context && (!context.identity || context.identity !== this.executionIdentity || context.map !== this.map)) { this.cancel('Travel world or own actor lifetime changed.', true); return; }
+    if (this.installedStart && player && distance(cell(player), this.installedStart) !== 0) { this.cancel('Starting cell changed after planning. Choose the destination again.', true); return; }
     if (!player || player.dead || map !== this.map) { this.cancel('Travel character or map state is unavailable.', true); return; }
     if (this.leg) {
       if (now - this.leg.since > 19_000) { this.cancel('Travel movement confirmation timed out. No retry was sent.', true); return; }
@@ -191,10 +266,12 @@ export class TravelController {
     if (now - this.lastAction < 300) return;
     const cells = routeSegment(this.route, this.stepSize);
     this.leg = { cells, since: now, acceptedUntil: null, nudged: false };
+    this.installedStart = null;
     this.send({ type: 'walk', destination: cells.at(-1)! }); this.lastAction = now;
   }
   cancel(reason = 'Travel stopped by you.', failed = false): void {
-    const wasActive = this.active;
+    const wasActive = this.active && this.state !== 'planning';
+    this.generation++; this.planning?.abort.abort(); this.planning = null; this.installedStart = null;
     this.state = failed ? 'failed' : 'cancelled'; this.reason = reason;
     this.leg = null; this.route = []; this.awaitingSpawn = false;
     if (wasActive) this.send({ type: 'stop' });
