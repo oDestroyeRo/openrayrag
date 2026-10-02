@@ -50,6 +50,7 @@ const fields: Record<Section, Field[]> = {
   combat: [
     { path:'combat.mode', label:'Combat mode', options:[['selected','Selected monsters'],['retaliate','Retaliate only'],['both','Selected + retaliation'],['off','Combat off']] },
     { path:'combat.levelDifference', label:'Maximum levels above you', min:-100, max:100 },
+    { path:'loot.ownership',label:'Pickup scope',options:[['own','Only drops from your kills'],['all','Loot all nearby drops']] },
   ],
   recovery: [
     { path:'recovery.enabled', label:'Sit to recover HP and SP', kind:'checkbox' },
@@ -85,7 +86,6 @@ const fields: Record<Section, Field[]> = {
     {path:'loadout.minAmmoStock',label:'Minimum observed ammo reserve',min:0,max:9999},
     {path:'loadout.restore',label:'Restore prior equipment',options:[['conditionEnd','When the condition ends'],['never','Keep the new loadout']]},
     {path:'loadout.cooldownSeconds',label:'Equipment cooldown, seconds',min:1,max:3600},
-    { path:'loot.ownership',label:'Pickup ownership',options:[['own','Drops from your kills'],['all','All available drops']] },
     { path:'loot.defaultAction',label:'Unlisted item rule',options:[['pickup','Pick up'],['ignore','Ignore']] },
   ],
   workflows: [
@@ -212,7 +212,7 @@ export class FeatureUi {
     const travel = this.panels.get('travel')!;
     travel.prepend(combat.querySelector('.routing-field')!,combat.querySelector('.routing-settings')!);
     const recovery = this.panels.get('recovery')!; recovery.append(combat.querySelector('#min-hp')!.previousElementSibling!,combat.querySelector('#min-hp')!);
-    this.panels.get('inventory')!.prepend(combat.querySelector('label[for="loot"]')!);
+    this.note('combat','Loot all considers observed drops inside your pickup radius and allowed field area. Item ignore rules still apply. The server decides pickup rights and inventory capacity; sending Pickup is not success.');
     const actions = combat.querySelector('.actions')!; actions.classList.add('run-controls'); host.insertBefore(actions,host.querySelector('footer'));
     const sessionDetails=document.createElement('p');sessionDetails.id='session-details';sessionDetails.className='session-details';sessionDetails.textContent='Session time, experience and task state appear after connection.';host.querySelector('.session-card')!.append(sessionDetails);
     const footnote = combat.querySelector('.footnote')!; footnote.textContent = 'Game input yields briefly. Temporary interruptions wait and resume; Stop cancels the run. Profiles never start automation.'; actions.append(footnote);

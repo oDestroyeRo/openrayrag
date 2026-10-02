@@ -953,6 +953,28 @@ mod tests {
     }
 
     #[test]
+    fn preserves_existing_loot_scope_and_master_settings() {
+        for ownership in ["own", "all"] {
+            for enabled in [false, true] {
+                let mut value = settings();
+                value["loot"] = json!(enabled);
+                value["automation"] = automation();
+                value["automation"]["loot"]["ownership"] = json!(ownership);
+                assert!(valid(value.clone()));
+                let parsed: Settings = serde_json::from_value(value.clone()).unwrap();
+                assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+            }
+        }
+        let mut invalid = settings();
+        invalid["automation"] = automation();
+        invalid["automation"]["loot"]["ownership"] = json!("unverified");
+        assert!(!valid(invalid.clone()));
+        invalid["automation"]["loot"]["ownership"] = json!("own");
+        invalid["automation"]["loot"]["lootAll"] = json!(true);
+        assert!(!valid(invalid));
+    }
+
+    #[test]
     fn attack_strategy_schema_round_trip_and_bounds() {
         let mut value = settings();
         value["automation"] = automation();

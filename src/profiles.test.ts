@@ -9,6 +9,16 @@ function fixture() {
   return { data, storage, store: new ProfileStore(storage, () => `profile-${++id}`, () => 100) };
 }
 describe('named profiles', () => {
+  it.each(['own','all'] as const)('keeps the canonical %s pickup scope and master switch through export/import without run evidence', ownership => {
+    for(const loot of [false,true]) {
+      const f=fixture(),automation=structuredClone(DEFAULT_AUTOMATION);automation.loot.ownership=ownership;
+      const saved=f.store.save('Loot policy','Test',{...settings(),loot,automation});
+      const imported=f.store.import(f.store.export(saved.id))[0]!;
+      expect(imported.settings.loot).toBe(loot);expect(imported.settings.automation!.loot).toEqual(automation.loot);
+      expect(Object.keys(imported.settings.automation!.loot)).toEqual(['ownership','defaultAction','rules']);
+      expect(f.store.forMap(imported.id,'prt_fild08','Test').settings.automation!.loot.ownership).toBe(ownership);
+    }
+  });
   it('round-trips protected disposition and rejects invalid imports atomically', () => {
     const f=fixture();const automation=structuredClone(DEFAULT_AUTOMATION);automation.disposition={maxSpend:0,rules:[{itemId:501,keep:1,minimum:2,desired:3,maximum:4,store:true,sell:false,cart:false,restock:'storage',allowUnique:false}]};
     automation.escape={...DEFAULT_ESCAPE,enabled:true,mode:'save',minStock:2};
