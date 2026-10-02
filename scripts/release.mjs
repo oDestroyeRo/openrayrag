@@ -214,7 +214,12 @@ export class GitHubReleaseApi {
     );
     this.token = token;
   }
-  async request(method, path, body, bytes = false) {
+  async request(
+    method,
+    path,
+    body,
+    { bytes = false, accept = "application/vnd.github+json" } = {},
+  ) {
     const url = path.startsWith("https://uploads.github.com/")
       ? path
       : `https://api.github.com/repos/${REPOSITORY}/${path}`;
@@ -229,9 +234,7 @@ export class GitHubReleaseApi {
       method,
       headers: {
         Authorization: `Bearer ${this.token}`,
-        Accept: bytes
-          ? "application/octet-stream"
-          : "application/vnd.github+json",
+        Accept: accept,
         "X-GitHub-Api-Version": "2026-03-10",
         ...(body
           ? {
@@ -347,7 +350,10 @@ export class GitHubReleaseApi {
         asset.size <= 256 * 1024 * 1024,
       "Invalid uploaded asset.",
     );
-    return this.request("GET", `releases/assets/${asset.id}`, undefined, true);
+    return this.request("GET", `releases/assets/${asset.id}`, undefined, {
+      bytes: true,
+      accept: "application/octet-stream",
+    });
   }
   async downloadRelease(release, names) {
     const assets = await this.assets(release.id);
@@ -400,7 +406,8 @@ export class GitHubReleaseApi {
       "GET",
       `actions/artifacts/${artifact.id}/zip`,
       undefined,
-      true,
+      // Actions returns a ZIP redirect through the JSON API media type.
+      { bytes: true },
     );
     requireValue(
       bytes && `sha256:${sha256(bytes)}` === artifact.digest,
