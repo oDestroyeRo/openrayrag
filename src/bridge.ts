@@ -1,3 +1,4 @@
+import type { DeathRecoveryGuard } from './death-recovery';
 import { socketCommand } from './socket-protocol';
 import { isOfficialGameplayCommand } from './official-input';
 import { type Settings } from './engine';
@@ -17,7 +18,7 @@ interface BridgeWindow extends Window {
   createUnityInstance?: (...args: unknown[]) => Promise<UnityClient>;
   __TAURI_INTERNALS__?: { invoke: (name: string, args: unknown) => Promise<unknown> };
   __RAYRAG__?: {
-    control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard) => void;
+    control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard) => void;
     perform: (action: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket', request: unknown) => void;
     snapshot: () => CompanionSnapshot;
   };
@@ -186,13 +187,13 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   };
 
   page.__RAYRAG__ = {
-    control(action, settings, escapeGuard, supplyGuard) {
+    control(action, settings, escapeGuard, supplyGuard, recoveryGuard) {
       if (action === 'heartbeat') { heartbeat = Date.now(); controller.heartbeat(true); return; }
       if (action === 'stop') { cancelLogin(); stop('Stopped by you.'); return; }
       try {
         if (page.buildUrl !== VERIFIED_BUILD) throw new Error('This game build is not verified.');
         if (!settings) throw new Error('Choose combat settings first.');
-        controller.heartbeat(true); controller.start(settings, escapeGuard, supplyGuard); heartbeat = Date.now();
+        controller.heartbeat(true); controller.start(settings, escapeGuard, supplyGuard, recoveryGuard); heartbeat = Date.now();
       } catch (error) { controller.engine.reason = error instanceof Error ? error.message : 'Could not start.'; }
       publish();
     },

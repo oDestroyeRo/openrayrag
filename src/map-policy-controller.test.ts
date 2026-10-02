@@ -11,7 +11,7 @@ import { OP, type Entity, type Position } from './protocol';
 import { walkDuration } from './movement';
 import { WorldState } from './world-state';
 import type { WalkGrid } from './navigation';
-const player:Entity={id:1,classId:1,name:'Test',kind:0,level:10,hp:100,maxHp:100,dead:false,x:8,y:4};
+const player:Entity={id:1,classId:1,name:'Test',kind:0,level:10,hp:100,maxHp:100,dead:false,sitting:false,x:8,y:4};
 const grid:WalkGrid={width:12,height:12,walkable:p=>p.x>=0&&p.y>=0&&p.x<12&&p.y<12};
 const policy=()=>({...structuredClone(DEFAULT_MAP_POLICY),lockArea:{map:'prt_fild08',minX:0,minY:0,maxX:4,maxY:4}});
 const settings=():Settings=>({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation:{...structuredClone(DEFAULT_AUTOMATION),mapPolicy:policy()}});
@@ -51,22 +51,22 @@ describe('controller lock entry and service ownership',()=>{
   it('respawns after death during first entry, preserves its debit, and waits for alive field entry',()=>{
     const {c,sent,step,settle}=setup();const value=settings();value.automation!.respawn={enabled:true,maxDeaths:1};
     c.start(value);c.tick();expect(c.travel.active).toBe(true);
-    c.receive(new BitWriter().u8(OP.death).i32(1).finish());step();step();
+    c.receive(new BitWriter().u8(OP.death).i32(1).finish());step(2100);step();
     expect(sent.filter(a=>a.type==='respawn')).toHaveLength(1);expect(c.engine.deaths).toBe(1);expect(c.engine.settings.map).toBe('prt_fild08');
-    c.engine.receive([{type:'resurrection',id:1,hp:100,position:{x:8,y:4}}]);step();
+    c.receive(new BitWriter().u8(OP.resurrection).i32(1).position({x:8,y:4}).i32(100).finish());step();
     expect(c.engine.running).toBe(false);expect(c.travel.snapshot().purpose).toBe('field-entry');expect(sent.some(a=>a.type==='attack')).toBe(false);
     settle();expect(c.engine.running).toBe(true);expect(c.engine.deaths).toBe(1);
-    c.receive(new BitWriter().u8(OP.death).i32(1).finish());step();step();
+    c.receive(new BitWriter().u8(OP.death).i32(1).finish());step(2100);step();
     expect(c.engine.deaths).toBe(2);expect(sent.filter(a=>a.type==='respawn')).toHaveLength(1);expect(c.snapshot().reason).toContain('Death limit');
   });
   it.each([false,true])('admits only dead respawn on another lock map (forbidden=%s), then requires policy return',forbidden=>{
     const {c,sent,step}=setup();c.engine.receive([{type:'map',map:'prontera'},{type:'spawn',entity:{...player}}]);c.world.reset('prontera');
     const value=settings();value.automation!.respawn={enabled:true,maxDeaths:2};if(forbidden)value.automation!.mapPolicy!.deny=['prontera'];
     const travel=vi.spyOn(c.travel,'start').mockImplementation(()=>{});c.start(value);sent.length=0;
-    c.receive(new BitWriter().u8(OP.death).i32(1).finish());step();step();expect(sent).toEqual([{type:'respawn'}]);expect(c.engine.deaths).toBe(1);
+    c.receive(new BitWriter().u8(OP.death).i32(1).finish());step(2100);step();expect(sent).toEqual([{type:'respawn'}]);expect(c.engine.deaths).toBe(1);
     expect(c.engine.settings.map).toBe('prt_fild08');expect(c.engine.settings.automation!.mapPolicy).toEqual(value.automation!.mapPolicy);
-    c.engine.receive([{type:'resurrection',id:1,hp:100,position:{x:8,y:4}}]);step();
-    expect(c.engine.running).toBe(false);expect(travel).toHaveBeenLastCalledWith('prontera',expect.anything(),'prt_fild08',10,true,value.automation!.mapPolicy,'travel');
+    c.receive(new BitWriter().u8(OP.resurrection).i32(1).position({x:8,y:4}).i32(100).finish());step();
+    expect(c.engine.running).toBe(false);expect(travel).toHaveBeenLastCalledWith('prontera',expect.anything(),'prt_fild08',10,true,value.automation!.mapPolicy,'return');
     expect(sent.some(a=>a.type==='attack'||a.type==='walk')).toBe(false);
   });
   it('Stop cancels entry and late authoritative movement never starts combat',()=>{
