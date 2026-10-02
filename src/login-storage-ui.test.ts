@@ -13,6 +13,7 @@ vi.mock('./feature-ui', async () => {
     levelDifference(){return 1;}
     active(): boolean { return false; }
     serviceBlocked(): boolean { return false; }
+    warpActivationReady(): boolean { return false; }
     settledForMaintenance(): boolean { return ipc.featureSettled; }
     read() { return structuredClone(DEFAULT_AUTOMATION); }
     lock(): void {}
@@ -26,6 +27,8 @@ class Element {
   id = ''; className = ''; dataset:Record<string,string>={}; style: Record<string, string> = {}; width = 400; height = 400;
   classList = { toggle() {}, add() {}, remove() {} };
   listeners = new Map<string, Array<(event: { preventDefault(): void;target?:Element }) => unknown>>();
+  children: Element[] = [];
+  ownerDocument = { createElement: () => new Element(this.elements) };
   markup = '';
   constructor(private readonly elements: Map<string, Element>) {}
   set innerHTML(html: string) {
@@ -37,8 +40,10 @@ class Element {
       this.elements.set(node.id, node);
     }
   }
-  append(): void {}
-  replaceChildren(): void {}
+  append(...children: Element[]): void { this.children.push(...children); for (const child of children) if (child.id) this.elements.set(child.id, child); }
+  replaceChildren(...children: Element[]): void { this.children = []; this.append(...children); }
+  querySelector(selector: string): Element | null { return selector.startsWith('#') ? this.elements.get(selector.slice(1)) ?? null : null; }
+  setAttribute(): void {}
   getContext() { return { clearRect() {}, fillText() {} }; }
   addEventListener(type: string, callback: (event: { preventDefault(): void;target?:Element }) => unknown): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), callback]);

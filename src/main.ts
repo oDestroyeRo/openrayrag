@@ -1,15 +1,15 @@
-import { CurrentForm, type FormDocument } from './current-form';
+import { CurrentForm } from './current-form';
 import type { Snapshot } from './engine';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { DEFAULT_AUTOMATION, MAX_TARGETS, validateSettings, type Settings } from './settings';
+import { validateSettings, type Settings } from './settings';
 import { FeatureUi } from './feature-ui';
 import { ReconnectPolicy, PersistentFieldRun } from './reconnect';
 import { GridNavigator, NAVIGATION_MAPS, searchGrid } from './navigation';
 import { validStatus, statusHeartbeatFresh, type GameStatus } from './game-status';
-import { MapTargets } from './targets';
+import { SettingsForm } from './settings-form';
 import { normalAttackProfile } from './combat';
-import { canStartField, settingsWithFieldMap } from './field-controls';
+import { canStartField } from './field-controls';
 import './style.css';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
@@ -110,7 +110,6 @@ let receivedAt = 0;
 let busy = false;
 let heartbeatPending = false;
 let previousSession: string | undefined;
-const targets = new MapTargets();
 const reconnect = new ReconnectPolicy();
 const fieldRun = new PersistentFieldRun();
 let sessionLoginAvailable = false;
@@ -161,32 +160,32 @@ function resumeFieldRun(s: GameStatus): void {
       if (fieldRun.completeResume(request, false) && generation === runGeneration) message('Waiting to reach the game controller before resuming.');
     }).finally(() => { if (pendingResume === task) pendingResume = null; updateButtons(); });
 }
-const targetRows = new Map<number, { label: HTMLLabelElement; input: HTMLInputElement; name: HTMLElement; detail: HTMLElement; count: HTMLElement }>();
-let targetOrder = '';
 const features = new FeatureUi(document.querySelector<HTMLElement>('main')!, {
-  settings, apply: applySettings, map: () => targets.map, character: () => latest?.player?.name ?? '',
+  settings: () => form.runSettings(), apply: value => form.applyProfile(value), map: () => latest?.map ?? '', character: () => latest?.player?.name ?? '',
   command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request), memo: request => featureRequest('memo',request), socketPreview:request=>featureRequest('socketPreview',request),socket:request=>featureRequest('socket',request), warp:request=>featureRequest('warp',request),warpPreview:request=>featureRequest('warpPreview',request),warpCancel:()=>invoke('control_bot',{action:'warpCancel',request:{}}),
   refinePreview: request => featureRequest('refinePreview',request), refine: request => featureRequest('refine',request), refineAdvance: promptToken => featureRequest('refineAdvance',{promptToken}),
-  notify: message,stop:()=>stopButton.click(), changed: () => { formChanged(); targets.setLevelDifference(features.levelDifference()); renderTargets(); updateButtons(); },
+  notify: message,stop:()=>stopButton.click(), changed: () => { formChanged(); updateButtons(); },
 });
-const currentForm = new CurrentForm(() => ({settings:formSettings(),selectedProfileId:features.selectedProfileId()}),
+const form = new SettingsForm(document.querySelector<HTMLElement>('main')!, features, {
+  context: () => ({
+    sessionId: latest?.sessionId ?? '',
+    mapInfo: latest?.mapInfo ?? { code: '', name: '', source: 'observed', monsters: [] },
+    level: latest?.player?.level ?? null,
+    runActive: runActive(),
+    controlsLocked: updateBusy || busy || stopping || loginBusy || runActive(),
+    targetsLocked: updateBusy || busy || stopping || loginBusy || !native || Date.now() - receivedAt >= 7000
+      || !latest?.connected || !latest.compatible || !latest.player || runActive(),
+    retainedTargets: fieldRun.requested ? fieldRun.targetIds : undefined,
+  }),
+  changed: () => { formChanged(); updateButtons(); },
+});
+const currentForm = new CurrentForm(() => form.snapshot(),
   document=>invoke<number>('save_current_form',{document}));
-function formSettings():Settings {
-  const value=settings();return {...value,map:value.automation?.mapPolicy?.lockArea?.map??(targets.configuredMap||value.map),targets:targets.configuredIds};
-}
 function formChanged():void {
   currentForm.touch();
   if(!native||!currentForm.initialized||updateBusy)return;
   if(saveTimer)clearTimeout(saveTimer);
   saveTimer=setTimeout(()=>{void currentForm.flush().catch(()=>{element('update-status').textContent='Updates are waiting for valid, saved current settings.';});},300);
-}
-function restoreForm(d:FormDocument):void {
-  const v=d.settings;features.write(v.automation??structuredClone(DEFAULT_AUTOMATION));features.restoreProfileSelection(d.selectedProfileId);
-  targets.setLevelDifference(features.levelDifference());targets.restore(v.map,v.targets);
-  const inputs:Record<string,number>={radius:v.radius,'min-hp':v.minHpPercent,'route-step':v.route_step,'route-time':v.route_randomWalk_maxRouteTime,'attack-distance':v.attackRouteMaxPathDistance,'attack-time':v.attackMaxRouteTime};
-  for(const [id,value]of Object.entries(inputs))element<HTMLInputElement>(id).value=String(value);
-  element<HTMLSelectElement>('random-walk').value=String(v.route_randomWalk);element<HTMLInputElement>('avoid-walls').checked=v.route_avoidWalls;element<HTMLInputElement>('loot').checked=v.loot;
-  element('radius-value').textContent=`${v.radius} cells`;element('hp-value').textContent=`${v.minHpPercent}%`;renderTargets();
 }
 function mainSettledForUpdate():boolean {
   return accountReady&&currentForm.initialized&&!accountDraft()&&!updateBusy&&!busy&&!stopping&&!loginBusy&&!heartbeatPending&&!pendingLogin&&!pendingResume&&!pendingService&&!pendingManual&&!pendingLimitStop
@@ -213,7 +212,6 @@ async function pollUpdate():Promise<void>{
   finally{updatePolling=false;}
 }
 const configHelp = document.createElement('p'); configHelp.id = 'config-help'; configHelp.className = 'hint'; document.querySelector('.run-controls')!.append(configHelp);
-const monsterCatalog = document.createElement('datalist'); monsterCatalog.id = 'classId-catalog'; document.querySelector('main')!.append(monsterCatalog);
 
 async function featureRequest(action: string, request: unknown): Promise<unknown> {
   if (!native || busy || stopping || loginBusy || !latest?.connected || !latest.compatible || !latest.player || (action==='service'?features.serviceBlocked():(action==='warp'||action==='warpPreview')&&features.warpActivationReady()?fieldRun.requested:runActive()) || Date.now()-receivedAt >= 7000) {
@@ -238,43 +236,17 @@ async function featureRequest(action: string, request: unknown): Promise<unknown
   } finally { busy=false;updateButtons(); }
 }
 
-function applySettings(value: Settings): void {
-  const checked = validateSettings(value);
-  if (runActive() || checked.map !== targets.map) throw new Error('Stop automation and enter the profile map before applying it.');
-  features.write(checked.automation ?? structuredClone(DEFAULT_AUTOMATION));
-  targets.setLevelDifference(features.levelDifference()); targets.clear(); for (const id of checked.targets) targets.select(id,true);
-  const inputs: Record<string,number> = {radius:checked.radius,'min-hp':checked.minHpPercent,'route-step':checked.route_step,'route-time':checked.route_randomWalk_maxRouteTime,'attack-distance':checked.attackRouteMaxPathDistance,'attack-time':checked.attackMaxRouteTime};
-  for(const [id,value]of Object.entries(inputs))element<HTMLInputElement>(id).value=String(value);
-  element<HTMLSelectElement>('random-walk').value=String(checked.route_randomWalk);element<HTMLInputElement>('avoid-walls').checked=checked.route_avoidWalls;element<HTMLInputElement>('loot').checked=checked.loot;
-  element('radius-value').textContent=`${checked.radius} cells`;element('hp-value').textContent=`${checked.minHpPercent}%`;renderTargets();formChanged();updateButtons();
-}
-
 function message(text: string, error = false): void {
   element('notice').textContent = text;
   element('notice').classList.toggle('error', error);
 }
-function settings(): Settings {
-  const automation=features.read();
-  return settingsWithFieldMap({
-    map: targets.map, targets: targets.ids,
-    radius: Number(element<HTMLInputElement>('radius').value),
-    minHpPercent: Number(element<HTMLInputElement>('min-hp').value),
-    loot: element<HTMLInputElement>('loot').checked,
-    route_randomWalk: Number(element<HTMLSelectElement>('random-walk').value) as 0 | 2,
-    route_step: Number(element<HTMLInputElement>('route-step').value),
-    route_avoidWalls: element<HTMLInputElement>('avoid-walls').checked,
-    route_randomWalk_maxRouteTime: Number(element<HTMLInputElement>('route-time').value),
-    attackRouteMaxPathDistance: Number(element<HTMLInputElement>('attack-distance').value),
-    attackMaxRouteTime: Number(element<HTMLInputElement>('attack-time').value),
-    automation,
-  });
-}
 function updateButtons(): void {
   if(updateBusy){for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))input.disabled=true;features.lock(true,true,true);return;}
+  form.refresh();
   const fresh = Date.now() - receivedAt < 7000;
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
   let checked:Settings|null = null;
-  try { checked=validateSettings(settings()); configHelp.textContent=''; }
+  try { checked=validateSettings(form.runSettings()); configHelp.textContent=''; }
   catch(error) { configHelp.textContent=ready && error instanceof Error ? error.message : ''; }
   startButton.disabled = !canStartField({native,fresh,busy,stopping,loginBusy,runActive:runActive(),connected:latest?.connected===true,compatible:latest?.compatible===true,
     map:latest?.map??'',player:latest?.player??null,settings:checked});
@@ -287,68 +259,8 @@ function updateButtons(): void {
   }
   element<HTMLInputElement>('auto-login').disabled = busy || stopping || loginBusy || !element<HTMLInputElement>('remember-login').checked;
   element<HTMLInputElement>('auto-reconnect').disabled = busy || stopping || loginBusy || !sessionLoginAvailable;
-  for (const id of ['radius', 'min-hp', 'loot', 'random-walk', 'route-step', 'route-time', 'attack-distance', 'attack-time', 'avoid-walls']) {
-    element<HTMLInputElement>(id).disabled = busy || stopping || loginBusy || runActive();
-  }
-  const locked = updateBusy || busy || stopping || loginBusy || !ready || runActive();
-  element<HTMLButtonElement>('select-targets').disabled = locked || !targets.options.some(m => targets.eligible(m.classId));
-  element<HTMLButtonElement>('clear-targets').disabled = locked || !targets.options.some(m => targets.checked(m.classId));
-  for (const [id, row] of targetRows) row.input.disabled = locked || !targets.eligible(id) || (!targets.checked(id) && targets.ids.length >= MAX_TARGETS);
   features.lock(busy || stopping || loginBusy || runActive(),busy || stopping || loginBusy || !ready || runActive(),busy || stopping || loginBusy || !ready || features.serviceBlocked(),busy || stopping || loginBusy || !ready || fieldRun.requested);
 }
-
-function renderTargets(): void {
-  const options = targets.options;
-  const container = element('targets');
-  const order = options.map(monster => monster.classId).join(',');
-  const currentIds = new Set(options.map(monster => monster.classId));
-  for (const id of targetRows.keys()) if (!currentIds.has(id)) targetRows.delete(id);
-  for (const monster of options) {
-    let row = targetRows.get(monster.classId);
-    if (!row) {
-      const label = document.createElement('label'); label.className = 'target-option';
-      const input = document.createElement('input'); input.type = 'checkbox';
-      const description = document.createElement('span'); description.className = 'target-description';
-      const name = document.createElement('strong'); const detail = document.createElement('small');
-      const count = document.createElement('span'); count.className = 'target-visible';
-      description.append(name, detail); label.append(input, description, count);
-      input.addEventListener('change', () => {
-        targets.select(monster.classId, input.checked); formChanged(); renderTargets(); updateButtons();
-      });
-      row = { label, input, name, detail, count }; targetRows.set(monster.classId, row);
-    }
-    row.input.checked = targets.checked(monster.classId);
-    row.input.setAttribute('aria-label', `Attack ${monster.name}`);
-    row.name.textContent = monster.name;
-    row.name.title = `Monster class ID ${monster.classId}`;
-    const population = monster.spawnCount === null ? 'Seen on this map' : `${monster.spawnCount} map spawns`;
-    const levelLimit = latest?.player && !targets.eligible(monster.classId) ? ' · Above level limit' : '';
-    row.detail.textContent = `Lv ${monster.level} · #${monster.classId} · HP ${monster.maxHp} · ${population}${levelLimit}`;
-    row.count.textContent = `${monster.visibleCount} in view`;
-    row.count.classList.toggle('present', monster.visibleCount > 0);
-    row.label.classList.toggle('selected', row.input.checked);
-  }
-  // Keep focused checkboxes intact through the half-second telemetry refresh.
-  if (order !== targetOrder || !options.length) {
-    targetOrder = order;
-    if (options.length) container.replaceChildren(...options.map(monster => targetRows.get(monster.classId)!.label));
-    else {
-      const empty = document.createElement('p'); empty.className = 'target-empty';
-      empty.textContent = targets.map ? 'No monsters listed yet. Monsters seen in the game will appear here.' : 'Map monsters will appear after you enter the field.';
-      container.replaceChildren(empty);
-    }
-  }
-  element('target-count').textContent = `${targets.ids.length} selected`;
-  if (monsterCatalog.dataset.order !== order) { monsterCatalog.dataset.order=order;monsterCatalog.replaceChildren(...options.map(monster=>{const option=document.createElement('option');option.value=String(monster.classId);option.label=monster.name;return option;})); }
-  const info = latest?.mapInfo;
-  element('target-map').textContent = info?.code ? `${info.name} · ${info.code}` : 'Enter a map to choose monsters';
-  element('target-source').textContent = info?.source === 'database'
-    ? `Game map database · Map spawns are configured counts; in view is live. Level limit: yours ${features.levelDifference()>=0?'+':''}${features.levelDifference()}.`
-    : info?.source === 'loading' ? 'Loading map database… Monsters already in view can be selected.'
-    : `Using monsters seen on this map; the map database is unavailable here. Level limit: yours ${features.levelDifference()>=0?'+':''}${features.levelDifference()}.`;
-}
-element('select-targets').addEventListener('click', () => { targets.selectEligible(); formChanged(); renderTargets(); updateButtons(); });
-element('clear-targets').addEventListener('click', () => { targets.clear(); formChanged(); renderTargets(); updateButtons(); });
 
 function showSavedLogin(profile: SavedLogin | null): void {
   savedLogin = profile;
@@ -424,7 +336,7 @@ openButton.addEventListener('click', () => void perform(async () => {
 }));
 startButton.addEventListener('click', () => void perform(async () => {
   if (!latest?.player || stopping) return;
-  const checked = validateSettings(settings()), generation = ++runGeneration;
+  const checked = validateSettings(form.runSettings()), generation = ++runGeneration;
   fieldRun.begin(checked, latest.player.name, latest.sessionId, { kills: latest.kills, looted: latest.looted, deaths: latest.deaths, attacks: latest.attacks });
   limitHeld = false; configureReconnect();
   reconnect.observe(latest.connected, true, latest.login.phase, Date.now(), latest.login.message);
@@ -459,12 +371,6 @@ stopButton.addEventListener('click', () => {
     finally { stopping = false; pendingLogin = null; pendingResume = null; updateButtons(); }
   })();
 });
-for (const [id, output, suffix] of [['radius','radius-value',' cells'],['min-hp','hp-value','%']] as const) {
-  element<HTMLInputElement>(id).addEventListener('input', () => { element(output).textContent = element<HTMLInputElement>(id).value + suffix; updateButtons(); });
-}
-
-
-
 function render(s: GameStatus): void {
   // Navigation is asynchronous: the previous page may still publish its terminal
   // login status while the next official client is loading.
@@ -474,10 +380,7 @@ function render(s: GameStatus): void {
   if (sessionLoginAvailable !== s.reconnectAvailable) { sessionLoginAvailable = s.reconnectAvailable; configureReconnect(); }
   reconnect.observe(s.connected, !!s.player, s.login.phase, Date.now(), s.login.message);
   fieldRun.observe(s); holdAtRunLimit();
-  targets.setLevelDifference(features.levelDifference());
-  targets.update(s.sessionId, s.mapInfo, s.player?.level ?? null);
-  if (fieldRun.requested) for (const id of fieldRun.targetIds) targets.select(id, true);
-  renderTargets();
+  form.refresh();
   if (['complete','failed','cancelled'].includes(s.login.phase)) loginBusy = false;
   if (justSignedIn) element<HTMLDetailsElement>('signin-panel').open = false;
   element('login-help').textContent = s.login.message || 'Select an existing slot. Sign-in enters the field with combat stopped.';
@@ -569,12 +472,12 @@ if (native) {
     ++runGeneration; ++loginGeneration; fieldRun.stop(); reconnect.cancel();
     sessionLoginAvailable = false; pendingResume = null; pendingLogin = null; limitHeld = false; previousSession = undefined;
     gameOpen = false; latest = null; receivedAt = 0; loginBusy = false;
-    targets.update('', { code: '', name: '', source: 'observed', monsters: [] }, null); renderTargets();
+    form.refresh();
     element('status').textContent = 'OFFLINE'; element('status').classList.remove('active');
     message('Game window closed. Open it again to reconnect.'); updateButtons(); drawRadar(null);
   });
   try {
-    try{currentForm.restore(await invoke('current_form'),restoreForm);}
+    try{currentForm.restore(await invoke('current_form'), document => form.restore(document));}
     catch{currentForm.initialized=false;element('update-status').textContent='Current settings could not be restored. Automatic updates are waiting.';}
     if(currentForm.initialized)await currentForm.flush().catch(()=>{element('update-status').textContent='Updates are waiting for valid, saved current settings.';});
     const profile = await invoke<SavedLogin | null>('saved_login');
@@ -632,6 +535,6 @@ if (native) {
   }, 1000);
 }
 // Only the explicit settings projection enters persistence; account inputs are excluded.
-document.querySelector('main')!.addEventListener('input',event=>{const target=event.target as HTMLElement;if(!target.closest('#signin-panel')&&target.closest('.settings,.feature-panel,.rule-editor'))formChanged();});
+document.querySelector('main')!.addEventListener('input',event=>{const target=event.target as HTMLElement;if(!target.closest('#signin-panel')&&target.closest('.settings,.feature-panel,.rule-editor')){formChanged();updateButtons();}});
 document.querySelector('main')!.addEventListener('change',event=>{const target=event.target as HTMLElement;if(target.id==='profile-select')formChanged();});
 updateButtons();
