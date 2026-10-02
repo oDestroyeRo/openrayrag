@@ -382,7 +382,7 @@ export class CompanionController {
     const context=this.supplyContext();
     if(supplyGuard){supplyGuard=validateSupplyResumeGuard(supplyGuard);if(supplyGuard.character!==context.character)throw new Error('Supply resume state belongs to a different character.');}
     if(this.supply.uncertain)throw new Error('Waiting for the previous supply transaction to reconcile.');
-    if (this.socket.busy || this.memo.blocked || this.active || this.engine.manualTargetOwned || this.engine.pendingFeatureAction)
+    if (this.socket.busy || this.memo.blocked || this.active || this.engine.retreatOwned || this.engine.manualTargetOwned || this.engine.pendingFeatureAction)
       throw new Error('Stop the current automation or manual action before requesting a new run.');
     if(!this.travel.movementSettled(this.engine.map,this.engine.player))throw new Error('Waiting for canceled rendezvous movement to settle before Start.');
     if(this.partyHeal.busy)throw new Error('Waiting for the previous party Heal execution receipt.');
@@ -488,7 +488,7 @@ export class CompanionController {
       if(!this.travel.movementSettled(this.engine.map,this.engine.player))throw new Error('Wait for canceled rendezvous movement to settle.');
       if(this.partyHeal.busy)throw new Error('Waiting for the previous party Heal execution receipt before running a service.');
       if(!this.engine.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
-      if (this.partyFollow.ownsTravel || this.socket.busy || this.memo.blocked || this.social.busy || this.engine.manualTargetOwned || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
+      if (this.partyFollow.ownsTravel || this.socket.busy || this.memo.blocked || this.social.busy || this.engine.retreatOwned || this.engine.manualTargetOwned || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
         || ['running','waiting'].includes(this.routine.snapshot().state) || this.unresolvedWorld || this.now() < this.fencedUntil
         || this.engine.pendingFeatureAction || this.featureReceipt || this.supply.uncertain)
         throw new Error('Wait for the current transaction or unresolved escape/action before running a service.');
@@ -614,7 +614,7 @@ export class CompanionController {
         this.world.reset(event.type === 'map' ? event.map : this.engine.map, true);
       }
     }
-    const manualMovementReceipts=new Map(events.map(event=>[event,this.engine.manualMovementReceiptOwner(event)]));
+    const manualMovementReceipts=new Map(events.map(event=>[event,this.engine.manualMovementReceiptOwner(event)??this.engine.retreatMovementReceiptOwner(event)]));
     this.travel.prepareObservation(events);
     this.engine.receive(events);
     this.world.partyActors.sync(this.world.party,this.world.map,this.engine.observations,this.engine.playerId);
@@ -924,11 +924,11 @@ export class CompanionController {
     this.waitingReason = reason; this.engine.reason = reason;
     if (this.engine.running || this.travel.active) this.pause(reason);
   }
-  private escapeContext(): EscapeContext {
+  private escapeContext(allowRetreatCancellation=false): EscapeContext {
     const blocker = (this.socket.busy?'Waiting for the exact socket receipt before escape.':'') || (this.memo.blocked?'Waiting for memo state to settle.':'') || (this.supply.uncertain ? 'Waiting for the exact supply transaction receipt before escape.' : '') || this.blockedReason || (this.featureReceipt ? 'Waiting for the previous resource action to settle.' : '')
       || (this.service.active&&!['travel','approach'].includes(this.service.snapshot().state) || this.pending || this.workflow.snapshot().running || this.unresolvedWorld || ['running','waiting'].includes(this.routine.snapshot().state)
         ? 'Waiting for the current action owner before emergency escape.' : '')
-      || (this.now() < this.fencedUntil || !this.engine.featureActionsSettled ? 'Waiting for the previous action and cast to settle.' : '')
+      || (this.now() < this.fencedUntil || !(allowRetreatCancellation?this.engine.resourceActionsSettled:this.engine.featureActionsSettled) ? 'Waiting for the previous action and cast to settle.' : '')
       || (this.world.npc.mode !== 'idle' || this.world.npc.id !== null || this.world.vending ? 'Finish the NPC or vending interaction before escape.' : '')
       || (this.characterName && this.engine.player?.name !== this.characterName ? 'Waiting for the originally selected character.' : '')
       || (!this.gridFor(this.engine.map) ? `Verified walkability is not available for ${this.engine.map}.` : '');
@@ -939,6 +939,7 @@ export class CompanionController {
       connection: this.connectionEpoch, ready: !blocker && this.heartbeatHealthy && this.now() >= this.yieldUntil, blocker };
   }
   private escapeTick(): boolean {
+    if(this.engine.retreatOwned&&this.requestedSettings&&this.escape.wants(this.requestedSettings,this.escapeContext(true)))this.pause('Stopping retreat before emergency escape.');
     const context = this.escapeContext(); this.escape.update(context);
     if (this.requestedSettings && this.escape.wants(this.requestedSettings, context)) {
       // Stop/cancel movement first, then wait 250ms before the wing/skill. The

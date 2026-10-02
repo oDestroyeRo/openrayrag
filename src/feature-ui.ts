@@ -10,7 +10,7 @@ import { ActorPredicateEditor, actorSnapshotAt } from './actor-predicate-ui';
 import { SocialUi, validSocialSnapshot } from './social-ui';
 import { MemoUi, validMemoSnapshot } from './memo-ui';
 import { validActorSnapshot, type ActorObservationSnapshot } from './actor-observations';
-import { DEFAULT_AUTOMATION, DEFAULT_PARTY_HEAL, validateAutomation, type AutomationSettings, type Settings } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_RETREAT, DEFAULT_PARTY_HEAL, validateAutomation, type AutomationSettings, type Settings } from './settings';
 import { MAX_PROFILES, ProfileStore } from './profiles';
 import { ITEM_CATALOG, SKILL_CATALOG, itemName, skillName } from './game-catalog';
 import { validateExpandedAction } from './protocol-feature';
@@ -60,6 +60,11 @@ const fields: Record<Section, Field[]> = {
     { path:'combat.mode', label:'Combat mode', options:[['selected','Selected monsters'],['retaliate','Retaliate only'],['both','Selected + retaliation'],['off','Combat off']] },
     { path:'combat.partyEngagement',label:'Join monsters engaged by verified visible party members',kind:'checkbox' },
     { path:'combat.levelDifference', label:'Maximum levels above you', min:-100, max:100 },
+    {path:'retreat.enabled',label:'Retreat during verified ranged normal attacks',kind:'checkbox'},
+    {path:'retreat.triggerDistance',label:'Retreat at or below distance',min:1,max:13},
+    {path:'retreat.desiredDistance',label:'Desired firing distance',min:2,max:14},
+    {path:'retreat.maxPathSteps',label:'Maximum steps per retreat',min:1,max:20},
+    {path:'retreat.maxAttempts',label:'Retreat attempts per monster lifetime',min:1,max:10},
     { path:'loot.ownership',label:'Pickup scope',options:[['own','Only drops from your kills'],['all','Loot all nearby drops']] },
   ],
   recovery: [
@@ -196,7 +201,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     if (v && typeof v === 'object') return Object.keys(v).length <= 256 && Object.values(v).every(entry => bounded(entry,depth+1));
     return false;
   }
-  if (!['character','world','workflow','routine','service','task','actionResult','travel','partyFollow','escape','supply','supplyGuard','deathRecoveryGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies','manualTarget','partyHeal'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if (!['character','world','workflow','routine','service','task','actionResult','travel','partyFollow','escape','supply','supplyGuard','deathRecoveryGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies','manualTarget','partyHeal','retreat'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
   if(object(value.travel).policy!==undefined){try{validateMapPolicy(object(value.travel).policy);}catch{return false;}}
   if(value.partyEngagement!==undefined) {
     const p=object(value.partyEngagement);
@@ -225,6 +230,7 @@ export class FeatureUi {
   private dispositionPlan: DispositionPlan | null = null;
   private attackStrategiesPresent = false;
   private partyHealPresent=false;
+  private retreatPresent=false;
   private routePreview: { abort: AbortController; identity: string; settings: string; output: HTMLElement; current?: () => string; evidence?: string } | null = null;
   private previewIdentity(): string {
     const p = object(this.status.player), observations = object(this.status.actorObservations);
@@ -293,7 +299,7 @@ export class FeatureUi {
     const sessionDetails=document.createElement('p');sessionDetails.id='session-details';sessionDetails.className='session-details';sessionDetails.textContent='Session time, experience and task state appear after connection.';host.querySelector('.session-card')!.append(sessionDetails);
     const footnote = combat.querySelector('.footnote')!; footnote.textContent = 'Game input yields briefly. Temporary interruptions wait and resume; Stop cancels the run. Profiles never start automation.'; actions.append(footnote);
     combat.querySelector('.routing-settings .hint')?.remove();
-    this.rules(); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.servicePanel(); this.profilePanel(); this.navigation();
+    this.rules();const retreatState=document.createElement('p');retreatState.id='retreat-state';retreatState.className='telemetry-summary';retreatState.hidden=true;combat.append(retreatState); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.servicePanel(); this.profilePanel(); this.navigation();
     this.manualTargets=new ManualTargetUi(this.hooks);this.panel('workflows').prepend(this.manualTargets.root);
     this.dispositionPanel();this.supplyPanel();this.mapPolicyPanel();
     this.social = new SocialUi(action => this.hooks.social(action), (message, error) => this.hooks.notify(message, error)); this.panel('workflows').append(this.social.root);
@@ -374,7 +380,8 @@ export class FeatureUi {
     this.note('combat','Party engagement is off by default. It requires a current, living, visible party member with verified affiliation on this map. Offline, duplicate, missing or stale membership, indirect damage, outside attackers and revoked claims remain excluded. Party participation does not grant your kill or drop credit.');
     const partyState=document.createElement('div');partyState.id='party-engagement-state';partyState.className='telemetry-summary';this.panel('combat').append(partyState);
     this.editor('combat','attackStrategies','Ordered attack skills by species',[{key:'id',label:'Stable rule ID',kind:'text'},{key:'speciesIds',label:'Monster species IDs · comma separated',kind:'ids'},{key:'skillId',label:'Verified actor skill',options:[['11','Fire Bolt'],['12','Cold Bolt'],['16','Lightning Bolt']]},{key:'level',label:'Level',min:1,max:10},{key:'behavior',label:'Use',options:[['opener','Before first normal attack'],['repeat','Repeat during engagement']]},{key:'maxAttempts',label:'Maximum dispatch attempts per actor',min:1,max:100},{key:'maxUses',label:'Maximum confirmed uses per actor',min:1,max:100},{key:'cooldownSeconds',label:'Cooldown seconds',min:1,max:3600}],{id:'opening-bolt',speciesIds:[4000],skillId:11,level:1,behavior:'opener',maxAttempts:1,maxUses:1,cooldownSeconds:3},32);
-    this.note('combat','An empty attack strategy list uses ordinary combat. Earlier matching rules win, even when two rules use the same skill. Opener means before this controller first sends a normal attack at that observed actor. Attempts and confirmations survive Stop/Start and target switches. An unresolved cast cannot be retried on that actor lifetime. Unknown prerequisites wait up to 30 seconds, then skip that actor for 30 seconds while retaining run intent. Only the three bolt skills have automatic cast positioning; combos, kiting and automatic ground AoE remain unavailable. Stationary party Heal is a separate opt-in recovery policy.');
+    this.note('combat','Retreat is off by default. It needs a verified ranged weapon and current ammo above the reserve. Distances use rounded projectile distance; desired separation must fit current range. Stop and movement must settle before the same monster is attacked again. Paths and attempts are bounded, and movement does not guarantee avoiding damage.');
+    this.note('combat','An empty attack strategy list uses ordinary combat. Earlier matching rules win, even when two rules use the same skill. Opener means before this controller first sends a normal attack at that observed actor. Attempts and confirmations survive Stop/Start and target switches. An unresolved cast cannot be retried on that actor lifetime. Unknown prerequisites wait up to 30 seconds, then skip that actor for 30 seconds while retaining run intent. Only the three bolt skills have automatic cast positioning; combos, skill retreat and automatic ground AoE remain unavailable. Stationary party Heal is a separate opt-in recovery policy.');
     const strategyState=document.createElement('div');strategyState.id='attack-strategy-state';strategyState.className='telemetry-summary';strategyState.hidden=true;this.panel('combat').append(strategyState);
     this.note('recovery','Party Heal uses only visible, living same-map party players with fresh HP. It never walks to them. Existing recovery items, skill rules and equipment changes keep priority. Attempts include failed or uncertain sends; Stop does not cancel a server cast. Remote player element is unknown, and the server validates Heal.');
     const healState=document.createElement('div');healState.id='party-heal-state';healState.className='telemetry-summary';this.panel('recovery').append(healState);
@@ -432,7 +439,7 @@ export class FeatureUi {
   }
   read(): AutomationSettings {
     const automation = structuredClone(DEFAULT_AUTOMATION) as unknown as Record<string,unknown>;
-    automation.partyHeal={...DEFAULT_PARTY_HEAL};automation.mapPolicy=structuredClone(DEFAULT_MAP_POLICY);automation.disposition=structuredClone(DEFAULT_DISPOSITION);automation.supply=structuredClone(DEFAULT_SUPPLY);
+    automation.partyHeal={...DEFAULT_PARTY_HEAL};automation.retreat=structuredClone(DEFAULT_RETREAT);automation.mapPolicy=structuredClone(DEFAULT_MAP_POLICY);automation.disposition=structuredClone(DEFAULT_DISPOSITION);automation.supply=structuredClone(DEFAULT_SUPPLY);
     object(automation.disposition).maxSpend=Number(this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!.value);
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
@@ -448,6 +455,7 @@ export class FeatureUi {
     object(automation.disposition).rules=this.dispositionEditor.read().map(row=>({...row,store:row.store==='1',cart:row.cart==='1',sell:row.sell==='1',allowUnique:row.allowUnique==='1'}));
     const mp=object(automation.mapPolicy);for(const key of ['allow','deny'])mp[key]=this.host.querySelector<HTMLInputElement>(`#map-policy-${key}`)!.value.split(/[\s,]+/).filter(Boolean);
     mp.lockArea=this.host.querySelector<HTMLInputElement>('#map-policy-area')!.checked?Object.fromEntries(['map','minX','minY','maxX','maxY'].map(key=>{const value=this.host.querySelector<HTMLInputElement>(`#map-policy-${key}`)!.value;return [key,key==='map'?value:Number(value)];})):null;
+    if(!this.retreatPresent&&JSON.stringify(automation.retreat)===JSON.stringify(DEFAULT_RETREAT))delete automation.retreat;
     return validateAutomation(automation as unknown as AutomationSettings);
   }
   write(automation: AutomationSettings): void {
@@ -455,6 +463,7 @@ export class FeatureUi {
     automation = validateAutomation(automation);automation={...automation,mapPolicy:automation.mapPolicy??structuredClone(DEFAULT_MAP_POLICY),supply:automation.supply??structuredClone(DEFAULT_SUPPLY)};
     this.partyHealPresent=Object.hasOwn(automation,'partyHeal');
     automation={...automation,partyHeal:automation.partyHeal??{...DEFAULT_PARTY_HEAL}};
+    this.retreatPresent=Object.hasOwn(automation,'retreat');automation={...automation,retreat:automation.retreat??{...DEFAULT_RETREAT}};
     this.attackStrategiesPresent=Object.hasOwn(automation,'attackStrategies');
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
@@ -629,10 +638,10 @@ export class FeatureUi {
     this.social.lock(manual);
     this.memo.lock(manual);this.socket.lock(manual);this.manualTargets.lock(manual);
   }
-  serviceBlocked(): boolean { return ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
+  serviceBlocked(): boolean { return object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
   clearSocial(): void { delete this.status.social; this.social.clear(); delete this.status.socket; this.socket.clear(); }
   clearMemo(): void { delete this.status.memo; this.memo.clear(); }
-  active(): boolean { return ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
+  active(): boolean { return object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
   private observation(): RoutineObservation {
     const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:this.hooks.map(),elapsedSeconds:0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;
@@ -644,6 +653,7 @@ export class FeatureUi {
     this.host.querySelector<HTMLElement>('#party-engagement-state')!.textContent=engagement.enabled===true?`Party exception active · ${number(engagement.accepted)??0} verified engagements · ${number(engagement.blocked)??0} excluded${reasons.length?'\n'+reasons.join('\n'):''}`:'Party exception is off; outside engagements remain excluded.';
     const heal=object(s.partyHeal);this.host.querySelector<HTMLElement>('#party-heal-state')!.textContent=`${text(heal.reason)||'Party Heal is off.'} · ${number(heal.attempts)??0} attempts · ${number(heal.confirmed)??0} executions confirmed${heal.resourceReadback===true?' · fresh resource readback':''}`;
     const strategyState=this.host.querySelector<HTMLElement>('#attack-strategy-state')!;const strategy=object(s.attackStrategies);const engagements=Array.isArray(strategy.entries)?strategy.entries:[];strategyState.hidden=engagements.length===0;strategyState.textContent=engagements.slice(0,8).map(entry=>{const actor=object(entry);const rules=Array.isArray(actor.rules)?actor.rules:[];return `Actor #${number(actor.id)??'?'} · ${actor.normalStarted===true?'normal attack started':'opener window open'}`+rules.slice(0,32).map(value=>{const rule=object(value);return `\n  ${text(rule.id)} · ${number(rule.attempts)??'?'} attempts · ${number(rule.uses)??'?'} confirmed${rule.uncertain===true?' · unresolved':rule.rejected===true?' · rejected':''}`;}).join('');}).join('\n')+(strategy.truncated===true?'\nAdditional actor ledgers omitted from display.':'');
+    const retreat=object(s.retreat);const retreatState=this.host.querySelector<HTMLElement>('#retreat-state');if(retreatState){retreatState.hidden=retreat.state===undefined||retreat.state==='off';retreatState.textContent=`${text(retreat.state)} · ${text(retreat.reason)} · ${number(retreat.attempts)??0} retreat attempts${retreat.settling===true?' · waiting for target clear or movement; nothing is retried':''}`;}
     this.social.render(s);
     this.memo.render(s);
     this.socket.render(s.socket);

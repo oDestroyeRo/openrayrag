@@ -20,6 +20,8 @@ export const DEFAULT_ESCAPE: EscapeSettings = { enabled: false, hpBelowPercent: 
 export interface LoadoutSettings { enabled: boolean; autoAmmo: boolean; minAmmoStock: number; ammoPreferences: Array<{itemId:number}>; restore: 'conditionEnd' | 'never'; cooldownSeconds: number }
 export interface PartyHealSettings { enabled:boolean; level:number; hpBelowPercent:number; spReserve:number; cooldownSeconds:number; maxAttempts:number }
 export const DEFAULT_PARTY_HEAL:PartyHealSettings={enabled:false,level:1,hpBelowPercent:80,spReserve:10,cooldownSeconds:3,maxAttempts:20};
+export interface RetreatSettings {enabled:boolean;triggerDistance:number;desiredDistance:number;maxPathSteps:number;maxAttempts:number}
+export const DEFAULT_RETREAT:RetreatSettings={enabled:false,triggerDistance:2,desiredDistance:5,maxPathSteps:12,maxAttempts:3};
 export interface AutomationSettings {
   partyHeal?:PartyHealSettings;
   loadout: LoadoutSettings;
@@ -31,6 +33,7 @@ export interface AutomationSettings {
   skills: SkillRule[];
   equipment: EquipmentRule[];
   attackStrategies?: AttackStrategyRule[];
+  retreat?: RetreatSettings;
   allocation: { stats: Array<{ stat: number; target: number }>; skills: Array<{ skillId: number; target: number }> };
   follow: { mode?: 'name' | 'partyLeader'; rendezvous?: boolean; name: string; distance: number; lostSeconds: number };
   travel: { destinationMap: string; returnToLockMap: boolean; waypoints: Array<Position & { map: string }>; loop: boolean };
@@ -75,13 +78,21 @@ function strictKeys(v: unknown, keys: string[]): void {
 }
 export function automationSettings(settings: Settings): AutomationSettings { return settings.automation ?? DEFAULT_AUTOMATION; }
 export function escapeSettings(settings: Settings): EscapeSettings { return { ...DEFAULT_ESCAPE, ...automationSettings(settings).escape }; }
+export function retreatSettings(settings:Settings):RetreatSettings {return automationSettings(settings).retreat??DEFAULT_RETREAT;}
+export function validateRetreat(value:RetreatSettings):RetreatSettings {
+  strictKeys(value,['enabled','triggerDistance','desiredDistance','maxPathSteps','maxAttempts']);
+  if(typeof value.enabled!=='boolean'||!bounded(value.triggerDistance,1,13)||!bounded(value.desiredDistance,2,14)
+    ||value.desiredDistance<=value.triggerDistance||!bounded(value.maxPathSteps,1,20)||!bounded(value.maxAttempts,1,10))throw new Error('Invalid ranged retreat settings.');
+  return {...value};
+}
 export function validateAutomation(a: AutomationSettings): AutomationSettings {
   try {
-    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies','mapPolicy','partyHeal']);
+    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies','mapPolicy','partyHeal','retreat']);
     if(Object.hasOwn(a,'partyHeal')) {
       const h=a.partyHeal!;strictKeys(h,['enabled','level','hpBelowPercent','spReserve','cooldownSeconds','maxAttempts']);
       if(typeof h.enabled!=='boolean'||!bounded(h.level,1,10)||!bounded(h.hpBelowPercent,1,100)||!bounded(h.spReserve,0,0x7fffffff)||!bounded(h.cooldownSeconds,1,3600)||!bounded(h.maxAttempts,1,100))throw new Error();
     }
+    if(Object.hasOwn(a,'retreat'))validateRetreat(a.retreat!);
     if (Object.hasOwn(a,'mapPolicy')) validateMapPolicy(a.mapPolicy);
     if (Object.hasOwn(a,'supply')) validateSupplySettings(a.supply);
     const escape = a.escape === undefined ? DEFAULT_ESCAPE : a.escape;
