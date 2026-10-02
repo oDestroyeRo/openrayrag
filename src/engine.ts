@@ -71,6 +71,7 @@ export class BotEngine {
   private serverTargetId:number|null=null;
   private readonly combatConditions=new Map<number,{rule:string;conditions:PredicateTrace[]}>();
   private respawnRefreshPending = false;
+  private respawnArrival:{id:number;name:string;entry:1|2}|null=null;
   private skillKills = new Map<number, { until:number; identity:ActionIdentity }>();
   private skillTargets = new Map<number, { skillId: number; until: number; identity:ActionIdentity }>();
   private aggressors = new Set<number>();
@@ -279,13 +280,16 @@ export class BotEngine {
       case 'enter':
         this.stop('Preparing character.'); this.resetWorld(); this.playerId = e.id; this.map = e.map; break;
       case 'map': {
+        this.respawnArrival=this.player?{id:this.player.id,name:this.player.name,entry:1}:null;
         const respawning=this.automation.pendingAction?.type==='respawn';
         const resume=respawning||(!this.running&&this.runIntent);
-        this.automation.observe({type:'map'},this.character,this.player?.id??null,true);
-        this.stop(respawning ? 'Respawn confirmed. Return to the lock map before resuming.' : 'Map changed. Press Start when ready.'); this.runIntent = resume; const id = this.playerId;
-        this.resetWorld(true); this.playerId = id; this.map = e.map; break;
+        if(respawning){this.running=false;this.reason='Waiting for the respawned character.';}
+        else this.stop('Map changed. Press Start when ready.');
+        this.runIntent = resume; const id = this.playerId;
+        this.resetWorld(true); this.playerId = id; this.map = e.map; this.respawnRefreshPending=respawning; break;
       }
       case 'clear': {
+        this.respawnArrival=this.player?{id:this.player.id,name:this.player.name,entry:2}:null;
         const respawning = this.automation.pendingAction?.type === 'respawn';
         const resume = !this.running && this.runIntent;
         if (respawning) {
@@ -309,7 +313,7 @@ export class BotEngine {
         if (e.entity.id === this.playerId&&e.entity.kind===0 || e.entity.kind === 1) this.entities.set(e.entity.id, e.entity);
         if (e.entity.id === this.playerId&&e.entity.kind===0) {
           this.character.spawn(e.entity as StatefulEntity);
-          if (this.respawnRefreshPending && !e.entity.dead && e.entity.hp > 0) {
+          if (this.respawnRefreshPending && this.respawnArrival && e.entryType===this.respawnArrival.entry && e.entity.id===this.respawnArrival.id && e.entity.name===this.respawnArrival.name && !e.entity.dead && e.entity.hp > 0) {
             this.automation.observe({ type: 'resurrection' }, this.character, this.player?.id??null,true);
             this.respawnRefreshPending = false;
           }
@@ -930,6 +934,16 @@ export class BotEngine {
   get featureActionsSettled(): boolean { return !this.automation.busy && this.loadout.equipmentSettled; }
   get actionResult(): ActionResult { return {...this.automation.result}; }
   idleForActions(): boolean { this.advanceMovement(); return !this.running&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&!this.loadout.blocked; }
+  /** Death recovery owns only the existing posture scheduler, never field decisions. */
+  recoveryOnly(settings: Settings): { complete: boolean; reason: string } {
+    const p=this.player,a=automationSettings(settings);
+    if(!p||p.dead||!this.actorActionIdentity())return {complete:false,reason:'Waiting for a ready living character before recovery.'};
+    if(!this.idleForActions())return {complete:false,reason:'Waiting for the recovery posture and movement to settle.'};
+    const next=this.automation.recover(a,p,this.character);
+    if(next.failure)return {complete:false,reason:next.failure};
+    if(next.action){this.automation.submit(next.action,this.character);return {complete:false,reason:this.automation.task().label};}
+    return {complete:!this.automation.recovering,reason:this.automation.task().label};
+  }
   manualAction(action: ExpandedAction): void {
     action=validateExpandedAction(action);
     if(!this.idleForActions())throw new Error('Stop automation and wait for movement and action confirmation first.');

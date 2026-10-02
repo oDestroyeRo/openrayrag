@@ -260,6 +260,50 @@ impl SupplySettings {
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DeathRecoveryGuard {
+    version: u8,
+    character: String,
+    destination: String,
+    phase: String,
+    uncertain: bool,
+    recovery_seconds: u16,
+    return_seconds: u16,
+    recovery_deadline: u64,
+    return_deadline: u64,
+}
+impl DeathRecoveryGuard {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.version == 1
+            && self
+                .character
+                .chars()
+                .any(|c| !c.is_whitespace() && c != '\u{feff}')
+            && self.character.encode_utf16().count() <= 64
+            && !self
+                .character
+                .chars()
+                .any(|c| c <= '\u{001f}' || c == '\u{007f}')
+            && map_code(&self.destination, false)
+            && matches!(
+                self.phase.as_str(),
+                "revival" | "recovery" | "return" | "failed"
+            )
+            && (self.phase != "recovery" || self.recovery_deadline > 0)
+            && (self.phase != "return" || self.return_deadline > 0)
+            && self.recovery_seconds <= 3600
+            && self.return_seconds <= 1200
+            && self.recovery_deadline <= 8_640_000_000_000_000
+            && self.return_deadline <= 8_640_000_000_000_000
+        {
+            Ok(())
+        } else {
+            Err("Invalid death recovery state.".into())
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SupplyResumeGuard {
     version: u8,
     character: String,
@@ -1485,5 +1529,25 @@ mod tests {
             .unwrap()
             .validate()
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod death_recovery_guard_tests {
+    use super::DeathRecoveryGuard;
+    #[test]
+    fn matches_strict_death_recovery_guard_corpus() {
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../../src/death-recovery-guards.json")).unwrap();
+        for case in cases {
+            let result = serde_json::from_str::<DeathRecoveryGuard>(case["json"].as_str().unwrap())
+                .and_then(|v| v.validate().map_err(serde::de::Error::custom));
+            assert_eq!(
+                result.is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
     }
 }

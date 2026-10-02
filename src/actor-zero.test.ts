@@ -19,11 +19,11 @@ const own:Entity={id:0,classId:0,name:'Synthetic',kind:0,level:7,hp:100,maxHp:10
 const enemy:Entity={...own,id:2,classId:4000,kind:1,name:'Monster',x:11};
 const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000]};
 // Source-shaped MemoryPack scalars, no private data or live allocator wrap.
-function spawn(entity:Entity):Uint8Array {
+function spawn(entity:Entity,entry=0):Uint8Array {
  const name=new TextEncoder().encode(entity.name);
  const body=new BitWriter().u8(15).i32(entity.id).i32(entity.classId).i32(0).i32(~name.length).i32(entity.name.length).take(name)
   .u8(entity.kind).u8(0).u8(entity.dead?3:0).i32(entity.x).i32(entity.y).u8(entity.level).i32(entity.hp).i32(entity.maxHp).i32(entity.sp??0).i32(entity.maxSp??0).i32(0).u8(0).finish();
- return new BitWriter().u8(OP.spawn).u8(0).i32(body.length).take(body).finish();
+ return new BitWriter().u8(OP.spawn).u8(entry).i32(body.length).take(body).finish();
 }
 function setup(id=0,ready=true,grid:WalkGrid={width:40,height:40,walkable:()=>true}){let now=100_000;const sent:Array<Action|ControllerAction>=[],socialSent:ManualSocialAction[]=[];const c=new CompanionController(a=>sent.push(a),()=>now,()=>grid,a=>socialSent.push(a));c.connect(true);
  const packet=(w:BitWriter|Uint8Array)=>c.receive(w instanceof BitWriter?w.finish():w);
@@ -193,8 +193,8 @@ describe('ready own identity and action lifetime fences',()=>{
   expect(s.c.snapshot().reason).toContain('Waiting for a confirmed result');expect(s.sent.filter(a=>a.type==='useItem')).toHaveLength(1);
  });
  it('confirms actor-zero same-map respawn only after the refreshed alive own spawn',()=>{
-  const s=setup();const automation=structuredClone(DEFAULT_AUTOMATION);automation.respawn.enabled=true;s.c.start({...settings,automation});s.packet(Uint8Array.of(36,0,0,0,0));s.step();expect(s.sent.at(-1)).toEqual({type:'respawn'});
-  s.packet(Uint8Array.of(16));s.packet(spawn(enemy));expect(s.c.engine.actionResult.status).toBe('pending');s.packet(spawn(own));expect(s.c.engine.actionResult.status).toBe('confirmed');
+  const s=setup();const automation=structuredClone(DEFAULT_AUTOMATION);automation.respawn.enabled=true;s.c.start({...settings,automation});s.packet(Uint8Array.of(36,0,0,0,0));s.step(2100);expect(s.sent.at(-1)).toEqual({type:'respawn'});
+  s.packet(Uint8Array.of(16));s.packet(spawn(enemy));expect(s.c.engine.actionResult.status).toBe('pending');s.packet(spawn(own,2));expect(s.c.engine.actionResult.status).toBe('confirmed');
  });
  it('permits observed NPC zero and requires independent observed-player evidence for a zero party invitation',()=>{
   const s=setup(1);s.packet(spawn({...own,id:0,kind:2}));s.c.perform('command',{type:'npcTalk',id:0});expect(s.sent.at(-1)).toEqual({type:'npcTalk',id:0});

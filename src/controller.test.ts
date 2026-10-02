@@ -28,6 +28,12 @@ function setup(walkGrid=grid) {
   const packet = (writer: BitWriter) => controller.receive(writer.finish());
   return { controller, sent, receive, step, advance, packet, time: () => now };
 }
+function ownPacket(e:Entity,entry:number):BitWriter {
+  const name=new TextEncoder().encode(e.name),body=new BitWriter().u8(15).i32(e.id).i32(e.classId).i32(0)
+    .i32(~name.length).i32(e.name.length).take(name).u8(e.kind).u8(0).u8(e.dead?3:e.sitting?2:0)
+    .i32(e.x).i32(e.y).u8(e.level).i32(e.hp).i32(e.maxHp).i32(e.sp??0).i32(e.maxSp??0).i32(0).u8(0).finish();
+  return new BitWriter().u8(OP.spawn).u8(entry).i32(body.length).take(body);
+}
 function policy() { return structuredClone(DEFAULT_AUTOMATION); }
 
 describe('official game panel input', () => {
@@ -253,12 +259,12 @@ describe('persistent field run ownership', () => {
     expect(controller.engine.running).toBe(true); expect(controller.engine.deaths).toBe(1);
   });
   it('confirms same-map respawn only after an alive self spawn, then resumes the requested run', () => {
-    const { controller, receive, sent, step } = setup(); const automation = policy(); automation.respawn.enabled = true;
-    controller.start({ ...settings, automation }); step(); receive({ type: 'death', id: 1 }); step();
-    expect(sent.at(-1)).toEqual({ type: 'respawn' }); receive({ type: 'clear' });
+    const { controller, receive, sent, step, packet } = setup(); const automation = policy(); automation.respawn.enabled = true;
+    controller.start({ ...settings, automation }); step(); receive({ type: 'death', id: 1 }); step(2100);
+    expect(sent.at(-1)).toEqual({ type: 'respawn' }); packet(new BitWriter().u8(OP.clear));
     expect(controller.engine.actionResult.status).toBe('pending'); expect(controller.engine.running).toBe(false);
     receive({ type: 'spawn', entity: { ...monster, id: 3 } }); expect(controller.engine.actionResult.status).toBe('pending');
-    receive({ type: 'spawn', entity: { ...player } }); step();
+    packet(ownPacket({...player,sitting:false},2)); step();
     expect(controller.engine.actionResult.status).toBe('confirmed'); expect(controller.engine.running).toBe(true);
     expect(controller.engine.deaths).toBe(1);
   });
@@ -414,10 +420,10 @@ describe('persistent recovery and transaction regressions', () => {
     expect(() => controller.perform('command', { type: 'npcAdvance' })).not.toThrow();
   });
   it('keeps the desired lock-map return through low HP and manual yielding', () => {
-    const { controller, receive, step } = setup(); const automation = policy(); automation.respawn.enabled = true; automation.travel.returnToLockMap = true;
+    const { controller, receive, step, packet } = setup(); const automation = policy(); automation.respawn.enabled = true; automation.travel.returnToLockMap = true;
     controller.start({ ...settings, automation }); step(); receive({ type: 'death', id: 1 });
     const travelStart = vi.spyOn(controller.travel, 'start').mockImplementation(() => {});
-    receive({ type: 'map', map: 'prontera' }, { type: 'spawn', entity: { ...player, hp: 20 } });
+    packet(new BitWriter().u8(OP.map).string('prontera'));packet(ownPacket({...player,hp:20,sitting:false},1));
     controller.pause('Manual input', 2000); receive({ type: 'heal', id: 1, hp: 100, maxHp: 100 });
     step(2000); expect(travelStart).toHaveBeenLastCalledWith('prontera', expect.anything(), 'prt_fild08', settings.route_step, settings.route_avoidWalls, DEFAULT_MAP_POLICY,'return');
     expect(controller.engine.running).toBe(false);

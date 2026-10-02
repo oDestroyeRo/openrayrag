@@ -127,7 +127,7 @@ describe('field run across game reloads', () => {
     expect(run.limitReason).toContain('death limit');
     expect(run.resumeFor({ ...dead, sessionId: 'third' })).toBeNull();
   });
-  it('executes the dead reload pending allowance once and blocks the next death', () => {
+  it('does not replay an uncertain dead reload allowance and retains the counted death limit', () => {
     let now = 100_000;
     const run = new PersistentFieldRun(() => now), value = { ...settings(), automation: structuredClone(DEFAULT_AUTOMATION) };
     value.automation.respawn = { enabled: true, maxDeaths: 1 };
@@ -141,10 +141,10 @@ describe('field run across game reloads', () => {
     controller.connect(true);
     controller.engine.receive([{ type: 'enter', id: 1, map: 'prontera' },
       { type: 'spawn', entity: { id: 1, classId: 0, name: 'Test', kind: 0, level: 7, hp: 0, maxHp: 100, x: 100, y: 100, dead: true } }]);
-    controller.start(request.settings); run.completeResume(request, true);
+    controller.start(request.settings,undefined,undefined,request.deathRecoveryGuard); run.completeResume(request, true);
     for (let i = 0; i < 3; i++) { now += 100; controller.tick(); }
     expect(controller.engine.deaths).toBe(0);
-    expect(sent.filter(action => action.type === 'respawn')).toHaveLength(1);
+    expect(sent.filter(action => action.type === 'respawn')).toHaveLength(0);
     controller.engine.receive([{ type: 'resurrection', id: 1, hp: 100, position: { x: 100, y: 100 } }]);
     now += 100; controller.tick();
     expect(controller.engine.player?.dead).toBe(false);
@@ -152,7 +152,7 @@ describe('field run across game reloads', () => {
     now += 100; controller.tick();
     expect(controller.engine.deaths).toBe(1);
     expect(controller.snapshot()).toMatchObject({ runRequested: true, state: 'waiting' });
-    expect(sent.filter(action => action.type === 'respawn')).toHaveLength(1);
+    expect(sent.filter(action => action.type === 'respawn')).toHaveLength(0);
     run.observe({ ...dead, deaths: controller.engine.deaths });
     expect(run.limitReason).toContain('death limit');
   });

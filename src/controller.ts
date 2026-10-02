@@ -1,3 +1,4 @@
+import { farmingDestination, deathCycle, deathGuard, validateDeathRecoveryGuard, type DeathRecoveryGuard, type DeathCycle } from './death-recovery';
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { ManualSocket, type SocketContext, type SocketSnapshot } from './socket';
 import { socketStockFloors, validateSocketEnvelope, type SocketAction } from './socket-protocol';
@@ -36,7 +37,7 @@ export type ControllerAction = ExpandedAction | WorldAction;
 export interface CompanionSnapshot extends Snapshot {
   runRequested: boolean; state: 'running' | 'waiting' | 'idle';
   world: WorldSnapshot; workflow: WorkflowSnapshot; routine: RoutineSnapshot; travel: TravelSnapshot; service: ServiceSnapshot;
-  escape: EscapeSnapshot; supply: SupplySnapshot; supplyGuard?: SupplyResumeGuard;
+  escape: EscapeSnapshot; supply: SupplySnapshot; supplyGuard?: SupplyResumeGuard; deathRecoveryGuard?: DeathRecoveryGuard;
   social: SocialSnapshot;
   memo: MemoSnapshot;
   socket: SocketSnapshot;
@@ -103,7 +104,13 @@ export class CompanionController {
   private fencedUntil = 0;
   private workflowDeadline = 0;
   private workflowTimeout = 10_000;
-  private respawnRefresh = false;
+  private deathCycle: DeathCycle | null = null;
+  private deathCycleConnection: number | null = null;
+  private cycleDeaths=0;
+  private readyOwn: { identity: string; name: string; initialization: boolean } | null = null;
+  private quietUntil = 0;
+  private ownArrival: {id:number|null;entry:1|2;initialization:boolean}|null=null;
+  private enteredConnection = false;
   private runKills = 0;
   private runPickups = 0;
   private characterName: string | null = null;
@@ -133,7 +140,15 @@ export class CompanionController {
   }
   private send(action:Action|WorldAction):void {
     if(action.type!=='stop'&&this.sendingSupply&&this.supply?.ownsField&&!this.supply.commandAllowed())throw new Error('Supply command allowance exhausted.');
+    if(action.type==='sit'&&this.deathCycle?.guard.phase==='recovery'){
+      // Scheduler has captured identity/sequence; retain it before the transport
+      // write, including a write that throws after reaching the socket.
+      this.deathCycle.posture={sitting:action.sitting,sequence:this.engine.actionResult.sequence,identity:this.deathIdentity()};
+      this.deathCycle.guard.uncertain=true;
+      this.deathCycleConnection=this.connectionEpoch;
+    }
     if(action.type==='walk'){this.memoWalkPending={...action.destination};this.memoWalkEnd=null;this.memoMovementUnknown=true;}
+    if(action.type!=='respawn')this.quietUntil=Math.max(this.quietUntil,this.now()+2_000);
     this.transport(action);
   }
   private resetMemoMovement():void {this.memoWalkPending=null;this.memoWalkEnd=null;this.memoMovementUnknown=false;}
@@ -145,6 +160,7 @@ export class CompanionController {
   }
   get active(): boolean { return this.runRequested || this.executing; }
   connect(compatible: boolean): void {
+    this.ownArrival=null;this.readyOwn=null;this.enteredConnection=false;
     this.socketInitialization=null;
     this.resetMemoMovement();
     this.memo.reset('Memo connection changed. Wait for a new complete snapshot.'); this.memoIdentity = null;
@@ -157,6 +173,7 @@ export class CompanionController {
     this.waitingReason = this.engine.reason; this.retryAt = 0;
   }
   disconnect(): void {
+    this.ownArrival=null;this.readyOwn=null;
     this.socketInitialization=null;
     this.resetMemoMovement();
     this.memo.reset('Memo connection closed. A transmitted update cannot be undone.'); this.memoIdentity = null;
@@ -199,7 +216,7 @@ export class CompanionController {
     this.generation++; this.pending = null; this.routine.cancel(reason); this.workflow.cancel(reason); this.service.cancel(reason);
     this.travel.cancel(reason); this.travelSettings = null;
     if (!this.runRequested) { this.returning = false; this.returnSettings = null; }
-    this.respawnRefresh = false;
+
   }
   stop(reason = 'Stopped by you.'): void {
     this.supply.stop(reason);this.supplyIntent=null;
@@ -231,6 +248,7 @@ export class CompanionController {
     }
   }
   manualCommand():void {
+    this.quietUntil=Math.max(this.quietUntil,this.now()+2_000);
     this.manualInput();
     if(this.active)this.pause('Yielding to an official game action.',2_000);
   }
@@ -284,10 +302,13 @@ export class CompanionController {
   }
   private requireIdle(): void {
     this.requireReady();
-    if (this.socket.busy || this.memo.blocked || this.active || this.escape.busy || this.supply.uncertain || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
+    if (this.deathCycle?.guard.uncertain || this.deathCycle?.posture || this.socket.busy || this.memo.blocked || this.active || this.escape.busy || this.supply.uncertain || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
   }
-  start(input: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard): void {
+  start(input: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard): void {
     const settings = validateSettings(input);
+    if(recoveryGuard){recoveryGuard=validateDeathRecoveryGuard(recoveryGuard);
+      if(recoveryGuard.character!==this.engine.player?.name||recoveryGuard.destination!==farmingDestination(settings))throw new Error('Death recovery state belongs to a different character or farming destination.');}
+
     if (escapeGuard) validateEscapeResumeGuard(escapeGuard);
     const context=this.supplyContext();
     if(supplyGuard){supplyGuard=validateSupplyResumeGuard(supplyGuard);if(supplyGuard.character!==context.character)throw new Error('Supply resume state belongs to a different character.');}
@@ -296,7 +317,11 @@ export class CompanionController {
       throw new Error('Stop the current automation or manual action before requesting a new run.');
     this.supply.configure(settings,context,supplyGuard);
     this.engine.acknowledgeLoadoutOverride();
-    this.engine.prepareRequestedRun(settings);
+    this.engine.prepareRequestedRun(settings);this.cycleDeaths=this.engine.deaths;
+    if(recoveryGuard&&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture){this.deathCycle=deathCycle(recoveryGuard,this.now());this.deathCycleConnection=null;}
+    else if(this.deathCycle&&!this.deathCycle.guard.uncertain&&!this.deathCycle.posture)this.deathCycle=null;
+    this.returnSettings=automationSettings(settings).travel.returnToLockMap?{...structuredClone(settings),map:farmingDestination(settings)}:null;
+    this.returning=!!this.deathCycle;
     this.requestedSettings = settings; this.characterName = this.engine.player?.name ?? null; this.featureReceipt = null;
     this.started = this.now(); this.lastTick = this.now(); this.retryAt = 0; this.retries = 0;
     this.blockedReason = ''; this.waitingReason = 'Preparing the requested run.';
@@ -478,7 +503,16 @@ export class CompanionController {
       if(event.type==='currency'||event.type==='stats'&&event.zeny!==undefined){this.supplyCurrencyRevision++;this.supplyCurrencyFresh=true;}
     }
     this.captureActionFailure();
-    const respawning = this.engine.snapshot().task.kind === 'respawn' && this.engine.actionResult.status === 'pending';
+    const cycle=this.deathCycle;
+    for(const event of events){
+      if(event.type==='enter'){this.ownArrival={id:event.id,entry:1,initialization:!this.enteredConnection};this.enteredConnection=true;}
+      else if(event.type==='map')this.ownArrival={id:this.engine.playerId,entry:1,initialization:false};
+      else if(event.type==='clear')this.ownArrival={id:this.engine.playerId,entry:2,initialization:false};
+    }
+    if(cycle)for(const event of events){
+      if(event.type==='clear'){cycle.refresh='same';cycle.ownId=this.engine.playerId;}
+      else if(event.type==='map'||event.type==='enter'){cycle.refresh='cross';cycle.ownId=event.type==='enter'?event.id:this.engine.playerId;}
+    }
     this.lastFrame = this.now();
     for (const event of events) {
       if (event.type === 'enter') { this.resetMemoMovement(); this.memo.invalidate('Memo character changed. Wait for full state.'); this.memoIdentity=null; this.social.reset('Social character changed.'); this.pause('Preparing the reconnected character.'); this.world.reset(event.map); }
@@ -491,11 +525,24 @@ export class CompanionController {
           this.retireWorld();
           this.generation++; this.workflow.cancel('Map changed.'); this.routine.cancel('Map changed.'); this.pending = null;
         }
-        if (respawning && event.type === 'clear') this.respawnRefresh = true;
         this.world.reset(event.type === 'map' ? event.map : this.engine.map, true);
       }
     }
     this.engine.receive(events);
+    const readyIdentity=this.engine.actorActionIdentity(),readyPlayer=this.engine.player;
+    if(readyIdentity&&readyPlayer&&events.some(event=>event.type==='spawn'&&event.entity.id===readyPlayer.id&&event.entity.kind===0
+      &&event.entity.id===this.ownArrival?.id&&event.entryType===this.ownArrival.entry&&!event.entity.dead&&event.entity.hp>0
+      ||event.type==='resurrection'&&event.id===readyPlayer.id&&event.hp>0))
+      {this.readyOwn={identity:JSON.stringify([this.connectionEpoch,readyIdentity]),name:readyPlayer.name,
+        initialization:!!this.ownArrival?.initialization&&events.some(event=>event.type==='spawn'&&event.entity.id===readyPlayer.id&&event.entryType===1)};this.ownArrival=null;}
+    if(cycle&&readyPlayer?.name===cycle.guard.character&&readyPlayer.hp>0&&!readyPlayer.dead&&this.deathOwnReady()
+      &&events.some(event=>event.type==='spawn'&&event.entity.id===cycle.ownId
+        &&(cycle.refresh==='same'&&event.entryType===2||cycle.refresh==='cross'&&event.entryType===1)
+        ||event.type==='resurrection'&&event.id===readyPlayer.id&&event.hp>0))this.revivalReady();
+    if(cycle?.posture&&events.some(event=>event.type==='sit'&&event.id===readyPlayer?.id&&event.sitting===cycle.posture!.sitting)
+      &&cycle.posture.identity===this.deathIdentity()) {cycle.posture=null;cycle.guard.uncertain=false;}
+    this.reconcileDeathPosture();
+
     if(events.some(event=>event.type==='enter'))this.socketInitialization={key:crypto.randomUUID(),identity:null};
     this.socket.observe(events,this.socketContext());
     const memoPlayer=this.engine.player,memoActor=this.engine.actorActionIdentity();
@@ -533,11 +580,6 @@ export class CompanionController {
     const escaped = this.escape.observe(events, this.escapeContext());
     if (escaped && this.runRequested && automationSettings(this.requestedSettings!).travel.returnToLockMap
       && this.engine.map !== this.requestedSettings!.map) {
-      this.returnSettings = structuredClone(this.requestedSettings!); this.returning = true;
-    }
-    if ((respawning || this.respawnRefresh) && this.returnSettings && events.some(event => event.type === 'map'
-      || event.type === 'resurrection' && event.id === this.engine.playerId
-      || event.type === 'spawn' && event.entity.id === this.engine.playerId && !event.entity.dead)) {
       this.returning = true;
     }
     this.travel.observe(events);
@@ -789,9 +831,125 @@ export class CompanionController {
     if (this.runRequested && this.escape.blocked) { this.waitingReason = this.escape.snapshot().reason || 'Waiting for HP recovery after escape.'; this.engine.reason = this.waitingReason; return true; }
     return false;
   }
+  private deathIdentity(): string {return JSON.stringify([this.connectionEpoch,this.engine.actorActionIdentity(undefined,true)]);}
+  private deathOwnReady(): boolean {
+    return !!this.readyOwn&&this.readyOwn.name===this.engine.player?.name&&this.readyOwn.identity===this.deathIdentity();
+  }
+  private reconcileDeathPosture(): void {
+    const cycle=this.deathCycle,p=this.engine.player;
+    if(!cycle?.guard.uncertain||!['recovery','failed'].includes(cycle.guard.phase)||!this.readyOwn?.initialization||!this.deathOwnReady()
+      ||this.deathCycleConnection!==null&&this.connectionEpoch<=this.deathCycleConnection
+      ||!p||p.name!==cycle.guard.character||p.dead||p.hp<=0||this.engine.character.sitting===null)return;
+    // A new connection's own initialization establishes current posture, not
+    // which old write executed. Keep failed/stopped continuation retired.
+    cycle.posture=null;cycle.guard.uncertain=false;
+    cycle.reason='Fresh character posture observed. The previous posture outcome remains unknown; a stopped or failed run will not resume.';
+  }
+  private revivalReady(): void {
+    const cycle=this.deathCycle;if(!cycle||cycle.guard.phase!=='revival')return;
+    cycle.guard.uncertain=false;cycle.guard.phase='recovery';cycle.refresh=null;
+    cycle.recoveryUntil=cycle.guard.recoveryDeadline||this.now()+cycle.guard.recoverySeconds*1000;cycle.guard.recoveryDeadline=cycle.recoveryUntil;
+    cycle.guard.returnDeadline ||= cycle.recoveryUntil+cycle.guard.returnSeconds*1000;
+    cycle.reason='Living character observed. Recovering before return.';
+  }
+  private deathRecoveryTick(): boolean {
+    const settings=this.requestedSettings,p=this.engine.player,now=this.now();
+    if(!settings)return false;
+    const a=automationSettings(settings);
+    if(p?.dead&&a.respawn.enabled&&(!this.deathCycle||this.engine.deaths>this.cycleDeaths&&!this.deathCycle.guard.uncertain&&!this.deathCycle.posture)){
+      this.cycleDeaths=this.engine.deaths;
+      this.quietUntil=Math.max(this.quietUntil,now+2_000);
+      this.supply.interrupt('Death interrupted the supply trip.');this.supplyIntent=null;
+      this.engine.stop('Preparing automatic revival.');this.travel.cancel('Death interrupted travel.');this.travelSettings=null;
+      this.deathCycle=deathCycle({version:1,character:this.characterName??p.name,destination:farmingDestination(settings),phase:'revival',uncertain:false,
+        recoverySeconds:a.recovery.timeoutSeconds,returnSeconds:1200,recoveryDeadline:0,returnDeadline:0},now);this.deathCycle.ownId=p.id;
+      this.deathCycleConnection=this.connectionEpoch;
+      this.returning=true;
+    }
+    const cycle=this.deathCycle;if(!cycle)return false;
+    this.engine.tick(false);this.captureActionFailure();
+    this.reconcileDeathPosture();
+    const wait=(reason:string)=>{cycle.reason=reason;this.waitingReason=reason;return true;};
+    const fail=(reason:string)=>{cycle.guard.phase='failed';this.travel.cancel(reason);this.travelSettings=null;return wait(reason);};
+    if(cycle.guard.phase==='failed')return wait(cycle.reason||'Death recovery was interrupted or its deadline expired. Stop and check state before another run.');
+    if(!p||p.name!==cycle.guard.character)return wait('Waiting for the original character before death recovery.');
+    if(cycle.guard.phase==='revival'&&!p.dead&&this.deathOwnReady())this.revivalReady();
+    if(cycle.guard.phase==='recovery'&&cycle.recoveryUntil!==null&&now>=cycle.recoveryUntil)return fail('Recovery time limit reached. Check regeneration and carried weight.');
+    if(cycle.guard.phase==='return'&&cycle.returnUntil!==null&&now>=cycle.returnUntil)return fail('Return time limit reached. No new return attempt will be started.');
+    if(this.blockedReason||this.featureReceipt&&!['respawn','sit'].includes(this.featureReceipt.action.type)||this.unresolvedWorld||this.supply.uncertain||this.escape.busy||this.socket.busy||this.memo.blocked||this.pending||this.service.active
+      ||this.workflow.snapshot().running||this.now()<this.fencedUntil||!this.engine.featureActionsSettled)return wait(this.blockedReason||'Waiting for previous actions to settle before death recovery.');
+    if(this.world.npc.mode!=='idle'||this.world.npc.id!==null||this.world.vending)return wait('Waiting for the current interaction to close before death recovery.');
+    if(cycle.posture){
+      const result=this.engine.actionResult;
+      if(result.sequence===cycle.posture.sequence&&result.status==='failed')return fail('Recovery posture was not confirmed. No repeat posture request will be sent.');
+      return wait('Waiting for the exact recovery posture confirmation.');
+    }
+    if(cycle.guard.phase==='revival'){
+      if(!p.dead)return wait('Waiting for an ordered ready living-own arrival.');
+      if(!a.respawn.enabled||this.engine.deaths>a.respawn.maxDeaths)return wait('Death limit reached; waiting for revival.');
+      if(cycle.guard.uncertain)return wait('Respawn outcome is unconfirmed. Waiting for a verified living character; no repeat request will be sent.');
+      if(now<this.quietUntil)return wait('Waiting briefly for input and movement to settle before the one respawn attempt.');
+      if(!this.engine.idleForActions())return wait('Waiting for movement to settle before respawn.');
+      // Reserve the episode before writing; an exception cannot authorize replay.
+      cycle.guard.uncertain=true;cycle.ownId=p.id;
+      try{this.engine.manualAction({type:'respawn'});}catch{return wait('Respawn send is uncertain. Waiting for living state; nothing will retry.');}
+      this.captureActionFailure();return wait('Waiting for the respawned living character.');
+    }
+    if(p.dead)return fail('Character died again during recovery or return. The previous cycle will not restart.');
+    if(!this.deathOwnReady())return wait('Waiting for the ready living-own arrival before recovery or return.');
+    if(cycle.guard.phase==='recovery'){
+      const casting=this.engine.observations.snapshot(this.engine.playerId,null,this.engine.connected,[],false).actors.find(row=>row.id===this.engine.playerId)?.cast.state==='casting';
+      if(casting)return wait('Waiting for the observed own cast to settle before recovery.');
+      if(a.recovery.enabled){
+        let recovery;
+        try{recovery=this.engine.recoveryOnly(settings);}catch{return fail('Recovery posture send is uncertain. No repeat request will be sent.');}
+        if(this.engine.pendingFeatureAction?.type==='sit'){
+          cycle.posture={sitting:this.engine.pendingFeatureAction.sitting,sequence:this.engine.actionResult.sequence,identity:this.deathIdentity()};cycle.guard.uncertain=true;
+        }
+        if(!recovery.complete)return wait(recovery.reason);
+      }
+      if(!a.recovery.enabled&&this.engine.character.sitting===true){
+        try{this.engine.manualAction({type:'sit',sitting:false});}catch{return fail('Standing posture send is uncertain. No repeat request will be sent.');}cycle.posture={sitting:false,sequence:this.engine.actionResult.sequence,identity:this.deathIdentity()};cycle.guard.uncertain=true;return wait('Waiting for confirmed standing posture before return.');
+      }
+      if(!p.maxHp||p.hp/p.maxHp*100<=settings.minHpPercent)return wait('Waiting for HP to recover above the configured field and travel limit.');
+      if(this.engine.character.sitting!==false)return wait('Waiting for confirmed standing posture before return.');
+      cycle.guard.phase='return';cycle.returnUntil=Math.min(cycle.guard.returnDeadline||Infinity,now+cycle.guard.returnSeconds*1000);cycle.guard.returnDeadline=cycle.returnUntil;
+    }
+    if(!p.maxHp||p.hp/p.maxHp*100<=settings.minHpPercent){
+      if(this.travel.active)this.pause('Waiting for HP and a living character before travelling.');
+      return fail('Return interrupted by unavailable or low HP. The original return deadline will not restart.');
+    }
+    if(!this.engine.idleForActions())return wait('Waiting for previous movement and posture to settle before return.');
+    if(this.travel.active){
+      this.travel.tick(this.engine.map,p);const result=this.travel.snapshot();
+      if(result.state==='failed')return fail(result.reason);
+      return wait(result.reason);
+    }
+    if(this.travel.snapshot().state==='failed'&&this.travelSettings)return fail(this.travel.snapshot().reason);
+    this.travelSettings=null;
+    const policy=mapPolicy(settings),destination=a.travel.returnToLockMap?cycle.guard.destination:(policy.lockArea?.map||this.engine.map);
+    try{
+      if(this.engine.map!==destination){
+        this.travel.start(this.engine.map,p,destination,settings.route_step,settings.route_avoidWalls,policy,'return');this.travelSettings=settings;
+        return wait('Returning to the captured farming map.');
+      }
+      const grid=this.gridFor(this.engine.map);
+      if(!grid)return wait('Waiting for verified collision data before field return.');
+      if(!mapAllowed(policy,this.engine.map))return fail('The captured farming destination is forbidden by the map policy.');
+      if(!insideLockArea(policy,this.engine.map,p)){
+        const entry=lockEntry(this.engine.map,p,grid,policy);if(!entry)return wait('No reachable safe cell inside the field lock area.');
+        this.travel.startApproach(this.engine.map,p,entry,settings.route_step,policy,'field-entry');this.travelSettings=settings;return wait('Entering the captured farming area.');
+      }
+      if(grid.portals?.some(area=>Math.abs(p.x-area.x)<=area.halfWidth&&Math.abs(p.y-area.y)<=area.halfHeight)){
+        this.travel.start(this.engine.map,p,this.engine.map,settings.route_step,settings.route_avoidWalls,policy,'return');this.travelSettings=settings;return wait('Settling off the arrival portal before field activity.');
+      }
+      this.deathCycle=null;this.returning=false;this.retryAt=0;this.waitingReason='Recovery and return verified. Resuming the requested field run.';
+      this.resumeRun();return true;
+    }catch(error){return fail(error instanceof Error?error.message:'Return failed. No new deadline or attempt will be created.');}
+  }
   private resumeRun(): void {
     const settings = this.requestedSettings;
-    if (!settings || this.socket.busy || this.memo.blocked || this.supply.ownsField || this.supply.uncertain || this.engine.running || this.travel.active || this.pending || this.workflow.snapshot().running
+    if (!settings || this.deathCycle || this.socket.busy || this.memo.blocked || this.supply.ownsField || this.supply.uncertain || this.engine.running || this.travel.active || this.pending || this.workflow.snapshot().running
       || ['running','waiting'].includes(this.routine.snapshot().state)) return;
     const now = this.now(); const policy = automationSettings(settings); const player = this.engine.player;
     if (this.escape.blocked) { this.waitingReason = this.escape.snapshot().reason; return; }
@@ -844,7 +1002,6 @@ export class CompanionController {
         }
         const bound = { ...settings, map: executionPolicy.lockArea ? settings.map : this.engine.map };
         this.engine.resumeRequested(bound);
-        this.returnSettings = policy.travel.returnToLockMap && (policy.respawn.enabled || policy.escape?.enabled) ? structuredClone(settings) : null;
         this.returning = false; this.travelSettings = null; this.waitingReason = ''; this.retries = 0;
       }
     } catch (error) {
@@ -864,7 +1021,7 @@ export class CompanionController {
       this.lastTick = now; this.pause('Waiting for fresh state after the Mac or game paused.', 1_000); return;
     }
     this.lastTick = now;
-    if (this.runRequested && this.returnSettings && this.engine.player?.dead) this.returning = true;
+
     // Advance finite routine deadlines before any workflow can produce a packet.
     this.routine.advance();
     if (this.pending?.routineId !== null && this.pending?.routineId !== undefined
@@ -893,6 +1050,7 @@ export class CompanionController {
       if(this.travel.snapshot().state==='planning')this.travel.tick(this.engine.map,this.engine.player);
       this.resumeRun();return;
     }
+    if(this.deathRecoveryTick())return;
     // Escape owns its own receipt rather than the scheduler's cost-only ACK.
     // It must run while a requested field run is already waiting below its HP floor.
     if (this.escapeTick()) return;
@@ -982,6 +1140,6 @@ export class CompanionController {
     return { ...snapshot, running: executing, runRequested: this.runRequested,
       state: executing ? 'running' : this.runRequested ? 'waiting' : 'idle',
       runIntent: this.runRequested, elapsedSeconds: this.runRequested ? Math.max(0, Math.floor((this.now() - this.started) / 1000)) : snapshot.elapsedSeconds,
-      world: this.world.snapshot(), workflow, routine, travel, service, escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),social:this.social.snapshot(),memo:this.memo.snapshot(this.memoContext()),socket:this.socket.snapshot(this.socketContext()) };
+      world: this.world.snapshot(), workflow, routine, travel, service, escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),deathRecoveryGuard:this.deathCycle?deathGuard(this.deathCycle):undefined,social:this.social.snapshot(),memo:this.memo.snapshot(this.memoContext()),socket:this.socket.snapshot(this.socketContext()) };
   }
 }

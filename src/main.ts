@@ -141,7 +141,7 @@ function resumeFieldRun(s: GameStatus): void {
   const request = fieldRun.resumeFor(s);
   if (!request) return;
   const generation = runGeneration;
-  const task = invoke('control_bot', { action: 'start', settings: request.settings, escapeGuard: request.escapeGuard, supplyGuard:request.supplyGuard });
+  const task = invoke('control_bot', { action: 'start', settings: request.settings, escapeGuard: request.escapeGuard, supplyGuard:request.supplyGuard, deathRecoveryGuard:request.deathRecoveryGuard });
   pendingResume = task;
   void task.then(() => { fieldRun.completeResume(request, true); })
     .catch(() => {
@@ -365,12 +365,13 @@ startButton.addEventListener('click', () => void perform(async () => {
   limitHeld = false; configureReconnect();
   reconnect.observe(latest.connected, true, latest.login.phase, Date.now(), latest.login.message);
   const supplyGuard=fieldRun.supplyGuardForStart(checked,latest.player.name,latest.sessionId);
+  const deathRecoveryGuard=fieldRun.deathGuardForStart(checked,latest.player.name,latest.sessionId);
   const supplyCharacter=latest.player.name,supplySession=latest.sessionId;
   const task = invoke('control_bot', { action: 'start', settings: checked,
     escapeGuard: fieldRun.guardForStart(checked, latest?.player?.name ?? '', latest?.sessionId ?? ''),
-    supplyGuard });
+    supplyGuard, deathRecoveryGuard });
   pendingResume = task;
-  try { await task;if(generation===runGeneration)fieldRun.completeSupplyStart(supplyCharacter,supplySession,supplyGuard); }
+  try { await task;if(generation===runGeneration){fieldRun.completeSupplyStart(supplyCharacter,supplySession,supplyGuard);fieldRun.completeDeathStart(supplyCharacter,supplySession,deathRecoveryGuard);} }
   catch (error) { if (generation === runGeneration) { fieldRun.stop(); configureReconnect(); } throw error; }
   finally { if (pendingResume === task) pendingResume = null; }
 }));

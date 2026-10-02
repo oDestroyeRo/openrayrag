@@ -1,0 +1,237 @@
+[
+  {
+    "name": "valid",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": true
+  },
+  {
+    "name": "missing version",
+    "json": "{\"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "missing character",
+    "json": "{\"version\": 1, \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "missing destination",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "missing phase",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "missing uncertain",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "missing recoverySeconds",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "missing returnSeconds",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "missing recoveryDeadline",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "missing returnDeadline",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid phase 0",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": [\"revival\"], \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid phase 1",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": {}, \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid phase 2",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": null, \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid phase 3",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": 3, \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid phase 4",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"other\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid character 0",
+    "json": "{\"version\": 1, \"character\": \"\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid character 1",
+    "json": "{\"version\": 1, \"character\": \" \", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid character 2",
+    "json": "{\"version\": 1, \"character\": \"\\ud800\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid character 3",
+    "json": "{\"version\": 1, \"character\": \"\\udc00\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid character 4",
+    "json": "{\"version\": 1, \"character\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid version 0",
+    "json": "{\"version\": 0, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid version 1",
+    "json": "{\"version\": 2, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid version 2",
+    "json": "{\"version\": \"1\", \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid uncertain 0",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": 0, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid uncertain 1",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": null, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid recoverySeconds 0",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": -1, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid recoverySeconds 1",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 3601, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid recoverySeconds 2",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 1.1, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid recoverySeconds 3",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": \"1\", \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid returnSeconds 0",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": -1, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid returnSeconds 1",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1201, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid recoveryDeadline 0",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": -1, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid recoveryDeadline 1",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 8640000000000001, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid recoveryDeadline 2",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0.1, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid returnDeadline 0",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": -1}",
+    "valid": false
+  },
+  {
+    "name": "invalid returnDeadline 1",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 8640000000000001}",
+    "valid": false
+  },
+  {
+    "name": "invalid destination 0",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid destination 1",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"bad/map\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "invalid destination 2",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "unicode",
+    "json": "{\"version\": 1, \"character\": \"\\u0e1c\\u0e39\\u0e49\\u0e40\\u0e25\\u0e48\\u0e19\\ud83d\\ude00\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": true
+  },
+  {
+    "name": "extra",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0, \"request\": 41}",
+    "valid": false
+  },
+  {
+    "name": "recovery requires original deadline",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"recovery\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "return requires original deadline",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"return\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "valid recovery deadline",
+    "json": "{\"version\": 1, \"character\": \"Test\", \"destination\": \"prt_fild08\", \"phase\": \"recovery\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 100000, \"returnDeadline\": 0}",
+    "valid": true
+  },
+  {
+    "name": "BOM whitespace name",
+    "json": "{\"version\": 1, \"character\": \"\\ufeff\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "NEL whitespace name",
+    "json": "{\"version\": 1, \"character\": \"\\u0085\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": false
+  },
+  {
+    "name": "BOM in nonblank name",
+    "json": "{\"version\": 1, \"character\": \"\\ufeffTest\", \"destination\": \"prt_fild08\", \"phase\": \"revival\", \"uncertain\": true, \"recoverySeconds\": 300, \"returnSeconds\": 1200, \"recoveryDeadline\": 0, \"returnDeadline\": 0}",
+    "valid": true
+  }
+]

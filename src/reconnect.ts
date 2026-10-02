@@ -1,3 +1,4 @@
+import { farmingDestination, validateDeathRecoveryGuard, type DeathRecoveryGuard } from './death-recovery';
 import { validateSettings, type Settings } from './settings';
 import { validateSupplyResumeGuard, type SupplyResumeGuard } from './supply-trip';
 import type { EscapeResumeGuard, EscapeSnapshot } from './escape';
@@ -64,9 +65,9 @@ export interface RunSession {
   sessionId: string; connected: boolean; compatible: boolean; map: string;
   player: { name: string; dead?: boolean } | null; runRequested?: boolean;
   kills?: number; looted?: number; deaths?: number; attacks?: number;
-  escape?: EscapeSnapshot; supplyGuard?:SupplyResumeGuard;
+  escape?: EscapeSnapshot; supplyGuard?:SupplyResumeGuard; deathRecoveryGuard?:DeathRecoveryGuard;
 }
-export interface ResumeRequest { generation: number; sessionId: string; settings: Settings; escapeGuard?: EscapeResumeGuard; supplyGuard?:SupplyResumeGuard }
+export interface ResumeRequest { generation: number; sessionId: string; settings: Settings; escapeGuard?: EscapeResumeGuard; supplyGuard?:SupplyResumeGuard; deathRecoveryGuard?:DeathRecoveryGuard }
 const MAX_ESCAPE_GUARDS = 64;
 interface RetainedEscape { session: string; cooldownUntil: number; latched: boolean }
 
@@ -85,6 +86,7 @@ export class PersistentFieldRun {
   private escapeOverflowUncertain = false;
   private readonly supplyGuards=new Map<string,{session:string;at:number;guard:SupplyResumeGuard}>();
   private supplyOverflow=false;
+  private readonly deathGuards=new Map<string,{session:string;at:number;guard:DeathRecoveryGuard}>();
   constructor(private readonly now = Date.now) {}
   begin(settings: Settings, character: string, sessionId: string, metrics: { kills: number; looted: number; deaths: number; attacks?: number } = { kills: 0, looted: 0, deaths: 0 }): void {
     const checked=validateSettings(settings);
@@ -93,6 +95,8 @@ export class PersistentFieldRun {
     const initial=checked.automation?.supply?.enabled&&!this.supplyGuards.has(character)&&this.supplyGuards.size<64
       ?validateSupplyResumeGuard({version:1,character,latched:false,remainingTrips:checked.automation.supply.maxTrips,
         actions:0,spent:0,reserved:0,intervalSeconds:0,deadlineSeconds:0,interrupted:false,uncertain:false,returnDestination:null}):undefined;
+    const previousDeath=this.deathGuards.get(character);
+    if(previousDeath&&!previousDeath.guard.uncertain)this.deathGuards.delete(character);
     this.desired = checked;
     if(initial)this.supplyGuards.set(character,{session:sessionId,at:this.now(),guard:initial});
     this.pruneEscapeGuards();
@@ -111,6 +115,18 @@ export class PersistentFieldRun {
     // bounded cooldown through a subsequent explicit Start in this app session.
   }
   observe(status: RunSession): void {
+    if(status.deathRecoveryGuard){
+      try{const guard=validateDeathRecoveryGuard(status.deathRecoveryGuard),old=this.deathGuards.get(guard.character);
+        if(status.connected&&status.compatible&&status.player?.name===guard.character&&(!old&&this.deathGuards.size<64||old?.session===status.sessionId
+          ||this.desired&&this.character===guard.character&&guard.destination===farmingDestination(this.desired)
+            &&(this.pendingSession===status.sessionId||this.session===status.sessionId)))
+          this.deathGuards.set(guard.character,{session:status.sessionId,at:this.now(),guard});
+      }catch{/* Unvalidated telemetry cannot change an outstanding death episode. */}
+    }else if(status.runRequested&&status.player?.dead===false){
+      const old=this.deathGuards.get(status.player.name);
+      if(old?.session===status.sessionId)this.deathGuards.delete(status.player.name);
+    }
+
     if(status.supplyGuard){
       try{
         const guard=validateSupplyResumeGuard(status.supplyGuard),old=this.supplyGuards.get(guard.character);
@@ -181,12 +197,34 @@ export class PersistentFieldRun {
     if(!automatic&&!guard.uncertain){guard.interrupted=false;guard.returnDestination=null;}
     return validateSupplyResumeGuard(guard);
   }
+  deathGuardForStart(settings:Settings,character:string,sessionId:string,automatic=false):DeathRecoveryGuard|undefined {
+    const old=this.deathGuards.get(character);
+    if(!settings.automation?.respawn.enabled&&!old&&!(automatic&&this.desired?.automation?.respawn.enabled))return undefined;
+    if(old){
+      const guard=structuredClone(old.guard);
+      // A replaced page loses wire ownership. A fresh ready living character can
+      // reconcile it; a dead character cannot prove the old request was unsent.
+      if(automatic&&sessionId!==old.session&&guard.phase==='revival')guard.uncertain=true;
+      return validateDeathRecoveryGuard(guard);
+    }
+    if(!automatic)return undefined;
+    return {version:1,character,destination:farmingDestination(settings),phase:this.deathGuards.size>=64?'failed':'revival',
+      uncertain:true,recoverySeconds:settings.automation!.recovery.timeoutSeconds,returnSeconds:1200,recoveryDeadline:0,returnDeadline:0};
+  }
+  completeDeathStart(character:string,sessionId:string,guard?:DeathRecoveryGuard):void {
+    if(!guard)return;const checked=validateDeathRecoveryGuard(guard);
+    if(checked.character!==character)throw new Error('Death recovery state belongs to another character.');
+    const old=this.deathGuards.get(character);
+    if(old?.session===sessionId)return; // Newer same-page receipts outrank an older callback.
+    if(!old&&this.deathGuards.size>=64)return;
+    this.deathGuards.set(character,{session:sessionId,at:this.now(),guard:checked});
+  }
   resumeFor(status: RunSession): ResumeRequest | null {
     if (!this.desired || this.limitReason || !status.connected || !status.compatible || !status.player
       || status.player.name !== this.character || !/^[a-zA-Z0-9_-]{1,64}$/.test(status.map)
       || !status.sessionId || status.sessionId === this.session || status.sessionId === this.pendingSession) return null;
     this.pendingSession = status.sessionId;
-    const settings = validateSettings({ ...this.desired, map: this.desired.automation?.mapPolicy?.lockArea ? this.desired.map : status.map });
+    const settings = validateSettings({ ...this.desired, map: this.desired.automation?.respawn.enabled||this.desired.automation?.travel.returnToLockMap||this.desired.automation?.mapPolicy?.lockArea ? farmingDestination(this.desired) : status.map });
     if (settings.automation) {
       const a = settings.automation;
       if (a.limits.minutes) a.limits.minutes = Math.max(1, Math.ceil((a.limits.minutes * 60_000 - (this.now() - this.startedAt)) / 60_000));
@@ -204,7 +242,14 @@ export class PersistentFieldRun {
       ? { latched: true, cooldownSeconds: Math.max(settings.automation.escape.cooldownSeconds,
         this.guardForStart(settings,this.character,status.sessionId)?.cooldownSeconds ?? 0) } : undefined;
     const supplyGuard=this.supplyGuardForStart(settings,this.character,status.sessionId,true);
-    return { generation: this.generation, sessionId: status.sessionId, settings: validateSettings(settings), ...(escapeGuard ? { escapeGuard } : {}),...(supplyGuard?{supplyGuard}:{}) };
+    const deathRecoveryGuard=this.deathGuardForStart(settings,this.character,status.sessionId,true);
+    if(deathRecoveryGuard&&status.player.dead===false&&deathRecoveryGuard.phase!=='failed'){
+      // Capture the maximum remaining cycle budget before invoking native Start.
+      // A reload before its first bridge publication cannot create a new deadline.
+      deathRecoveryGuard.recoveryDeadline ||= this.now()+deathRecoveryGuard.recoverySeconds*1000;
+      deathRecoveryGuard.returnDeadline ||= deathRecoveryGuard.recoveryDeadline+deathRecoveryGuard.returnSeconds*1000;
+    }
+    return { generation: this.generation, sessionId: status.sessionId, settings: validateSettings(settings), ...(escapeGuard ? { escapeGuard } : {}),...(supplyGuard?{supplyGuard}:{}),...(deathRecoveryGuard?{deathRecoveryGuard}:{}) };
   }
   completeResume(request: ResumeRequest, success: boolean): boolean {
     if (request.generation !== this.generation || request.sessionId !== this.pendingSession || !this.desired) return false;
@@ -212,6 +257,7 @@ export class PersistentFieldRun {
     this.pendingSession = '';
     if (success) {this.session = request.sessionId;
       if(request.supplyGuard)this.completeSupplyStart(request.supplyGuard.character,request.sessionId,request.supplyGuard);
+      if(request.deathRecoveryGuard)this.completeDeathStart(this.character,request.sessionId,request.deathRecoveryGuard);
     }
     return true;
   }

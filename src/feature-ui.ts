@@ -1,3 +1,4 @@
+import { validateDeathRecoveryGuard } from './death-recovery';
 import { DEFAULT_MAP_POLICY, insideLockArea, mapPolicy, policySummary, validateMapPolicy } from './map-policy';
 import { routeBetweenMapsAsync } from './travel';
 import {actorId} from './actor-identity';
@@ -63,7 +64,8 @@ const fields: Record<Section, Field[]> = {
     { path:'escape.method',label:'Escape action',options:[['item','Fly Wing / Butterfly Wing'],['skill','Teleport / Return skill']] },
     { path:'escape.minStock',label:'Wings to keep in reserve',min:0,max:9999 },
     { path:'escape.cooldownSeconds',label:'Minimum escape interval, seconds',min:1,max:3600 },
-    { path:'respawn.enabled',label:'Respawn after death',kind:'checkbox' }, { path:'respawn.maxDeaths',label:'Wait after deaths',min:1,max:100 },
+    { path:'respawn.enabled',label:'Auto respawn at the save point',kind:'checkbox' }, { path:'respawn.maxDeaths',label:'Maximum deaths before waiting',min:1,max:100 },
+    { path:'travel.returnToLockMap',label:'Return to the captured farming map after revival or escape',kind:'checkbox' },
   ],
   travel: [
     {path:'mapPolicy.mode',label:'Portal routing',options:[['legacy','Fewest crossings (legacy)'],['weighted','Weighted walking + map penalties']]},
@@ -75,7 +77,7 @@ const fields: Record<Section, Field[]> = {
     {path:'supply.maxTrips',label:'Maximum supply trips',min:1,max:100},{path:'supply.maxActions',label:'Commands per trip',min:1,max:100},
     {path:'supply.maxDurationSeconds',label:'Trip deadline, seconds',min:30,max:3600},{path:'supply.maxSpend',label:'Whole-trip reserved spending, zeny',min:0,max:2000000000},
     ...(['storage','buy','sell'] as const).map(kind=>({path:`supply.${kind}Service`,label:`Supply ${kind} service`,options:[['','Select a verified service'],...BUILTIN_SERVICES.filter(def=>kind==='storage'?def.outcome.type==='storageOpened':def.outcome.type==='shopOpened'&&def.outcome.mode===kind).map(def=>[def.contractId,def.name] as [string,string])] as Array<[string,string]>})),
-    { path:'travel.destinationMap',label:'Destination map code',kind:'text' }, { path:'travel.returnToLockMap',label:'Return to start map after respawn or escape',kind:'checkbox' },
+    { path:'travel.destinationMap',label:'Destination map code',kind:'text' },
     { path:'travel.loop',label:'Repeat waypoint route',kind:'checkbox' },
     { path:'follow.name',label:'Follow player name',kind:'text' }, { path:'follow.distance',label:'Follow distance, cells',min:1,max:20 },
     { path:'follow.lostSeconds',label:'Wait when player lost, seconds',min:1,max:120 },
@@ -161,6 +163,7 @@ const countColumn: Column = {key:'count',label:'Quantity',min:1,max:9999};
 // Bounded telemetry is treated as data. A new packet field cannot inject HTML or
 // make a native status event grow an unbounded tree in the controller.
 export function validFeatureStatus(value: Record<string, unknown>): boolean {
+  if(value.deathRecoveryGuard!==undefined){try{validateDeathRecoveryGuard(value.deathRecoveryGuard);}catch{return false;}}
   let remaining = 100_000;
   function bounded(v: unknown, depth: number): boolean {
     if (--remaining < 0 || depth > 10) return false;
@@ -171,7 +174,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     if (v && typeof v === 'object') return Object.keys(v).length <= 256 && Object.values(v).every(entry => bounded(entry,depth+1));
     return false;
   }
-  if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','supply','supplyGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','supply','supplyGuard','deathRecoveryGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
   if(object(value.travel).policy!==undefined){try{validateMapPolicy(object(value.travel).policy);}catch{return false;}}
   if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
   if(value.social!==undefined&&!validSocialSnapshot(value.social))return false;
@@ -333,7 +336,7 @@ export class FeatureUi {
     this.editor('combat','attackStrategies','Ordered attack skills by species',[{key:'id',label:'Stable rule ID',kind:'text'},{key:'speciesIds',label:'Monster species IDs · comma separated',kind:'ids'},{key:'skillId',label:'Verified actor skill',options:[['11','Fire Bolt'],['12','Cold Bolt'],['16','Lightning Bolt']]},{key:'level',label:'Level',min:1,max:10},{key:'behavior',label:'Use',options:[['opener','Before first normal attack'],['repeat','Repeat during engagement']]},{key:'maxAttempts',label:'Maximum dispatch attempts per actor',min:1,max:100},{key:'maxUses',label:'Maximum confirmed uses per actor',min:1,max:100},{key:'cooldownSeconds',label:'Cooldown seconds',min:1,max:3600}],{id:'opening-bolt',speciesIds:[4000],skillId:11,level:1,behavior:'opener',maxAttempts:1,maxUses:1,cooldownSeconds:3},32);
     this.note('combat','An empty attack strategy list uses ordinary combat. Earlier matching rules win, even when two rules use the same skill. Opener means before this controller first sends a normal attack at that observed actor. Attempts and confirmations survive Stop/Start and target switches. An unresolved cast cannot be retried on that actor lifetime. Unknown prerequisites wait up to 30 seconds, then skip that actor for 30 seconds while retaining run intent. Only the three bolt skills have automatic cast positioning; combos, kiting, party support and automatic ground AoE remain unavailable.');
     const strategyState=document.createElement('div');strategyState.id='attack-strategy-state';strategyState.className='telemetry-summary';strategyState.hidden=true;this.panel('combat').append(strategyState);
-    this.note('recovery','Rest starts above the emergency HP threshold. Resume needs both configured HP and SP targets. Recovery timeouts keep the run waiting.');
+    this.note('recovery','Automatic respawn is off by default. It sends one save-point request per death and waits for your living character. When sitting recovery is enabled, it reaches the configured HP/SP targets and confirms standing before return. Stop cancels continuation; an unanswered request never retries. The farming map is captured at Start: lock map, journey destination, then starting map. Recovery or return failure keeps the run waiting.');
     this.note('recovery','Emergency escape is opt-in: random uses Fly Wing or Teleport; save point uses Butterfly Wing or Return. It waits for your refreshed character, then for HP recovery. Stock reserve applies to wings. A rejected or uncertain attempt never falls back to another action.');
     this.editor('travel','travel.waypoints','Waypoints',[{key:'map',label:'Map code',kind:'text'},{key:'x',label:'X',min:0,max:511},{key:'y',label:'Y',min:0,max:511}],{map:'prt_fild08',x:150,y:150},64);
     this.note('travel','Travel uses verified portal routes. NPC or conditional portals may require a manual action. A blank player name disables follow.');
