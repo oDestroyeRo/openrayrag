@@ -119,7 +119,11 @@ export class CompanionController {
     this.engine = new BotEngine(action=>this.send(action), now, gridFor);
     this.workflow = new NpcWorkflow(now);
     this.routine = new RoutineRuntime(validControllerAction, now, { actionTimeoutSeconds: actionConfirmationTimeout({ type: 'skill' }) / 1000 });
-    this.travel = new TravelController(action=>this.send(action), now, gridFor);
+    this.travel = new TravelController(action=>this.send(action), now, gridFor, { context: () => {
+      const identity = this.engine.actorActionIdentity();
+      return { identity: identity ? JSON.stringify([this.connectionEpoch, this.world.generation, identity]) : null,
+        map: this.engine.map, player: this.engine.player };
+    } });
     this.service = new NpcServiceRuntime(this.travel, now, gridFor);
     this.escape = new EmergencyEscape(now);
     this.supply = new SupplyTripRuntime({next:(context,goals,policy)=>nextSupplyAction(context,goals,policy,this.requestedSettings?.automation?.supply!,{storageFull:this.supplyStorageFull}),confirm:confirmSupplyReceipt},now);
@@ -886,6 +890,7 @@ export class CompanionController {
       // Poll receipts, movement and absolute deadlines while held keys keep
       // extending the grace period. The engine's clock must not look asleep.
       this.engine.tick(false);this.captureActionFailure();this.syncWorkflowOwner();
+      if(this.travel.snapshot().state==='planning')this.travel.tick(this.engine.map,this.engine.player);
       this.resumeRun();return;
     }
     // Escape owns its own receipt rather than the scheduler's cost-only ACK.

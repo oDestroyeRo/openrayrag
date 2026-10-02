@@ -1,5 +1,5 @@
 import { DEFAULT_MAP_POLICY } from './map-policy';
-import { DEFAULT_AUTOMATION } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FeatureUi } from './feature-ui';
 import { NpcServiceStore } from './npc-service-store';
@@ -56,10 +56,12 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
     },
     () => `service-${++nextId}`,
   );
+  const status: Record<string,unknown> = {};
   const hooks = {
     notify: vi.fn(),
     service: vi.fn(async (_spec: unknown) => 'Service requested.'),
-    map: () => 'prontera',
+    map: () => typeof status.map === 'string' ? status.map : 'prontera',
+    settings: () => DEFAULT_SETTINGS,
   };
   const view: object = Object.create(FeatureUi.prototype);
   Object.assign(view, {
@@ -76,14 +78,14 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
     locked: false,
     manualLocked: true,
     serviceLocked: true,
-    status: {},
+    status,
   });
   Reflect.apply(Reflect.get(FeatureUi.prototype, 'servicePanel'), view, []);
   const button = (name: string) => panel.all().find((node) => node.tag === 'button' && node.textContent === name)!;
   const field = (name: string) => panel.all().find((node) => node.attributes.get('aria-label') === name)!;
   const lock = (config: boolean, manual: boolean, service: boolean) =>
     Reflect.apply(Reflect.get(FeatureUi.prototype, 'lock'), view, [config, manual, service]);
-  return { panel, store, hooks, button, field, lock };
+  return { panel, store, hooks, button, field, lock, status };
 }
 afterEach(() => vi.unstubAllGlobals());
 describe('NPC service UI ownership gates', () => {
@@ -110,6 +112,18 @@ describe('NPC service UI ownership gates', () => {
     const executionPolicy={...structuredClone(DEFAULT_MAP_POLICY),deny:['prontera']},s=setup(executionPolicy);s.lock(false,true,false);await s.button('Preview').click();
     expect(s.panel.all().some(node=>node.textContent.includes('forbidden by the map policy'))).toBe(true);await s.button('Run service').click();
     expect(s.hooks.service.mock.calls[0]?.[0]).toMatchObject({executionPolicy});
+  });
+  it('cancels the actual service-panel preview if prerequisites change during its portal plan',async()=>{
+    vi.useFakeTimers();
+    try {
+      const s=setup({...structuredClone(DEFAULT_MAP_POLICY),mode:'weighted'});
+      Object.assign(s.status,{map:'prt_fild08',player:{id:0,x:169,y:193},character:{inventoryKnown:true,skillsKnown:true,inventory:[],stats:{zeny:10000},learned:[{skillId:1,level:5}]}});
+      await s.button('Preview').click();expect(vi.getTimerCount()).toBeGreaterThan(0);
+      s.status.character={inventoryKnown:false,skillsKnown:true,inventory:[],stats:{zeny:0},learned:[{skillId:1,level:5}]};
+      await vi.runAllTimersAsync();
+      expect(s.panel.all().some(node=>node.textContent.startsWith('Preview cancelled.'))).toBe(true);
+      expect(s.hooks.service).not.toHaveBeenCalled();
+    } finally {vi.useRealTimers();}
   });
   it('runs a verified service during field automation while keeping configuration locked', async () => {
     const s = setup();

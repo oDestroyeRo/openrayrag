@@ -1,0 +1,268 @@
+{
+  "host": "v26.10.0",
+  "sliceBudgetMs": 8,
+  "results": [
+    {
+      "runtime": "native-module-artifact",
+      "rows": [
+        {
+          "mode": "legacy",
+          "destination": "prontera",
+          "cache": "cold",
+          "totalMs": 19.731,
+          "maxSliceMs": 7.743,
+          "maxSchedulingDelayMs": 1.422,
+          "maxTimerDelayMs": 1.95,
+          "slices": 3
+        },
+        {
+          "mode": "legacy",
+          "destination": "prontera",
+          "cache": "repeated",
+          "totalMs": 1.546,
+          "maxSliceMs": 0.205,
+          "maxSchedulingDelayMs": 1.297,
+          "maxTimerDelayMs": 0,
+          "slices": 1
+        },
+        {
+          "mode": "legacy",
+          "destination": "payon",
+          "cache": "cold",
+          "totalMs": 216.406,
+          "maxSliceMs": 8.037,
+          "maxSchedulingDelayMs": 1.596,
+          "maxTimerDelayMs": 8.689,
+          "slices": 25
+        },
+        {
+          "mode": "legacy",
+          "destination": "payon",
+          "cache": "repeated",
+          "totalMs": 1.576,
+          "maxSliceMs": 0.262,
+          "maxSchedulingDelayMs": 1.281,
+          "maxTimerDelayMs": 0,
+          "slices": 1
+        },
+        {
+          "mode": "legacy",
+          "destination": "geffen",
+          "cache": "cold",
+          "totalMs": 310.439,
+          "maxSliceMs": 8.086,
+          "maxSchedulingDelayMs": 2.27,
+          "maxTimerDelayMs": 8.845,
+          "slices": 37
+        },
+        {
+          "mode": "legacy",
+          "destination": "geffen",
+          "cache": "repeated",
+          "totalMs": 1.878,
+          "maxSliceMs": 0.338,
+          "maxSchedulingDelayMs": 1.417,
+          "maxTimerDelayMs": 0,
+          "slices": 1
+        },
+        {
+          "mode": "weighted",
+          "destination": "prontera",
+          "cache": "cold",
+          "totalMs": 38.898,
+          "maxSliceMs": 6.741,
+          "maxSchedulingDelayMs": 1.364,
+          "maxTimerDelayMs": 1.762,
+          "slices": 10
+        },
+        {
+          "mode": "weighted",
+          "destination": "prontera",
+          "cache": "repeated",
+          "totalMs": 11.513,
+          "maxSliceMs": 1.592,
+          "maxSchedulingDelayMs": 1.338,
+          "maxTimerDelayMs": 1.13,
+          "slices": 5
+        },
+        {
+          "mode": "weighted",
+          "destination": "payon",
+          "cache": "cold",
+          "totalMs": 2717.245,
+          "maxSliceMs": 8.286,
+          "maxSchedulingDelayMs": 2.393,
+          "maxTimerDelayMs": 9.56,
+          "slices": 335
+        },
+        {
+          "mode": "weighted",
+          "destination": "payon",
+          "cache": "repeated",
+          "totalMs": 2600.737,
+          "maxSliceMs": 9.06,
+          "maxSchedulingDelayMs": 1.941,
+          "maxTimerDelayMs": 9.115,
+          "slices": 321
+        },
+        {
+          "mode": "weighted",
+          "destination": "geffen",
+          "cache": "cold",
+          "totalMs": 1180.519,
+          "maxSliceMs": 8.158,
+          "maxSchedulingDelayMs": 2.138,
+          "maxTimerDelayMs": 8.913,
+          "slices": 152
+        },
+        {
+          "mode": "weighted",
+          "destination": "geffen",
+          "cache": "repeated",
+          "totalMs": 1041.348,
+          "maxSliceMs": 8.304,
+          "maxSchedulingDelayMs": 2.352,
+          "maxTimerDelayMs": 9.326,
+          "slices": 132
+        }
+      ],
+      "cancellation": {
+        "totalMs": 12.408,
+        "inputSchedulingDelayMs": 1.317,
+        "cancellationLatencyMs": 0.342,
+        "slices": 3
+      }
+    },
+    {
+      "runtime": "injected-iife-artifact",
+      "rows": [
+        {
+          "mode": "legacy",
+          "destination": "prontera",
+          "cache": "cold",
+          "totalMs": 277.846,
+          "maxSliceMs": 8.274,
+          "maxSchedulingDelayMs": 1.394,
+          "maxTimerDelayMs": 9.017,
+          "slices": 30
+        },
+        {
+          "mode": "legacy",
+          "destination": "prontera",
+          "cache": "repeated",
+          "totalMs": 1.645,
+          "maxSliceMs": 0.322,
+          "maxSchedulingDelayMs": 1.282,
+          "maxTimerDelayMs": 0,
+          "slices": 1
+        },
+        {
+          "mode": "legacy",
+          "destination": "payon",
+          "cache": "cold",
+          "totalMs": 2068.707,
+          "maxSliceMs": 8.468,
+          "maxSchedulingDelayMs": 2.143,
+          "maxTimerDelayMs": 9.47,
+          "slices": 221
+        },
+        {
+          "mode": "legacy",
+          "destination": "payon",
+          "cache": "repeated",
+          "totalMs": 1.776,
+          "maxSliceMs": 0.441,
+          "maxSchedulingDelayMs": 1.3,
+          "maxTimerDelayMs": 0,
+          "slices": 1
+        },
+        {
+          "mode": "legacy",
+          "destination": "geffen",
+          "cache": "cold",
+          "totalMs": 3221.222,
+          "maxSliceMs": 8.458,
+          "maxSchedulingDelayMs": 2.063,
+          "maxTimerDelayMs": 9.376,
+          "slices": 344
+        },
+        {
+          "mode": "legacy",
+          "destination": "geffen",
+          "cache": "repeated",
+          "totalMs": 1.976,
+          "maxSliceMs": 0.438,
+          "maxSchedulingDelayMs": 1.409,
+          "maxTimerDelayMs": 0,
+          "slices": 1
+        },
+        {
+          "mode": "weighted",
+          "destination": "prontera",
+          "cache": "cold",
+          "totalMs": 578.52,
+          "maxSliceMs": 8.254,
+          "maxSchedulingDelayMs": 2.16,
+          "maxTimerDelayMs": 8.964,
+          "slices": 65
+        },
+        {
+          "mode": "weighted",
+          "destination": "prontera",
+          "cache": "repeated",
+          "totalMs": 14.888,
+          "maxSliceMs": 3.001,
+          "maxSchedulingDelayMs": 1.521,
+          "maxTimerDelayMs": 0,
+          "slices": 5
+        },
+        {
+          "mode": "weighted",
+          "destination": "payon",
+          "cache": "cold",
+          "totalMs": 29849.947,
+          "maxSliceMs": 8.559,
+          "maxSchedulingDelayMs": 3.888,
+          "maxTimerDelayMs": 10.299,
+          "slices": 3191
+        },
+        {
+          "mode": "weighted",
+          "destination": "payon",
+          "cache": "repeated",
+          "totalMs": 30168.668,
+          "maxSliceMs": 86.434,
+          "maxSchedulingDelayMs": 16.417,
+          "maxTimerDelayMs": 88.894,
+          "slices": 3205
+        },
+        {
+          "mode": "weighted",
+          "destination": "geffen",
+          "cache": "cold",
+          "totalMs": 14126.437,
+          "maxSliceMs": 8.521,
+          "maxSchedulingDelayMs": 2.866,
+          "maxTimerDelayMs": 9.418,
+          "slices": 1512
+        },
+        {
+          "mode": "weighted",
+          "destination": "geffen",
+          "cache": "repeated",
+          "totalMs": 11885.075,
+          "maxSliceMs": 8.655,
+          "maxSchedulingDelayMs": 2.213,
+          "maxTimerDelayMs": 9.401,
+          "slices": 1272
+        }
+      ],
+      "cancellation": {
+        "totalMs": 29.955,
+        "inputSchedulingDelayMs": 1.352,
+        "cancellationLatencyMs": 0.342,
+        "slices": 3
+      }
+    }
+  ]
+}

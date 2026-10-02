@@ -1,6 +1,7 @@
 import { DEFAULT_MAP_POLICY, mapAllowed, policySummary, validateMapPolicy, type MapPolicy } from './map-policy';
-import { routeBetweenMaps } from './travel';
+import { routeBetweenMaps, routeBetweenMapsAsync } from './travel';
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
+import type { PlanningOptions } from './route-planning';
 import catalog from './data/npc-services.json';
 import { distance, GridNavigator, searchGrid, type WalkGrid } from './navigation';
 import type { Entity, GameEvent, Position } from './protocol';
@@ -619,10 +620,22 @@ export interface ServicePreviewContext {
   basicSkillLevel: number | null;
   stock: Readonly<Record<string, number>>;
 }
-export function previewService(
+export async function previewServiceAsync(input: unknown, c: ServicePreviewContext, policy: MapPolicy = DEFAULT_MAP_POLICY, options: PlanningOptions = {}): Promise<ReturnType<typeof previewService>> {
+  const context = structuredClone(c), detachedPolicy = structuredClone(policy);
+  let service: NpcServiceDefinition;
+  try { service = validateServiceDefinition(input); }
+  catch { return previewService(input, context, detachedPolicy); }
+  const reachable = !context.player || context.map === service.map || !!await routeBetweenMapsAsync(context.map, context.player, service.map, true, detachedPolicy, options);
+  return servicePreview(service, context, detachedPolicy, reachable);
+}
+export function previewService(input: unknown, c: ServicePreviewContext, policy: MapPolicy = DEFAULT_MAP_POLICY): { available: boolean; reasons: string[]; summary: string } {
+  return servicePreview(input, c, policy);
+}
+function servicePreview(
   input: unknown,
   c: ServicePreviewContext,
   policy:MapPolicy=DEFAULT_MAP_POLICY,
+  routeAvailable?: boolean,
 ): { available: boolean; reasons: string[]; summary: string } {
   let s: NpcServiceDefinition;
   try {
@@ -634,7 +647,7 @@ export function previewService(
     reasons: string[] = [];
   if (unavailable) reasons.push(unavailable);
   if(!mapAllowed(policy,s.map)||s.outcome.type==='arrival'&&!mapAllowed(policy,s.outcome.map))reasons.push('Service map or arrival outcome is forbidden by the map policy.');
-  if(c.player&&c.map!==s.map&&!routeBetweenMaps(c.map,c.player,s.map,true,policy))reasons.push('No allowed verified portal route reaches this service.');
+  if(c.player&&c.map!==s.map&&!(routeAvailable ?? !!routeBetweenMaps(c.map,c.player,s.map,true,policy)))reasons.push('No allowed verified portal route reaches this service.');
   if (!c.inventoryKnown || c.zeny === null) reasons.push('Wait for authoritative inventory and balance.');
   if (c.basicSkillLevel === null || c.basicSkillLevel < s.basicSkillLevel)
     reasons.push(`Basic Mastery level ${s.basicSkillLevel} is required.`);

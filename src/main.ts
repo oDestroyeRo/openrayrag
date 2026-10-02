@@ -1,14 +1,11 @@
+import type { Snapshot } from './engine';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { type Snapshot } from './engine';
 import { DEFAULT_SETTINGS, DEFAULT_AUTOMATION, MAX_TARGETS, validateSettings, type Settings } from './settings';
-import { FeatureUi, validFeatureStatus } from './feature-ui';
+import { FeatureUi } from './feature-ui';
 import { ReconnectPolicy, PersistentFieldRun } from './reconnect';
-import type { EscapeSnapshot } from './escape';
-import { type LoginStatus } from './login';
-import { validMapInfo, type MapInfo } from './map-data';
 import { GridNavigator, NAVIGATION_MAPS, searchGrid } from './navigation';
-import { validNavigationStatus } from './navigation-status';
+import { validStatus, statusHeartbeatFresh, type GameStatus } from './game-status';
 import { MapTargets } from './targets';
 import { normalAttackProfile } from './combat';
 import { canStartField, settingsWithFieldMap } from './field-controls';
@@ -90,7 +87,6 @@ const startButton = element<HTMLButtonElement>('start');
 const stopButton = element<HTMLButtonElement>('stop');
 const native = isTauri();
 interface SavedLogin { username: string; characterSlot: number; autoLogin: boolean }
-type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean; escape?: EscapeSnapshot; supplyGuard?:import('./supply-trip').SupplyResumeGuard };
 let savedLogin: SavedLogin | null = null;
 let loginBusy = false;
 let loginStartedAt = 0;
@@ -401,32 +397,7 @@ for (const [id, output, suffix] of [['radius','radius-value',' cells'],['min-hp'
   element<HTMLInputElement>(id).addEventListener('input', () => { element(output).textContent = element<HTMLInputElement>(id).value + suffix; updateButtons(); });
 }
 
-function validStatus(value: unknown): value is GameStatus {
-  if (!value || typeof value !== 'object') return false;
-  const s = value as Record<string, unknown>;
-  if (typeof s.reconnectAvailable !== 'boolean') return false;
-  if (typeof s.sessionId !== 'string' || !s.sessionId || s.sessionId.length > 64) return false;
-  const login = s.login as Partial<LoginStatus> | undefined;
-  if (!login || typeof login.message !== 'string' || login.message.length > 1024
-    || !['idle','signingIn','selecting','entering','complete','failed','cancelled'].includes(login.phase ?? '')) return false;
-  const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
-  const entity = (v: unknown) => {
-    if (!v || typeof v !== 'object') return false;
-    const e = v as Record<string, unknown>;
-    return Number.isInteger(e.id)&&Number(e.id)>=0&&Number(e.id)<=0x7fffffff&&['id','classId','kind','level','hp','maxHp','x','y'].every(k => finite(e[k])) && typeof e.name === 'string' && e.name.length <= 512;
-  };
-  if (!validNavigationStatus(s.navigation)) return false;
-  if ((s.runRequested !== undefined && typeof s.runRequested !== 'boolean') || (s.state !== undefined && !['running','waiting','idle'].includes(s.state as string))) return false;
-  return ['connected','compatible','running'].every(k => typeof s[k] === 'boolean')
-    && ['reason','map','target'].every(k => typeof s[k] === 'string' && (s[k] as string).length <= 1024)
-    && validMapInfo(s.mapInfo, s.map as string)
-    && ['attacks','kills','looted'].every(k => finite(s[k]))
-    && (s.player === null || entity(s.player) && (s.player as Record<string,unknown>).kind===0)
-    && Array.isArray(s.monsters) && s.monsters.length <= 150 && s.monsters.every(entity)
-    && Array.isArray(s.drops) && s.drops.length <= 150 && s.drops.every(v => v && ['id','x','y'].every(k => finite(v[k])))
-    && Array.isArray(s.log) && s.log.length <= 50 && s.log.every(v => v && finite(v.at) && typeof v.text === 'string' && v.text.length < 1024)
-    && validFeatureStatus(s);
-}
+
 
 function render(s: GameStatus): void {
   // Navigation is asynchronous: the previous page may still publish its terminal
@@ -581,7 +552,7 @@ if (native) {
       : 'A running bot reconnects with this session login and resumes when your character is ready.');
     if (!fieldRun.limitReason && latest?.connected && Date.now() - receivedAt > 7000) message('Waiting for fresh game status. The run will resume when the controller responds.', true);
     if (!gameOpen || heartbeatPending) return;
-    if (receivedAt > 0 && Date.now() - receivedAt > 7000) return;
+    if (!statusHeartbeatFresh(receivedAt, Date.now())) return;
     heartbeatPending = true;
     void invoke('control_bot', { action: 'heartbeat' }).catch(() => { updateButtons(); })
       .finally(() => { heartbeatPending = false; });

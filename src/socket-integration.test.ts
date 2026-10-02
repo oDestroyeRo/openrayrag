@@ -1,4 +1,4 @@
-import {describe,expect,it} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
 import {BitWriter} from './binary';
 import {CompanionController} from './controller';
 import {OP,type Entity} from './protocol';
@@ -7,6 +7,7 @@ import {DEFAULT_AUTOMATION} from './settings';
 import {memoPreview} from './memo';
 import type {MemoSlot,MemoSlots} from './memo-protocol';
 import type {SocketAction} from './socket-protocol';
+import {DEFAULT_MAP_POLICY} from './map-policy';
 
 const map='prt_fild08',guid='00112233445566778899aabbccddeeff';
 const own:Entity={id:0,classId:0,name:'Synthetic',kind:0,level:7,hp:100,maxHp:100,sp:200,maxSp:200,x:10,y:10,dead:false,statuses:[]};
@@ -46,6 +47,19 @@ function setup(ready=true) {
   mutation:()=>packet(item(new BitWriter().u8(63).i32(20001),[4002,4002,0,0])),elapse:(ms:number)=>{now+=ms;},step:(ms=100)=>{now+=ms;c.tick();}};
 }
 describe('memo and socket integration under one controller owner',()=>{
+ it('holds memo and socket admission during panel input, then official gameplay cancels pending planning',async()=>{
+  vi.useFakeTimers();
+  try{
+   const s=setup(),memo=s.memoRequest(),socket=s.request(s.socketPreview());
+   s.c.travel.start(map,s.c.engine.player!,'payon',10,true,{...DEFAULT_MAP_POLICY,mode:'weighted'});
+   expect(s.c.snapshot().travel.state).toBe('planning');expect(s.c.active).toBe(true);expect(vi.getTimerCount()).toBe(1);
+   expect(()=>s.c.perform('memo',memo)).toThrow('Stop');expect(()=>s.c.perform('socket',socket)).toThrow();expect(()=>s.socketPreview()).toThrow();
+   s.c.manualInput();expect(s.c.snapshot().travel.state).toBe('planning');expect(vi.getTimerCount()).toBe(1);
+   s.c.manualCommand();expect(s.c.snapshot().travel.state).toBe('cancelled');expect(vi.getTimerCount()).toBe(0);
+   await vi.runAllTimersAsync();expect(s.c.active).toBe(false);expect(s.sockets).toEqual([]);expect(s.memos).toEqual([]);
+   expect(s.actions.every(action=>(action as {type:string}).type==='stop')).toBe(true);
+  }finally{vi.useRealTimers();}
+ });
  it('keeps pending and canceled memo ownership until a fresh readback before any socket send',()=>{
   const s=setup();s.c.perform('memo',s.memoRequest());expect(s.memos).toEqual([0]);
   expect(()=>s.socketPreview()).toThrow();s.c.stop();expect(s.c.memo.blocked).toBe(true);expect(()=>s.socketPreview()).toThrow();
