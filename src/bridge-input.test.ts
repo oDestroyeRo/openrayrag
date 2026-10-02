@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompanionController } from './controller';
 import { BitWriter } from './binary';
-import { GAME_URL, OP, SOCKET_URL, VERIFIED_BUILD, walkCommand, command, type Entity } from './protocol';
+import { GAME_URL, OP, SOCKET_URL, VERIFIED_BUILD, walkCommand, lookCommand, command, type Entity } from './protocol';
 import { FEATURE_OP, featureCommand } from './protocol-feature';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
 import type { Settings } from './settings';
@@ -58,6 +58,16 @@ beforeEach(()=>{vi.useFakeTimers();vi.setSystemTime(100_000);});
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks();captured.controller=null;captured.senders=[];});
 
 describe('official page input and socket boundary',()=>{
+  it('gives official Look manual grace without routing it through resource cancellation, and forwards exactly once',async()=>{
+    const f=await fixture(),look=vi.spyOn(f.c,'officialLook'),takeover=vi.spyOn(f.c,'manualCommand');
+    const frame=lookCommand({type:'look',direction:7,head:2});f.socket.send(frame);
+    expect(look).toHaveBeenCalledOnce();expect(takeover).not.toHaveBeenCalled();expect(f.socket.writes).toEqual([frame]);
+  });
+  it('encodes Companion Look through the prototype transport and updater dispatch gate',async()=>{
+    const f=await fixture(),look=vi.spyOn(f.c,'officialLook');Reflect.apply(captured.senders[0]!,null,[{type:'look',direction:6,head:1}]);
+    expect(new Uint8Array(f.socket.writes[0] as ArrayBuffer)).toEqual(Uint8Array.of(13,6,1));expect(look).not.toHaveBeenCalled();
+    expect(()=>Reflect.apply(captured.senders[0]!,null,[{type:'look',direction:8,head:1}])).toThrow();expect(f.socket.writes).toHaveLength(1);
+  });
   it('preserves an actual own-zero opener through the trusted panel listener and normal raw result',async()=>{
     const f=await fixture(),a=structuredClone(DEFAULT_AUTOMATION);
     a.attackStrategies=[{id:'open',speciesIds:[4000],skillId:11,level:1,behavior:'opener',maxAttempts:1,maxUses:1,cooldownSeconds:1}];

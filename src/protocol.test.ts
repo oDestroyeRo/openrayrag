@@ -1,10 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { command, walkCommand, decode, OP } from './protocol';
+import { command, walkCommand, lookCommand, decode, OP } from './protocol';
+import { BitWriter } from './binary';
 
 const bytes = (base64: string) => Uint8Array.from(atob(base64), c => c.charCodeAt(0));
 // Public-world Poring packet observed on the deployed build; contains no account data.
 const poring = bytes('BgA8AAAAD2YGAACgDwAAAAAAAPn///8GAAAAUG9yaW5nAQMBQAEAAJkAAAABMwAAADMAAAAAAAAAAAAAAP////8AQQGYAEJ/oEN7ARlDzczMPkMkjz4JMzMiIgA=');
 describe('deployed Rebuild V8 protocol', () => {
+  it('decodes exact source Look payloads with signed look-at values outside map bounds',()=>{
+    for(const id of [0,1,0x7fffffff])for(const direction of [0,7])for(const head of [0,1,2]){
+      const raw=new BitWriter().u8(OP.look).i32(id).i16(-32768).i16(32767).u8(direction).u8(head).finish();
+      expect(decode(raw)).toEqual([{type:'look',id,lookAt:{x:-32768,y:32767},direction,head}]);
+      expect([...lookCommand({type:'look',direction,head})]).toEqual([13,direction,head]);
+    }
+  });
+  it('rejects malformed or extended Look replies before emitting availability evidence',()=>{
+    const valid=new BitWriter().u8(OP.look).i32(0).i16(0).i16(0).u8(7).u8(2).finish();
+    for(let n=1;n<11;n++)expect(()=>decode(valid.slice(0,n))).toThrow();
+    for(const raw of [new Uint8Array([...valid,0]),new BitWriter().u8(OP.look).i32(-1).i16(0).i16(0).u8(0).u8(1).finish(),
+      new BitWriter().u8(OP.look).i32(0).i16(0).i16(0).u8(8).u8(1).finish(),new BitWriter().u8(OP.look).i32(0).i16(0).i16(0).u8(7).u8(3).finish()])
+      expect(()=>decode(raw)).toThrow();
+    const padded=new Uint8Array(13);padded.set(valid,1);expect(decode(padded.subarray(1,12))).toEqual(decode(valid));
+  });
+  it('validates only the ordinary Look request shape',()=>{
+    for(const action of [{type:'look',direction:-1,head:1},{type:'look',direction:8,head:1},{type:'look',direction:0.5,head:1},
+      {type:'look',direction:0,head:-1},{type:'look',direction:0,head:3},{type:'look',direction:0,head:1,nonce:'private'}] as const)
+      expect(()=>lookCommand(action)).toThrow();
+  });
   it('decodes the observed MemoryPack monster schema', () => {
     expect(decode(poring)[0]).toEqual({ type:'spawn', entryType:0, entity: { id:1638, classId:4000, name:'Poring', kind:1, x:320,y:153,level:1,hp:51,maxHp:51,sp:0,maxSp:0,sitting:false,statuses:[],dead:false } });
     expect(decode(poring)[1]).toMatchObject({type:'walk', id:1638, walk:{cells:[{x:321,y:152},{x:320,y:153},{x:319,y:154},{x:318,y:155},{x:317,y:156},{x:316,y:156},{x:315,y:156},{x:314,y:156},{x:313,y:156}]}});

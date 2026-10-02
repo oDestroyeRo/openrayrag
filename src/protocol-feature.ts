@@ -31,7 +31,7 @@ export interface SkillResult {
   result?: number; hits?: number; damageSeconds?: number; indirect?: boolean;
 }
 export type FeatureEvent =
-  | { type: 'castStart'; id: number; skillId: number; level: number; position: Position; remainingSeconds: number; flags: number; target?: number; targetPosition?: Position; size?: number }
+  | { type: 'castStart'; id: number; skillId: number; level: number; position: Position; remainingSeconds: number; flags: number; facing?:number; target?: number; targetPosition?: Position; size?: number }
   | { type: 'castExtend'; id: number; deltaSeconds: number }
   | { type: 'castStop'; id: number }
   | { type: 'resetMotion'; id: number }
@@ -187,8 +187,8 @@ function parseFeatures(data: Uint8Array): FeatureEvent[] | null {
       const target=opcode===FEATURE_OP.castStart?bounded(r.i32(),-1,0x7fffffff,'cast target'):undefined;
       const targetPosition=opcode===FEATURE_OP.areaCastStart?r.position():undefined;
       const skillId=r.u8();const level=r.u8();const size=opcode===FEATURE_OP.areaCastStart?r.u8():undefined;
-      bounded(r.u8(),0,7,'cast facing');const position=r.position();const remainingSeconds=r.f32();const flags=bounded(r.u8(),0,15,'cast flags');
-      events=[{type:'castStart',id,skillId,level,position,remainingSeconds,flags,...(target!==undefined?{target}:{}),...(targetPosition?{targetPosition,size}:{})}];break;
+      const facing=bounded(r.u8(),0,7,'cast facing');const position=r.position();const remainingSeconds=r.f32();const flags=bounded(r.u8(),0,15,'cast flags');
+      events=[{type:'castStart',id,skillId,level,position,remainingSeconds,flags,facing,...(target!==undefined?{target}:{}),...(targetPosition?{targetPosition,size}:{})}];break;
     }
     case FEATURE_OP.castExtend: events=[{type:'castExtend',id:actorId(r.i32()),deltaSeconds:r.f32()}];break;
     case FEATURE_OP.changeTarget: events=[{type:'changeTarget',id:bounded(r.i32(),0,0x7fffffff,'current target')}];break;
