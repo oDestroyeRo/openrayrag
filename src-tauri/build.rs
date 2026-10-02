@@ -14,6 +14,7 @@ fn main() {
             "update_invalidate",
             "update_final_ack",
             "open_game",
+            "close_game",
             "control_bot",
             "bridge_status",
             "login_game",

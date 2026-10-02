@@ -155,7 +155,9 @@ describe('client shell navigation', () => {
     }
     // Source placement is checked here; real browser placement is a separate proof.
     const toolbar = f.root.innerHTML.split('<header class="client-toolbar">')[1]!.split('</header>')[0]!;
-    for (const id of ['start', 'stop', 'open', 'notice', 'status', 'character', 'location', 'config-help']) expect(toolbar).toContain(`id="${id}"`);
+    for (const id of ['start', 'stop', 'open', 'disconnect', 'notice', 'status', 'character', 'location', 'config-help', 'hp-text', 'sp-text', 'console-levels', 'console-weight', 'console-zeny', 'console-experience', 'death-count', 'death-cap']) expect(toolbar).toContain(`id="${id}"`);
+    expect(f.root.innerHTML).toContain('Bot console'); expect(f.root.innerHTML).toContain('Connect account');
+    expect(f.root.innerHTML).not.toContain('Open game');
   });
 
   it('keeps profiles on Settings independently of the selected Bot subsection', () => {

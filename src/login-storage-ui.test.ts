@@ -24,6 +24,8 @@ vi.mock('./feature-ui', async () => {
     serviceBlocked(): boolean { return false; }
     warpActivationReady(): boolean { return false; }
     settledForMaintenance(): boolean { return ipc.featureSettled; }
+    clearSocial():void{}
+    clearMemo():void{}
     read() { return structuredClone(DEFAULT_AUTOMATION); }
     lock(): void {}
   }, validFeatureStatus: () => true };
@@ -224,6 +226,7 @@ it('keeps shell navigation usable through a deferred installation without unlock
  const botTabs=['combat','recovery','travel','inventory','workflows'].map(section=>f.get(`client-bot-tab-${section}`));
  expect([...tabs,...botTabs,...f.index()].every(button=>!button.disabled)).toBe(true);
  expect(f.get('start').disabled).toBe(true);expect(f.get('open').disabled).toBe(true);expect(f.get('synthetic-manual-action').disabled).toBe(true);
+ expect(f.get('console-walk').disabled).toBe(true);expect(f.get('console-use-item').disabled).toBe(true);expect(f.get('disconnect').disabled).toBe(true);
  const saves=f.calls('save_current_form').length;
  await f.get('client-tab-settings').emit('click');expect(f.get('client-page-settings').hidden).toBe(false);
  await f.index()[0]!.emit('click');expect(f.get('client-page-manual').hidden).toBe(false);
@@ -249,4 +252,39 @@ it('renders the fresh held owner before toolbar status and binds observed sessio
  expect(f.calls('save_current_form')).toHaveLength(saves);expect(f.calls('control_bot')).toEqual([]);
  publish({payload:{...status,character:{...base.character,stats:null},refine:{blocked:false}}});
  expect(f.get('status').textContent).toBe('READY');expect(f.get('sp-text').textContent).toBe('— / —');expect(f.get('sp-bar').style.width).toBe('0%');
+});
+
+it('Connect account opens the retained account form without creating or showing a game window',async()=>{
+ const f=await fixture();await f.get('open').emit('click');
+ expect(f.get('client-page-settings').hidden).toBe(false);
+ expect(f.calls('open_game')).toEqual([]);expect(f.calls('login_game')).toEqual([]);expect(f.calls('control_bot')).toEqual([]);
+});
+
+it('requires settled, fresh stopped state for explicit Disconnect and clears telemetry for a new login',async()=>{
+ const f=await fixture(),publish=ipc.listen.mock.calls.find(call=>call[0]==='game-status')![1];
+ const base=new BotEngine(()=>{}).snapshot();
+ const status={...base,sessionId:'synthetic-session',login:{phase:'idle',message:''},reconnectAvailable:false,connected:true,compatible:true,
+  player:{id:0,classId:4,kind:0,name:'Synthetic',level:30,hp:100,maxHp:100,x:1,y:1,dead:false,statuses:[]},
+  character:{...base.character,stats:{sp:75,maxSp:200}},mapInfo:{code:'',name:'',source:'observed',monsters:[]}};
+ publish({payload:{...status,runRequested:true}});expect(f.get('disconnect').disabled).toBe(true);await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([]);
+ publish({payload:{...status,refine:{blocked:true,reason:'Pending receipt'}}});expect(f.get('disconnect').disabled).toBe(true);await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([]);
+ publish({payload:status});ipc.featureSettled=false;await vi.advanceTimersByTimeAsync(1000);expect(f.get('disconnect').disabled).toBe(true);
+ ipc.featureSettled=true;publish({payload:status});expect(f.get('disconnect').disabled).toBe(false);
+ let finish!:()=>void;ipc.invoke.mockImplementation((command:string)=>command==='close_game'?new Promise<void>(resolve=>{finish=resolve;}):Promise.resolve(undefined));
+ await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([['close_game']]);expect(f.get('disconnect').disabled).toBe(true);expect(f.get('console-walk').disabled).toBe(true);finish();
+ const closed=ipc.listen.mock.calls.find(call=>call[0]==='game-closed')![1];closed({payload:undefined});
+ for(let i=0;i<20;i++)await Promise.resolve();
+ expect(f.get('character').textContent).toBe('No character connected');expect(f.get('hp-text').textContent).toBe('— / —');expect(f.get('console-weight').textContent).toBe('— / —');expect(f.get('signin').disabled).toBe(false);expect(f.calls('login_game')).toEqual([]);
+});
+
+it('refreshes console locks for stale status and unsettled owners',async()=>{
+ const f=await fixture(),publish=ipc.listen.mock.calls.find(call=>call[0]==='game-status')![1],base=new BotEngine(()=>{}).snapshot();
+ const status={...base,sessionId:'synthetic-session',login:{phase:'idle',message:''},reconnectAvailable:false,connected:true,compatible:true,
+  player:{id:0,classId:4,kind:0,name:'Synthetic',level:30,hp:100,maxHp:100,x:1,y:1,dead:false,statuses:[]},
+  character:{...base.character,inventoryKnown:true,inventory:[{itemId:501,bagId:501,type:1,count:3}]},mapInfo:{code:'',name:'',source:'observed',monsters:[]}};
+ publish({payload:status});f.get('console-item').value='501';await f.get('console-item').emit('change');expect(f.get('console-use-item').disabled).toBe(false);
+ await vi.advanceTimersByTimeAsync(8000);expect(f.get('console-use-item').disabled).toBe(true);expect(f.get('disconnect').disabled).toBe(true);
+ publish({payload:status});expect(f.get('console-use-item').disabled).toBe(false);
+ ipc.featureSettled=false;publish({payload:status});expect(f.get('console-use-item').disabled).toBe(true);
+ ipc.featureSettled=true;publish({payload:status});expect(f.get('console-use-item').disabled).toBe(false);
 });

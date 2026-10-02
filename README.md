@@ -1,6 +1,6 @@
 # Rayrag Companion
 
-A Tauri v2 macOS client for automatic sign-in, character selection, combat, looting and configurable game automation on [Ray Side Project SEA 01](https://websea01.rayrag.com/). It opens the official Unity game in a separate, ephemeral WebKit window. [OpenKore](https://github.com/openkore/openkore) supplies behavioral references; Companion uses its own TypeScript engine, interface and Rebuild protocol adapter.
+A Tauri v2 macOS client for automatic sign-in, character selection, combat, looting and configurable game automation on [Ray Side Project SEA 01](https://websea01.rayrag.com/). It opens a bot console with a persistent character monitor, collision map, nearby actors, inventory actions and activity history. The official Unity client remains in a hidden, ephemeral WebKit window to provide the verified connection; it is not a renderer-free transport. [OpenKore](https://github.com/openkore/openkore) supplies behavioral references; Companion uses its own TypeScript engine, interface and Rebuild protocol adapter.
 
 ## Run
 
@@ -23,10 +23,12 @@ The release profile leaves build dependencies unstripped to work around a macOS 
 
 ## Start a run
 
-1. Under **Account & character**, enter your account, choose an existing character slot (1–3), and select **Sign in & enter**. **Open game** also permits manual sign-in. Empty slots do not open character creation.
+1. Under **Account & character**, enter your account, choose an existing character slot (1–3), and select **Sign in & enter**. **Connect account** opens this account form; the official game window stays hidden. Empty slots do not open character creation.
 2. Under **Combat**, select monster types from the current map. The list combines the public spawn database with monsters observed by the game. Spawn counts are configured populations, while **in view** counts are live observations. No monster is selected automatically before the first run.
-3. Check **Travel & follow** for the collision map and routing settings. Enable **Find monsters → Search the current map** if the bot should walk to find targets. Set recovery and item rules as needed, then select **Start bot**.
-4. Select **Stop** to cancel the run and pending automatic sign-in. Closing the client ends its game session.
+3. The default **Console** displays the current collision map. Stop the bot before clicking verified ground to walk once, attacking a nearby monster or using an observed untargeted item. Keyboard X/Y fields offer the same bounded walk. Check **Bot → Travel** for routing settings. Enable **Find monsters → Search the current map** if the bot should walk to find targets. Set recovery and item rules as needed, then select **Start bot**.
+4. Select **Stop** to cancel the run and pending automatic sign-in. After stopping, **Disconnect** closes the connection when the client no longer reports active automation or pending action owners, so you can choose another account or character. It cannot undo server actions. Closing the client ends its game session.
+
+[Bot console behavior and limits](docs/BOT_CONSOLE.md) explain manual controls, observed receipts and hidden-runtime verification.
 
 After Start, the run request remains active until **Stop** or game-window close. The status distinguishes **RUNNING**, **WAITING** and idle. Low HP, map loading, missing navigation, interrupted routes, connection loss or controller pauses put the bot into waiting/recovery; valid state lets it resume. Opening or closing a game panel yields new bot decisions for two seconds after the last input, preserving pending confirmations, movement, skill motion, cooldowns and run allowances. An actual command sent by the official game client takes over and retains uncertainty for interrupted actions. See [game input ownership](docs/GAME_INPUT.md). The run retains its selected monster classes when it binds to a new map; it does not automatically add new targets.
 

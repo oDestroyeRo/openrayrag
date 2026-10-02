@@ -1,11 +1,10 @@
 import { CurrentForm } from './current-form';
-import type { Snapshot } from './engine';
+import { BotConsole } from './bot-console';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { validateSettings, type Settings } from './settings';
 import { FeatureUi } from './feature-ui';
 import { ReconnectPolicy, PersistentFieldRun } from './reconnect';
-import { GridNavigator, NAVIGATION_MAPS, searchGrid } from './navigation';
 import { validStatus, statusHeartbeatFresh, type GameStatus } from './game-status';
 import { SettingsForm } from './settings-form';
 import { normalAttackProfile } from './combat';
@@ -146,9 +145,21 @@ async function pollUpdate():Promise<void>{
   finally{updatePolling=false;}
 }
 const configHelp = element('config-help');
+const botConsole = new BotConsole(shell.main, {
+  settings: () => form.runSettings(), command: request => featureRequest('command', request), notify: message,
+  account: () => { shell.showPage('settings'); element<HTMLDetailsElement>('signin-panel').open = true; element<HTMLInputElement>('username').focus(); },
+  lootSettings: () => { shell.showPage('bot'); shell.showBotSection('inventory'); },
+  manualTools: () => shell.showPage('manual'),
+});
+function disconnectReady():boolean {
+  return native && gameOpen && accountReady && !updateBusy && !busy && !stopping && !loginBusy && !pendingLogin && !pendingResume
+    && !pendingService && !pendingManual && !pendingLimitStop && !heartbeatPending && !runActive()
+    && features.settledForMaintenance() && !(latest?.connected && latest.player && Date.now()-receivedAt>=7000);
+}
+
 
 async function featureRequest(action: string, request: unknown): Promise<unknown> {
-  if (!native || busy || stopping || loginBusy || !latest?.connected || !latest.compatible || !latest.player || (action==='service'?features.serviceBlocked():(action==='warp'||action==='warpPreview')&&features.warpActivationReady()?fieldRun.requested:runActive()) || Date.now()-receivedAt >= 7000) {
+  if (!native || updateBusy || busy || stopping || loginBusy || !latest?.connected || !latest.compatible || !latest.player || (action==='service'?features.serviceBlocked():(action==='warp'||action==='warpPreview')&&features.warpActivationReady()?fieldRun.requested:runActive()) || Date.now()-receivedAt >= 7000) {
     throw new Error('Stop automation and connect a verified character before sending a manual command.');
   }
   busy=true;updateButtons();
@@ -179,7 +190,7 @@ function updateButtons(): void {
   for (const button of navigation) button.disabled = false;
   try { element('death-cap').textContent = clientDeathCap(form.snapshot().settings.automation?.respawn); }
   catch { element('death-cap').textContent = '—'; }
-  if(updateBusy){for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.lock(true,true,true);return;}
+  if(updateBusy){botConsole.lock(true,'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.lock(true,true,true);return;}
   form.refresh();
   const fresh = Date.now() - receivedAt < 7000;
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
@@ -190,6 +201,8 @@ function updateButtons(): void {
     map:latest?.map??'',player:latest?.player??null,settings:checked});
   stopButton.disabled = stopping || !gameOpen && !fieldRun.requested && !loginBusy;
   openButton.disabled = !accountReady || busy || stopping || loginBusy;
+  element<HTMLButtonElement>('disconnect').disabled = !disconnectReady();
+  botConsole.lock(busy || stopping || loginBusy || !ready || runActive() || !features.settledForMaintenance(), !native ? 'Browser preview · native connection required.' : busy || stopping || loginBusy ? 'Wait for the current request to finish.' : !ready ? 'Connect a fresh verified character to use manual controls.' : runActive() || !features.settledForMaintenance() ? 'Stop the bot and wait for current actions to settle before manual control.' : '');
   element<HTMLButtonElement>('signin').disabled = !native || !accountReady || busy || stopping || loginBusy || !!(latest?.connected && latest.player);
   element<HTMLButtonElement>('forget-login').disabled = busy || stopping || loginBusy;
   for (const id of ['username', 'password', 'character-slot', 'remember-login']) {
@@ -267,11 +280,10 @@ async function perform(action: () => Promise<unknown>): Promise<void> {
   try { await action(); } catch (error) { message(typeof error === 'string' ? error : 'Unable to contact the game.', true); }
   finally { busy = false; updateButtons(); }
 }
-openButton.addEventListener('click', () => void perform(async () => {
-  if (!native) { message('Run npm run app:dev to open the native game window. Browser preview cannot control a game.'); return; }
-  await invoke('open_game'); gameOpen = true;
-  message('Loading the game. Sign in there, then return here to start.');
-}));
+element('disconnect').addEventListener('click', () => {
+  if (!disconnectReady()) return;
+  void perform(async () => { await invoke('close_game'); });
+});
 startButton.addEventListener('click', () => void perform(async () => {
   if (!latest?.player || stopping) return;
   const checked = validateSettings(form.runSettings()), generation = ++runGeneration;
@@ -328,7 +340,7 @@ function render(s: GameStatus): void {
   element('status').classList.toggle('active', state === 'RUNNING');
   element('status').dataset.state = state;
   element('character').textContent = s.player?.name ?? 'No character connected';
-  element('location').textContent = s.player ? `Level ${s.player.level} · ${s.map} · ${s.player.x}, ${s.player.y}` : 'Your adventure starts in the game window.';
+  element('location').textContent = s.player ? `Level ${s.player.level} · ${s.map} · ${s.player.x}, ${s.player.y}` : 'Connect an account to load your character.';
   const attack = normalAttackProfile(s.character);
   const rawRange = attack.sourceRange !== null && attack.sourceRange !== attack.range ? ` · source range ${attack.sourceRange}` : '';
   element('attack-range').textContent = `Normal attack: ${attack.range} cells · ${attack.source}${rawRange}. ${attack.limitation} Projectile sight is checked; skill range and kiting are separate.`;
@@ -341,69 +353,17 @@ function render(s: GameStatus): void {
   element('nearby').textContent = String(s.monsters.length);
   element('map-label').textContent = s.map || 'WAITING';
   element('target-label').textContent = s.target || 'No active target';
-  const nearby = s.monsters.map(e => ({ name: e.name, level: e.level,
-    distance: s.player ? Math.max(Math.abs(e.x-s.player.x), Math.abs(e.y-s.player.y)) : 0 }))
-    .sort((a,b) => a.distance-b.distance).slice(0,3);
-  element('monster-list').textContent = nearby.length ? nearby.map(e => `${e.name} · Lv ${e.level} · ${Math.ceil(e.distance)} cells`).join('  /  ') : 'No monsters in sight.';
   message(reason,
     s.login.phase === 'failed' || s.connected && !s.compatible);
   const list = element('log'); list.replaceChildren();
-  for (const entry of s.log.slice(0,6)) {
+  for (const entry of s.log.slice(0,50)) {
     const li = document.createElement('li'); const time = document.createElement('time'); const text = document.createElement('span');
     time.textContent = new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     text.textContent = entry.text; li.append(time, text); list.append(li);
   }
-  drawRadar(s); updateButtons(); resumeFieldRun(s);
+  if (!list.childElementCount) { const empty=document.createElement('li'); empty.className='empty'; empty.textContent='No activity observed yet.'; list.append(empty); }
+  botConsole.render(s); updateButtons(); resumeFieldRun(s);
 }
-let rasterMap = '';
-let raster: HTMLCanvasElement | null = null;
-function drawRadar(s: Snapshot | null): void {
-  const canvas = element<HTMLCanvasElement>('radar'); const ctx = canvas.getContext('2d')!;
-  const map = s?.map ?? '';
-  if (rasterMap !== map) {
-    rasterMap = map; raster = null;
-    const grid = searchGrid(map);
-    if (grid) {
-      const nav = new GridNavigator(grid);
-      raster = document.createElement('canvas'); raster.width = grid.width; raster.height = grid.height;
-      const image = raster.getContext('2d')!.createImageData(grid.width, grid.height);
-      for (let y = 0; y < grid.height; y++) for (let x = 0; x < grid.width; x++) {
-        const state = nav.tileState({ x, y });
-        const color = state === 'blocked' ? [16,22,26] : state === 'portal' ? [121,79,48] : [62,86,72];
-        const i = (x + (grid.height - 1 - y) * grid.width) * 4;
-        image.data.set([...color, 255], i);
-      }
-      raster.getContext('2d')!.putImageData(image, 0, 0);
-    }
-  }
-  canvas.width = raster?.width ?? 400; canvas.height = raster?.height ?? 400;
-  canvas.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  const n = s?.navigation;
-  element('navigation-info').textContent = n
-    ? `${n.width} × ${n.height} · ${n.blocked.toLocaleString()} blocked · ${n.walkable.toLocaleString()} walkable · ${n.excluded.toLocaleString()} portal exclusions · ${n.reachable.toLocaleString()} reachable${n.routeLength ? ` · ${n.routeLength} route cells` : ''}${n.ready ? '' : ' · Move away from blocked ground and portals'}`
-    : map ? `Walkability is not verified for ${map}. Start is disabled. ${NAVIGATION_MAPS.length} maps are supported.`
-      : 'Enter a supported map to inspect walkability.';
-  if (!raster) {
-    ctx.font = '13px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#889b92';
-    ctx.fillText('Waiting for verified map collision', canvas.width / 2, canvas.height / 2); return;
-  }
-  ctx.imageSmoothingEnabled = false; ctx.drawImage(raster, 0, 0);
-  const routeLine = (cells: Array<{x:number;y:number}>, color: string, width: number) => {
-    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
-    cells.forEach((p, i) => { if (i) ctx.lineTo(p.x + .5, canvas.height - .5 - p.y); else ctx.moveTo(p.x + .5, canvas.height - .5 - p.y); }); ctx.stroke();
-  };
-  routeLine(n?.route ?? [], '#80bde3', 1.6); routeLine(n?.leg ?? [], '#d7e9b0', 2.2);
-  const dot = (p: {x:number;y:number}, color: string, radius: number) => {
-    ctx.fillStyle = color; ctx.strokeStyle = '#10161a'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.arc(p.x + .5, canvas.height - .5 - p.y, radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  };
-  for (const monster of s?.monsters ?? []) dot(monster, '#e2ae79', 2.5);
-  for (const drop of s?.drops ?? []) dot(drop, '#b9a7ee', 2);
-  if (n?.goal) dot(n.goal, '#80bde3', 3.5);
-  if (s?.player) dot(s.player, '#c3f5cf', 4);
-}
-drawRadar(null);
 if (!native) message('Browser preview · Launch the macOS app with npm run app:dev to connect.');
 if (native) {
   void (async () => {
@@ -416,7 +376,11 @@ if (native) {
     gameOpen = false; latest = null; receivedAt = 0; loginBusy = false;
     form.refresh();
     element('status').textContent = 'OFFLINE'; element('status').classList.remove('active'); element('status').dataset.state = 'OFFLINE';
-    message('Game window closed. Open it again to reconnect.'); updateButtons(); drawRadar(null);
+    element('character').textContent='No character connected'; element('location').textContent='Connect an account to load your character.';
+    element('hp-text').textContent='— / —'; element('hp-bar').style.width='0%'; element('sp-text').textContent='— / —'; element('sp-bar').style.width='0%'; element('death-count').textContent='—';
+    for (const id of ['attacks','kills','looted','nearby']) element(id).textContent='0'; element('map-label').textContent='WAITING'; element('target-label').textContent='No active target';
+    const empty=document.createElement('li'); empty.className='empty'; empty.textContent='Session activity will appear after connection.'; element('log').replaceChildren(empty);
+    message('Disconnected. Select an account and character to connect again.'); botConsole.render(null); updateButtons();
   });
   try {
     try{currentForm.restore(await invoke('current_form'), document => form.restore(document));}
@@ -460,7 +424,7 @@ if (native) {
           previousSession = undefined; loginBusy = false;
           if (typeof error === 'string' && /(?:sign in|account)/i.test(error)) reconnect.observe(false, false, 'failed', Date.now(), 'Explicit sign-in required.');
           else reconnect.networkFailure(Date.now());
-          message(reconnect.requiresSignIn ? 'Waiting for you to sign in again before resuming.' : 'Reconnect could not open the game. Waiting before trying again.', true); updateButtons();
+          message(reconnect.requiresSignIn ? 'Waiting for you to sign in again before resuming.' : 'Reconnect could not restore the connection. Waiting before trying again.', true); updateButtons();
         }).finally(() => { if (pendingLogin === task) pendingLogin = null; });
     }
     element('reconnect-help').textContent = fieldRun.limitReason || (reconnect.requiresSignIn
