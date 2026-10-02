@@ -20,6 +20,47 @@ pub(crate) struct LocalLoginStore {
     directory: PathBuf,
 }
 
+/// Owns one successfully acquired operation lock. A forked child can retain
+/// this open description even with CLOEXEC, so closing our File alone is not
+/// an operation-completion boundary. Unlock before the owned File is closed.
+pub(crate) struct FileLock {
+    file: File,
+    owner_pid: libc::pid_t,
+}
+impl FileLock {
+    pub(crate) fn acquire(file: File) -> io::Result<Self> {
+        // SAFETY: a valid owned fd. Failed acquisitions are never guards and
+        // cannot unlock another operation when their unowned File is closed.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self {
+            file,
+            // SAFETY: getpid has no arguments and cannot access Rust memory.
+            owner_pid: unsafe { libc::getpid() },
+        })
+    }
+}
+impl std::ops::Deref for FileLock {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.file
+    }
+}
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        // SAFETY: this guard is constructed only after successful LOCK_EX; its
+        // descriptor is live until File's subsequent automatic Drop. Only the
+        // acquiring process can end the operation; an inherited child merely
+        // closes its own descriptor and must not unlock the parent's operation.
+        unsafe {
+            if libc::getpid() == self.owner_pid {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+    }
+}
+
 impl LocalLoginStore {
     pub(crate) fn settings(app_data: PathBuf) -> Self {
         Self {
@@ -118,7 +159,7 @@ impl LocalLoginStore {
         forget().map_err(|_| FORGET_ERROR.into())
     }
 
-    pub(crate) fn open_directory(&self, create: bool) -> io::Result<Option<File>> {
+    pub(crate) fn open_directory(&self, create: bool) -> io::Result<Option<FileLock>> {
         self.open_directory_with(create, |parent| parent.sync_all())
     }
 
@@ -126,7 +167,7 @@ impl LocalLoginStore {
         &self,
         create: bool,
         mut sync_parent: impl FnMut(&File) -> io::Result<()>,
-    ) -> io::Result<Option<File>> {
+    ) -> io::Result<Option<FileLock>> {
         if !self.directory.is_absolute() {
             return Err(invalid());
         }
@@ -174,12 +215,8 @@ impl LocalLoginStore {
             directory = next;
         }
         verify_private(&directory, true)?;
-        // SAFETY: valid fd. Nonblocking lock avoids hanging the login UI if
-        // another process is saving; closing the File releases the lock.
-        if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(Some(directory))
+        // Nonblocking ownership avoids hanging the login UI on another save.
+        FileLock::acquire(directory).map(Some)
     }
 }
 
@@ -355,6 +392,9 @@ pub(crate) fn rename_at(directory: &File, from: &str, to: &str) -> io::Result<()
     }
     Ok(())
 }
+
+#[cfg(test)]
+pub(crate) use tests::InheritedLock;
 
 #[cfg(test)]
 mod tests {
@@ -608,6 +648,185 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         assert_rejected(&store);
         assert_eq!(fs::read(path).unwrap(), before);
+    }
+
+    // The child uses only async-signal-safe libc calls between fork and _exit.
+    // It retains the inherited open description until an explicit parent signal.
+    pub(crate) struct InheritedLock {
+        pid: libc::pid_t,
+        release: File,
+    }
+    impl InheritedLock {
+        pub(crate) fn new(directory_fd: libc::c_int) -> Self {
+            Self::fork(directory_fd, None)
+        }
+        pub(crate) fn dropping_copy(guard: &mut FileLock) -> Self {
+            Self::fork(guard.as_raw_fd(), Some(guard as *mut FileLock))
+        }
+        fn fork(directory_fd: libc::c_int, drop_copy: Option<*mut FileLock>) -> Self {
+            let mut ready = [0; 2];
+            let mut release = [0; 2];
+            // SAFETY: writable two-fd arrays, owned below after successful pipe.
+            assert_eq!(unsafe { libc::pipe(ready.as_mut_ptr()) }, 0);
+            assert_eq!(unsafe { libc::pipe(release.as_mut_ptr()) }, 0);
+            // SAFETY: these four pipe fds were just created and are exclusively owned.
+            let (mut ready_read, ready_write, release_read, release_write) = unsafe {
+                (
+                    File::from_raw_fd(ready[0]),
+                    File::from_raw_fd(ready[1]),
+                    File::from_raw_fd(release[0]),
+                    File::from_raw_fd(release[1]),
+                )
+            };
+            // SAFETY: the child runs only the descriptor guard's libc/close Drop
+            // and async-signal-safe syscalls, without allocation or other cleanup.
+            let pid = unsafe { libc::fork() };
+            assert!(pid >= 0);
+            if pid == 0 {
+                // SAFETY: inherited live fds and stack bytes; _exit avoids Rust Drop.
+                unsafe {
+                    libc::close(ready[0]);
+                    libc::close(release[1]);
+                    if let Some(guard) = drop_copy {
+                        std::ptr::drop_in_place(guard);
+                    }
+                    let mut signal = 1u8;
+                    let wrote = libc::write(ready[1], (&signal as *const u8).cast(), 1);
+                    let read = libc::read(release[0], (&mut signal as *mut u8).cast(), 1);
+                    if drop_copy.is_none() {
+                        libc::close(directory_fd);
+                    }
+                    libc::_exit(if wrote == 1 && read == 1 { 0 } else { 1 });
+                }
+            }
+            drop(ready_write);
+            drop(release_read);
+            let child = Self {
+                pid,
+                release: release_write,
+            };
+            let mut ready = [0u8; 1];
+            ready_read.read_exact(&mut ready).unwrap();
+            child
+        }
+        pub(crate) fn finish(&mut self) -> i32 {
+            let _ = self.release.write_all(&[1]);
+            let mut status = 0;
+            loop {
+                // SAFETY: this pid is our child and status is a writable integer.
+                let waited = unsafe { libc::waitpid(self.pid, &mut status, 0) };
+                if waited == self.pid {
+                    self.pid = 0;
+                    return status;
+                }
+                if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+                    self.pid = 0;
+                    return -1;
+                }
+            }
+        }
+    }
+    impl Drop for InheritedLock {
+        fn drop(&mut self) {
+            if self.pid != 0 {
+                self.finish();
+            }
+        }
+    }
+
+    #[test]
+    fn operation_completion_unlocks_while_a_child_retains_the_directory() {
+        for settings in [false, true] {
+            let root = TemporaryRoot::new();
+            let store = if settings {
+                LocalLoginStore::settings(root.0.join("app-data"))
+            } else {
+                root.store()
+            };
+            let guard = store.open_directory(true).unwrap().unwrap();
+            // CLOEXEC does not prevent inheritance between fork and exec.
+            // SAFETY: valid borrowed descriptor; F_GETFD does not alter ownership.
+            assert_ne!(
+                unsafe { libc::fcntl(guard.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+                0
+            );
+            let mut child = InheritedLock::new(guard.as_raw_fd());
+            assert_eq!(
+                store.open_directory(false).err().unwrap().kind(),
+                io::ErrorKind::WouldBlock
+            );
+            // Failed, unowned acquisitions must never unlock the active operation.
+            assert_eq!(
+                store.open_directory(false).err().unwrap().kind(),
+                io::ErrorKind::WouldBlock
+            );
+            drop(guard);
+            let reopened = store.open_directory(false);
+            let released_before_child_close = reopened.is_ok();
+            let excludes_during_new_operation = store.open_directory(false).err().map(|e| e.kind());
+            drop(reopened);
+            let operation_can_finish_again = store.open_directory(false).is_ok();
+            // Always release/reap before asserting the failing post-drop result.
+            let child_status = child.finish();
+            assert_eq!(child_status, 0);
+            assert!(
+                released_before_child_close,
+                "operation lock survived owner completion"
+            );
+            assert_eq!(
+                excludes_during_new_operation,
+                Some(io::ErrorKind::WouldBlock)
+            );
+            assert!(operation_can_finish_again);
+        }
+    }
+
+    #[test]
+    fn inherited_child_drop_cannot_release_the_active_parent_operation() {
+        let root = TemporaryRoot::new();
+        let store = root.store();
+        let mut guard = store.open_directory(true).unwrap().unwrap();
+        let mut retained = InheritedLock::new(guard.as_raw_fd());
+        let mut dropping = InheritedLock::dropping_copy(&mut guard);
+        // The ready signal follows actual child guard Drop, not just fork.
+        let active_parent_excludes = store.open_directory(false).err().map(|e| e.kind());
+        drop(guard);
+        let released_by_parent = store.open_directory(false).is_ok();
+        let dropping_status = dropping.finish();
+        let retained_status = retained.finish();
+        assert_eq!(dropping_status, 0);
+        assert_eq!(retained_status, 0);
+        assert_eq!(active_parent_excludes, Some(io::ErrorKind::WouldBlock));
+        assert!(released_by_parent);
+    }
+
+    #[test]
+    fn failed_save_load_and_forget_release_the_operation_lock() {
+        let root = TemporaryRoot::new();
+        let store = root.store();
+        store.save(&profile()).unwrap();
+        assert_eq!(
+            store
+                .save_with(&profile(), |_, _| Err(io::Error::other(
+                    "synthetic write failure"
+                )))
+                .unwrap_err(),
+            SAVE_ERROR
+        );
+        drop(store.open_directory(false).unwrap().unwrap());
+        fs::write(store.directory.join(PROFILE), b"synthetic malformed data").unwrap();
+        assert_eq!(store.load().err().unwrap(), READ_ERROR);
+        drop(store.open_directory(false).unwrap().unwrap());
+        store.save(&profile()).unwrap();
+        let outside = root.0.join("outside");
+        write_private(&outside, b"synthetic untouched data");
+        symlink(&outside, store.directory.join(TEMPORARY)).unwrap();
+        assert_eq!(store.forget().unwrap_err(), FORGET_ERROR);
+        drop(store.open_directory(false).unwrap().unwrap());
+        fs::remove_file(store.directory.join(TEMPORARY)).unwrap();
+        store.forget().unwrap();
+        assert!(store.load().unwrap().is_none());
+        assert_eq!(fs::read(outside).unwrap(), b"synthetic untouched data");
     }
 
     #[test]
