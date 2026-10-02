@@ -15,7 +15,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-security-framework = "=3.7.0"
+libc = "=0.2.189"
 
 # Avoid malformed Mach-O proc macros from Rust 1.98's --strip-debug on macOS.
 # This affects build dependencies only, not the final application binary.
