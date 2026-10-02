@@ -69,7 +69,7 @@ root.innerHTML = `
           <label class="toggle-row">Avoid walls <code>route_avoidWalls</code><input id="avoid-walls" type="checkbox" checked /></label>
           <p id="attack-range" class="hint">Normal attack: conservative 1 cell until equipment is verified.</p>
         </details>
-        <label class="toggle-row" for="loot"><div>Collect loot<small>Nearby drops from your defeated monsters</small></div><input id="loot" type="checkbox" checked role="switch" /></label>
+        <label class="toggle-row" for="loot"><div>Collect loot<small>Use Pickup scope below to choose own drops or all nearby drops</small></div><input id="loot" type="checkbox" checked role="switch" /></label>
         <div class="actions"><button id="start" class="primary" disabled>▶ &nbsp; Start bot</button><button id="stop" class="secondary" disabled>■ &nbsp; Stop</button></div>
         <p class="footnote">Click or type in the game to pause briefly. The bot waits through low HP, map changes and connection loss. Stop cancels the run.</p>
       </section>

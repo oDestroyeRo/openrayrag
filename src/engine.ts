@@ -33,6 +33,15 @@ export interface Snapshot {
 export type Action = { type: 'attack' | 'pickup'; id: number } | { type: 'stop' } | { type: 'walk'; destination: Position } | ExpandedAction;
 const ACTION_DELAY = 100;
 const LOOT_DELAY = 150;
+// New-drop packets precede monster removal at the pinned server. This is a
+// conservative client correlation window, not ground-item ownership evidence.
+const PRE_DEATH_DROP_WINDOW = 2000;
+const OWN_LOOT_HISTORY = 30000;
+const MAX_OWN_KILLS = 64;
+const MAX_NEW_DROPS = 256;
+const MAX_DROP_ENGAGEMENTS = 8;
+type DropIdentity = Pick<Drop,'itemId'|'count'|'x'|'y'>;
+const sameDrop = (a:DropIdentity|undefined,b:DropIdentity):boolean => !!a&&a.itemId===b.itemId&&a.count===b.count&&a.x===b.x&&a.y===b.y;
 const cell = (p: Position): Position => ({ x: Math.floor(p.x), y: Math.floor(p.y) });
 interface RouteTask { engagement?:EngagementIdentity|null; strategy?:Extract<StrategyChoice,{state:'cast'}>; type: 'skill' | 'search' | 'attack' | 'pickup' | 'follow' | 'waypoint' | 'travel'; id?: number; destination: Position; cells: Position[]; since: number | null; attackRange?: number }
 interface RouteLeg { destination: Position; cells: Position[]; since: number; acceptedUntil: number | null }
@@ -57,7 +66,7 @@ export class BotEngine {
   private implicitWalk: { targetId: number | null; until: number } | null = null;
   private routeFailures = 0;
   private routeStep = 10;
-  private pending: { type: 'attack' | 'pickup'; id: number; since: number; progress: number; approachSince: number | null; direct: boolean; attackRange?: number; engagement?:EngagementIdentity|null; actorIdentity?:ActionIdentity|null } | null = null;
+  private pending: { type: 'attack' | 'pickup'; id: number; since: number; progress: number; approachSince: number | null; direct: boolean; attackRange?: number; engagement?:EngagementIdentity|null; actorIdentity?:ActionIdentity|null; dropIdentity?:DropIdentity } | null = null;
   private foreignTargets = new Set<number>();
   private serverTargetId:number|null=null;
   private readonly combatConditions=new Map<number,{rule:string;conditions:PredicateTrace[]}>();
@@ -86,8 +95,9 @@ export class BotEngine {
   private runStarted = 0;
   private lastTick = 0;
   private lootAfter = 0;
-  private killedAt: Array<Position & { at: number }> = [];
-  private dropCreatedAt = new Map<number, number>();
+  private killedAt: Array<Position & { at: number; identity:ActionIdentity }> = [];
+  private dropCreatedAt = new Map<number, {at:number; drop:DropIdentity; engagements:ActionIdentity[]}>();
+  private lootOwner:ActionIdentity|null=null;
 
   constructor(private readonly send: (action: Action) => void, private readonly now = Date.now,
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) { this.automation = new AutomationScheduler(a=>this.send(a),this.now,a=>this.actionIdentity(a)); this.observations=new ActorObservations(this.now);this.loadout=new LoadoutPolicy(this.now); }
@@ -174,7 +184,9 @@ export class BotEngine {
     this.route = null; this.leg = null; this.routeFailures = 0; this.routeStep = validated.route_step;
     this.settings = validated; this.combatConditions.clear();this.automation.reset(); this.loadout.newRun();
     this.pending = null; this.excluded.clear();
-    this.killedAt = []; this.dropCreatedAt.clear(); this.skillKills.clear(); this.skillTargets.clear(); this.lootAfter = 0;
+    if(!continuing||!sameActionIdentity(this.lootOwner,this.actorActionIdentity()))this.clearLootEvidence();
+    else this.pruneLootEvidence();
+    this.lootOwner=this.actorActionIdentity();this.skillKills.clear();this.skillTargets.clear();
     this.deaths=0; this.runIntent = true; this.followLostAt = null; this.waypointIndex = 0; this.runKills = this.kills; this.runPickups = this.looted;
     this.running = true; this.runStarted = this.now(); this.lastTick = this.now(); this.lastAction = 0;
     this.reason = 'Looking for nearby targets.'; this.note('Started combat and loot.');
@@ -192,15 +204,15 @@ export class BotEngine {
     if(!preserveCharacter)this.respawnRefreshPending=false;
     if(preserveCharacter)this.character.resetField();else {this.character.reset();this.automation.reset(true);this.runIntent=false;} this.implicitWalk = null; this.motions.clear(); this.navigator = null; this.navigationMap = ''; this.route = null; this.leg = null; this.routeFailures = 0;
     this.entities.clear(); this.actors.clear(); this.aggressors.clear(); this.drops.clear(); this.foreignTargets.clear(); this.excluded.clear();
-    this.killedAt = []; this.dropCreatedAt.clear(); this.skillKills.clear(); this.skillTargets.clear(); this.pending = null; this.map = ''; this.playerId = null;
+    this.clearLootEvidence();this.skillKills.clear();this.skillTargets.clear();this.pending = null;this.map='';this.playerId=null;
   }
   private removed(id: number, dead: boolean): void {
     const skillKill=this.skillKills.get(id);
     // HP reaching zero invalidates predicate observations before the death
     // packet. Target replacement/departure already discards these owners;
     // the surviving credit must still belong to the current own lifetime.
-    const ownKill=this.pending?.type==='attack'&&this.pending.id===id&&this.selfOwnerCurrent(this.pending.actorIdentity)
-      || !!skillKill&&skillKill.until>=this.now()&&this.selfOwnerCurrent(skillKill.identity);
+    const killIdentity=this.pending?.type==='attack'&&this.pending.id===id&&this.selfOwnerCurrent(this.pending.actorIdentity)?this.pending.actorIdentity
+      :skillKill&&skillKill.until>=this.now()&&this.selfOwnerCurrent(skillKill.identity)?skillKill.identity:null;
     if(this.strategyWait?.id===id)this.strategyWait=null;
     this.strategies.remove(id);this.combatConditions.delete(id);this.observations.remove(id);if(this.serverTargetId===id)this.serverTargetId=null;
     this.motions.delete(id);
@@ -208,8 +220,10 @@ export class BotEngine {
     if(!dead)this.revivableActors.delete(id);
     else if(entity?.kind===0&&id!==this.playerId&&(this.revivableActors.has(id)||this.revivableActors.size<150))this.revivableActors.set(id,{...entity,statuses:undefined});
     if (dead && entity && !this.foreignTargets.has(id)
-      && ownKill) {
-      this.kills++; this.killedAt.push({ x: entity.x, y: entity.y, at: this.now() });
+      && killIdentity) {
+      this.pruneLootEvidence();
+      this.kills++;this.killedAt.push({x:entity.x,y:entity.y,at:this.now(),identity:{...killIdentity}});
+      if(this.killedAt.length>MAX_OWN_KILLS)this.killedAt.shift();
       this.lootAfter = this.now() + LOOT_DELAY;
       this.note(`Defeated ${entity.name}.`);
     }
@@ -219,7 +233,7 @@ export class BotEngine {
     }
     if (this.route?.id === id) {if(this.route.type==='follow')this.followLostAt??=this.now();this.cancelRoute();}
     this.skillKills.delete(id); this.skillTargets.delete(id); this.foreignTargets.delete(id); this.aggressors.delete(id); this.actors.delete(id);
-    if(id===this.playerId){this.skillKills.clear();this.skillTargets.clear();}
+    if(id===this.playerId){this.clearLootEvidence();this.skillKills.clear();this.skillTargets.clear();}
     if (id === this.playerId && dead && entity) { const alreadyDead=entity.dead;entity.dead=true;entity.hp=0;if(!alreadyDead)this.onDeath(); }
     else { this.entities.delete(id);if(id===this.playerId)this.stop('Character left the field.'); }
   }
@@ -351,6 +365,8 @@ export class BotEngine {
         else this.removed(e.id, true);
         break;
       case 'resurrection': {
+        if(e.id===this.playerId)this.clearLootEvidence();
+        else this.replaceActorOwnership(e.id);
         this.observations.remove(e.id);if(e.id===this.playerId||this.serverTargetId===e.id)this.serverTargetId=null;
         this.motions.delete(e.id);
         const entity = this.entities.get(e.id) ?? this.actors.get(e.id) ?? this.revivableActors.get(e.id);
@@ -383,11 +399,25 @@ export class BotEngine {
         const entity = this.entities.get(e.id) ?? this.actors.get(e.id); if (entity) { entity.hp = e.hp; entity.maxHp = e.maxHp; } break;
       }
       case 'stats': if (this.player) { this.player.hp = e.hp; this.player.maxHp = e.maxHp; this.player.level = e.level; } break;
-      case 'drop':
-        if (!this.drops.has(e.drop.id) && this.running && e.drop.isNew) this.dropCreatedAt.set(e.drop.id, this.now());
+      case 'drop': {
+        const previous=this.drops.get(e.drop.id);
+        if(previous&&!sameDrop(previous,e.drop)) {
+          // A reused/contradictory drop ID cannot inherit the old correlation
+          // or receipt credit. Keep a sent pickup owned until its normal reply
+          // or timeout; do not immediately retry the changed ground item.
+          this.dropCreatedAt.delete(e.drop.id);
+          this.excluded.set(e.drop.id,this.now()+30000);
+          if(this.pending?.type==='pickup'&&this.pending.id===e.drop.id)this.pending.dropIdentity=undefined;
+          if(this.route?.type==='pickup'&&this.route.id===e.drop.id)this.cancelRoute();
+        }
+        if(!this.drops.has(e.drop.id)&&e.drop.isNew&&(this.running||this.killedAt.length>0&&sameActionIdentity(this.lootOwner,this.actorActionIdentity())))this.observeNewDrop(e.drop);
         this.drops.set(e.drop.id, e.drop); break;
+      }
       case 'pickup':
-        if (e.picker === this.playerId && this.pending?.type === 'pickup' && this.pending.id === e.id) { this.looted++; const drop = this.drops.get(e.id); if (drop) this.lootStats.set(drop.itemId,(this.lootStats.get(drop.itemId) ?? 0) + drop.count); this.note('Loot pickup confirmed.'); }
+        if (e.picker === this.playerId && this.pending?.type === 'pickup' && this.pending.id === e.id&&this.selfOwnerCurrent(this.pending.actorIdentity)) {
+          const drop=this.drops.get(e.id);
+          if(drop&&sameDrop(this.pending.dropIdentity,drop)){this.looted++;this.lootStats.set(drop.itemId,(this.lootStats.get(drop.itemId)??0)+drop.count);this.note('Loot pickup confirmed.');}
+        }
         this.drops.delete(e.id);
         this.dropCreatedAt.delete(e.id);
         if (this.pending?.type === 'pickup' && this.pending.id === e.id) this.pending = null;
@@ -436,7 +466,7 @@ export class BotEngine {
       }
       this.reason = 'Waiting for the previous monster approach to acknowledge before another action.'; return;
     }
-    this.killedAt = this.killedAt.filter(k => now - k.at < 30000);
+    this.pruneLootEvidence();
     if (this.automation.busy) { this.reason=this.automation.task().label; return; }
     if(this.pending?.type==='attack') {
       const target=this.entities.get(this.pending.id);
@@ -575,7 +605,7 @@ export class BotEngine {
     const available = (id: number) => (this.excluded.get(id) ?? 0) <= now;
     if (this.settings.loot) {
       const candidates = [...this.drops.values()].filter(d => this.fieldContains(d) && available(d.id) && distance(p, d) <= this.settings.radius
-        && acceptsLoot(a,d.itemId) && (a.loot.ownership === 'all' || this.killedAt.some(k => distance(k, d) <= 3 && (this.dropCreatedAt.get(d.id) ?? -Infinity) >= k.at)));
+        && acceptsLoot(a,d.itemId) && (a.loot.ownership==='all'||this.ownsDrop(d)));
       const choice = this.bestRoute(p, candidates, d=>lootRule(a,d.itemId)?.priority ?? 0);
       if (choice) { this.pursue('pickup', choice.target.id, cell(choice.target), choice.cells); this.routeTick(p, now); return; }
     }
@@ -597,6 +627,33 @@ export class BotEngine {
       }
       this.routeTick(p, now);
     } else this.reason = 'Waiting for a reachable matching monster.';
+  }
+  private clearLootEvidence():void {this.killedAt=[];this.dropCreatedAt.clear();this.lootOwner=null;this.lootAfter=0;}
+  private pruneLootEvidence():void {
+    const now=this.now();
+    if(!sameActionIdentity(this.lootOwner,this.actorActionIdentity())){this.clearLootEvidence();return;}
+    this.killedAt=this.killedAt.filter(k=>now>=k.at&&now-k.at<OWN_LOOT_HISTORY);
+    for(const [id,evidence]of this.dropCreatedAt)if(now<evidence.at||now-evidence.at>=OWN_LOOT_HISTORY)this.dropCreatedAt.delete(id);
+  }
+  private observeNewDrop(drop:Drop):void {
+    this.pruneLootEvidence();this.lootOwner=this.actorActionIdentity();if(!this.lootOwner)return;
+    const engagements:ActionIdentity[]=[];
+    const include=(identity:ActionIdentity|null|undefined)=>{
+      if(!identity||identity.targetId===undefined||identity.targetIncarnation===undefined||!this.selfOwnerCurrent(identity)||this.foreignTargets.has(identity.targetId))return;
+      const monster=this.entities.get(identity.targetId);
+      // Zero-HP targets still retain their dispatched lifetime until removal.
+      if(monster?.kind!==1||distance(monster,drop)>3||engagements.some(old=>sameActionIdentity(old,identity))||engagements.length>=MAX_DROP_ENGAGEMENTS)return;
+      engagements.push({...identity});
+    };
+    if(this.pending?.type==='attack')include(this.pending.actorIdentity);
+    for(const skill of this.skillKills.values())if(skill.until>=this.now())include(skill.identity);
+    this.dropCreatedAt.set(drop.id,{at:this.now(),drop:{itemId:drop.itemId,count:drop.count,x:drop.x,y:drop.y},engagements});
+    if(this.dropCreatedAt.size>MAX_NEW_DROPS)this.dropCreatedAt.delete(this.dropCreatedAt.keys().next().value!);
+  }
+  private ownsDrop(drop:Drop):boolean {
+    const evidence=this.dropCreatedAt.get(drop.id);if(!evidence||!sameDrop(evidence.drop,drop))return false;
+    return this.killedAt.some(k=>distance(k,drop)<=3&&(evidence.at>=k.at
+      ||k.at-evidence.at<=PRE_DEATH_DROP_WINDOW&&evidence.engagements.some(identity=>sameActionIdentity(identity,k.identity))));
   }
   private fieldContains(p:Position):boolean {const policy=mapPolicy(this.settings);return mapAllowed(policy,this.map)&&insideLockArea(policy,this.map,p);}
   private eligible(e: Entity, now: number, acquiring = true): boolean {
@@ -686,7 +743,7 @@ export class BotEngine {
     if(type==='attack')this.strategies.normalDispatched(engagement);
     this.send({ type, id }); this.lastAction = this.now();
     this.pending = { type, id, since: this.now(), progress: this.now(), approachSince: direct ? approachStarted : null, direct,
-      ...(type === 'attack' ? { engagement,actorIdentity,attackRange: normalAttackProfile(this.character).range } : {}) };
+      actorIdentity,...(type === 'attack' ? { engagement,attackRange: normalAttackProfile(this.character).range } : {dropIdentity:{...this.drops.get(id)!}}) };
     if (direct) this.implicitWalk = {targetId:id,until:this.now()+4000};
     this.reason = type === 'attack' ? `Attacking ${this.entities.get(id)?.name ?? 'selected monster'}.` : `Collecting item #${this.drops.get(id)?.itemId}.`;
     if (type === 'attack') this.attacks++;
@@ -701,6 +758,8 @@ export class BotEngine {
   /** A replacement spawn is a new lifetime, even without a preceding removal. */
   private replaceActorOwnership(id:number):void {
     const own=id===this.playerId;
+    if(own)this.clearLootEvidence();
+    else for(const evidence of this.dropCreatedAt.values())evidence.engagements=evidence.engagements.filter(identity=>identity.targetId!==id);
     const pending=!!this.pending&&(own||this.pending.type==='attack'&&this.pending.id===id);
     const route=!!this.route&&(own||['attack','skill'].includes(this.route.type)&&this.route.id===id);
     if(pending||route) {
@@ -829,6 +888,7 @@ export class BotEngine {
   prepareRequestedRun(input:Settings):void {
     if(this.running||this.automation.pendingAction)throw new Error('Stop the current run and wait for its action before requesting another.');
     this.settings=validateSettings(input);
+    this.clearLootEvidence();
     // Entry travel is part of the requested run, including deaths and elapsed time.
     // This does not release movement/resource fences or authorize field actions.
     this.deaths=0;this.runStarted=this.now();this.runKills=this.kills;this.runPickups=this.looted;this.waypointIndex=0;
@@ -850,6 +910,7 @@ export class BotEngine {
     this.reason='Returned to the lock map; resumed the requested run.';this.note(this.reason);
   }
   private onDeath(): void {
+    this.clearLootEvidence();
     this.strategies.cancel();
     this.skillKills.clear();this.skillTargets.clear();
     this.implicitWalk = null; this.loadout.reset(true);
