@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, DEFAULT_ESCAPE } from './settings';
 import { MAX_PROFILES, PROFILE_STORAGE_KEY, ProfileStore } from './profiles';
+import { CurrentForm, formDocument } from './current-form';
 
 const settings = () => ({ ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [1002] });
 function fixture() {
@@ -18,6 +19,35 @@ describe('named profiles', () => {
       expect(Object.keys(imported.settings.automation!.loot)).toEqual(['ownership','defaultAction','rules']);
       expect(f.store.forMap(imported.id,'prt_fild08','Test').settings.automation!.loot.ownership).toBe(ownership);
     }
+  });
+  it('round-trips optional actor resource conditions and rejects malformed thresholds atomically', () => {
+    const f=fixture(),automation=structuredClone(DEFAULT_AUTOMATION);
+    automation.items=[{itemId:501,resource:'hp',belowPercent:80,minStock:0,cooldownSeconds:1,conditions:[{field:'actorSpPercent',actor:{scope:'self'},operator:'gte',value:25.5}]}];
+    const saved=f.store.save('Resources','',{...settings(),automation});const exported=f.store.export(saved.id);
+    expect(f.store.import(exported)[0]?.settings.automation?.items).toEqual(automation.items);
+    const malformed=JSON.parse(exported);malformed.profiles[0].settings.automation.items[0].conditions[0].value=101;
+    const before=f.data.get(PROFILE_STORAGE_KEY);expect(()=>f.store.import(JSON.stringify(malformed))).toThrow();expect(f.data.get(PROFILE_STORAGE_KEY)).toBe(before);
+    expect(DEFAULT_AUTOMATION.items).toEqual([]);
+  });
+  it('persists resource conditions in current forms without relaxing strict schema or restoring run intent', async () => {
+    const automation=structuredClone(DEFAULT_AUTOMATION);
+    automation.items=[{itemId:501,resource:'hp',belowPercent:80,minStock:0,cooldownSeconds:1,conditions:[
+      {field:'actorHpPercent',actor:{scope:'self'},operator:'lte',value:60},
+      {field:'actorSpPercent',actor:{scope:'self'},operator:'gte',value:25.5},
+    ]}];
+    const configured={...settings(),automation},writes:unknown[]=[];
+    const form=new CurrentForm(()=>({settings:configured,selectedProfileId:'resources'}),async document=>{writes.push(structuredClone(document));return document.revision;});
+    form.restore(null,()=>{throw new Error('No prior form should be applied.');});
+    const saved=await form.flush(),restored=formDocument(JSON.parse(JSON.stringify(saved)));
+    expect(restored.settings.automation!.items).toEqual(automation.items);
+    expect(restored.settings.targets).toEqual(configured.targets);
+    expect(Object.keys(restored).sort()).toEqual(['revision','selectedProfileId','settings','version']);
+    for(const change of [{value:101},{operator:'ne'},{actor:{scope:'candidate'}},{observedHp:40}]) {
+      const malformed=structuredClone(saved);Object.assign(malformed.settings.automation!.items[0]!.conditions![0]!,change);
+      expect(()=>formDocument(malformed)).toThrow();
+    }
+    automation.items[0]!.conditions![0]!.value=NaN;
+    await expect(form.flush()).rejects.toThrow();expect(writes).toHaveLength(1);
   });
   it('round-trips protected disposition and rejects invalid imports atomically', () => {
     const f=fixture();const automation=structuredClone(DEFAULT_AUTOMATION);automation.disposition={maxSpend:0,rules:[{itemId:501,keep:1,minimum:2,desired:3,maximum:4,store:true,sell:false,cart:false,restock:'storage',allowUnique:false}]};

@@ -1,0 +1,470 @@
+[
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lt",
+      "value": 0
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lt",
+      "value": 50.5
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lt",
+      "value": 100
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": 0
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": 50.5
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": 100
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "eq",
+      "value": 0
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "eq",
+      "value": 50.5
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "eq",
+      "value": 100
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gte",
+      "value": 0
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gte",
+      "value": 50.5
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gte",
+      "value": 100
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gt",
+      "value": 0
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gt",
+      "value": 50.5
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gt",
+      "value": 100
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lt",
+      "value": 0
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lt",
+      "value": 50.5
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lt",
+      "value": 100
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": 0
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": 50.5
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": 100
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "eq",
+      "value": 0
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "eq",
+      "value": 50.5
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "eq",
+      "value": 100
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gte",
+      "value": 0
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gte",
+      "value": 50.5
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gte",
+      "value": 100
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gt",
+      "value": 0
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gt",
+      "value": 50.5
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorSpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "gt",
+      "value": 100
+    }
+  },
+  {
+    "valid": false,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": -1
+    }
+  },
+  {
+    "valid": false,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": 100.1
+    }
+  },
+  {
+    "valid": false,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": "50"
+    }
+  },
+  {
+    "valid": false,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": true
+    }
+  },
+  {
+    "valid": false,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": null
+    }
+  },
+  {
+    "valid": false,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "ne",
+      "value": 50
+    }
+  },
+  {
+    "valid": false,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "contains",
+      "value": 50
+    }
+  },
+  {
+    "valid": false,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": 50,
+      "skillId": 1
+    }
+  },
+  {
+    "valid": false,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self"
+      },
+      "operator": "lte",
+      "value": 50,
+      "extra": true
+    }
+  },
+  {
+    "valid": false,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "self",
+        "id": 0
+      },
+      "operator": "lte",
+      "value": 50
+    }
+  },
+  {
+    "valid": false,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "candidate"
+      },
+      "operator": "lte",
+      "value": 50
+    }
+  },
+  {
+    "valid": true,
+    "condition": {
+      "field": "actorHpPercent",
+      "actor": {
+        "scope": "actor",
+        "id": 0,
+        "world": "00000000-0000-0000-0000-000000000001",
+        "incarnation": 1
+      },
+      "operator": "lte",
+      "value": 50
+    }
+  }
+]

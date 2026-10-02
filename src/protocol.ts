@@ -1,3 +1,4 @@
+import { BitReader } from './binary';
 import {actorId,optionalWireActorId} from './actor-identity';
 import { decodeFeatures, FEATURE_OP } from './protocol-feature';
 import type { FeatureEvent } from './protocol-feature';
@@ -14,7 +15,7 @@ export const VERIFIED_BUILD = 'Build_2569-09-01-01-55';
 export const OP = {
   enter: 3, spawn: 6, walk: 7, move: 10, attack: 11, remove: 15,
   clear: 16, map: 18, stop: 19, stopImmediate: 20, hit: 23,
-  death: 36, heal: 37, resurrection: 46, tracking: 60, drop: 81, pickup: 82,
+  partyAffiliation: 103, death: 36, heal: 37, resurrection: 46, tracking: 60, drop: 81, pickup: 82,
   ...FEATURE_OP,
 } as const;
 
@@ -22,11 +23,13 @@ export interface Position { x: number; y: number }
 export interface Entity extends Position {
   id: number; classId: number; name: string; kind: number; level: number;
   hp: number; maxHp: number; dead: boolean;
+  partyId?: number; partyName?: string;
   sp?: number; maxSp?: number; sitting?: boolean; statuses?: { id: number; seconds: number }[];
 }
 export interface Walk { origin: Position; cells: Position[]; secondsPerCell: number; firstSeconds: number; locked: boolean }
 export interface Drop extends Position { id: number; itemId: number; count: number; isNew: boolean }
 export type GameEvent = FeatureEvent | SocialEvent | MemoEvent
+  | { type: 'partyAffiliation'; id: number; partyId: number; partyName: string }
   | { type: 'enter'; id: number; map: string }
   | { type: 'map'; map: string }
   | { type: 'spawn'; entity: Entity; entryType?: number }
@@ -68,7 +71,7 @@ class Reader {
   string(): string { return this.text(this.u16()); }
   text(bytes: number, encoding = 'utf-8'): string {
     if (bytes > 1024) throw new Error('Oversized string');
-    return new TextDecoder(encoding, { fatal: true }).decode(this.take(bytes));
+    return new TextDecoder(encoding, { fatal: true, ignoreBOM: true }).decode(this.take(bytes));
   }
   memoryString(): string {
     const length = this.i32();
@@ -130,15 +133,23 @@ function spawn(r: Reader): GameEvent[] {
   // the official client: only a positive maximum establishes a player SP value.
   const resources = kind === 0 && maxSp === 0 ? {} : { sp, maxSp };
   const events: GameEvent[] = [{ type: 'spawn', entryType: event, entity: { id, classId, name, kind, level, ...pos, hp, maxHp, ...resources, sitting: state === 2, statuses, dead: state === 3 } }];
-  // Only the player and monsters are retained. Appearance blocks are skipped.
-  if (state === 1 && (kind === 0 || kind === 1)) {
-    if (kind === 0) {
-      const appearanceSize = r.i32();
-      if (appearanceSize < 1 || appearanceSize > 4096) throw new Error('Unknown player appearance layout');
-      r.take(appearanceSize);
-    }
-    events.push({ type: 'walk', id, walk: readWalk(r) });
+  // Older synthetic/entity-only captures remain valid, with unknown affiliation.
+  // Only a complete pinned PlayerSpawnParameters block can establish party identity.
+  if (kind === 0 && r.offset < r.data.length) {
+    const appearanceSize = r.i32();
+    if (appearanceSize < 41 || appearanceSize > 4096) throw new Error('Unknown player appearance layout');
+    const appearance = new Reader(r.take(appearanceSize));
+    if (appearance.u8() !== 13) throw new Error('Unknown player appearance schema');
+    appearance.take(28); // bool, int32 weapon class, three bytes, five int32 equipment IDs.
+    const partyId = appearance.i32();
+    const partyName = appearance.memoryString();
+    appearance.i32(); // CharacterFollowerState is an int32 flags enum.
+    if (appearance.offset !== appearanceSize || partyId < -1 || partyName.length > 128
+      || (partyId > 0 && !partyName) || (partyId <= 0 && partyName)) throw new Error('Invalid player affiliation');
+    const spawned = events[0]!;
+    if (spawned.type === 'spawn') Object.assign(spawned.entity,{partyId,partyName});
   }
+  if (state === 1 && (kind === 0 || kind === 1)) events.push({ type: 'walk', id, walk: readWalk(r) });
   return events;
 }
 
@@ -179,6 +190,13 @@ export function decode(data: Uint8Array): GameEvent[] {
   const memo = decodeMemo(data);
   if (memo !== null) return memo;
   switch (opcode) {
+    case OP.partyAffiliation: {
+      const party = new BitReader(data);party.u8();const id = actorId(party.i32());const joined=party.u8();
+      if(joined!==0&&joined!==1)throw new Error('Invalid party affiliation');
+      const partyId=joined?party.i32():-1;const partyName=joined?party.string(128):'';
+      if(joined){if(partyId<=0||!partyName)throw new Error('Invalid party affiliation');party.bool();}
+      party.finish();return [{type:'partyAffiliation',id,partyId,partyName}];
+    }
     case OP.enter: return [{ type: 'enter', id: actorId(r.i32()), map: mapName(r.string()) }];
     case OP.map: return [{ type: 'map', map: mapName(r.string()) }];
     case OP.spawn: return spawn(r);

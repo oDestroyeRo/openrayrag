@@ -1,25 +1,34 @@
 import type { Entity, GameEvent } from './protocol';
 import { SUPPORTED_STATUS_IDS } from './actor-status-catalog';
+import { absoluteResource, damageResource, unavailableResource, resourceFresh, compareResource, validResourceObservation, RESOURCE_OPERATORS, type ResourceObservation, type ResourceOperator } from './actor-resources';
 
 export const ACTOR_OBSERVATION_LIMITS = { actors: 300, publishedActors: 64, publishedStatuses: 128, evaluatedStatuses:512, conditionReports:8, conditionsPerReport:4, conditions: 16, staleMs: 15_000 } as const;
 export const PERMANENT_STATUS_SECONDS = Math.fround(3.4028234663852886e38);
 export type ActorSelector = { scope: 'self' } | { scope: 'target' } | { scope: 'candidate' } | { scope: 'actor'; id: number; world: string; incarnation: number };
 export type ActorPredicate =
   | { field: 'actorStatus'; actor: ActorSelector; statusId: number; operator: 'eq' | 'ne'; value: boolean }
-  | { field: 'actorCasting'; actor: ActorSelector; skillId?: number; operator: 'eq' | 'ne'; value: boolean };
+  | { field: 'actorCasting'; actor: ActorSelector; skillId?: number; operator: 'eq' | 'ne'; value: boolean }
+  | { field: 'actorHpPercent'; actor: ActorSelector; operator: ResourceOperator; value: number }
+  | { field: 'actorSpPercent'; actor: ActorSelector; operator: ResourceOperator; value: number };
 export interface PredicateTrace { condition: ActorPredicate; state: 'matched' | 'unmatched' | 'unavailable'; reason: string }
 interface StatusObservation { id: number; known: boolean; present: boolean; observedAt: number; expiresAt: number | null }
 interface CastObservation { state: 'unknown' | 'casting' | 'idle'; observedAt: number | null; deadline: number | null; skillId: number | null }
 export interface ActorObservation {
   id: number; incarnation: number; kind: number; name: string; observedAt: number;
   statusesKnown: boolean; statuses: StatusObservation[]; cast: CastObservation;
+  hp?: ResourceObservation; sp?: ResourceObservation;
 }
 export interface ActorObservationSnapshot {
   world: string; at: number; lastFrameAt: number | null; connected: boolean;
   selfId: number | null; targetId: number | null; candidateId?:number|null; truncated?:boolean; actors: ActorObservation[];
 }
-export interface ObservationContext { world: string; at: number; incarnation?: number }
-interface RecordState extends Omit<ActorObservation, 'statuses'> { statuses: Map<number, StatusObservation> }
+export interface ObservationContext { world: string; at: number; incarnation?: number; sequence?: number }
+export interface PartyActorEvidence { world: string; incarnation: number; kind: number; name: string; partyId: number | null; partyName: string | null; affiliationRevision: number }
+interface RecordState extends Omit<ActorObservation, 'statuses'> {
+  statuses: Map<number, StatusObservation>; startedAt: number; hpSequence: number; spSequence: number; hpUsesParty: boolean;
+  partyId: number | null; partyName: string | null; affiliationRevision: number; affiliationSequence: number; affiliationAt: number;
+  partyHp?: ResourceObservation; partySp?: ResourceObservation;
+}
 const uuid = (v: unknown): v is string => typeof v === 'string' && /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/.test(v);
 const integer = (v: unknown, min: number, max: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -31,7 +40,10 @@ export function validActorSelector(value: unknown): value is ActorSelector {
     && integer(value.id,0,0x7fffffff) && integer(value.incarnation,1,0x7fffffff);
 }
 export function validActorPredicate(value: unknown, allowCandidate=false): value is ActorPredicate {
-  if (!record(value) || !validActorSelector(value.actor) || value.actor.scope==='candidate'&&!allowCandidate || (value.operator!=='eq'&&value.operator!=='ne') || typeof value.value !== 'boolean') return false;
+  if (!record(value) || !validActorSelector(value.actor) || value.actor.scope==='candidate'&&!allowCandidate) return false;
+  if (value.field === 'actorHpPercent' || value.field === 'actorSpPercent') return keys(value,['field','actor','operator','value'])
+    && RESOURCE_OPERATORS.includes(value.operator as ResourceOperator) && typeof value.value === 'number' && Number.isFinite(value.value) && value.value >= 0 && value.value <= 100;
+  if ((value.operator!=='eq'&&value.operator!=='ne') || typeof value.value !== 'boolean') return false;
   if (value.field === 'actorStatus') return keys(value,['field','actor','statusId','operator','value']) && integer(value.statusId,1,255);
   return value.field === 'actorCasting' && keys(value,['field','actor','operator','value'],['skillId'])
     && (!Object.hasOwn(value,'skillId') || integer(value.skillId,1,255));
@@ -48,10 +60,11 @@ export function validActorSnapshot(value: unknown): value is ActorObservationSna
     || !(value.targetId === null || integer(value.targetId,0,0x7fffffff)) || !Array.isArray(value.actors) || value.actors.length > 64) return false;
   let statuses = 0;const actorIds=new Set<number>();
   return value.actors.every(actor => {
-    if (!record(actor) || !keys(actor,['id','incarnation','kind','name','observedAt','statusesKnown','statuses','cast']) || !integer(actor.id,0,0x7fffffff) || !integer(actor.incarnation,1,0x7fffffff)
+    if (!record(actor) || !keys(actor,['id','incarnation','kind','name','observedAt','statusesKnown','statuses','cast'],['hp','sp']) || !integer(actor.id,0,0x7fffffff) || !integer(actor.incarnation,1,0x7fffffff)
       || !integer(actor.kind,0,4) || typeof actor.name !== 'string' || actor.name.length > 64 || !clock(actor.observedAt)
       || typeof actor.statusesKnown !== 'boolean' || !Array.isArray(actor.statuses) || actor.statuses.length > 128
-      || (statuses += actor.statuses.length) > 512 || !record(actor.cast)) return false;
+      || (statuses += actor.statuses.length) > 512 || !record(actor.cast)
+      || Object.hasOwn(actor,'hp') && !validResourceObservation(actor.hp) || Object.hasOwn(actor,'sp') && !validResourceObservation(actor.sp)) return false;
     if(actorIds.has(actor.id))return false;actorIds.add(actor.id);
     const statusIds=new Set<number>();
     if(!actor.statuses.every(status=>{if(!record(status)||typeof status.id!=='number'||statusIds.has(status.id))return false;statusIds.add(status.id);return true;}))return false;
@@ -66,6 +79,7 @@ export function validActorSnapshot(value: unknown): value is ActorObservationSna
 
 export function evaluateActorPredicate(condition: ActorPredicate, snapshot: ActorObservationSnapshot | undefined): PredicateTrace {
   const trace = (state: PredicateTrace['state'], reason: string): PredicateTrace => ({ condition: structuredClone(condition), state, reason });
+  if (!validActorPredicate(condition,true)) return trace('unavailable','Actor condition has invalid fields or threshold.');
   if (!snapshot || !snapshot.connected || snapshot.lastFrameAt === null || snapshot.at < snapshot.lastFrameAt
     || snapshot.at - snapshot.lastFrameAt > ACTOR_OBSERVATION_LIMITS.staleMs) return trace('unavailable','Actor observations need a fresh connected world.');
   const selector = condition.actor;
@@ -74,8 +88,22 @@ export function evaluateActorPredicate(condition: ActorPredicate, snapshot: Acto
   const actor = snapshot.actors.find(actor => actor.id === id);
   if(!actor&&snapshot.truncated)return trace('unavailable','Actor observations were truncated; inspect fewer actors.');
   if (!actor || (selector.scope === 'actor' && actor.incarnation !== selector.incarnation)) return trace('unavailable','Actor is absent or its lifetime changed. Rebind an observed actor.');
-  if (actor.kind !== 0 && actor.kind !== 1) return trace('unavailable','Status and casting evidence is supported for players and monsters only.');
+  if (actor.kind !== 0 && actor.kind !== 1) return trace('unavailable','Actor evidence is supported for players and monsters only.');
   if (actor.observedAt > snapshot.at) return trace('unavailable','Actor observation clock is unavailable.');
+  if (condition.field === 'actorHpPercent' || condition.field === 'actorSpPercent') {
+    if (selector.scope === 'candidate' && actor.kind !== 1) return trace('unavailable','Candidate resources require a monster.');
+    const resource = condition.field === 'actorHpPercent' ? actor.hp : actor.sp;
+    const label = condition.field === 'actorHpPercent' ? 'HP' : 'SP';
+    if (!resource || resource.reason !== null) return trace('unavailable',`${label} unavailable: ${resource?.reason ?? 'no verified resource source'}${resource?.source?` (source: ${resource.source})`:''}.`);
+    if (condition.field==='actorSpPercent' && (actor.kind!==0
+      || actor.id===snapshot.selfId && !['spawn','own-stats','own-sp'].includes(resource.source??'')
+      || actor.id!==snapshot.selfId && (actor.id<=0||resource.source!=='party'))) return trace('unavailable','SP requires verified own state or a visible current-party player binding.');
+    if (!resourceFresh(resource,snapshot.at)) return trace('unavailable',`${label} from ${resource.source} is stale or its observation clock is unavailable (15-second limit).`);
+    if (actor.hp?.value === 0) return trace('unavailable','A living actor HP observation is required.');
+    const percent = resource.value! / resource.max! * 100;
+    const matched = compareResource(resource.value!*100,condition.operator,condition.value*resource.max!);
+    return trace(matched?'matched':'unmatched',`${label} ${percent.toFixed(2)}% from ${resource.source}, observed ${snapshot.at-resource.at!} ms ago.`);
+  }
   let actual: boolean;
   if (condition.field === 'actorStatus') {
     if (!SUPPORTED_STATUS_IDS.has(condition.statusId)) return trace('unavailable','This status has no reliable visible add/remove contract.');
@@ -100,14 +128,20 @@ const unknownCast = (): CastObservation => ({state:'unknown',observedAt:null,dea
 export class ActorObservations {
   private world: string;
   private nextIncarnation = 0;
+  private sequence = 0;
   private lastFrameAt: number | null = null;
+  private ownInitialization: { id:number; at:number; sequence:number; sp?:ResourceObservation } | null = null;
   private readonly actors = new Map<number,RecordState>();
   constructor(private readonly now = Date.now, private readonly newWorld = () => crypto.randomUUID()) { this.world = newWorld(); }
-  context(id?: number): ObservationContext { return {world:this.world,at:this.now(),...(id!==undefined?{incarnation:this.actors.get(id)?.incarnation??0}:{})}; }
+  context(id?: number): ObservationContext { return {world:this.world,at:this.now(),sequence:++this.sequence,...(id!==undefined?{incarnation:this.actors.get(id)?.incarnation??0}:{})}; }
   frame(): void { const at=this.now(); if (this.lastFrameAt !== null && at < this.lastFrameAt) this.reset(); if (clock(at)) this.lastFrameAt=at; }
-  reset(): void { this.world=this.newWorld();this.nextIncarnation=0;this.lastFrameAt=null;this.actors.clear(); }
-  remove(id: number): void { this.actors.delete(id); }
-  spawn(entity: Entity, selfId:number|null=null): void {
+  reset(): void { this.world=this.newWorld();this.nextIncarnation=0;this.sequence=0;this.lastFrameAt=null;this.ownInitialization=null;this.actors.clear(); }
+  /** Enter announces an identity before packet 56 and the matching EnterServer spawn. */
+  beginOwnInitialization(id:number): void { this.ownInitialization={id,at:this.now(),sequence:++this.sequence}; }
+  remove(id: number): void { this.actors.delete(id);if(this.ownInitialization?.id===id)this.ownInitialization=null; }
+  spawn(entity: Entity, selfId:number|null=null, entryType?:number): void {
+    const initialization=this.ownInitialization?.id===entity.id?this.ownInitialization:null;
+    if(initialization)this.ownInitialization=null; // A wrong or replacement arrival cannot reuse it later.
     if (entity.dead || (entity.kind===0||entity.kind===1)&&entity.hp <= 0) {this.remove(entity.id);return;}
     // Keep room for an announced own actor during loading/death. Filling that
     // slot with another actor must not prevent authoritative self revival.
@@ -115,21 +149,87 @@ export class ActorObservations {
     if (!this.actors.has(entity.id) && this.actors.size >= limit) return;
     const at=this.now();if(!clock(at)||this.nextIncarnation>=0x7fffffff){this.reset();return;} const statuses=new Map<number,StatusObservation>();
     for (const status of entity.statuses ?? []) if(SUPPORTED_STATUS_IDS.has(status.id)) statuses.set(status.id,this.status(status.id,status.seconds,at));
+    const own=entity.kind===0&&entity.id===selfId;
+    const placeholder=entity.sp===undefined&&entity.maxSp===undefined||entity.sp===0&&entity.maxSp===0;
+    // The owner receives the nearby-player 0/0 SP placeholder after initial
+    // stats. Bind that one announced arrival without refreshing receipt time.
+    const sp=own&&entryType===1&&placeholder&&initialization?.sp?{...initialization.sp}
+      :own&&entity.sp!==undefined?absoluteResource(entity.sp,entity.maxSp,at,'spawn'):undefined;
     this.actors.set(entity.id,{id:entity.id,incarnation:++this.nextIncarnation,kind:entity.kind,name:entity.name.slice(0,64),observedAt:at,
-      statusesKnown:entity.statuses!==undefined,statuses,cast:unknownCast()});
+      statusesKnown:entity.statuses!==undefined,statuses,cast:unknownCast(),startedAt:at,hpSequence:++this.sequence,spSequence:this.sequence,hpUsesParty:false,
+      partyId:entity.partyId??null,partyName:entity.partyName??null,affiliationRevision:0,affiliationSequence:this.sequence,affiliationAt:at,
+      hp:absoluteResource(entity.hp,entity.maxHp,at,'spawn'),
+      ...(sp?{sp}:{})});
+  }
+  partyActor(id:number): PartyActorEvidence | null {
+    const actor=this.actors.get(id);return actor?{world:this.world,incarnation:actor.incarnation,kind:actor.kind,name:actor.name,
+      partyId:actor.partyId,partyName:actor.partyName,affiliationRevision:actor.affiliationRevision}:null;
+  }
+  clearPartyResources(id:number, context:Pick<ObservationContext,'world'|'incarnation'>):void {
+    const actor=this.actors.get(id);if(!actor||context.world!==this.world||context.incarnation!==actor.incarnation)return;
+    // Retire contexts captured before membership invalidation, even when the
+    // visible actor itself has not changed incarnation.
+    actor.hpSequence=actor.spSequence=++this.sequence;
+    actor.partyHp=undefined;actor.partySp=undefined;
+    if(actor.hpUsesParty)actor.hp=unavailableResource('binding');
+    if(!actor.sp||actor.sp.source==='party')actor.sp=unavailableResource('binding');
+  }
+  partyResources(id:number, values:{hp?:number;maxHp?:number;sp?:number;maxSp?:number}, context:ObservationContext):void {
+    const actor=this.actors.get(id);
+    if(!actor||actor.kind!==0||id<=0||context.world!==this.world||context.incarnation!==actor.incarnation
+      ||context.sequence===undefined||!clock(context.at)||context.at>this.now())return;
+    const sequence=context.sequence??++this.sequence;
+    actor.partyHp=absoluteResource(values.hp,values.maxHp,context.at,'party');
+    actor.partySp=absoluteResource(values.sp,values.maxSp,context.at,'party');
+    // Absolute packets replace the baseline in captured packet order. Equal
+    // numbers never suppress a subsequent HitTarget. HP/SP have separate fences.
+    if(sequence>actor.hpSequence&&context.at>=(actor.hp?.at??actor.startedAt)) {
+      actor.hpSequence=sequence;actor.hp={...actor.partyHp};actor.hpUsesParty=true;
+    }
+    if((sequence>actor.spSequence||!actor.sp)&&context.at>=(actor.sp?.at??0)) {
+      actor.spSequence=sequence;actor.sp={...actor.partySp};
+    }
   }
   private status(id: number, seconds: number, at: number): StatusObservation {
     const permanent=seconds===PERMANENT_STATUS_SECONDS;
     const deadline=at+Math.max(0,seconds)*1000;
     return {id,present:true,known:Number.isFinite(seconds)&&(permanent||clock(deadline)),observedAt:at,expiresAt:permanent?null:clock(deadline)?deadline:at};
   }
-  apply(event: GameEvent, context=this.context()): void {
+  apply(event: GameEvent, context=this.context(), selfId:number|null=null): void {
     if (context.world!==this.world || !clock(context.at) || context.at > this.now()) return;
-    const id=event.type==='skillResult'?event.source:'id' in event?event.id:null;
+    const initialization=this.ownInitialization;
+    if((event.type==='stats'||event.type==='sp')&&selfId===null&&initialization&&!this.actors.has(initialization.id)) {
+      if(context.incarnation!==undefined||context.sequence===undefined||context.sequence<=initialization.sequence||context.at<initialization.at)return;
+      initialization.sequence=context.sequence;
+      if(event.sp!==undefined)initialization.sp=context.at<(initialization.sp?.at??0)?unavailableResource('out-of-order',context.at)
+        :absoluteResource(event.sp,event.maxSp,context.at,event.type==='sp'?'own-sp':'own-stats');
+      return;
+    }
+    const id=event.type==='stats'||event.type==='sp'?selfId:event.type==='skillResult'?event.source:'id' in event?event.id:null;
     const actor=id===null?undefined:this.actors.get(id);
-    if (!actor || context.at < actor.observedAt || context.incarnation!==undefined && context.incarnation!==actor.incarnation || (actor.kind!==0&&actor.kind!==1)) return;
+    if (!actor || context.at < actor.startedAt || context.incarnation!==undefined && context.incarnation!==actor.incarnation || (actor.kind!==0&&actor.kind!==1)) return;
     const at=context.at;
-    if(event.type==='status' && SUPPORTED_STATUS_IDS.has(event.statusId)) {
+    if (event.type==='heal'||event.type==='hit'||event.type==='stats'||event.type==='sp') {
+      const sequence=context.sequence??++this.sequence;
+      if (event.type!=='sp'&&sequence>actor.hpSequence) {
+        actor.hpSequence=sequence;
+        if(at<(actor.hp?.at??0))actor.hp=unavailableResource('out-of-order',at);
+        else if(event.type==='hit')actor.hp=damageResource(actor.hp,event.damage,at);
+        else {actor.hp=absoluteResource(event.hp,event.maxHp,at,event.type==='heal'?'hp-recovery':'own-stats');actor.hpUsesParty=false;}
+      }
+      if ((event.type==='sp'||event.type==='stats'&&event.sp!==undefined)&&sequence>actor.spSequence) {
+        actor.spSequence=sequence;
+        actor.sp=at<(actor.sp?.at??0)?unavailableResource('out-of-order',at):absoluteResource(event.sp,event.maxSp,at,event.type==='sp'?'own-sp':'own-stats');
+      }
+      return;
+    }
+    if (context.at < actor.observedAt) return;
+    if (event.type==='partyAffiliation' && actor.kind===0) {
+      if(context.sequence===undefined||context.sequence<=actor.affiliationSequence||at<actor.affiliationAt)return;
+      actor.affiliationSequence=context.sequence;actor.affiliationAt=at;
+      if(actor.partyId!==event.partyId||actor.partyName!==event.partyName)actor.affiliationRevision++;
+      actor.partyId=event.partyId;actor.partyName=event.partyName;
+    } else if(event.type==='status' && SUPPORTED_STATUS_IDS.has(event.statusId)) {
       if(event.seconds===null) actor.statuses.set(event.statusId,{id:event.statusId,present:false,known:!event.refresh,observedAt:at,expiresAt:at});
       else actor.statuses.set(event.statusId,this.status(event.statusId,event.seconds,at));
       actor.observedAt=at;
@@ -152,7 +252,7 @@ export class ActorObservations {
     for(const id of ids) {
       const actor=this.actors.get(id);if(!actor)continue;
       const allStatuses=[...actor.statuses.values()];const complete=allStatuses.length<=remaining;const statuses=complete?allStatuses.map(s=>({...s})):[];
-      truncated||=!complete;remaining-=statuses.length;actors.push({...actor,statusesKnown:complete&&actor.statusesKnown,statuses,cast:{...actor.cast}});
+      truncated||=!complete;remaining-=statuses.length;actors.push({id:actor.id,incarnation:actor.incarnation,kind:actor.kind,name:actor.name,observedAt:actor.observedAt,statusesKnown:complete&&actor.statusesKnown,statuses,cast:{...actor.cast},...(actor.hp?{hp:{...actor.hp}}:{}),...(actor.sp?{sp:{...actor.sp}}:{})});
       if(actors.length>=ACTOR_OBSERVATION_LIMITS.publishedActors){truncated||=ids.size>actors.length;break;}
     }
     return {world:this.world,at:this.now(),lastFrameAt:this.lastFrameAt,connected,selfId,targetId,...(candidateId!==null?{candidateId}:{}),...(truncated?{truncated:true}:{}),actors};

@@ -186,7 +186,7 @@ Final direct-target release proof: 708 TypeScript tests and 25 Rust tests passed
 
 ## Actor condition observations
 
-[Actor status and cast conditions](ACTOR_OBSERVATIONS.md) records the pinned packet layouts, supported status catalog, freshness/lifetime rules and conservative expiry semantics used by optional typed conditions.
+[Actor status, cast and resource conditions](ACTOR_OBSERVATIONS.md) records the pinned packet layouts, supported status catalog, HP/SP resource and party-binding contracts, freshness/lifetime rules and conservative expiry semantics used by optional typed conditions.
 
 ## Ordinary emergency escape
 

@@ -1,3 +1,4 @@
+import { PartyActorBindings } from './party-actors';
 import type { InventoryItem } from './protocol-feature';
 import type { BarterOffer, PartyMember, PricedRow, ShopEntry, VendingEntry, WorldEvent } from './world-protocol';
 
@@ -19,6 +20,7 @@ function cloneOffer(offer: BarterOffer): BarterOffer { return { ...offer, item: 
 
 /** Server-owned world state. Sending a request never changes inventory or money. */
 export class WorldState {
+  readonly partyActors = new PartyActorBindings();
   map = ''; generation = 0; revision = 0;
   npc: WorldSnapshot['npc'] = { id: null, mode: 'idle', dialog: null, options: [] };
   shop: WorldSnapshot['shop'] = null;
@@ -33,6 +35,7 @@ export class WorldState {
   viewedVending: WorldSnapshot['viewedVending'] = null;
 
   reset(map = '', preservePersistent = false): void {
+    this.partyActors.clear();
     this.map = map; this.generation++; this.revision++;
     this.endInteraction(); this.viewedVending = null; this.vending = null;
     if (!preservePersistent) {
