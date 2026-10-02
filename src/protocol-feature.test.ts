@@ -191,6 +191,10 @@ describe('source actor cast and owner target packets',()=>{
     for(const id of [0,123])expect(decode(new Fixture().u8(33).i32(id).finish())).toEqual([{type:'changeTarget',id}]);
     expect(decode(Uint8Array.of(28))).toEqual([]); // circle has no actor identity
   });
+  it('decodes only the exact source ResetMotion111 actor layout',()=>{
+    for(const id of [0,1,0x7fffffff])expect(decode(new Fixture().u8(111).i32(id).finish())).toEqual([{type:'resetMotion',id}]);
+    for(const bytes of [Uint8Array.of(111),new Fixture().u8(111).i32(-1).finish(),new Fixture().u8(111).i32(1).finish().slice(0,-1),new Fixture().u8(111).i32(1).u8(0).finish()])expect(()=>decode(bytes)).toThrow(FeatureProtocolError);
+  });
   it('rejects malformed bounds, flags, clocks, truncation and whole-byte trailers atomically',()=>{
     const cast=(id=1,target=-1,direction=0,seconds=1,flags=0)=>new Fixture().u8(24).i32(id).i32(target).u8(20).u8(1).u8(direction).position().f32(seconds).u8(flags).finish();
     for(const bytes of [cast(-1),cast(1,-2),cast(1,-1,8),cast(1,-1,0,NaN),cast(1,-1,0,Infinity),cast(1,-1,0,1,16),cast().slice(0,-1),Uint8Array.from([...cast(),0]),new Fixture().u8(33).i32(-1).finish()])expect(()=>decode(bytes)).toThrow(FeatureProtocolError);

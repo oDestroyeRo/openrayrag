@@ -1,3 +1,4 @@
+import { matchesSkillExecution } from './skill-execution';
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { deathLimitGuidance } from './death-recovery';
 import { AttackStrategyPolicy, engagementIdentity, type StrategyChoice, type AttackStrategySnapshot, type EngagementIdentity } from './attack-strategy';
@@ -34,6 +35,14 @@ export interface Snapshot {
   loadout: LoadoutSnapshot; character: CharacterSnapshot; actors: Entity[]; task: AutomationTask; elapsedSeconds: number; deaths: number; runIntent: boolean; lootStats: Array<{itemId:number;count:number}>; actionResult: ActionResult;
 }
 export type Action = { type: 'attack' | 'pickup'; id: number } | { type: 'stop' } | { type: 'walk'; destination: Position } | ExpandedAction;
+export const OWN_CAST_WAIT_REASON = 'Waiting for the observed own cast to settle. Some triggered results are ambiguous; after casting finishes, walking in game can confirm readiness.';
+// Pinned equipment/card procs can emit these execution shapes with indirect=false.
+// A queued proc can survive equipment removal, so current gear cannot rule it out.
+function unmarkedProcCanMatch(action:Extract<ExpandedAction,{type:'skill'}>):boolean {
+  return action.mode==='self'&&action.skillId===42&&action.level===1
+    ||action.mode==='target'&&(action.skillId===43&&(action.level===1||action.level===3)
+      ||action.skillId===96&&(action.level===3||action.level===5||action.level===10));
+}
 const ACTION_DELAY = 100;
 const LOOT_DELAY = 150;
 // New-drop packets precede monster removal at the pinned server. This is a
@@ -94,6 +103,7 @@ export class BotEngine {
   runIntent = false;
   readonly character = new CharacterState();
   readonly observations: ActorObservations;
+  private observedOwnCast: { identity: ActionIdentity; action: Extract<ExpandedAction, { type: 'skill' }> } | null = null;
   private readonly strategies=new AttackStrategyPolicy();
   private strategyWait:{id:number;since:number}|null=null;
   private readonly automation: AutomationScheduler;
@@ -208,12 +218,34 @@ export class BotEngine {
     this.advanceMovement();
     this.lastFrame = this.now();
     this.observations.frame();
-    for (const event of events) this.apply(event);
+    for (const event of events) { this.apply(event);this.observeOwnCast(event); }
     this.observations.frame();
+  }
+  /** A cast timer or adjustment cannot prove completion. Initial unknown state
+   * creates no fence; observed casts require source-backed availability evidence. */
+  observedOwnCastSettled(): boolean { return this.observedOwnCast === null; }
+  private observeOwnCast(event: GameEvent | FeatureEvent): void {
+    const identity = this.actorActionIdentity();
+    if (this.observedOwnCast && !sameActionIdentity(this.observedOwnCast.identity, identity)) this.observedOwnCast = null;
+    if (!identity) return;
+    if (event.type === 'castStart' && event.id === identity.selfId) {
+      const skill = { type: 'skill' as const, skillId: event.skillId, level: event.level };
+      const action: Extract<ExpandedAction, { type: 'skill' }> = event.targetPosition
+        ? { ...skill, mode: 'ground', position: { ...event.targetPosition } }
+        : event.target !== undefined && event.target >= 0 && event.target !== identity.selfId
+          ? { ...skill, mode: 'target', target: event.target } : { ...skill, mode: 'self' };
+      this.observedOwnCast = { identity, action };
+    } else if (this.observedOwnCast && (event.type === 'castStop' && event.id === identity.selfId
+      // StartWalk is emitted only after TryMove admits movement; it does not ACK a resource owner.
+      || event.type === 'walk' && event.id === identity.selfId
+      // At the pinned source, only CounterAttack.Process emits ResetMotion, after FinishCasting.
+      || event.type === 'resetMotion' && event.id === identity.selfId && this.observedOwnCast.action.skillId === 31 && this.observedOwnCast.action.mode === 'self'
+      || !unmarkedProcCanMatch(this.observedOwnCast.action) && matchesSkillExecution(this.observedOwnCast.action, event, identity.selfId))) this.observedOwnCast = null;
   }
   private resetWorld(preserveCharacter=false): void {
     if(this.manualTask)this.finishManual('failed','Manual command ended after a world change.',false);
     if(!preserveCharacter){this.manualAttackFence=null;this.manualWalkFence=false;this.manualRetiredMovement=false;this.manualReceiptOwner=null;}
+    this.observedOwnCast = null;
     this.observations.reset();this.strategies.reset();this.strategyWait=null;this.serverTargetId=null;this.combatConditions.clear();this.revivableActors.clear();
     this.loadout.reset(preserveCharacter);
     if(!preserveCharacter)this.respawnRefreshPending=false;
@@ -485,6 +517,7 @@ export class BotEngine {
       // Panel input yields decisions, not ownership. Advance accepted legs and
       // their original deadlines without sending another walk, attack or cast.
       if(!p.dead&&this.route)this.routeTick(p,now,true);
+      if(!p.dead)this.expirePending(now);
       return;
     }
     if (p.dead) { if(a.respawn.enabled && this.deaths <= a.respawn.maxDeaths && !this.automation.busy) { this.automation.submit({type:'respawn'},this.character); this.reason='Waiting for respawn confirmation.'; } return; }
@@ -506,6 +539,11 @@ export class BotEngine {
       this.reason = 'Waiting for the previous monster approach to acknowledge before another action.'; return;
     }
     this.pruneLootEvidence();
+    if(!this.observedOwnCastSettled()) {
+      this.expirePending(now);
+      if(this.route)this.routeTick(p,now,true);
+      this.reason=OWN_CAST_WAIT_REASON;return;
+    }
     if (this.automation.busy) { this.reason=this.automation.task().label; return; }
     if(this.pending?.type==='attack') {
       const target=this.entities.get(this.pending.id);
@@ -624,13 +662,7 @@ export class BotEngine {
         }
         this.note(this.reason); return;
       }
-      const approachExpired = this.pending.approachSince !== null
-        && (now - this.pending.approachSince >= this.settings.attackMaxRouteTime * 1000
-          || (this.pending.type === 'attack' && (!target || !this.planAttack(p, target))));
-      if (!approachExpired && now - this.pending.progress < 12000 && now - this.pending.since < 90000) return;
-      this.excluded.set(this.pending.id, now + 30000); this.send({ type: 'stop' });
-      this.reason = 'Target timed out or became unreachable; skipping it for 30 seconds.'; this.note(this.reason);
-      this.pending = null; this.lastAction = now; return;
+      this.expirePending(now);return;
     }
     if (now < this.lootAfter) return;
     // Keep a chosen pursuit stable; a moving target is replanned after the current leg.
@@ -666,6 +698,17 @@ export class BotEngine {
       }
       this.routeTick(p, now);
     } else this.reason = 'Waiting for a reachable matching monster.';
+  }
+  /** Existing receipts retain their original deadlines while new decisions wait. */
+  private expirePending(now:number):void {
+    const pending=this.pending,p=this.player;if(!pending||!p)return;
+    const target=this.entities.get(pending.id);
+    const approachExpired=pending.approachSince!==null&&(now-pending.approachSince>=this.settings.attackMaxRouteTime*1000
+      ||pending.type==='attack'&&(!target||!this.planAttack(p,target)));
+    if(!approachExpired&&now-pending.progress<12000&&now-pending.since<90000)return;
+    this.excluded.set(pending.id,now+30000);this.send({type:'stop'});
+    this.reason='Target timed out or became unreachable; skipping it for 30 seconds.';this.note(this.reason);
+    this.pending=null;this.lastAction=now;
   }
   private clearLootEvidence():void {this.killedAt=[];this.dropCreatedAt.clear();this.lootOwner=null;this.lootAfter=0;}
   private pruneLootEvidence():void {
@@ -877,7 +920,7 @@ export class BotEngine {
         return;
       }
     }
-    if(settleOnly)return;
+    if(settleOnly||!this.observedOwnCastSettled())return;
     if(route.type==='skill') {
       const target=this.entities.get(route.id!);
       if(!target||!this.eligible(target,now,false)){this.cancelRoute();return;}
@@ -1004,7 +1047,7 @@ export class BotEngine {
     const targetId=request.command.type==='attack'?request.command.target.id:null;
     return {map:this.map,player:this.player??null,owner:this.player?this.manualActorIdentity(this.player.id):null,
       target:targetId===null?null:this.entities.get(targetId)??null,targetIdentity:targetId===null?null:this.manualActorIdentity(targetId),
-      character:this.character,observations:this.actorObservation(request.policy.monsterRules.flatMap(rule=>rule.conditions??[]),null,targetId),foreignTarget:targetId!==null&&this.foreignTargets.has(targetId)};
+      character:this.character,observedOwnCastSettled:this.observedOwnCastSettled(),observations:this.actorObservation(request.policy.monsterRules.flatMap(rule=>rule.conditions??[]),null,targetId),foreignTarget:targetId!==null&&this.foreignTargets.has(targetId)};
   }
   previewManual(input:unknown):Position[] {
     const request=validateManualTargetRequest(input);
@@ -1053,7 +1096,8 @@ export class BotEngine {
     if(!this.connected||!this.compatible||now-this.lastFrame>15000||request.map!==this.map||!sameManualIdentity(request.owner,this.player?this.manualActorIdentity(this.player.id):null)){this.finishManual('failed','Manual command lost its fresh character or world.');return;}
     if(now-task.since>=request.timeoutSeconds*1000){this.finishManual('failed','Manual command deadline reached; waiting for Stop reconciliation.');return;}
     if(!p||p.dead||p.hp<=0||p.maxHp<=0||p.hp/p.maxHp*100<=request.policy.minHpPercent){this.finishManual('failed','Character reached the manual HP stop limit.');return;}
-    const blocker=manualStateBlocker(request.command.type,this.manualContext(request));if(blocker){this.finishManual('failed',blocker);return;}
+    // A cast waits at dispatch without canceling this already admitted finite task.
+    const blocker=manualStateBlocker(request.command.type,this.manualContext(request),false);if(blocker){this.finishManual('failed',blocker);return;}
     const nav=this.navigation();if(!nav||!nav.safe(p)){this.finishManual('failed','Character left verified manual movement ground.');return;}
     if(request.command.type==='attack'){
       const target=this.entities.get(request.command.target.id);
@@ -1073,15 +1117,16 @@ export class BotEngine {
       if(this.route&&distance(cell(target),this.route.destination)!==0){this.route.destination=cell(target);this.route.cells=[];}
     }
     if(this.awaitsImplicitWalk()||!!this.ownMotion()&&!this.leg)return;
+    if(!this.observedOwnCastSettled())this.reason=OWN_CAST_WAIT_REASON;
     if(this.route){this.routeTick(p,now,!dispatchDecisions);if(this.manualTask)this.manualStatus.reason=this.reason;}
     if(this.manualTask&&!this.route&&!this.pending&&!this.leg){
       if(request.command.type==='walk'&&task.acceptedWalk&&!this.ownMotion()&&distance(cell(p),request.command.destination)===0)this.finishManual('complete','Verified walking destination reached.',false);
       else this.finishManual('failed','Manual route ended without a verified destination.');
     }
   }
-  idleForActions(): boolean { this.advanceMovement(); return !this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&!this.loadout.blocked; }
+  idleForActions(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&!this.loadout.blocked; }
   /** Installation is gated by sent owners, not HP or an equipment policy fault. */
-  settledForMaintenance(): boolean { this.advanceMovement(); return !this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled; }
+  settledForMaintenance(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled; }
   /** Death recovery owns only the existing posture scheduler, never field decisions. */
   recoveryOnly(settings: Settings): { complete: boolean; reason: string } {
     const p=this.player,a=automationSettings(settings);
@@ -1094,6 +1139,7 @@ export class BotEngine {
   }
   manualAction(action: ExpandedAction): void {
     action=validateExpandedAction(action);
+    if(!this.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
     if(!this.idleForActions())throw new Error('Stop automation and wait for movement and action confirmation first.');
     const p=this.player;
     if(!this.connected||!this.compatible||!p)throw new Error('A verified character is required.');

@@ -246,6 +246,28 @@ function setup(
   };
 }
 describe("controller supply repair regressions", () => {
+  it("does not reserve a supply trip or budget while an observed own cast is pending", () => {
+    const f = setup();
+    f.packet(new BitWriter().u8(FEATURE_OP.castStart).i32(1).i32(1).u8(11).u8(1).u8(0).position(player).f32(10).u8(0).finish());
+    f.c.start(settings);
+    const before = f.c.supply.snapshot();
+    f.advance(3000);
+    expect(f.c.supply.snapshot()).toMatchObject({ state: before.state, remainingTrips: before.remainingTrips, spent: 0, reserved: 0 });
+    expect(f.sent).toEqual([]);
+    expect(f.c.runRequested).toBe(true);
+    f.packet(new BitWriter().u8(FEATURE_OP.castStop).i32(1).finish());
+    f.advance(500);
+    expect(f.c.supply.snapshot().remainingTrips).toBe(before.remainingTrips - 1);
+  });
+  it("advances a sent supply receipt deadline during an observed own cast", () => {
+    const f = setup(); f.begin(); f.open(); expect(f.buy()).toHaveLength(1);
+    f.packet(new BitWriter().u8(FEATURE_OP.castStart).i32(1).i32(1).u8(11).u8(1).u8(0).position(player).f32(20).u8(0).finish());
+    f.advance(10_100);
+    expect(f.c.supply.snapshot()).toMatchObject({ state: "waiting", remainingTrips: 1 });
+    expect(f.c.supply.snapshot().reason).toContain("timed out");
+    expect(f.c.supply.uncertain).toBe(true); expect(f.buy()).toHaveLength(1);
+    expect(f.c.engine.observedOwnCastSettled()).toBe(false);
+  });
   it("allows emergency escape after interrupting a supply prepare or exhausted wait", () => {
     for (const exhausted of [false, true]) {
       const a = {
