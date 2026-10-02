@@ -11,3 +11,10 @@ export function matchesSkillExecution(action: Extract<ExpandedAction, {type:'ski
   return action.mode === 'target' ? result.target === action.target
     : result.targetPosition?.x === action.position.x && result.targetPosition?.y === action.position.y;
 }
+
+/** HealHandler's living-player branch: damage/HP changes are not receipts. */
+export function matchesPartyHealExecution(action:Extract<ExpandedAction,{type:'skill'}>,event:FeatureEvent|{type:string},playerId:number|null):boolean {
+  if(action.skillId!==41||action.mode!=='target'||!matchesSkillExecution(action,event,playerId)||event.type!=='skillResult')return false;
+  const result=event as Extract<FeatureEvent,{type:'skillResult'}>;
+  return result.indirect===false&&result.result===2&&result.hits===0&&(result.attacker===undefined||result.attacker===-1||result.attacker===playerId);
+}

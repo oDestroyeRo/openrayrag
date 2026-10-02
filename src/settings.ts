@@ -18,7 +18,10 @@ export interface EscapeSettings {
 }
 export const DEFAULT_ESCAPE: EscapeSettings = { enabled: false, hpBelowPercent: 20, mode: 'random', method: 'item', minStock: 0, cooldownSeconds: 60, hpEnabled: true, threatEnabled: false, threatCount: 3, threatWindowSeconds: 10 };
 export interface LoadoutSettings { enabled: boolean; autoAmmo: boolean; minAmmoStock: number; ammoPreferences: Array<{itemId:number}>; restore: 'conditionEnd' | 'never'; cooldownSeconds: number }
+export interface PartyHealSettings { enabled:boolean; level:number; hpBelowPercent:number; spReserve:number; cooldownSeconds:number; maxAttempts:number }
+export const DEFAULT_PARTY_HEAL:PartyHealSettings={enabled:false,level:1,hpBelowPercent:80,spReserve:10,cooldownSeconds:3,maxAttempts:20};
 export interface AutomationSettings {
+  partyHeal?:PartyHealSettings;
   loadout: LoadoutSettings;
   combat: { mode: 'off' | 'selected' | 'retaliate' | 'both'; levelDifference: number; partyEngagement?: boolean; rules: MonsterRule[] };
   loot: { ownership: 'own' | 'all'; defaultAction: 'pickup' | 'ignore'; rules: LootRule[] };
@@ -74,7 +77,11 @@ export function automationSettings(settings: Settings): AutomationSettings { ret
 export function escapeSettings(settings: Settings): EscapeSettings { return { ...DEFAULT_ESCAPE, ...automationSettings(settings).escape }; }
 export function validateAutomation(a: AutomationSettings): AutomationSettings {
   try {
-    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies','mapPolicy']);
+    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies','mapPolicy','partyHeal']);
+    if(Object.hasOwn(a,'partyHeal')) {
+      const h=a.partyHeal!;strictKeys(h,['enabled','level','hpBelowPercent','spReserve','cooldownSeconds','maxAttempts']);
+      if(typeof h.enabled!=='boolean'||!bounded(h.level,1,10)||!bounded(h.hpBelowPercent,1,100)||!bounded(h.spReserve,0,0x7fffffff)||!bounded(h.cooldownSeconds,1,3600)||!bounded(h.maxAttempts,1,100))throw new Error();
+    }
     if (Object.hasOwn(a,'mapPolicy')) validateMapPolicy(a.mapPolicy);
     if (Object.hasOwn(a,'supply')) validateSupplySettings(a.supply);
     const escape = a.escape === undefined ? DEFAULT_ESCAPE : a.escape;
