@@ -137,7 +137,7 @@ export function validateAutomation(a: AutomationSettings): AutomationSettings {
       || !bounded(a.recovery.spStart,0,95) || !bounded(a.recovery.spEnd,1,100)
       || !bounded(a.recovery.timeoutSeconds,1,3600) || a.recovery.hpStart >= a.recovery.hpEnd || a.recovery.spStart >= a.recovery.spEnd
       || !list(a.items,32,r=>id(r.itemId)&&['hp','sp'].includes(r.resource)&&bounded(r.belowPercent,1,100)&&bounded(r.minStock,0,9999)&&bounded(r.cooldownSeconds,1,3600),r=>r.itemId)
-      || !list(a.skills,32,r=>bounded(r.skillId,1,255)&&bounded(r.level,1,10)&&['self','enemy'].includes(r.target)&&bounded(r.hpBelowPercent,1,100)&&bounded(r.spAbovePercent,0,100)&&bounded(r.cooldownSeconds,1,3600),r=>r.skillId)
+      || !list(a.skills,32,r=>r.skillId!==55&&bounded(r.skillId,1,255)&&bounded(r.level,1,10)&&['self','enemy'].includes(r.target)&&bounded(r.hpBelowPercent,1,100)&&bounded(r.spAbovePercent,0,100)&&bounded(r.cooldownSeconds,1,3600),r=>r.skillId)
       || !list(a.equipment,32,r=>id(r.itemId)&&bounded(r.hpBelowPercent,1,100)&&bounded(r.monsterClassId,0,2_147_483_647),r=>r.itemId)
       || !list(a.allocation.stats,6,r=>bounded(r.stat,0,5)&&bounded(r.target,1,99),r=>r.stat)
       || !list(a.allocation.skills,64,r=>bounded(r.skillId,1,255)&&bounded(r.target,1,10),r=>r.skillId)

@@ -162,6 +162,9 @@ pub(crate) fn validate_action(value: &Value) -> Validation {
         }
         "skill" => {
             let action = value.as_object().ok_or_else(invalid)?;
+            if integer(action, "skillId", 1, 32767)? == 55 {
+                return Err(invalid());
+            }
             match string(action, "mode")? {
                 "self" => {
                     let action = object(value, &["type", "mode", "skillId", "level"])?;
@@ -707,6 +710,73 @@ fn validate_memo(value: &Value) -> Validation {
     Ok(())
 }
 
+fn validate_warp(value: &Value, preview_only: bool) -> Validation {
+    let kind = string(value.as_object().ok_or_else(invalid)?, "type")?;
+    let keys = match (kind, preview_only) {
+        ("warpGround", false) => vec!["type", "slot", "target", "preview", "policy"],
+        ("warpGround", true) => vec!["type", "slot", "target", "policy"],
+        ("warpActivate", false) => vec!["type", "preview", "policy"],
+        ("warpActivate", true) => vec!["type", "policy"],
+        _ => return Err(invalid()),
+    };
+    let request = object(value, &keys)?;
+    if request.len() != keys.len() {
+        return Err(invalid());
+    }
+    crate::automation::validate_manual_protection_policy(field(request, "policy")?)?;
+    if kind == "warpGround" {
+        integer(request, "slot", 0, 3)?;
+        let target = object(field(request, "target")?, &["x", "y"])?;
+        integer(target, "x", 0, 511)?;
+        integer(target, "y", 0, 511)?;
+    }
+    if preview_only {
+        return Ok(());
+    }
+    let preview = object(
+        field(request, "preview")?,
+        &[
+            "world",
+            "actorId",
+            "incarnation",
+            "connectionEpoch",
+            "revision",
+            "map",
+            "x",
+            "y",
+            "generation",
+            "level",
+            "inventoryRevision",
+            "equipmentRevision",
+            "spRevision",
+            "skillsRevision",
+        ],
+    )?;
+    let mut base = preview.clone();
+    for key in [
+        "generation",
+        "level",
+        "inventoryRevision",
+        "equipmentRevision",
+        "spRevision",
+        "skillsRevision",
+    ] {
+        base.remove(key);
+    }
+    validate_memo(&serde_json::json!({"type":"memoSave","slot":0,"preview":base}))?;
+    integer(preview, "generation", 0, MAX_ID)?;
+    integer(preview, "level", 1, 4)?;
+    for key in [
+        "inventoryRevision",
+        "equipmentRevision",
+        "spRevision",
+        "skillsRevision",
+    ] {
+        integer(preview, key, 1, MAX_ID)?;
+    }
+    Ok(())
+}
+
 fn validate_social(value: &Value) -> Validation {
     let kind = value
         .as_object()
@@ -967,6 +1037,12 @@ pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
             }
             Ok(())
         }
+        "warp" => validate_warp(request, false),
+        "warpPreview" => validate_warp(request, true),
+        "warpCancel" => {
+            object(request, &[])?;
+            Ok(())
+        }
         _ => Err("Unknown bot action.".into()),
     }
 }
@@ -984,6 +1060,27 @@ pub(crate) fn request_script(action: &str, request: &Value) -> Result<String, St
 mod tests {
     use super::{validate_action, validate_request};
     use serde_json::{json, Value};
+    #[test]
+    fn warp_shared_schema_and_generic_bypass() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../../src/data/warp-request-cases.json")).unwrap();
+        for case in cases.as_array().unwrap() {
+            assert_eq!(
+                validate_request(case["mode"].as_str().unwrap(), &case["request"]).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+        for action in [
+            json!({"type":"skill","mode":"ground","skillId":55,"level":4,"position":{"x":11,"y":10}}),
+            json!({"type":"skill","mode":"self","skillId":55,"level":1}),
+        ] {
+            assert!(validate_request("command", &action).is_err());
+            let routine = json!({"name":"No Warp","durationSeconds":10,"maxActions":1,"rules":[{"name":"Denied","priority":0,"cooldownSeconds":1,"maxRuns":1,"conditions":[{"field":"hpPercent","operator":"lt","value":100}],"action":action}]});
+            assert!(validate_request("routine", &routine).is_err());
+        }
+    }
     #[test]
     fn manual_memo_shared_corpus_and_automation_exclusion() {
         let cases: Value =

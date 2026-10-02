@@ -3,6 +3,9 @@ import { PartyHealPolicy, partyHealCandidates, partyHpCondition, type PartyHealS
 import { deathLimitGuidance, farmingDestination, deathCycle, deathGuard, validateDeathRecoveryGuard, type DeathRecoveryGuard, type DeathCycle } from './death-recovery';
 import { ManualRefine, type RefineContext, type RefineSnapshot } from './refine';
 import { validateRefineAdvance, type RefinePacket } from './refine-protocol';
+import { ManualWarp, type WarpContext, type WarpSnapshot, type WarpGuardStore } from './warp';
+import { warpInitializationPacket, officialWarpSkill,validateWarpEnvelope, type WarpWire } from './warp-protocol';
+import { warpCastReadiness, CAST_PREREQUISITES, BLIND_CONDITION } from './cast-policy';
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { ManualSocket, type SocketContext, type SocketSnapshot } from './socket';
 import { socketStockFloors, validateSocketEnvelope, type SocketAction } from './socket-protocol';
@@ -18,7 +21,7 @@ import { canMemoMap } from './memo-map-catalog';
 import { BotEngine, OWN_CAST_WAIT_REASON, type Action, type Snapshot } from './engine';
 import { decode } from './protocol';
 import { validateExpandedAction, type ExpandedAction } from './protocol-feature';
-import { validateSettings, automationSettings, type Settings } from './settings';
+import { validateSettings, automationSettings, type Settings, type AutomationSettings } from './settings';
 import { decodeWorld, validateWorldAction, type WorldAction, type WorldEvent } from './world-protocol';
 import { WorldState, type WorldSnapshot } from './world-state';
 import { NpcWorkflow, validateWorkflowSpec, worldActionBlockers, type WorkflowContext, type WorkflowSnapshot, type WorkflowStep, createVendingReceipt, confirmVendingReceipt, type VendingReceipt } from './workflows';
@@ -48,6 +51,7 @@ export interface CompanionSnapshot extends Snapshot {
   socket: SocketSnapshot;
   partyHeal?:PartyHealSnapshot;
   refine: RefineSnapshot;
+  warp: WarpSnapshot;
 }
 function expanded(value: unknown): value is ExpandedAction {
   try { validateExpandedAction(value); return true; } catch { return false; }
@@ -87,6 +91,7 @@ export class CompanionController {
   private socketInitialization:{key:string;identity:string|null}|null=null;
   readonly social: ManualSocial;
   readonly memo: ManualMemo;
+  readonly warp:ManualWarp;private warpPolicy:AutomationSettings|null=null;
   private memoIdentity: string | null = null;
   private memoWalkPending: {x:number;y:number} | null = null;
   private memoWalkEnd: {x:number;y:number} | null = null;
@@ -135,7 +140,8 @@ export class CompanionController {
     sendSocial: (action: ManualSocialAction) => void = () => { throw new Error('Manual social transport is unavailable.'); },
     sendMemo: (slot: MemoSlot) => void = () => { throw new Error('Manual memo transport is unavailable.'); },
     sendSocket: (action: SocketAction) => void = () => { throw new Error('Manual socket transport is unavailable.'); },
-    sendRefine: (packet: RefinePacket) => void = () => { throw new Error('Manual refine transport is unavailable.'); }) {
+    sendRefine: (packet: RefinePacket) => void = () => { throw new Error('Manual refine transport is unavailable.'); },
+    sendWarp:(wire:WarpWire)=>void=()=>{throw new Error('Warp Portal transport is unavailable.');},warpStore?:WarpGuardStore) {
     this.partyHeal=new PartyHealPolicy(now);
     this.engine = new BotEngine(action=>this.send(action), now, gridFor, entityId => {
       if (!this.world.party) return null;
@@ -163,6 +169,7 @@ export class CompanionController {
     this.memo = new ManualMemo(sendMemo, now);
     this.socket = new ManualSocket(sendSocket, now);
     this.refine = new ManualRefine(sendRefine, now);
+    this.warp = new ManualWarp(sendWarp,now,warpStore);
   }
   private send(action:Action|WorldAction):void {
     if(action.type!=='stop'&&this.sendingSupply&&this.supply?.ownsField&&!this.supply.commandAllowed())throw new Error('Supply command allowance exhausted.');
@@ -181,7 +188,7 @@ export class CompanionController {
     const policy=this.requestedSettings?.automation?.partyHeal;
     if(!this.partyHeal.available(policy,this.engine.observedOwnCastSettled()))return false;
     const e=this.engine,p=e.player;
-    if(!policy||!p||!this.runRequested||!this.heartbeatHealthy||!this.movementSettled()||this.refine.blocked||this.partyFollow.ownsTravel||this.returning||this.deathCycle||this.pending||this.featureReceipt||this.unresolvedWorld||this.workflowOutstanding||this.travel.active||this.service.active||this.workflow.snapshot().running||['running','waiting'].includes(this.routine.snapshot().state)||this.supply.ownsField||this.supply.uncertain||this.escape.busy||this.memo.blocked||this.socket.busy||this.social.busy||this.now()<this.fencedUntil||this.now()<this.yieldUntil||this.world.npc.id!==null||this.world.npc.mode!=='idle'||this.world.vending){this.partyHeal.wait('Waiting for higher-priority owners or physical movement.');return false;}
+    if(!policy||!p||!this.runRequested||!this.heartbeatHealthy||!this.movementSettled()||this.refine.blocked||this.warp.blocked||this.partyFollow.ownsTravel||this.returning||this.deathCycle||this.pending||this.featureReceipt||this.unresolvedWorld||this.workflowOutstanding||this.travel.active||this.service.active||this.workflow.snapshot().running||['running','waiting'].includes(this.routine.snapshot().state)||this.supply.ownsField||this.supply.uncertain||this.escape.busy||this.memo.blocked||this.socket.busy||this.social.busy||this.now()<this.fencedUntil||this.now()<this.yieldUntil||this.world.npc.id!==null||this.world.npc.mode!=='idle'||this.world.vending){this.partyHeal.wait('Waiting for higher-priority owners or physical movement.');return false;}
     this.world.partyActors.sync(this.world.party,this.world.map,e.observations,p.id);
     const bindings=[...(this.world.party?.members.keys()??[])].flatMap(id=>{const binding=this.world.partyActors.get(id);return binding?[binding]:[];});
     const observations=e.actorObservation(bindings.map(binding=>partyHpCondition(binding,policy.hpBelowPercent)));
@@ -206,7 +213,7 @@ export class CompanionController {
   get runRequested(): boolean { return this.requestedSettings !== null; }
   get connectionGeneration(): number { return this.connectionEpoch; }
   private get executing(): boolean {
-    return this.refine.blocked || this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || this.engine.manualTargetActive || this.partyFollow.ownsTravel || this.returning || this.service.active || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
+    return this.warp.busy || this.refine.blocked || this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || this.engine.manualTargetActive || this.partyFollow.ownsTravel || this.returning || this.service.active || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
       || ['running','waiting'].includes(this.routine.snapshot().state);
   }
   get active(): boolean { return this.runRequested || this.executing; }
@@ -214,6 +221,7 @@ export class CompanionController {
     this.partyHeal.cancel('The game transport changed.');
     this.ownArrival=null;this.readyOwn=null;this.enteredConnection=false;
     this.socketInitialization=null;
+    this.warp.connectionChanged(true);
     this.resetMemoMovement();
     this.memo.reset('Memo connection changed. Wait for a new complete snapshot.'); this.memoIdentity = null;
     this.clearRefineContext();
@@ -228,6 +236,7 @@ export class CompanionController {
   disconnect(): void {
     this.ownArrival=null;this.readyOwn=null;
     this.socketInitialization=null;
+    this.warp.connectionChanged(false);
     this.resetMemoMovement();
     this.memo.reset('Memo connection closed. A transmitted update cannot be undone.'); this.memoIdentity = null;
     this.clearRefineContext();
@@ -263,6 +272,7 @@ export class CompanionController {
   }
   private cancelOwners(reason: string): void {
     this.partyFollow.cancel(reason);
+    this.warp.cancel(reason);
     this.memo.cancel('Memo intent canceled. A transmitted update cannot be undone or replayed.');
     this.refine.cancel(reason);
     this.supplyStorageFull=null;
@@ -300,6 +310,7 @@ export class CompanionController {
     const active=this.active;
     this.socket.externalInput();
     this.refine.externalInput();
+    this.warp.cancel('Official game input retired Warp intent; server actions remain uncertain.');
     this.memo.cancel('Memo preview or intent canceled by manual game input. A transmitted update cannot replay.');
     if(active){
       // Pointer/key input also opens local panels. Keep sent action receipts,
@@ -320,9 +331,28 @@ export class CompanionController {
   /** The bridge observes only official opcode 80, before forwarding it. */
   officialRefineCommand(character:string|null):void { this.refine.officialCommand(character); }
   officialRefineResourceRevision():string|null {
+    if(this.warp.blocked)return null;
+    return this.initializationResourceRevision(false);
+  }
+  private initializationResourceRevision(strong:boolean):string|null {
     if(!this.engine.observedOwnCastSettled()||this.engine.retreatOwned||this.partyFollow.ownsTravel||this.partyHeal.busy||this.partyHeal.awaitingSpReadback||!this.movementSettled())return null;
     const c=this.refineContext();
-    return c.inventory&&c.equipment&&c.zeny!==null?JSON.stringify([c.connection,c.inventoryRevision,c.equipmentRevision,c.currencyRevision]):null;
+    const revisions=[c.connection,c.inventoryRevision,c.equipmentRevision,c.currencyRevision];
+    if(strong)revisions.push(this.engine.character.spRevision,this.engine.character.skillsRevision);
+    return c.inventory&&c.equipment&&c.zeny!==null?JSON.stringify(revisions):null;
+  }
+  /** First full56 only: capture state for the bridge's certified new-runtime path. */
+  officialInitializationResourceRevision():string|null {return this.initializationResourceRevision(true);}
+  /** The bridge certifies closed old transports, first Enter and stable official input. */
+  reconcileOfficialInitialization(revision:string):boolean {
+    const context=this.refineContext();
+    if(!context.ready||!context.identity||this.engine.running||revision!==this.initializationResourceRevision(true)||!this.refineRuntimeSettled()
+      ||this.world.npc.id!==null||this.world.npc.mode!=='idle'||!this.warp.initializedSession(this.warpContext()))return false;
+    // These are availability resets. Refine retains an unknown official outcome;
+    // Warp still uses its ordinary strict idle gate after that owner retires.
+    this.refine.reconcileOfficialInitialization(context);
+    this.warp.tick(this.warpContext());
+    return true;
   }
   /** Only the bridge's closed-transport, first-Enter initialization path calls this. */
   reconcileOfficialRefineInitialization(revision:string):void {
@@ -388,7 +418,7 @@ export class CompanionController {
     return !this.refine.maintenanceBlocked&&stationary&&e.connected&&e.compatible&&!!e.actorActionIdentity(undefined,true)
       &&!this.runRequested&&!this.returning&&!this.pending&&!this.featureReceipt&&!this.workflowOutstanding&&!this.unresolvedWorld
       &&!this.travel.active&&!this.service.active&&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)
-      &&!this.supply.ownsField&&!this.supply.uncertain&&!this.escape.busy&&!this.memo.blocked&&!this.socket.busy&&!this.social.busy
+      &&!this.supply.ownsField&&!this.supply.uncertain&&!this.escape.busy&&this.warp.settledForMaintenance()&&!this.memo.blocked&&!this.socket.busy&&!this.social.busy
       &&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture&&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil
       &&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending&&e.settledForMaintenance();
   }
@@ -396,7 +426,7 @@ export class CompanionController {
     this.requireReady();
     if(!this.travel.movementSettled(this.engine.map,this.engine.player))throw new Error('Wait for canceled rendezvous movement to settle.');
     if(!this.engine.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
-    if (this.deathCycle?.guard.uncertain || this.deathCycle?.posture || this.socket.busy || this.memo.blocked || this.active || this.escape.busy || this.supply.uncertain || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
+    if (this.deathCycle?.guard.uncertain || this.deathCycle?.posture || this.warp.blocked || this.socket.busy || this.memo.blocked || this.active || this.escape.busy || this.supply.uncertain || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
   }
   start(input: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard): void {
     const settings = validateSettings(input);
@@ -408,7 +438,7 @@ export class CompanionController {
     if(supplyGuard){supplyGuard=validateSupplyResumeGuard(supplyGuard);if(supplyGuard.character!==context.character)throw new Error('Supply resume state belongs to a different character.');}
     if(this.refine.blocked)throw new Error('Waiting for the previous refine transaction to reconcile.');
     if(this.supply.uncertain)throw new Error('Waiting for the previous supply transaction to reconcile.');
-    if (this.socket.busy || this.memo.blocked || this.active || this.engine.retreatOwned || this.engine.manualTargetOwned || this.engine.pendingFeatureAction)
+    if (this.warp.blocked || this.socket.busy || this.memo.blocked || this.active || this.engine.retreatOwned || this.engine.manualTargetOwned || this.engine.pendingFeatureAction)
       throw new Error('Stop the current automation or manual action before requesting a new run.');
     if(!this.travel.movementSettled(this.engine.map,this.engine.player))throw new Error('Waiting for canceled rendezvous movement to settle before Start.');
     if(this.partyHeal.busy)throw new Error('Waiting for the previous party Heal execution receipt.');
@@ -454,7 +484,7 @@ export class CompanionController {
     const init=this.socketInitialization;if(init&&identity&&init.identity===null)init.identity=identity;
     const readbackKey=identity?(init?.identity===identity?init.key:identity):init?.identity===null?init.key:null;
     return {ready:!!identity&&!!p&&!p.dead&&p.hp>0&&e.connected&&e.compatible&&!!e.map&&this.now()-this.lastFrame<=15_000,
-      settled:stationary&&!this.refine.blocked&&!this.memo.blocked&&!this.returning&&!this.runRequested&&!e.running&&!this.pending&&!this.featureReceipt&&!this.unresolvedWorld&&!this.workflowOutstanding
+      settled:stationary&&!this.warp.blocked&&!this.refine.blocked&&!this.memo.blocked&&!this.returning&&!this.runRequested&&!e.running&&!this.pending&&!this.featureReceipt&&!this.unresolvedWorld&&!this.workflowOutstanding
         &&!this.social.busy&&!this.escape.busy&&!this.supply.ownsField&&!this.supply.uncertain&&!this.service.active&&!this.travel.active
         &&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)&&e.featureActionsSettled&&e.idleForActions()
         &&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil&&this.heartbeatHealthy&&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending,
@@ -480,6 +510,14 @@ export class CompanionController {
       this.refineNpcGeneration++;this.refinePromptToken=null;if(event.type==='npcEnd')this.refineNpcIdentity=null;
     }
   }
+  private refineRuntimeSettled():boolean {
+    const e=this.engine;
+    return e.observedOwnCastSettled()&&!e.retreatOwned&&!this.partyFollow.ownsTravel&&!this.partyHeal.busy&&!this.partyHeal.awaitingSpReadback&&e.idleForActions()&&e.featureActionsSettled&&this.movementSettled()
+      &&!this.socket.busy&&!this.memo.blocked&&!this.runRequested&&!this.returning&&!this.pending&&!this.featureReceipt&&!this.unresolvedWorld&&!this.workflowOutstanding
+      &&!this.social.busy&&!this.escape.busy&&!this.supply.ownsField&&!this.supply.uncertain&&!this.service.active&&!this.travel.active
+      &&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)&&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture
+      &&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil&&!this.world.vending;
+  }
   private refineContext():RefineContext {
     const e=this.engine,c=e.character,p=e.player,identity=this.refineIdentity(),npcId=this.world.npc.id;
     const actor=npcId===null?null:e.actors.get(npcId),candidate=npcId===null?null:this.refineIdentity(npcId);
@@ -487,11 +525,7 @@ export class CompanionController {
     const init=this.refineInitialization;if(init&&identity&&init.identity===null)init.identity=identity;
     const readbackKey=identity?(init?.identity===identity?init.key:identity):init?.identity===null?init.key:null;
     return {ready:!!p&&!p.dead&&!!identity&&e.connected&&e.compatible&&this.heartbeatHealthy&&this.now()-this.lastFrame<=15000,
-      settled:e.observedOwnCastSettled()&&!e.retreatOwned&&!this.partyFollow.ownsTravel&&!this.partyHeal.busy&&!this.partyHeal.awaitingSpReadback&&e.idleForActions()&&e.featureActionsSettled&&this.movementSettled()
-        &&!this.socket.busy&&!this.memo.blocked&&!this.runRequested&&!this.returning&&!this.pending&&!this.featureReceipt&&!this.unresolvedWorld&&!this.workflowOutstanding
-        &&!this.social.busy&&!this.escape.busy&&!this.supply.ownsField&&!this.supply.uncertain&&!this.service.active&&!this.travel.active
-        &&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)&&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture
-        &&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil&&!this.world.vending,identity,character:p?.name??null,readbackKey,connection:this.connectionEpoch,map:e.map,
+      settled:!this.warp.blocked&&this.refineRuntimeSettled(),identity,character:p?.name??null,readbackKey,connection:this.connectionEpoch,map:e.map,
       npcId,npcIdentity,npcGeneration:this.refineNpcGeneration,npcMode:this.world.npc.mode,promptToken:npcIdentity?this.refinePromptToken:null,
       inventory:c.inventoryKnown?[...c.inventory.values()]:null,equipment:c.inventoryKnown?[...c.equipment,c.ammoId]:null,
       zeny:c.stats?.zeny??null,inventoryRevision:c.inventoryRevision,equipmentRevision:c.equipmentRevision,currencyRevision:this.supplyCurrencyRevision,activityRevision:this.refineActivityRevision};
@@ -521,13 +555,40 @@ export class CompanionController {
       map:this.engine.map,x,y,walkable:grid?x>=0&&y>=0&&x<grid.width&&y<grid.height&&grid.walkable({x,y}):null,
       canMemo:canMemoMap(this.engine.map),learnedWarp:this.engine.character.skillsKnown?this.engine.character.learned.get(55)??0:null};
   }
-  perform(mode: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance', input: unknown): void {
+  /** Captures only Warp protocol evidence; ordinary input takeover has its own hook. */
+  observeOfficialPacket(data:Uint8Array):void { const event=warpInitializationPacket(data);if(event)this.warp.initialization(event);else if(officialWarpSkill(data))this.warp.externalWarp(); }
+  private warpContext(policy:AutomationSettings=this.warpPolicy??automationSettings(this.engine.settings)):WarpContext {
+    const base=this.memoContext(),c=this.engine.character,memo=this.memo.snapshot(base);
+    const readiness=warpCastReadiness(c,this.engine.actorObservation([...CAST_PREREQUISITES,BLIND_CONDITION]));
+    const castSettled=this.engine.observedOwnCastSettled();
+    const p=this.engine.player,level=c.skillsKnown?c.learned.get(55)??0:0;
+    const binding=base.actorId!==null&&base.incarnation!==null?{world:base.world,actorId:base.actorId,incarnation:base.incarnation,connectionEpoch:base.connectionEpoch,revision:memo.revision,map:base.map,x:base.x,y:base.y,generation:this.warp.revision,level,inventoryRevision:c.inventoryRevision,equipmentRevision:c.equipmentRevision,spRevision:c.spRevision,skillsRevision:c.skillsRevision}:null;
+    return {ready:base.ready,idle:base.idle&&!this.partyFollow.ownsTravel&&!this.partyHeal.busy&&!this.partyHeal.awaitingSpReadback&&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture&&!this.memo.blocked,character:p?.name??'',connection:this.connectionEpoch,binding,slots:memo.slots,
+      unavailable:!castSettled?OWN_CAST_WAIT_REASON:readiness.state==='ready'?null:readiness.reason,sp:c.stats?.sp??null,gems:c.inventoryKnown?c.count(717):null,
+      reserve:Math.max(0,...dispositionStockFloors(policy).filter(row=>row.itemId===717).map(row=>row.count),...(policy.disposition?.rules??[]).filter(row=>row.itemId===717).map(row=>row.keep)),
+      cost:readiness.state==='ready'?readiness.profile.spCost:null,resourcesReady:c.inventoryKnown&&c.equipment.length===10&&c.spRevision>0,
+      groundAllowed:target=>castSettled&&readiness.state==='ready'&&this.engine.manualWarpGroundAllowed(target,readiness.profile.range,policy)};
+  }
+  perform(mode: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance' | 'warp' | 'warpPreview' | 'warpCancel', input: unknown): void {
     if(mode==='refinePreview'||mode==='refine') { const context=this.refineContext();this.refine.tick(context);this.requireIdle();
       if(mode==='refinePreview')this.refine.preview(input,context);else this.refine.dispatch(input,context);return; }
     if(mode==='refineAdvance') { const token=validateRefineAdvance(input);this.requireIdle();const context=this.refineContext();
       if(!context.ready||!context.settled||!context.npcIdentity||context.npcMode!=='refine'||token!==context.promptToken)throw new Error('The displayed refining dialogue changed. Wait for its fresh prompt.');
       this.refinePromptToken=null;this.refine.cancel('Requested NPC advance.');this.dispatch({type:'npcAdvance'},null,true);return; }
 
+    if(mode==='warpCancel'){if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length)throw new Error('Invalid Warp cancellation.');this.warp.cancel('Warp intent dismissed locally; server actions and resources remain uncertain.');return;}
+    if(mode==='warp'||mode==='warpPreview'){
+      const envelope=validateWarpEnvelope(input,mode==='warpPreview');
+      // An exact Heal result still needs its own ordered SP readback.
+      // Reject competitors before changing protection policy or consuming intent.
+      if(this.partyHeal.busy||this.partyHeal.awaitingSpReadback)throw new Error('Wait for the previous party Heal receipt and ordered SP readback.');
+      const context=this.warpContext(envelope.policy);
+      if(!context.idle)throw new Error(context.unavailable??'Wait for stationary movement, casts and all other owners to settle.');
+      if(this.warp.blocked&&this.warpPolicy&&JSON.stringify(this.warpPolicy)!==JSON.stringify(envelope.policy)){this.warp.cancel('Manual protection settings changed; activation canceled.');throw new Error('Warp protection preview is stale.');}
+      if(mode==='warpPreview'){this.warp.prepare(envelope.request,context);this.warpPolicy=envelope.policy;}
+      else {if(!this.warpPolicy||JSON.stringify(this.warpPolicy)!==JSON.stringify(envelope.policy))throw new Error('Warp protection preview is stale.');this.warp.dispatch(envelope.request,context);}
+      this.started=this.now();this.lastTick=this.now();return;
+    }
     if (mode === 'socketPreview' || mode === 'socket') {
       this.socket.tick(this.socketContext());
       this.requireIdle();
@@ -554,7 +615,7 @@ export class CompanionController {
       if(!this.travel.movementSettled(this.engine.map,this.engine.player))throw new Error('Wait for canceled rendezvous movement to settle.');
       if(this.partyHeal.busy)throw new Error('Waiting for the previous party Heal execution receipt before running a service.');
       if(!this.engine.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
-      if (this.refine.blocked || this.partyFollow.ownsTravel || this.socket.busy || this.memo.blocked || this.social.busy || this.engine.retreatOwned || this.engine.manualTargetOwned || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
+      if (this.warp.blocked || this.refine.blocked || this.partyFollow.ownsTravel || this.socket.busy || this.memo.blocked || this.social.busy || this.engine.retreatOwned || this.engine.manualTargetOwned || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
         || ['running','waiting'].includes(this.routine.snapshot().state) || this.unresolvedWorld || this.now() < this.fencedUntil
         || this.engine.pendingFeatureAction || this.featureReceipt || this.supply.uncertain)
         throw new Error('Wait for the current transaction or unresolved escape/action before running a service.');
@@ -683,6 +744,7 @@ export class CompanionController {
     }
     const manualMovementReceipts=new Map(events.map(event=>[event,this.engine.manualMovementReceiptOwner(event)??this.engine.retreatMovementReceiptOwner(event)]));
     this.travel.prepareObservation(events);
+    this.warp.observeDeath(events,this.warpContext());
     this.engine.receive(events);
     this.world.partyActors.sync(this.world.party,this.world.map,this.engine.observations,this.engine.playerId);
     this.engine.partyChanged();
@@ -738,6 +800,8 @@ export class CompanionController {
       if(own&&['castStart','castExtend','castStop','skillResult','status','sit','walk','death','remove','spawn'].includes(event.type))this.refineActivityRevision++;
     }
 
+    this.warp.observe(events,this.warpContext());
+    const recoveredMemo=this.warp.takeRecoveredMemo();if(recoveredMemo)this.memo.observeSlots(recoveredMemo,this.memoContext());
     const socialPlayer = this.engine.player, socialActor=this.engine.actorActionIdentity();
     if(this.socialIdentity&&!sameActionIdentity(this.socialIdentity.actor,socialActor)) {
       if(socialPlayer&&socialPlayer.name!==this.socialIdentity.name)this.social.reset('Social character identity changed.');
@@ -866,7 +930,7 @@ export class CompanionController {
   }
   private supplyContext():SupplyContext {
     const c=this.engine.character,p=this.engine.player,w=this.context();
-    const noOwner=!this.refine.blocked&&!this.partyFollow.ownsTravel&&this.travel.movementSettled(this.engine.map,p)&&!this.socket.busy&&!this.memo.blocked&&!this.pending&&!this.workflow.snapshot().running&&!this.service.active&&!this.travel.active&&!this.unresolvedWorld&&!this.featureReceipt&&this.now()>=this.fencedUntil;
+    const noOwner=!this.warp.blocked&&!this.refine.blocked&&!this.partyFollow.ownsTravel&&this.travel.movementSettled(this.engine.map,p)&&!this.socket.busy&&!this.memo.blocked&&!this.pending&&!this.workflow.snapshot().running&&!this.service.active&&!this.travel.active&&!this.unresolvedWorld&&!this.featureReceipt&&this.now()>=this.fencedUntil;
     const settled=this.engine.idleForActions()&&noOwner;
     return {character:p?.name??this.characterName??'',epoch:String(this.connectionEpoch),map:this.engine.map,position:p?{x:Math.floor(p.x),y:Math.floor(p.y)}:null,
       connected:this.engine.connected&&this.engine.compatible,alive:!!p&&!p.dead,loading:this.travel.active&&this.travel.snapshot().state==='transition',fresh:this.now()-this.lastFrame<=15000&&this.supplyInventoryFresh&&this.supplyCurrencyFresh,
@@ -1000,7 +1064,7 @@ export class CompanionController {
     if (this.engine.running || this.travel.active) this.pause(reason);
   }
   private escapeContext(allowRetreatCancellation=false): EscapeContext {
-    const blocker = (this.refine.blocked?'Waiting for the refine transaction to reconcile.':'') || (this.socket.busy?'Waiting for the exact socket receipt before escape.':'') || (this.memo.blocked?'Waiting for memo state to settle.':'') || (this.supply.uncertain ? 'Waiting for the exact supply transaction receipt before escape.' : '') || this.blockedReason || (this.featureReceipt ? 'Waiting for the previous resource action to settle.' : '')
+    const blocker = (this.warp.blocked?'Waiting for Warp Portal action and resources to reconcile.':'') || (this.refine.blocked?'Waiting for the refine transaction to reconcile.':'') || (this.socket.busy?'Waiting for the exact socket receipt before escape.':'') || (this.memo.blocked?'Waiting for memo state to settle.':'') || (this.supply.uncertain ? 'Waiting for the exact supply transaction receipt before escape.' : '') || this.blockedReason || (this.featureReceipt ? 'Waiting for the previous resource action to settle.' : '')
       || (this.service.active&&!['travel','approach'].includes(this.service.snapshot().state) || this.pending || this.workflow.snapshot().running || this.unresolvedWorld || ['running','waiting'].includes(this.routine.snapshot().state)
         ? 'Waiting for the current action owner before emergency escape.' : '')
       || (this.now() < this.fencedUntil || !(allowRetreatCancellation?this.engine.resourceActionsSettled:this.engine.featureActionsSettled) ? 'Waiting for the previous action and cast to settle.' : '')
@@ -1080,7 +1144,7 @@ export class CompanionController {
     if(cycle.guard.phase==='revival'&&!p.dead&&this.deathOwnReady())this.revivalReady();
     if(cycle.guard.phase==='recovery'&&cycle.recoveryUntil!==null&&now>=cycle.recoveryUntil)return fail('Recovery time limit reached. Check regeneration and carried weight.');
     if(cycle.guard.phase==='return'&&cycle.returnUntil!==null&&now>=cycle.returnUntil)return fail('Return time limit reached. No new return attempt will be started.');
-    if(this.blockedReason||this.featureReceipt&&!['respawn','sit'].includes(this.featureReceipt.action.type)||this.unresolvedWorld||this.supply.uncertain||this.escape.busy||this.refine.blocked||this.socket.busy||this.memo.blocked||this.pending||this.service.active
+    if(this.blockedReason||this.featureReceipt&&!['respawn','sit'].includes(this.featureReceipt.action.type)||this.unresolvedWorld||this.supply.uncertain||this.escape.busy||this.warp.blocked||this.refine.blocked||this.socket.busy||this.memo.blocked||this.pending||this.service.active
       ||this.workflow.snapshot().running||this.now()<this.fencedUntil||!this.engine.featureActionsSettled)return wait(this.blockedReason||'Waiting for previous actions to settle before death recovery.');
     if(this.world.npc.mode!=='idle'||this.world.npc.id!==null||this.world.vending)return wait('Waiting for the current interaction to close before death recovery.');
     if(cycle.posture){
@@ -1154,7 +1218,7 @@ export class CompanionController {
   private partyFollowContext():PartyFollowContext {
     return {party:this.world.party,bindings:this.world.partyActors,observations:this.engine.observations,actors:this.engine.actors,
       map:this.engine.map,player:this.engine.player,own:this.engine.actorActionIdentity(),connection:this.connectionEpoch,
-      admissionReady:!this.deathCycle&&!this.engine.pendingFeatureAction&&this.engine.featureActionsSettled&&!this.socket.busy&&!this.memo.blocked&&!this.social.busy&&!this.supply.ownsField&&!this.supply.uncertain&&!this.escape.busy
+      admissionReady:!this.deathCycle&&!this.engine.pendingFeatureAction&&this.engine.featureActionsSettled&&!this.warp.blocked&&!this.socket.busy&&!this.memo.blocked&&!this.social.busy&&!this.supply.ownsField&&!this.supply.uncertain&&!this.escape.busy
         &&!this.service.active&&!this.travel.active&&!this.engine.manualTargetOwned&&!this.pending&&!this.featureReceipt&&!this.unresolvedWorld&&!this.workflowOutstanding
         &&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)&&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending};
   }
@@ -1195,7 +1259,7 @@ export class CompanionController {
   private resumeRun(): void {
     const settings = this.requestedSettings;
     if(this.partyFollow.enabled){this.partyFollow.update(this.partyFollowContext());if(this.partyFollow.snapshot().state!=='following')return;}
-    if (!settings || this.refine.blocked || this.deathCycle || this.socket.busy || this.memo.blocked || this.supply.ownsField || this.supply.uncertain || this.engine.running || this.travel.active || this.pending || this.workflow.snapshot().running
+    if (!settings || this.warp.blocked || this.refine.blocked || this.deathCycle || this.socket.busy || this.memo.blocked || this.supply.ownsField || this.supply.uncertain || this.engine.running || this.travel.active || this.pending || this.workflow.snapshot().running
       || ['running','waiting'].includes(this.routine.snapshot().state)) return;
     const now = this.now(); const policy = automationSettings(settings); const player = this.engine.player;
     if (this.escape.blocked) { this.waitingReason = this.escape.snapshot().reason; return; }
@@ -1262,6 +1326,9 @@ export class CompanionController {
     this.partyFollow.advanceDeadline();
     this.social.tick();
     this.memo.tick(this.memoContext());
+    // Retire Warp's original observation windows before any other owner can return.
+    // Availability evidence never acknowledges its pending resources or restores intent.
+    this.warp.tick(this.warpContext());
     this.socket.tick(this.socketContext());
     this.refine.tick(this.refineContext());
     if(this.socket.busy){this.engine.castAvailability.cancel('Manual socket ownership stopped automatic cast recovery.');return;}
@@ -1282,7 +1349,12 @@ export class CompanionController {
       this.lastTick = now; this.pause('Waiting for fresh state after the Mac or game paused.', 1_000); return;
     }
     this.lastTick = now;
-
+    if(this.warp.blocked){
+      this.engine.castAvailability.cancel('Manual Warp Portal ownership stopped automatic cast recovery.');
+      // Advance existing physical/resource clocks without new field decisions.
+      // Local expiry does not acknowledge Warp spending or release its hold.
+      this.engine.tick(false);this.captureActionFailure();this.syncWorkflowOwner();return;
+    }
     // Advance finite routine deadlines before any workflow can produce a packet.
     this.routine.advance();
     if (this.pending?.routineId !== null && this.pending?.routineId !== undefined
@@ -1399,7 +1471,7 @@ export class CompanionController {
     e.tick(false);this.captureActionFailure();this.syncWorkflowOwner();
     const feature=e.pendingFeatureAction;
     const pendingResource=this.pending?.engineSequence!==undefined&&['skill','useItem'].includes(this.pending.action.type);
-    const exclusive=!this.refine.blocked&&!this.partyFollow.ownsTravel&&!this.socket.busy&&!this.memo.blocked&&!this.social.busy&&!this.service.active&&!this.travel.active
+    const exclusive=!this.warp.blocked&&!this.refine.blocked&&!this.partyFollow.ownsTravel&&!this.socket.busy&&!this.memo.blocked&&!this.social.busy&&!this.service.active&&!this.travel.active
       &&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)
       &&(!this.pending||pendingResource)&&!this.workflowOutstanding&&!this.unresolvedWorld&&!this.supply.ownsField&&!this.supply.uncertain
       &&!this.escape.sent&&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture
@@ -1425,13 +1497,13 @@ export class CompanionController {
     else if (this.travel.active || travel.state === 'complete' && this.travelSettings) snapshot.reason = travel.reason;
     else if (workflow.running) snapshot.reason = workflow.reason;
     else if (routine.state === 'running' || routine.state === 'waiting') snapshot.reason = routine.reason;
-    const executing = this.executing && (refine.state==='pending' || this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || this.engine.manualTargetActive || service.active || this.travel.active || workflow.running || !!this.pending
+    const executing = this.executing && (this.warp.busy || refine.state==='pending' || this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || this.engine.manualTargetActive || service.active || this.travel.active || workflow.running || !!this.pending
       || this.partyFollow.ownsTravel || this.escape.inFlight || ['running','waiting'].includes(routine.state));
     if (this.runRequested && !executing) snapshot.reason = this.blockedReason || this.waitingReason || snapshot.reason;
     if(this.runRequested&&this.now()<this.yieldUntil&&!this.blockedReason)snapshot.reason=this.waitingReason;
     return { ...snapshot, running: executing, runRequested: this.runRequested,
       state: executing ? 'running' : this.runRequested ? 'waiting' : 'idle',
       runIntent: this.runRequested, elapsedSeconds: this.runRequested ? Math.max(0, Math.floor((this.now() - this.started) / 1000)) : snapshot.elapsedSeconds,
-      refine, world: this.world.snapshot(), workflow, routine, travel, service, partyFollow:this.partyFollow.snapshot(), escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),deathRecoveryGuard:this.deathCycle?deathGuard(this.deathCycle):undefined,social:this.social.snapshot(),memo:this.memo.snapshot(this.memoContext()),socket:this.socket.snapshot(this.socketContext()),partyHeal:this.partyHeal.snapshot() };
+      refine, world: this.world.snapshot(), workflow, routine, travel, service, partyFollow:this.partyFollow.snapshot(), escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),deathRecoveryGuard:this.deathCycle?deathGuard(this.deathCycle):undefined,social:this.social.snapshot(),memo:this.memo.snapshot(this.memoContext()),socket:this.socket.snapshot(this.socketContext()),warp:this.warp.snapshot(this.warpContext()),partyHeal:this.partyHeal.snapshot() };
   }
 }

@@ -8,6 +8,7 @@ vi.mock('./social-ui', () => ({ SocialUi: class { root = document.createElement(
 vi.mock('./memo-ui', () => ({ MemoUi: class { root = document.createElement('div'); lock() {} }, validMemoSnapshot: () => true }));
 vi.mock('./refine-ui', () => ({ RefineUi: class { root = document.createElement('div'); lock() {} policyChanged() {} settledForMaintenance() { return true; } }, validRefineSnapshot: () => true }));
 vi.mock('./socket-ui', () => ({ SocketUi: class { root = document.createElement('div'); lock() {} policyChanged() {} }, validSocketSnapshot: () => true }));
+vi.mock('./warp-ui', () => ({ WarpUi: class { root = document.createElement('div'); lock() {} policyChanged() {} }, validWarpSnapshot: () => true }));
 
 class Element {
   children: Element[] = [];

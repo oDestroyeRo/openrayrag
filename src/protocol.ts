@@ -1,4 +1,5 @@
 import { BitReader, BitWriter } from './binary';
+import { decodeWarp, type WarpStateEvent } from './warp-protocol';
 import {actorId,optionalWireActorId} from './actor-identity';
 import { decodeFeatures, FEATURE_OP } from './protocol-feature';
 import type { FeatureEvent } from './protocol-feature';
@@ -29,7 +30,7 @@ export interface Entity extends Position {
 }
 export interface Walk { origin: Position; cells: Position[]; secondsPerCell: number; firstSeconds: number; locked: boolean }
 export interface Drop extends Position { id: number; itemId: number; count: number; isNew: boolean }
-export type GameEvent = FeatureEvent | SocialEvent | MemoEvent
+export type GameEvent = FeatureEvent | SocialEvent | MemoEvent | WarpStateEvent
   | {type:'look';id:number;lookAt:Position;direction:number;head:number}
   | { type: 'partyAffiliation'; id: number; partyId: number; partyName: string }
   | { type: 'enter'; id: number; map: string }
@@ -189,6 +190,8 @@ export function decode(data: Uint8Array): GameEvent[] {
   if (features !== null) return features;
   const social = decodeSocial(data);
   if (social !== null) return social;
+  const warp = decodeWarp(data);
+  if(warp!==null)return warp;
   const memo = decodeMemo(data);
   if (memo !== null) return memo;
   switch (opcode) {

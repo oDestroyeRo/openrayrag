@@ -19,11 +19,11 @@ export class CharacterState {
   sitting: boolean | null = null;
   readonly statuses = new Map<number, number>();
   experience: CharacterSnapshot['experience'] = null;
-  inventoryRevision = 0; equipmentRevision = 0; statsRevision = 0; skillsRevision = 0;
+  spRevision = 0; inventoryRevision = 0; equipmentRevision = 0; statsRevision = 0; skillsRevision = 0;
   reset(): void {
     this.stats = null; this.inventoryKnown = false; this.skillsKnown = false; this.inventory.clear(); this.cart = null;
     this.equipment = []; this.ammoId = -1; this.learned.clear(); this.granted.clear(); this.sitting = null;
-    this.statuses.clear(); this.experience = null; this.inventoryRevision = this.equipmentRevision = this.statsRevision = this.skillsRevision = 0;
+    this.statuses.clear(); this.experience = null; this.spRevision = this.inventoryRevision = this.equipmentRevision = this.statsRevision = this.skillsRevision = 0;
   }
   resetField(): void { this.sitting=null;this.statuses.clear(); }
   applyCartWeights(cartWeight: number, currentWeight: number): void {
@@ -38,8 +38,8 @@ export class CharacterState {
   }
   apply(event: FeatureEvent, playerId: number | null): void {
     switch (event.type) {
-      case 'stats': { const { type: _type, ...stats } = event; this.stats = { ...this.stats, ...stats }; this.statsRevision++; break; }
-      case 'sp': if (this.stats) { this.stats.sp = event.sp; this.stats.maxSp = event.maxSp; } break;
+      case 'stats': { if(event.sp!==undefined)this.spRevision++; const { type: _type, ...stats } = event; this.stats = { ...this.stats, ...stats }; this.statsRevision++; break; }
+      case 'sp': this.spRevision++; if (this.stats) { this.stats.sp = event.sp; this.stats.maxSp = event.maxSp; } break;
       case 'sit': if (event.id === playerId) this.sitting = event.sitting; break;
       case 'status': if (event.id === playerId) { if (event.seconds === null) this.statuses.delete(event.statusId); else this.statuses.set(event.statusId,event.seconds); } break;
       case 'inventory':

@@ -146,6 +146,9 @@ fn control_bot(
             | "refinePreview"
             | "refine"
             | "refineAdvance"
+            | "warp"
+            | "warpPreview"
+            | "warpCancel"
     ) {
         return Err("Unknown bot action.".into());
     }
@@ -165,6 +168,9 @@ fn control_bot(
             | "refinePreview"
             | "refine"
             | "refineAdvance"
+            | "warp"
+            | "warpPreview"
+            | "warpCancel"
     ) && settings.is_some()
     {
         return Err("Use start to apply automation settings.".into());
@@ -196,6 +202,9 @@ fn control_bot(
             | "refinePreview"
             | "refine"
             | "refineAdvance"
+            | "warp"
+            | "warpPreview"
+            | "warpCancel"
     ) {
         control::request_script(
             &action,

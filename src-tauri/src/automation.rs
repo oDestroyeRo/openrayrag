@@ -1063,6 +1063,7 @@ impl AutomationSettings {
             && unique_by(&self.skills, |r| r.skill_id)
             && self.skills.iter().all(|r| {
                 (1..=255).contains(&r.skill_id)
+                    && r.skill_id != 55
                     && conditions_valid(&r.conditions, false)
                     && (1..=10).contains(&r.level)
                     && (1..=100).contains(&r.hp_below_percent)

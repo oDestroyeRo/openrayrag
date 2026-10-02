@@ -7,6 +7,7 @@ import { automationSettings, DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './sett
 import type { Settings } from './settings';
 import { worldCommand } from './world-protocol';
 import { memoCommand } from './memo-protocol';
+import { warpCommand } from './warp-protocol';
 import { socketCommand } from './socket-protocol';
 import { refineCommand } from './refine-protocol';
 import { socialCommand } from './social-protocol';
@@ -16,8 +17,8 @@ vi.mock('./controller',async original=>{
   const actual=await original<typeof import('./controller')>();
   return {...actual,CompanionController:class extends actual.CompanionController {
     constructor(...args:ConstructorParameters<typeof actual.CompanionController>){
-      super(args[0],args[1],()=>({width:200,height:200,walkable:()=>true}),args[3],args[4],args[5],args[6]);
-      captured.controller=this;captured.senders=[args[0],args[3]!,args[4]!,args[5]!,args[6]!] as typeof captured.senders;
+      super(args[0],args[1],()=>({width:200,height:200,walkable:()=>true}),args[3],args[4],args[5],args[6],args[7],args[8]);
+      captured.controller=this;captured.senders=[args[0],args[3]!,args[4]!,args[5]!,args[6]!,args[7]!] as typeof captured.senders;
     }
   }};
 });
@@ -37,11 +38,12 @@ function spawn(e:Entity,entryType=0):Uint8Array {
     .u8(e.kind).u8(0).u8(0).i32(e.x).i32(e.y).u8(e.level).i32(e.hp).i32(e.maxHp).i32(e.sp??0).i32(e.maxSp??0).i32(0).u8(0).finish();
   return new BitWriter().u8(OP.spawn).u8(entryType).i32(body.length).take(body).finish();
 }
-type Page={WebSocket:typeof NativeSocket;buildUrl:string;__RAYRAG__?:{control:(action:'start'|'heartbeat',settings?:Settings)=>void;maintenance:(nonce:string,reserve:boolean|'commit')=>void}};
+type Page={WebSocket:typeof NativeSocket;buildUrl:string;__RAYRAG__?:{control:(action:'start'|'heartbeat',settings?:Settings)=>void;maintenance:(nonce:string,reserve:boolean|'commit')=>void;perform:(action:string,request:unknown)=>void}};
 async function fixture(ready=true,ownId=0){
   const invoke=vi.fn(async(name:string)=>name==='update_ack'||name==='update_lease_alive'?true:undefined);
   const page:Page & Pick<Window,'addEventListener'> & {__TAURI_INTERNALS__:{invoke:typeof invoke}}={WebSocket:NativeSocket,buildUrl:VERIFIED_BUILD,addEventListener:()=>{},__TAURI_INTERNALS__:{invoke}},listeners=new Map<string,EventListener>();
   vi.stubGlobal('window',page);vi.stubGlobal('location',{origin:new URL(GAME_URL).origin,pathname:'/'});
+  vi.stubGlobal('localStorage',{getItem:()=>null,setItem:()=>{},removeItem:()=>{}});
   vi.stubGlobal('document',{addEventListener:(type:string,listener:EventListener)=>listeners.set(type,listener)});
   vi.resetModules();await import('./bridge');
   const socket=new page.WebSocket(SOCKET_URL);socket.dispatchEvent(new Event('open'));
@@ -58,17 +60,20 @@ async function fixture(ready=true,ownId=0){
 beforeEach(()=>{vi.useFakeTimers();vi.setSystemTime(100_000);});
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks();captured.controller=null;captured.senders=[];});
 
-function skillResources():Uint8Array {
+function skillResources(warp=false,full=true):Uint8Array {
   const f=new BitWriter().u8(FEATURE_OP.stats);
   for(const value of [15,15,10000,1,1,1,1,1,1,0,0,0])f.i32(value);
   for(const value of [100,100,200,200,...Array(16).fill(1),2000])f.i32(value);
-  f.f32(.5).i32(100).i32(0).bool(true).i16(1).i16(42).u8(1).i16(0)
-    .bool(true).u8(1).i32(0).i32(0).u8(0);
+  f.f32(.5).i32(100).i32(0);
+  if(!full)return f.bool(false).bool(false).finish();
+  f.bool(true).i16(1).i16(warp?55:42).u8(warp?4:1).i16(0)
+    .bool(true).u8(1).i32(warp?1:0);
+  if(warp)f.i32(717).i16(3);f.i32(0).u8(0);
   for(let i=0;i<10;i++)f.i32(0);
   return f.i32(-1).finish();
 }
 describe('passive skill deadline during an official refine hold',()=>{
-  it.each([0,1].flatMap(ownId=>[false,true].map(obsolete=>({ownId,obsolete}))))('own $ownId, obsolete socket $obsolete retains only the original skill deadline',async({ownId,obsolete})=>{
+  it.each([0,1].flatMap(ownId=>[false,true].flatMap(obsolete=>[false,true].map(warpHold=>({ownId,obsolete,warpHold})))))('own $ownId, obsolete socket $obsolete, Warp hold $warpHold retains only the original skill deadline',async({ownId,obsolete,warpHold})=>{
     const f=await fixture(true,ownId);
     const current=new f.page.WebSocket(SOCKET_URL);current.dispatchEvent(new Event('open'));
     await f.packetOn(current,new BitWriter().u8(OP.enter).i32(ownId).string('prt_fild08').finish());
@@ -86,6 +91,7 @@ describe('passive skill deadline during an official refine hold',()=>{
       if(data===frame)expect(f.c.snapshot().refine.blocked).toBe(true);
       native.call(this,data);
     });
+    if(warpHold)await f.packetOn(current,new BitWriter().u8(97).u8(1).finish());
     const writer=obsolete?f.socket:current;writer.send(frame);
     expect(economic).toHaveBeenCalledOnce();expect(takeover).toHaveBeenCalledTimes(obsolete?0:1);
     expect(writer.writes.at(-1)).toBe(frame);
@@ -103,6 +109,7 @@ describe('passive skill deadline during an official refine hold',()=>{
     expect(f.c.engine.pendingFeatureAction).toBeNull();expect(f.c.engine.featureActionsSettled).toBe(true);
     expect(f.c.engine.actionResult.reason).toBe(obsolete?'No server confirmation for skill.':'Action canceled.');
     expect(f.c.snapshot()).toMatchObject({running:false,runRequested:false,refine:{blocked:true,state:'uncertain'}});
+    expect(f.c.warp.blocked).toBe(warpHold);expect(f.c.snapshot().warp.activation).toBeNull();
     // Only the existing skill's Stop cancellation may accompany the original
     // official frame. No Look, retry, refine replay or other decision is sent.
     expect(current.writes).toEqual(obsolete?[skill,command('stop')]:[skill,command('stop'),frame]);
@@ -110,6 +117,25 @@ describe('passive skill deadline during an official refine hold',()=>{
     expect([f.c.engine.deaths,f.c.engine.kills,f.c.engine.looted]).toEqual(counters);
     expect(automationSettings(f.c.engine.settings).respawn.maxDeaths).toBe(1);
     expect(automationSettings(f.c.engine.settings).recovery.enabled).toBe(false);
+  });
+  it.each([0,1])('advances own%s original Warp deadline while actual obsolete OPEN opcode80 retains its economic hold',async ownId=>{
+    const f=await fixture(true,ownId),current=new f.page.WebSocket(SOCKET_URL);current.dispatchEvent(new Event('open'));
+    await f.packetOn(current,new BitWriter().u8(OP.enter).i32(ownId).string('prt_fild08').finish());await f.packetOn(current,skillResources(true));
+    await f.packetOn(current,new BitWriter().u8(94).u8(1).string('prontera').i16(100).i16(100).u8(0).u8(0).u8(0).finish());
+    await f.packetOn(current,spawn({...player,id:ownId},1));
+    const policy=structuredClone(DEFAULT_AUTOMATION);f.c.perform('warpPreview',{type:'warpGround',slot:0,target:{x:101,y:100},policy});f.c.perform('warp',{...f.c.snapshot().warp.preview,policy});
+    expect(f.c.snapshot().warp).toMatchObject({blocked:true,pending:true});const ground=current.writes[0];
+    const frame=Uint8Array.from(refineCommand({targetBagId:700,oreItemId:1010,catalystBagId:0}));f.socket.send(frame);
+    expect(f.socket.readyState).toBe(NativeSocket.OPEN);expect(f.c.snapshot().refine.blocked).toBe(true);
+    for(let second=1;second<=31;second++){
+      f.page.__RAYRAG__!.control('heartbeat');
+      await f.packetOn(current,new BitWriter().u8(OP.stop).i32(ownId).finish());await f.step(1000);
+      if(second===29)expect(f.c.snapshot().warp.pending).toBe(true);
+      if(second===30)expect(f.c.snapshot().warp).toMatchObject({blocked:true,pending:false,state:'stopped',activation:null});
+    }
+    expect(f.c.snapshot().warp.reason).toContain('observation window expired');expect(f.c.snapshot().warp.resourceEvidence).toContain('Waiting for ordered SP');
+    expect(f.c.snapshot().refine).toMatchObject({blocked:true,state:'uncertain'});expect(f.c.settledForMaintenance()).toBe(false);f.c.stop();
+    expect(f.c.runRequested).toBe(false);expect(current.writes).toEqual([ground]);expect(f.socket.writes).toEqual([frame]);
   });
 });
 
@@ -170,10 +196,11 @@ describe('official page input and socket boundary',()=>{
   });
   it('bypasses the official hook for each Companion transport and ignores untrusted DOM events',async()=>{
     const f=await fixture(),takeover=vi.spyOn(f.c,'manualCommand'),input=vi.spyOn(f.c,'manualInput');
-    const [field,social,memo,socket,refine]=captured.senders;
+    const [field,social,memo,socket,refine,warp]=captured.senders;
     Reflect.apply(field!,null,[{type:'attack',id:2}]);Reflect.apply(social!,null,[{type:'emote',id:1}]);
     Reflect.apply(memo!,null,[0]);Reflect.apply(socket!,null,[{type:'socket',targetBagId:20001,cardBagId:4002}]);Reflect.apply(refine!,null,[{targetBagId:700,oreItemId:1010,catalystBagId:0}]);
-    f.input('keydown',false);expect(input).not.toHaveBeenCalled();expect(takeover).not.toHaveBeenCalled();expect(f.socket.writes).toHaveLength(5);
+    Reflect.apply(warp!,null,[{stage:'ground',level:4,x:101,y:100}]);
+    f.input('keydown',false);expect(input).not.toHaveBeenCalled();expect(takeover).not.toHaveBeenCalled();expect(f.socket.writes).toHaveLength(6);
   });
   it('does not prevent or repeat the official send when the takeover hook throws',async()=>{
     const f=await fixture();vi.spyOn(f.c,'manualCommand').mockImplementation(()=>{throw new Error('synthetic hook failure');});
@@ -187,7 +214,9 @@ describe('update dispatch freeze',()=>{
     const nonce='a'.repeat(32);f.page.__RAYRAG__!.maintenance(nonce,true);
     for(let i=0;i<15;i++)await Promise.resolve();expect(f.invoke.mock.calls.some(c=>c[0]==='update_ack')).toBe(true);
     for(const packet of [command('attack',2),new Uint8Array([2]),'opaque',new Blob(['opaque'])])f.socket.send(packet);
-    for(const [sender,args]of captured.senders.map((sender,i)=>[sender,[[{type:'attack',id:2}],[{type:'emote',id:1}],[0],[{type:'socket',targetBagId:20001,cardBagId:4002}],[{targetBagId:700,oreItemId:1010,catalystBagId:0}]][i]!] as const))expect(()=>Reflect.apply(sender,null,args)).toThrow('Client update');
+    for(const [sender,args]of captured.senders.map((sender,i)=>[sender,[[{type:'attack',id:2}],[{type:'emote',id:1}],[0],[{type:'socket',targetBagId:20001,cardBagId:4002}],[{targetBagId:700,oreItemId:1010,catalystBagId:0}],[{stage:'ground',level:4,x:101,y:100}]][i]!] as const))expect(()=>Reflect.apply(sender,null,args)).toThrow('Client update');
+    expect(()=>Reflect.apply(captured.senders[5]!,null,[{stage:'activate',slot:0}])).toThrow('Client update');
+    const perform=vi.spyOn(f.c,'perform');for(const mode of ['warpPreview','warp','warpCancel'])f.page.__RAYRAG__!.perform(mode,{});expect(perform).not.toHaveBeenCalled();
     expect(f.socket.writes).toEqual([]);await f.step(5000);f.socket.send('still held');expect(f.socket.writes).toEqual([]);
     f.page.__RAYRAG__!.maintenance(nonce,false);f.socket.send('new payload');expect(f.socket.writes).toEqual(['new payload']);
   });
@@ -350,4 +379,173 @@ it.each(['valid','oldOpen','sameSocket','wrongCharacter','preliminary','readyBef
 it('keeps panel input and non-economic official commands free of the refine hold',async()=>{
  const f=await fixture();f.input();f.socket.send(command('attack',2));expect(f.c.snapshot().refine.blocked).toBe(false);
  const unrelated=new f.page.WebSocket('wss://unrelated.invalid');unrelated.send(new Uint8Array([80]));expect(f.c.snapshot().refine.blocked).toBe(false);
+});
+
+it('marks official Warp uncertainty before forwarding and retains it through Stop and maintenance settlement',async()=>{
+ const f=await fixture(),frame=warpCommand({stage:'ground',level:4,x:101,y:100});
+ vi.spyOn(NativeSocket.prototype,'send').mockImplementation(function(this:NativeSocket,data){expect(f.c.warp.blocked).toBe(true);this.writes.push(data);});
+ f.socket.send(frame);expect(f.socket.writes).toEqual([frame]);f.c.stop();await f.step(5000);expect(f.c.warp.blocked).toBe(true);
+ f.page.__RAYRAG__!.maintenance('a'.repeat(32),true);for(let i=0;i<15;i++)await Promise.resolve();expect(f.invoke.mock.calls.some(c=>c[0]==='update_ack')).toBe(false);
+});
+it('serializes Warp Ready evidence after inbound full resources and memo without reviving old intent',async()=>{
+ const f=await fixture();f.socket.send(warpCommand({stage:'activate',slot:0}));f.socket.dispatchEvent(new Event('close'));
+ const next=new f.page.WebSocket(SOCKET_URL);next.dispatchEvent(new Event('open'));
+ next.send(new BitWriter().u8(3).bool(false).string('Test').finish());
+ await f.packetOn(next,new BitWriter().u8(OP.enter).i32(0).string('prt_fild08').finish());
+ const w=new BitWriter().u8(56);for(const n of [15,1,50,1,1,1,1,1,1,0,0,0])w.i32(n);for(const n of [100,100,200,200,...Array(17).fill(0)])w.i32(n);
+ w.f32(1).i32(0).i32(0).bool(true).i16(1).i16(55).u8(4).i16(0).bool(true).u8(1).i32(1).i32(717).i16(3).i32(0).u8(0);for(let i=0;i<10;i++)w.i32(0);w.i32(-1);
+ // Queue Ready immediately behind inbound messages, without awaiting their observers.
+ for(const data of [w.finish(),new BitWriter().u8(94).u8(1).string('prontera').i16(100).i16(100).u8(0).u8(0).u8(0).finish()])next.dispatchEvent(Object.assign(new Event('message'),{data:data.buffer}));
+ next.send(new Uint8Array([2]));expect(f.c.warp.blocked).toBe(true);await f.packetOn(next,spawn(player,1));
+ expect(f.c.warp.blocked).toBe(false);expect(f.c.snapshot().warp).toMatchObject({state:'recovered',activation:null,preview:null});
+ await f.step(2000);f.page.__RAYRAG__!.maintenance('b'.repeat(32),true);for(let i=0;i<15;i++)await Promise.resolve();expect(f.invoke.mock.calls.some(c=>c[0]==='update_ack')).toBe(true);expect(next.writes).toHaveLength(2);
+});
+
+
+describe('certified fresh initialization with coexisting Warp and official refining uncertainty',()=>{
+ const memo=()=>new BitWriter().u8(94).u8(1).string('prontera').i16(100).i16(100).u8(0).u8(0).u8(0).finish();
+ const refine=()=>Uint8Array.from(refineCommand({targetBagId:700,oreItemId:1010,catalystBagId:0}));
+ async function held(ownId:number,owners:'warpOnly'|'refineOnly'|'bothManual'|'bothOfficial',stop=true){
+  const f=await fixture(true,ownId);await f.packet(skillResources(true));await f.packet(memo());
+  if(owners==='bothManual'){
+   const policy=structuredClone(DEFAULT_AUTOMATION);f.c.perform('warpPreview',{type:'warpGround',slot:0,target:{x:102,y:100},policy});
+   f.c.perform('warp',{...f.c.snapshot().warp.preview,policy});
+  }else if(owners!=='refineOnly')f.socket.send(warpCommand({stage:'ground',level:4,x:102,y:100}));
+  if(owners!=='warpOnly')f.socket.send(refine());if(stop)f.c.stop();
+  expect(f.c.warp.blocked).toBe(owners!=='refineOnly');expect(f.c.snapshot().refine.blocked).toBe(owners!=='warpOnly');
+  return f;
+ }
+ async function enter(f:Awaited<ReturnType<typeof held>>,ownId:number,close=true){
+  if(close){f.socket.readyState=3;f.socket.dispatchEvent(new Event('close'));}
+  const next=new f.page.WebSocket(SOCKET_URL);next.dispatchEvent(new Event('open'));
+  next.send(new BitWriter().u8(3).bool(false).string('Test').finish());
+  await f.packetOn(next,new BitWriter().u8(OP.enter).i32(ownId).string('prt_fild08').finish());return next;
+ }
+ it.each([0,1].flatMap(ownId=>(['warpOnly','refineOnly','bothManual','bothOfficial'] as const).map(owners=>({ownId,owners}))))('own$ownId $owners retries the retained certificate after grace with no later packet',async({ownId,owners})=>{
+  // Match the original independent bridge transcript, including its absence of
+  // client Stop: Stop would clear the retained official-input grace period.
+  const f=await held(ownId,owners,false),counters=[f.c.engine.deaths,f.c.engine.kills,f.c.engine.looted],next=await enter(f,ownId);
+  await f.packetOn(next,skillResources(true));await f.packetOn(next,memo());next.send(Uint8Array.of(2));await f.packetOn(next,spawn({...player,id:ownId},1));
+  f.page.__RAYRAG__!.control('heartbeat');
+  if(owners==='bothManual'){
+   expect(f.c.warp.blocked).toBe(true);expect(f.c.snapshot().refine.blocked).toBe(true);
+   await f.step(1999);expect(f.c.warp.blocked).toBe(true);expect(f.c.snapshot().refine.blocked).toBe(true);
+   await f.step(501);
+  }else await f.step(2500);
+  expect(f.c.engine.idleForActions()).toBe(true);expect(f.c.engine.observedOwnCastSettled()).toBe(true);
+  expect(f.c.snapshot().refine.blocked).toBe(false);expect(f.c.warp.blocked).toBe(false);expect(f.c.runRequested).toBe(false);
+  expect(f.c.snapshot().warp.activation).toBeNull();expect(f.c.snapshot().warp.preview).toBeNull();
+  expect([f.c.engine.deaths,f.c.engine.kills,f.c.engine.looted]).toEqual(counters);
+  expect(next.writes.map(data=>(data as Uint8Array)[0])).toEqual([3,2]);
+ });
+ it.each([0,1].flatMap(ownId=>(['warpOnly','refineOnly','bothManual','bothOfficial'] as const).map(owners=>({ownId,owners}))))('own$ownId $owners retires only availability after one complete reset',async({ownId,owners})=>{
+  const f=await held(ownId,owners),counters=[f.c.engine.deaths,f.c.engine.kills,f.c.engine.looted];
+  const next=await enter(f,ownId);await f.packetOn(next,skillResources(true));await f.packetOn(next,memo());
+  // Ordinary readback and admission remain unavailable while both holds exist.
+  if(owners.startsWith('both')){expect(f.c.officialRefineResourceRevision()).toBeNull();expect(()=>f.c.perform('refinePreview',{})).toThrow();}
+  next.send(Uint8Array.of(2));await f.packetOn(next,spawn({...player,id:ownId},1));
+  f.page.__RAYRAG__!.control('heartbeat');await f.step(2500);
+  expect(f.c.engine.observedOwnCastSettled()).toBe(true);expect(f.c.engine.idleForActions()).toBe(true);
+  expect(f.c.snapshot().refine.blocked).toBe(false);expect(f.c.warp.blocked).toBe(false);expect(f.c.runRequested).toBe(false);
+  expect([f.c.engine.deaths,f.c.engine.kills,f.c.engine.looted]).toEqual(counters);
+  expect(f.c.snapshot().warp.activation).toBeNull();expect(f.c.snapshot().warp.preview).toBeNull();
+  if(owners!=='warpOnly')expect(f.c.snapshot().refine.reason).toContain('remains unknown');
+  expect(next.writes.map(data=>(data as Uint8Array)[0])).toEqual([3,2]);
+  next.readyState=3;next.dispatchEvent(new Event('close'));
+  const again=await enter(f,ownId,false);await f.packetOn(again,skillResources(true));await f.packetOn(again,memo());again.send(Uint8Array.of(2));await f.packetOn(again,spawn({...player,id:ownId},1));
+  expect(f.c.warp.blocked).toBe(false);expect(f.c.snapshot().refine.blocked).toBe(false);expect(f.c.runRequested).toBe(false);
+  expect(again.writes.map(data=>(data as Uint8Array)[0])).toEqual([3,2]);
+ });
+ it.each([0,1].flatMap(ownId=>(['oldOpen','staleResources','new80','ordinaryLook','obsolete80','duplicateEnter','inventoryChanged','spChanged','zenyChanged','secondFull','foreign','hp0','entry0','entry2','duplicateReady','missingReady','missingMemo','readyBeforeFull','firstSparse','ordinaryReadback'] as const).map(fault=>({ownId,fault}))))('own$ownId $fault cannot certify dual-owner reset',async({ownId,fault})=>{
+  const f=await held(ownId,'bothOfficial');
+  const next=['ordinaryReadback','ordinaryLook'].includes(fault)?f.socket:await enter(f,ownId,fault!=='oldOpen'&&fault!=='obsolete80');
+  if(fault==='readyBeforeFull')next.send(Uint8Array.of(2));
+  if(fault==='firstSparse'){await f.packetOn(next,skillResources(true,false));expect(f.c.engine.character.inventoryKnown).toBe(false);}
+  if(fault==='duplicateEnter'){next.send(new BitWriter().u8(3).bool(false).string('Test').finish());await f.packetOn(next,new BitWriter().u8(OP.enter).i32(ownId).string('prt_fild08').finish());}
+  await f.packetOn(fault==='staleResources'?f.socket:next,skillResources(true));if(fault!=='missingMemo')await f.packetOn(next,memo());
+  if(fault==='new80')next.send(refine());
+  if(fault==='ordinaryLook'){next.send(lookCommand({type:'look',direction:1,head:1}));await f.packetOn(next,new BitWriter().u8(13).i32(ownId).i16(100).i16(100).u8(1).u8(1).finish());}
+  if(fault==='obsolete80'){f.socket.send(refine());f.socket.readyState=3;f.socket.dispatchEvent(new Event('close'));}
+  if(fault==='inventoryChanged')await f.packetOn(next,new BitWriter().u8(50).bool(false).i32(717).i16(1).i32(0).bool(false).finish());
+  if(fault==='spChanged')await f.packetOn(next,new BitWriter().u8(39).i32(199).i32(200).finish());
+  if(fault==='zenyChanged')await f.packetOn(next,new BitWriter().u8(40).i32(9999).finish());
+  if(fault==='secondFull')await f.packetOn(next,skillResources(true));
+  if(fault!=='missingReady'&&fault!=='readyBeforeFull')next.send(Uint8Array.of(2));
+  if(fault==='duplicateReady')next.send(Uint8Array.of(2));
+  await f.packetOn(next,spawn({...player,id:ownId,hp:fault==='hp0'?0:100,name:fault==='foreign'?'Another':'Test'},fault==='entry0'?0:fault==='entry2'?2:1));
+  f.page.__RAYRAG__!.control('heartbeat');await f.step(2500);
+  expect(f.c.snapshot().refine.blocked).toBe(true);expect(f.c.warp.blocked).toBe(true);expect(f.c.runRequested).toBe(false);
+  expect(f.c.officialRefineResourceRevision()).toBeNull();
+  expect(f.c.snapshot().warp.activation).toBeNull();expect(f.c.snapshot().warp.preview).toBeNull();
+  // Renewed resources/readiness cannot repair that first initialization certificate.
+  await f.packetOn(next,skillResources(true));await f.packetOn(next,memo());next.send(Uint8Array.of(2));await f.packetOn(next,spawn({...player,id:ownId},1));
+  expect(f.c.snapshot().refine.blocked).toBe(true);expect(f.c.warp.blocked).toBe(true);
+ });
+ it.each([0,1].flatMap(ownId=>(['cast','walk'] as const).map(physical=>({ownId,physical}))))('own$ownId certified resources cannot bypass $physical physical ownership',async({ownId,physical})=>{
+  const f=await held(ownId,'bothOfficial'),next=await enter(f,ownId);
+  await f.packetOn(next,skillResources(true));await f.packetOn(next,memo());
+  await f.packetOn(next,new BitWriter().u8(77).u8(0).i32(3).bool(true).finish());
+  next.send(Uint8Array.of(2));await f.packetOn(next,spawn({...player,id:ownId},1));
+  expect(f.c.warp.blocked).toBe(true);expect(f.c.snapshot().refine.blocked).toBe(true);
+  if(physical==='cast')await f.packetOn(next,new BitWriter().u8(FEATURE_OP.castStart).i32(ownId).i32(ownId).u8(42).u8(1).u8(0).i16(100).i16(100).f32(10).u8(0).finish());
+  else await f.packetOn(next,new BitWriter().u8(7).i32(ownId).i16(100).i16(100).f32(100).f32(100).f32(.1).f32(.1).u8(2).u8(0x60).u8(0).finish());
+  await f.packetOn(next,new BitWriter().u8(77).u8(3).finish());
+  if(physical==='cast')expect(f.c.engine.observedOwnCastSettled()).toBe(false);
+  else expect(f.c.engine.idleForActions()).toBe(false);
+  expect(f.c.warp.blocked).toBe(true);expect(f.c.snapshot().refine.blocked).toBe(true);expect(f.c.runRequested).toBe(false);
+  expect(next.writes.map(data=>(data as Uint8Array)[0])).toEqual([3,2]);
+ });
+ it.each([0,1])('own%s unavailable heartbeat cannot consume the certified reset before readiness',async ownId=>{
+  const f=await held(ownId,'bothOfficial'),next=await enter(f,ownId);
+  await f.packetOn(next,skillResources(true));await f.packetOn(next,memo());next.send(Uint8Array.of(2));
+  f.c.heartbeat(false);await f.packetOn(next,spawn({...player,id:ownId},1));
+  expect(f.c.warp.blocked).toBe(true);expect(f.c.snapshot().refine.blocked).toBe(true);
+  f.page.__RAYRAG__!.control('heartbeat');for(let i=0;i<12;i++)await Promise.resolve();
+  expect(f.c.warp.blocked).toBe(false);expect(f.c.snapshot().refine.blocked).toBe(false);expect(f.c.runRequested).toBe(false);
+  expect(next.writes.map(data=>(data as Uint8Array)[0])).toEqual([3,2]);
+ });
+ it.each([0,1].flatMap(ownId=>(['benign','spChanged','new80','oldOpen','socketSwitch','stop','heartbeat','maintenance','lateSp','lateFull','lateMap','lateReady'] as const).map(edge=>({ownId,edge}))))('own$ownId $edge revalidates only after a pending current-socket decode',async({ownId,edge})=>{
+  const f=await held(ownId,'bothManual',false),next=await enter(f,ownId,edge!=='oldOpen'),counters=[f.c.engine.deaths,f.c.engine.kills,f.c.engine.looted];
+  await f.packetOn(next,skillResources(true));await f.packetOn(next,memo());next.send(Uint8Array.of(2));await f.packetOn(next,spawn({...player,id:ownId},1));
+  expect(f.c.warp.blocked).toBe(true);expect(f.c.snapshot().refine.blocked).toBe(true);
+  const frame=edge==='spChanged'?new BitWriter().u8(39).i32(199).i32(200).finish():new BitWriter().u8(OP.stop).i32(ownId).finish();
+  let release!:(data:ArrayBuffer)=>void;const pending=new Promise<ArrayBuffer>(resolve=>{release=resolve;});
+  const blob=new Blob([Uint8Array.from(frame).buffer]);vi.spyOn(blob,'arrayBuffer').mockReturnValue(pending);
+  next.dispatchEvent(Object.assign(new Event('message'),{data:blob}));await Promise.resolve();
+  f.page.__RAYRAG__!.control('heartbeat');
+  if(edge==='new80')next.send(refine());
+  if(edge==='socketSwitch'){next.readyState=3;next.dispatchEvent(new Event('close'));const newer=new f.page.WebSocket(SOCKET_URL);newer.dispatchEvent(new Event('open'));}
+  if(edge==='stop')f.c.stop();
+  if(edge==='heartbeat')f.c.heartbeat(false);
+  const nonce='c'.repeat(32);if(edge==='maintenance')f.page.__RAYRAG__!.maintenance(nonce,true);
+  await f.step(2500);
+  // The grace period has elapsed, but the already queued decode still owns the
+  // observation order. The retry cannot use its predecessor's resource tuple.
+  expect(f.c.warp.blocked).toBe(true);expect(f.c.snapshot().refine.blocked).toBe(true);
+  expect(f.invoke.mock.calls.some(call=>call[0]==='update_ack')).toBe(false);
+  // These arrivals append behind the already queued retry while Blob decoding
+  // still waits. Both that retry and the earlier receive-local attempt must
+  // yield to the newer observation before considering the certificate.
+  const late=edge==='lateSp'?new BitWriter().u8(39).i32(199).i32(200).finish()
+   :edge==='lateFull'?skillResources(true):edge==='lateMap'?new BitWriter().u8(OP.map).string('prontera').finish():null;
+  if(late)next.dispatchEvent(Object.assign(new Event('message'),{data:Uint8Array.from(late).buffer}));
+  if(edge==='lateReady')next.send(Uint8Array.of(2));
+  release(Uint8Array.from(frame).buffer);for(let i=0;i<20;i++)await Promise.resolve();await f.step(100);
+  if(edge==='heartbeat'){
+   expect(f.c.warp.blocked).toBe(true);expect(f.c.snapshot().refine.blocked).toBe(true);
+   f.page.__RAYRAG__!.control('heartbeat');for(let i=0;i<12;i++)await Promise.resolve();
+  }
+  const invalid=['spChanged','new80','oldOpen','socketSwitch','lateSp','lateFull','lateMap','lateReady'].includes(edge);
+  expect(f.c.warp.blocked).toBe(invalid);expect(f.c.snapshot().refine.blocked).toBe(invalid);expect(f.c.runRequested).toBe(false);
+  expect(f.c.snapshot().warp.activation).toBeNull();expect(f.c.snapshot().warp.preview).toBeNull();
+  expect([f.c.engine.deaths,f.c.engine.kills,f.c.engine.looted]).toEqual(counters);
+  expect(next.writes.map(data=>(data as Uint8Array)[0])).toEqual(edge==='new80'?[3,2,80]:edge==='lateReady'?[3,2,2]:[3,2]);
+  if(edge==='maintenance'){
+   f.page.__RAYRAG__!.maintenance(nonce,true);for(let i=0;i<15;i++)await Promise.resolve();
+   expect(f.invoke.mock.calls.some(call=>call[0]==='update_ack')).toBe(true);
+   const reconcile=vi.spyOn(f.c,'reconcileOfficialInitialization');await f.step(1000);expect(reconcile).not.toHaveBeenCalled();
+   expect(next.writes.map(data=>(data as Uint8Array)[0])).toEqual([3,2]);
+   f.page.__RAYRAG__!.maintenance(nonce,false);
+  }
+ });
 });

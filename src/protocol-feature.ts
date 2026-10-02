@@ -296,6 +296,7 @@ export function validateExpandedAction(value: unknown): ExpandedAction {
       return { type: 'allocateStats', attributes };
     }
     case 'skill': {
+      if(action.skillId===55)throw new Error('Warp Portal requires the dedicated staged manual owner.');
       const level = number(action.level, 1, 255, 'skill level');
       if (action.mode === 'self') {
         keys(action, ['type', 'mode', 'skillId', 'level']);

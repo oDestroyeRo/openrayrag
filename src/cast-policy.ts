@@ -78,3 +78,16 @@ export function castReadiness(skillId:number,level:number,state:CharacterState,o
   if(state.stats.sp<cost)return {state:'blocked',reason:'Insufficient effective SP for the selected skill.'};
   return {state:'ready',profile:{skillId,level,range:blind.state==='matched'?5:9,spCost:cost,afterCastSeconds:skillAfterCastSeconds(skillId)}};
 }
+
+/** Warp's learned level and stage-specific SP checks belong to its manual owner.
+ * Cast availability is checked by the controller's shared observed owner, not a timer. */
+export function warpCastReadiness(state:CharacterState,observations:ActorObservationSnapshot|undefined):CastReadiness {
+  const level=state.skillsKnown?state.learned.get(55)??0:0;
+  if(!Number.isInteger(level)||level<1||level>4)return {state:'unavailable',reason:'Warp Portal requires observed learned level 1–4; granted-only skills are unsupported.'};
+  for(const condition of CAST_PREREQUISITES){const trace=evaluateActorPredicate(condition,observations);if(trace.state!=='matched')return {state:trace.state==='unavailable'?'unavailable':'blocked',reason:'Verified clear body-state prerequisites are required for Warp Portal.'};}
+  const blind=evaluateActorPredicate(BLIND_CONDITION,observations);
+  if(blind.state==='unavailable')return {state:'unavailable',reason:'Blind state is unavailable; stationary range cannot be verified.'};
+  const cost=effectiveSpCost(state,55,level);
+  if(cost===null)return {state:'unavailable',reason:'Effective SP cost needs verified equipment, cards and refinement.'};
+  return {state:'ready',profile:{skillId:55,level,range:blind.state==='matched'?5:9,spCost:cost,afterCastSeconds:0}};
+}
