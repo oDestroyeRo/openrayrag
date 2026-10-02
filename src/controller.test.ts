@@ -1,3 +1,4 @@
+import { DEFAULT_MAP_POLICY } from './map-policy';
 import { describe, expect, it, vi } from 'vitest';
 import { CompanionController, type ControllerAction } from './controller';
 import { BotEngine, type Action } from './engine';
@@ -241,6 +242,23 @@ describe('latency and confirmation ownership', () => {
     controller.perform('command', { type: 'skill', mode: 'target', skillId: 3, level: 1, target: 2 }); controller.stop();
     expect(sent.map(action => action.type)).toEqual(['skill', 'stop']);
   });
+  it.each(['canceled','confirmed motion'] as const)('accepts requested Start while retaining a %s skill fence',state=>{
+    const {controller,receive,sent,step,advance}=setup();
+    receive({type:'stats',level:7,hp:100,maxHp:100,sp:100,maxSp:100},{type:'skills',learned:[{skillId:3,level:1}]});
+    controller.perform('command',{type:'skill',mode:'target',skillId:3,level:1,target:2});
+    if(state==='canceled')controller.stop();
+    else receive({type:'skillResult',source:1,target:2,skillId:3,level:1,mode:'target',indirect:false,motionSeconds:2,position:{x:100,y:100}});
+    expect(controller.engine.pendingFeatureAction).toBeNull();expect(controller.engine.idleForActions()).toBe(false);
+    expect(()=>controller.start(settings)).not.toThrow();expect(controller.runRequested).toBe(true);expect(controller.engine.running).toBe(false);
+    const commands=sent.slice();advance(1900);expect(sent).toEqual(commands);expect(controller.engine.idleForActions()).toBe(false);
+    if(state==='confirmed motion'){step(100);expect(controller.engine.running).toBe(true);step();expect(sent.at(-1)).toEqual({type:'attack',id:2});}
+    else {controller.stop();expect(controller.runRequested).toBe(false);expect(controller.engine.idleForActions()).toBe(false);}
+  });
+  it('rejects a pending skill before mutating supply configuration or finite budgets',()=>{
+    const {controller,receive}=setup();receive({type:'stats',level:7,hp:100,maxHp:100,sp:100,maxSp:100},{type:'skills',learned:[{skillId:3,level:1}]});
+    controller.perform('command',{type:'skill',mode:'target',skillId:3,level:1,target:2});controller.engine.deaths=2;
+    const configure=vi.spyOn(controller.supply,'configure');expect(()=>controller.start(settings)).toThrow('Stop the current');expect(configure).not.toHaveBeenCalled();expect(controller.engine.deaths).toBe(2);
+  });
   it('sends Stop for a manual skill timeout even when the field engine was idle', () => {
     let now = 100_000; const sent: Action[] = []; const engine = new BotEngine(action => sent.push(action), () => now, () => grid);
     engine.connect(true); engine.receive([{ type: 'enter', id: 1, map: 'prt_fild08' }, { type: 'spawn', entity: { ...player } },
@@ -306,7 +324,7 @@ describe('persistent recovery and transaction regressions', () => {
     const travelStart = vi.spyOn(controller.travel, 'start').mockImplementation(() => {});
     receive({ type: 'map', map: 'prontera' }, { type: 'spawn', entity: { ...player, hp: 20 } });
     controller.pause('Manual input', 2000); receive({ type: 'heal', id: 1, hp: 100, maxHp: 100 });
-    step(2000); expect(travelStart).toHaveBeenLastCalledWith('prontera', expect.anything(), 'prt_fild08', settings.route_step, settings.route_avoidWalls);
+    step(2000); expect(travelStart).toHaveBeenLastCalledWith('prontera', expect.anything(), 'prt_fild08', settings.route_step, settings.route_avoidWalls, DEFAULT_MAP_POLICY,'return');
     expect(controller.engine.running).toBe(false);
   });
   it('lets a 12-second manual or routine skill finish before its 30-second deadline', () => {
@@ -324,7 +342,7 @@ describe('persistent recovery and transaction regressions', () => {
     const controller = new CompanionController(action => sent.push(action as Action), () => 100_000, () => portalGrid);
     controller.connect(true); controller.engine.receive([{ type: 'enter', id: 1, map: 'prt_fild08' }, { type: 'spawn', entity: { ...player } }]);
     controller.world.reset('prt_fild08'); const start = vi.spyOn(controller.travel, 'start').mockImplementation(() => {});
-    controller.start(settings); expect(start).toHaveBeenCalledWith('prt_fild08', expect.anything(), 'prt_fild08', settings.route_step, settings.route_avoidWalls);
+    controller.start(settings); expect(start).toHaveBeenCalledWith('prt_fild08', expect.anything(), 'prt_fild08', settings.route_step, settings.route_avoidWalls,DEFAULT_MAP_POLICY);
     expect(sent).toEqual([]);
   });
   it('does not credit another character finishing a monster after an own nonlethal skill', () => {

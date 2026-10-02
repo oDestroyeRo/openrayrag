@@ -1,3 +1,4 @@
+import { insideLockArea, mapAllowed, mapPolicy } from './map-policy';
 import type { Position } from "./protocol";
 import type { Settings } from "./settings";
 import type {
@@ -542,6 +543,8 @@ export class SupplyTripRuntime<Receipt> {
         !this.remainingTrips
       )
         return null;
+      const executionPolicy=mapPolicy(this.settings!);
+      if(!context.position||!mapAllowed(executionPolicy,context.map)||!insideLockArea(executionPolicy,context.map,context.position)){this.reason='Supply waits until the allowed field lock area has been entered.';return null;}
       const low = this.policy.stockEnabled
         ? this.disposition.rules.filter(
             (rule) =>

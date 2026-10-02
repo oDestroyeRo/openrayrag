@@ -1,3 +1,4 @@
+import { DEFAULT_SETTINGS } from './settings';
 import { describe, expect, it } from 'vitest';
 import { FeatureUi } from './feature-ui';
 
@@ -8,7 +9,7 @@ function setup() {
     return nodes.get(key)!;
   } };
   const view = Object.create(FeatureUi.prototype);
-  Object.assign(view, { host, status: {}, dispositionPlan: null, social: { render: () => {} } });
+  Object.assign(view, { host, hooks:{settings:()=>DEFAULT_SETTINGS,map:()=>''}, status: {}, dispositionPlan: null, social: { render: () => {} } });
   return {
     render: (supply: unknown) => FeatureUi.prototype.render.call(view, { supply }),
     output: host.querySelector('#supply-preview'),

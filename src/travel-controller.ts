@@ -1,3 +1,4 @@
+import { DEFAULT_MAP_POLICY, insideLockArea, mapAllowed, type MapPolicy } from './map-policy';
 import type { Entity, GameEvent, Position, Walk } from './protocol';
 import type { Action } from './engine';
 import { distance, GridNavigator, routeSegment, searchGrid, type WalkGrid } from './navigation';
@@ -6,12 +7,14 @@ import { planArrivalEscape, planPortalApproach, routeBetweenMaps, travelNavigato
 
 export interface TravelSnapshot {
   state: 'idle' | 'walking' | 'transition' | 'complete' | 'failed' | 'cancelled';
-  destination: string; reason: string; remainingMaps: string[]; route: Position[]; leg: Position[];
+  destination: string; reason: string; policy: MapPolicy; purpose: 'travel' | 'service' | 'return' | 'field-entry'; remainingMaps: string[]; route: Position[]; leg: Position[];
 }
 const cell = (p: Position): Position => ({ x: Math.floor(p.x), y: Math.floor(p.y) });
 
 /** Owns movement only while the field engine is stopped. Never infers a map transition from elapsed time. */
 export class TravelController {
+  private policy:MapPolicy=DEFAULT_MAP_POLICY;
+  private purpose:TravelSnapshot['purpose']='travel';
   private state: TravelSnapshot['state'] = 'idle';
   private destination = '';
   private reason = '';
@@ -34,11 +37,13 @@ export class TravelController {
   constructor(private readonly send: (action: Action) => void, private readonly now = Date.now, private readonly gridFor: (map: string) => WalkGrid | null = searchGrid) {}
   get active(): boolean { return this.state === 'walking' || this.state === 'transition'; }
 
-  start(map: string, player: Entity, destination: string, stepSize: number, avoidWalls: boolean): void {
+  start(map: string, player: Entity, destination: string, stepSize: number, avoidWalls: boolean, policy:MapPolicy=DEFAULT_MAP_POLICY, purpose:TravelSnapshot['purpose']='travel'): void {
     if (this.active) throw new Error('Stop the current trip first.');
     if (!Number.isInteger(stepSize) || stepSize < 1 || stepSize > 20) throw new Error('Invalid travel step size.');
-    const steps = routeBetweenMaps(map, cell(player), destination, avoidWalls);
-    if (!steps) throw new Error('No verified route connects this position to the destination.');
+    if(!mapAllowed(policy,destination))throw new Error('The destination map is forbidden by the map policy.');
+    const steps = routeBetweenMaps(map, cell(player), destination, avoidWalls,policy);
+    if (!steps) throw new Error(`No verified route connects this position to the destination under the map policy.${!mapAllowed(policy,map)?' Current map is forbidden: departure only; reentry is prohibited.':''}`);
+    this.policy=structuredClone(policy);this.purpose=purpose;
     this.approachNav = null; this.approachTarget = null;
     this.steps = steps; this.destination = destination; this.map = map; this.playerId = player.id;
     this.stepSize = stepSize; this.avoidWalls = avoidWalls; this.since = this.now(); this.deadline = this.now() + 20_000;
@@ -48,18 +53,21 @@ export class TravelController {
   }
 
   /** Bounded final approach shares the trip's accepted-leg ownership and deadlines. */
-  startApproach(map: string, player: Entity, target: Position, stepSize = 10): void {
+  startApproach(map: string, player: Entity, target: Position, stepSize = 10, policy:MapPolicy=DEFAULT_MAP_POLICY,purpose:TravelSnapshot['purpose']='service'): void {
     if (this.active) throw new Error('Stop the current trip first.');
     if (!Number.isInteger(stepSize) || stepSize < 1 || stepSize > 20) throw new Error('Invalid travel step size.');
+    if(!mapAllowed(policy,map))throw new Error('The approach map is forbidden by the map policy.');
+    if(purpose==='field-entry'&&!insideLockArea(policy,map,target))throw new Error('Entry target must be inside the field lock area.');
     const grid = this.gridFor(map);
     if (!grid) throw new Error('No verified collision map for the final approach.');
     const nav = new GridNavigator(grid);
     const destination = { ...target };
     const route = nav.plan(cell(player),destination,{avoidWalls:true});
     if (!route?.length || route.length > 512) throw new Error('The final approach is unreachable or exceeds 512 cells.');
+    this.policy=structuredClone(policy);this.purpose=purpose;
     this.approachNav = nav; this.approachTarget = destination; this.consecutiveNudges = 0; this.nudgeNavigator = null; this.steps = []; this.destination = map; this.map = map; this.playerId = player.id;
     this.stepSize = stepSize; this.route = route; this.finalEscape = true; this.leg = null; this.awaitingSpawn = false;
-    this.since = this.now(); this.lastAction = 0; this.state = 'walking'; this.reason = 'Approaching the NPC on verified ground.';
+    this.since = this.now(); this.lastAction = 0; this.state = 'walking'; this.reason = purpose==='field-entry'?'Entering the field lock area.':'Approaching the NPC on verified ground.';
   }
 
   private plan(player: Entity): void {
@@ -73,8 +81,9 @@ export class TravelController {
     }
     this.route = route; this.finalEscape = !step; this.leg = null;
     this.state = 'walking';
-    this.reason = this.approachNav ? 'Approaching the NPC on verified ground.' : step ? `Travel to ${this.destination}: approaching the portal to ${step.portal.toMap}.`
+    this.reason = this.approachNav ? (this.purpose==='field-entry'?'Entering the field lock area.':'Approaching the NPC on verified ground.') : step ? `Travel to ${this.destination}: approaching the portal to ${step.portal.toMap}.`
       : `Arrived in ${this.destination}; leaving the portal area.`;
+    if(!mapAllowed(this.policy,this.map))this.reason+=' Current map is forbidden: departure only; no reentry.';
   }
 
   observe(events: GameEvent[]): void {
@@ -175,7 +184,7 @@ export class TravelController {
     if (index < 0) { this.cancel('Character left the planned travel corridor.', true); return; }
     this.route = this.route.slice(index);
     if (this.route.length === 1) {
-      if (this.finalEscape) { this.state = 'complete'; this.reason = this.approachNav ? 'Final NPC approach confirmed.' : `Arrived in ${this.destination}. Choose targets before starting combat.`; }
+      if (this.finalEscape) { this.state = 'complete'; this.reason = this.approachNav ? (this.purpose==='field-entry'?'Field lock entry confirmed.':'Final NPC approach confirmed.') : `Arrived in ${this.destination}. Choose targets before starting combat.`; }
       else { this.state = 'transition'; this.deadline = now + 20_000; this.reason = 'Waiting for the planned map transition.'; }
       return;
     }
@@ -191,7 +200,7 @@ export class TravelController {
     if (wasActive) this.send({ type: 'stop' });
   }
   snapshot(): TravelSnapshot {
-    return { state: this.state, destination: this.destination, reason: this.reason,
+    return { policy:structuredClone(this.policy),purpose:this.purpose,state: this.state, destination: this.destination, reason: this.reason,
       remainingMaps: this.steps.map(step => step.portal.toMap).slice(0,64), route: this.route.slice(0,512), leg: this.leg?.cells ?? [] };
   }
 }

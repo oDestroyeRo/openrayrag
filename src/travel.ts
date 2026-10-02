@@ -1,3 +1,4 @@
+import { DEFAULT_MAP_POLICY, mapAllowed, PORTAL_COST, type MapPolicy } from './map-policy';
 import catalog from './data/travel-portals.json';
 import { GridNavigator, MAX_MAP_DIMENSION, searchGrid, type PortalArea, type WalkGrid } from './navigation';
 import { type Position } from './protocol';
@@ -304,10 +305,10 @@ export class TravelPlanner {
     if (this.navigators.size > 4) this.navigators.delete(this.navigators.keys().next().value!);
     return navigator;
   }
-  private distancesTo(toMap: string): Map<string, number> {
+  private distancesTo(toMap: string, policy: MapPolicy = DEFAULT_MAP_POLICY, origin = ''): Map<string, number> {
     const incoming = new Map<string, string[]>();
     for (const edge of this.edges) {
-      if (!this.allowSameMap && edge.fromMap === edge.toMap) continue;
+      if ((!this.allowSameMap && edge.fromMap === edge.toMap) || !mapAllowed(policy,edge.toMap) || (!mapAllowed(policy,edge.fromMap) && edge.fromMap !== origin)) continue;
       const maps = incoming.get(edge.toMap) ?? []; maps.push(edge.fromMap); incoming.set(edge.toMap, maps);
     }
     const distances = new Map([[toMap,0]]);
@@ -319,10 +320,12 @@ export class TravelPlanner {
     return distances;
   }
   /** Fewest reachable portal crossings, then least collision-aware walking cost. */
-  routeBetweenMaps(fromMap: string, from: Position, toMap: string, avoidWalls = true): TravelStep[] | null {
+  routeBetweenMaps(fromMap: string, from: Position, toMap: string, avoidWalls = true, policy: MapPolicy = DEFAULT_MAP_POLICY): TravelStep[] | null {
+    if (!mapAllowed(policy,toMap)) return null;
+    if (policy.mode === 'weighted') return this.weightedRoute(fromMap,from,toMap,avoidWalls,policy);
     if (!this.mapCells(fromMap) || !this.mapCells(toMap) || !this.planArrivalEscape(fromMap, from, avoidWalls)) return null;
     if (fromMap === toMap) return [];
-    const distances = this.distancesTo(toMap);
+    const distances = this.distancesTo(toMap,policy,fromMap);
     if (!distances.has(fromMap)) return null;
     const key = (map: string, p: Position) => `${map}:${p.x}:${p.y}`;
     const initial: WorldNode = { key: key(fromMap,from), map: fromMap, position: { ...from }, hops: 0,
@@ -371,7 +374,7 @@ export class TravelPlanner {
         return steps;
       }
       for (const edge of this.byMap.get(current.map) ?? []) {
-        if ((!this.allowSameMap && edge.fromMap === edge.toMap) || !distances.has(edge.toMap)) continue;
+        if ((!this.allowSameMap && edge.fromMap === edge.toMap) || !mapAllowed(policy,edge.toMap) || !distances.has(edge.toMap)) continue;
         const destinationKey = key(edge.toMap, edge.arrival);
         const hops = current.hops + 1;
         const previous = best.get(destinationKey);
@@ -387,11 +390,127 @@ export class TravelPlanner {
     }
     return null;
   }
+  /** Weighted Dijkstra retains a Pareto frontier of score and hops per exact
+   * arrival. A cheap label near the hop cap cannot erase a more expensive
+   * label which still has enough crossings available. Physical searches/cache
+   * remain policy independent; every graph edge is checked against this snapshot.
+   */
+  private weightedRoute(fromMap:string,from:Position,toMap:string,avoidWalls:boolean,policy:MapPolicy):TravelStep[]|null {
+    if (!this.mapCells(fromMap) || !this.mapCells(toMap) || !this.search(fromMap,from,null,avoidWalls)) return null;
+    if(fromMap===toMap)return [];
+    type Label={key:string;map:string;position:Position;score:number;estimate:number;hops:number;sequence:number;parent:Label|null;step:Omit<TravelStep,'arrivalEscape'>|null;terminal?:Path;pending?:PortalEdge};
+    const key=(map:string,p:Position)=>`${map}:${p.x}:${p.y}`;
+    let sequence=0,expanded=0;
+    const labels=new Map<string,Label[]>();
+    const remaining=this.weightedPotential(toMap,policy);
+    const initialEstimate=remaining(fromMap,from);if(!Number.isFinite(initialEstimate))return null;
+    const heap=new Heap<Label>((a,b)=>a.estimate<b.estimate||(a.estimate===b.estimate&&(a.score<b.score||a.score===b.score&&(a.hops<b.hops||a.hops===b.hops&&a.sequence<b.sequence))));
+    const first:Label={key:key(fromMap,from),map:fromMap,position:{...from},score:0,estimate:initialEstimate,hops:0,sequence:sequence++,parent:null,step:null};
+    labels.set(first.key,[first]);heap.push(first);
+    const penalties=new Map(policy.penalties.map(p=>[p.map,p.cost]));
+    const distances=this.distancesTo(toMap,policy,fromMap);
+    let current:Label|undefined;
+    while((current=heap.pop())){
+      if(current.pending){
+        const parent=current.parent!;
+        if(!labels.get(parent.key)?.includes(parent))continue;
+        const previous=labels.get(current.key)??[];
+        if(previous.some(l=>l.score<=current!.score&&l.hops<=current!.hops))continue;
+        const approach=this.search(parent.map,parent.position,current.pending,avoidWalls);if(!approach)continue;
+        const score=parent.score+approach.cost+PORTAL_COST+(penalties.get(parent.map)??0);
+        const next:Label={...current,score,estimate:Math.floor(score)+remaining(current.map,current.position),pending:undefined,step:{portal:current.pending,cells:approach.cells}};
+        if(previous.some(l=>l.score<=next.score&&l.hops<=next.hops))continue;
+        labels.set(next.key,[...previous.filter(l=>!(next.score<=l.score&&next.hops<=l.hops)),next]);heap.push(next);continue;
+      }
+      if(current.terminal){
+        const steps:TravelStep[]=[];
+        for(let node:Label|null=current.parent;node?.step;node=node.parent)steps.push({...node.step,cells:node.step.cells.map(p=>({...p})),arrivalEscape:[]});
+        steps.reverse();
+        for(let i=0;i<steps.length;i++){
+          const next=steps[i+1]?.cells;
+          if(!next){steps[i]!.arrivalEscape=current.terminal.cells.map(p=>({...p}));continue;}
+          const target=this.mapCells(steps[i]!.portal.toMap)!,exit=next.findIndex(p=>target.safe(p));
+          if(exit<0)return null;
+          steps[i]!.arrivalEscape=next.slice(0,exit+1).map(p=>({...p}));
+        }
+        return steps;
+      }
+      if(!labels.get(current.key)?.includes(current))continue;
+      if(++expanded>4096)return null;
+      if(current.map===toMap){
+        const escape=this.search(current.map,current.position,null,avoidWalls);
+        if(escape)heap.push({...current,score:current.score+escape.cost,estimate:current.score+escape.cost,sequence:sequence++,parent:current,terminal:escape});
+        continue;
+      }
+      if(current.hops>=64)continue;
+      for(const edge of this.byMap.get(current.map)??[]){
+        if((!this.allowSameMap&&edge.fromMap===edge.toMap)||!mapAllowed(policy,edge.toMap)||!distances.has(edge.toMap)||current.hops+1+distances.get(edge.toMap)!>64)continue;
+        const target=this.mapCells(edge.toMap);if(!target||!target.tiles[target.index(edge.arrival)])continue;
+        const dx=Math.max(0,Math.abs(current.position.x-edge.area.x)-edge.area.halfWidth),dy=Math.max(0,Math.abs(current.position.y-edge.area.y)-edge.area.halfHeight);
+        const score=current.score+10*Math.max(dx,dy)+4*Math.min(dx,dy)+PORTAL_COST+(penalties.get(current.map)??0),bound=remaining(edge.toMap,edge.arrival);
+        if(!Number.isFinite(bound))continue;
+        const next:Label={key:key(edge.toMap,edge.arrival),map:edge.toMap,position:{...edge.arrival},score,estimate:Math.floor(score)+bound,hops:current.hops+1,sequence:sequence++,parent:current,step:null,pending:edge};
+        const old=labels.get(next.key)??[];
+        if(old.some(l=>l.score<=next.score&&l.hops<=next.hops))continue;
+        heap.push(next);
+      }
+    }
+    return null;
+  }
+
+  /** Reverse Dijkstra over exact portal arrivals supplies a consistent lower
+   * bound, without reading any physical grid. Each abstract edge ignores walls,
+   * corners and trigger exclusions, so its octile distance cannot exceed the
+   * verified walking cost. Terminal escape has lower bound zero. Rounding only
+   * the heuristic penalties down keeps these sums exact integers even when the
+   * configured score has fractional penalties. Frontier estimates also round
+   * their accumulated score down, avoiding floating summation overestimates;
+   * actual scores, terminal scores and Pareto labels are unchanged. The fixed
+   * catalog bounds this temporary graph, which is discarded
+   * after the query rather than retaining another planner per policy.
+   */
+  private weightedPotential(toMap:string,policy:MapPolicy):(map:string,p:Position)=>number {
+    const key=(map:string,p:Position)=>`${map}:${p.x}:${p.y}`;
+    const penalties=new Map(policy.penalties.map(p=>[p.map,Math.floor(p.cost)]));
+    const departures=(map:string)=>(this.byMap.get(map)??[]).filter(e=>(this.allowSameMap||e.fromMap!==e.toMap)&&mapAllowed(policy,e.toMap));
+    const cost=(map:string,p:Position,e:PortalEdge)=>{
+      const dx=Math.max(0,Math.abs(p.x-e.area.x)-e.area.halfWidth),dy=Math.max(0,Math.abs(p.y-e.area.y)-e.area.halfHeight);
+      return 10*Math.max(dx,dy)+4*Math.min(dx,dy)+PORTAL_COST+(penalties.get(map)??0);
+    };
+    const arrivals=new Map<string,{map:string;position:Position}>();
+    for(const edges of this.byMap.values())for(const e of edges)if(mapAllowed(policy,e.toMap))arrivals.set(key(e.toMap,e.arrival),{map:e.toMap,position:e.arrival});
+    const reverse=new Map<string,Array<{key:string;cost:number}>>();
+    for(const [origin,a] of arrivals)for(const edge of departures(a.map)){
+      const destination=key(edge.toMap,edge.arrival),incoming=reverse.get(destination)??[];
+      incoming.push({key:origin,cost:cost(a.map,a.position,edge)});reverse.set(destination,incoming);
+    }
+    const distances=new Map<string,number>();
+    const heap=new Heap<{key:string;cost:number}>((a,b)=>a.cost<b.cost);
+    for(const [id,a] of arrivals)if(a.map===toMap){distances.set(id,0);heap.push({key:id,cost:0});}
+    let current:{key:string;cost:number}|undefined;
+    while((current=heap.pop())){
+      if(distances.get(current.key)!==current.cost)continue;
+      for(const edge of reverse.get(current.key)??[]){
+        const distance=current.cost+edge.cost;
+        if(distance<(distances.get(edge.key)??Infinity)){distances.set(edge.key,distance);heap.push({key:edge.key,cost:distance});}
+      }
+    }
+    return(map,p)=>{
+      if(map===toMap)return 0;
+      const known=distances.get(key(map,p));if(known!==undefined)return known;
+      // The initial point may be arbitrary or on a forbidden departure map.
+      // Only its outgoing edges are considered; forbidden reentry stays absent.
+      let bound=Infinity;
+      for(const edge of departures(map))bound=Math.min(bound,cost(map,p,edge)+(distances.get(key(edge.toMap,edge.arrival))??Infinity));
+      return bound;
+    };
+  }
+
 }
 
 const planner = new TravelPlanner();
-export const routeBetweenMaps = (fromMap: string, from: Position, toMap: string, avoidWalls = true): TravelStep[] | null =>
-  planner.routeBetweenMaps(fromMap,from,toMap,avoidWalls);
+export const routeBetweenMaps = (fromMap: string, from: Position, toMap: string, avoidWalls = true, policy: MapPolicy = DEFAULT_MAP_POLICY): TravelStep[] | null =>
+  planner.routeBetweenMaps(fromMap,from,toMap,avoidWalls,policy);
 export const planPortalApproach = (map: string, from: Position, edge: PortalEdge, avoidWalls = true): Position[] | null =>
   planner.planPortalApproach(map,from,edge,avoidWalls);
 export const planArrivalEscape = (map: string, from: Position, avoidWalls = true): Position[] | null =>

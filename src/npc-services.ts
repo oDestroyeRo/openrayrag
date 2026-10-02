@@ -1,3 +1,5 @@
+import { DEFAULT_MAP_POLICY, mapAllowed, policySummary, validateMapPolicy, type MapPolicy } from './map-policy';
+import { routeBetweenMaps } from './travel';
 import catalog from './data/npc-services.json';
 import { distance, GridNavigator, searchGrid, type WalkGrid } from './navigation';
 import type { Entity, GameEvent, Position } from './protocol';
@@ -307,6 +309,7 @@ export class NpcServiceRuntime {
   private binding: { actor: Entity; generation: number; connection: number } | null = null;
   private transition = false;
   private receiptValue: ServiceReceipt | null = null;
+  private executionPolicy:MapPolicy=DEFAULT_MAP_POLICY;
   readonly workflow: NpcWorkflow;
   constructor(
     private readonly travel: TravelController,
@@ -321,9 +324,11 @@ export class NpcServiceRuntime {
   receipt(): ServiceReceipt | null {
     return this.receiptValue;
   }
-  start(input: unknown, c: ServiceContext): void {
+  start(input: unknown, c: ServiceContext, policy:MapPolicy=DEFAULT_MAP_POLICY): void {
     if (this.active) throw new Error('Stop the current service first.');
     const s = validateServiceRequest(input);
+    if(!mapAllowed(policy,s.map)||s.outcome.type==='arrival'&&!mapAllowed(policy,s.outcome.map))throw new Error('Service map or arrival outcome is forbidden by the map policy.');
+    this.executionPolicy=structuredClone(policy);
     if (!c.alive || !c.inventoryKnown || c.zeny < 0)
       throw new Error('A living character, confirmed inventory and balance are required.');
     if ((c.basicSkillLevel ?? 0) < s.basicSkillLevel)
@@ -453,7 +458,7 @@ export class NpcServiceRuntime {
         );
       if (c.map !== s.map || onPortal) {
         try {
-          this.travel.start(c.map, c.player, s.map, 10, true);
+          this.travel.start(c.map, c.player, s.map, 10, true,this.executionPolicy,'service');
           this.state = 'travel';
           this.reason = 'Travelling to the service map.';
         } catch (e) {
@@ -570,7 +575,7 @@ export class NpcServiceRuntime {
       return;
     }
     try {
-      this.travel.startApproach(s.map, c.player, best.at(-1)!);
+      this.travel.startApproach(s.map, c.player, best.at(-1)!,10,this.executionPolicy,'service');
       this.state = 'approach';
       this.deadline = this.now() + 300_000;
       this.reason = 'Approaching the service NPC.';
@@ -594,6 +599,14 @@ export class NpcServiceRuntime {
   }
 }
 
+/** Execution policy is deliberately outside the source-matched portable definition. */
+export function validateServiceExecution(input:unknown):{service:NpcServiceDefinition;executionPolicy:MapPolicy} {
+  if(input&&typeof input==='object'&&!Array.isArray(input)&&Object.hasOwn(input,'service')){
+    const request=object(input,['service','executionPolicy']);
+    return {service:validateServiceRequest(request.service),executionPolicy:validateMapPolicy(request.executionPolicy)};
+  }
+  return {service:validateServiceRequest(input),executionPolicy:structuredClone(DEFAULT_MAP_POLICY)};
+}
 export interface ServicePreviewContext {
   map: string;
   player: Position | null;
@@ -606,6 +619,7 @@ export interface ServicePreviewContext {
 export function previewService(
   input: unknown,
   c: ServicePreviewContext,
+  policy:MapPolicy=DEFAULT_MAP_POLICY,
 ): { available: boolean; reasons: string[]; summary: string } {
   let s: NpcServiceDefinition;
   try {
@@ -616,6 +630,8 @@ export function previewService(
   const unavailable = serviceAvailability(s),
     reasons: string[] = [];
   if (unavailable) reasons.push(unavailable);
+  if(!mapAllowed(policy,s.map)||s.outcome.type==='arrival'&&!mapAllowed(policy,s.outcome.map))reasons.push('Service map or arrival outcome is forbidden by the map policy.');
+  if(c.player&&c.map!==s.map&&!routeBetweenMaps(c.map,c.player,s.map,true,policy))reasons.push('No allowed verified portal route reaches this service.');
   if (!c.inventoryKnown || c.zeny === null) reasons.push('Wait for authoritative inventory and balance.');
   if (c.basicSkillLevel === null || c.basicSkillLevel < s.basicSkillLevel)
     reasons.push(`Basic Mastery level ${s.basicSkillLevel} is required.`);
@@ -655,8 +671,8 @@ export function previewService(
     ? `Baseline source ${s.sourcePath} at ${s.sourcePin}. Exact non-cart storage menu and opening observed on SEA 01 on 2026-10-02; no balance or inventory contradiction. Other services and transfers are not covered.`
     : `Source ${s.sourcePath} at ${s.sourcePin}; deployed contract has not been live verified.`;
   return {
-    available: !unavailable,
+    available: !unavailable&&mapAllowed(policy,s.map)&&(s.outcome.type!=='arrival'||mapAllowed(policy,s.outcome.map)),
     reasons,
-    summary: `${s.identity.name} · ${s.map} ${s.identity.anchor.x},${s.identity.anchor.y} · NPC kind2\nApproach: ${s.approach.x - s.approach.halfWidth}–${s.approach.x + s.approach.halfWidth}, ${s.approach.y - s.approach.halfHeight}–${s.approach.y + s.approach.halfHeight}; interaction range ${s.approach.interactionRange}\nBasic Mastery ${s.basicSkillLevel} · Fees ${fees} zeny · Spend cap ${s.workflow.maxSpend}\n${s.workflow.steps.length} exact dialogue/menu steps → ${outcome}\n${provenance}`,
+    summary: `${policySummary(policy,c.map)}\n${s.identity.name} · ${s.map} ${s.identity.anchor.x},${s.identity.anchor.y} · NPC kind2\nApproach: ${s.approach.x - s.approach.halfWidth}–${s.approach.x + s.approach.halfWidth}, ${s.approach.y - s.approach.halfHeight}–${s.approach.y + s.approach.halfHeight}; interaction range ${s.approach.interactionRange}\nBasic Mastery ${s.basicSkillLevel} · Fees ${fees} zeny · Spend cap ${s.workflow.maxSpend}\n${s.workflow.steps.length} exact dialogue/menu steps → ${outcome}\n${provenance}`,
   };
 }

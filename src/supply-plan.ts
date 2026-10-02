@@ -1,3 +1,4 @@
+import { insideLockArea, mapAllowed, mapPolicy, policySummary } from './map-policy';
 import {
   planDisposition,
   type DispositionPolicy,
@@ -174,6 +175,8 @@ export function previewSupplyTrip(
       settings.automation?.supply ?? DEFAULT_SUPPLY,
     ),
     policy = settings.automation?.disposition ?? { maxSpend: 0, rules: [] };
+  const executionPolicy=mapPolicy(settings);
+  if(context.position&&(!mapAllowed(executionPolicy,context.map)||!insideLockArea(executionPolicy,context.map,context.position)))return 'Supply waits until the allowed field lock area has been entered. '+policySummary(executionPolicy,context.map);
   const inventory = context.disposition.containers.inventory;
   if (!supply.enabled) return "Supply trips are off. No trip will start.";
   if (

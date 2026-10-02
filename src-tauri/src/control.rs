@@ -692,7 +692,18 @@ pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
         "command" => validate_action(request),
         "workflow" => validate_workflow(request),
         "routine" => validate_routine(request),
-        "service" => validate_service(request),
+        "service" => {
+            if request
+                .as_object()
+                .is_some_and(|o| o.contains_key("service"))
+            {
+                let wrapper = object(request, &["service", "executionPolicy"])?;
+                crate::automation::validate_map_policy(field(wrapper, "executionPolicy")?)?;
+                validate_service(field(wrapper, "service")?)
+            } else {
+                validate_service(request)
+            }
+        }
         "social" => validate_social(request),
         _ => Err("Unknown bot action.".into()),
     }
@@ -1114,5 +1125,35 @@ mod automation_request_tests {
         ] {
             assert!(validate_actor_predicate(&invalid).is_err());
         }
+    }
+    #[test]
+    fn service_execution_policy_is_separate_and_strict() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../src/data/npc-service-request-cases.json"
+        ))
+        .unwrap();
+        let service = &cases
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["valid"] == true)
+            .unwrap()["request"];
+        let policy_cases: serde_json::Value =
+            serde_json::from_str(include_str!("../../src/data/map-policy-cases.json")).unwrap();
+        for case in policy_cases.as_array().unwrap() {
+            let request = json!({"service":service,"executionPolicy":case["policy"]});
+            assert_eq!(
+                validate_request("service", &request).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+        assert!(validate_request("service", &json!({"service":service})).is_err());
+        assert!(validate_request(
+            "service",
+            &json!({"service":service,"executionPolicy":null})
+        )
+        .is_err());
     }
 }

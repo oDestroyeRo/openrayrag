@@ -50,6 +50,18 @@ impl Settings {
             };
         };
         automation.validate()?;
+        if let Some(area) = automation
+            .map_policy
+            .as_ref()
+            .and_then(|p| p.lock_area.as_ref())
+        {
+            if area.map != self.map
+                || (!automation.travel.destination_map.is_empty()
+                    && automation.travel.destination_map != self.map)
+            {
+                return Err("Field lock and destination maps must match.".into());
+            }
+        }
         if self.targets.is_empty()
             && matches!(
                 automation.combat.mode,
@@ -107,8 +119,93 @@ struct AutomationSettings {
         skip_serializing_if = "Option::is_none"
     )]
     supply: Option<SupplySettings>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_map_policy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    map_policy: Option<MapPolicy>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MapPolicy {
+    mode: String,
+    allow: Vec<String>,
+    deny: Vec<String>,
+    penalties: Vec<MapPenalty>,
+    lock_area: Option<LockArea>,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MapPenalty {
+    map: String,
+    cost: f64,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LockArea {
+    map: String,
+    min_x: u16,
+    min_y: u16,
+    max_x: u16,
+    max_y: u16,
+}
+fn deserialize_map_policy<'de, D>(deserializer: D) -> Result<Option<MapPolicy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    {
+        let value = Value::deserialize(deserializer)?;
+        validate_map_policy(&value).map_err(serde::de::Error::custom)?;
+        serde_json::from_value(value)
+            .map(Some)
+            .map_err(serde::de::Error::custom)
+    }
+}
+impl MapPolicy {
+    fn valid(&self) -> bool {
+        let list = |v: &Vec<String>| {
+            v.len() <= 256
+                && unique_by(v, |m| m.clone())
+                && v.iter().all(|m| crate::supported_map(m))
+        };
+        matches!(self.mode.as_str(), "legacy" | "weighted")
+            && list(&self.allow)
+            && list(&self.deny)
+            && self.penalties.len() <= 256
+            && unique_by(&self.penalties, |p| p.map.clone())
+            && self.penalties.iter().all(|p| {
+                crate::supported_map(&p.map)
+                    && p.cost.is_finite()
+                    && (0.0..=1_000_000.0).contains(&p.cost)
+            })
+            && self.lock_area.as_ref().map_or(true, |a| {
+                crate::map_dimensions(&a.map).is_some_and(|(w, h)| {
+                    a.min_x <= a.max_x
+                        && a.min_y <= a.max_y
+                        && u64::from(a.max_x) < w
+                        && u64::from(a.max_y) < h
+                })
+            })
+    }
+}
+pub(crate) fn validate_map_policy(value: &Value) -> Result<(), String> {
+    // serde treats an omitted Option as None; require the explicit nullable field.
+    if !value
+        .as_object()
+        .is_some_and(|o| o.contains_key("lockArea"))
+    {
+        return Err("Invalid map policy.".into());
+    }
+    let policy: MapPolicy =
+        serde_json::from_value(value.clone()).map_err(|_| "Invalid map policy.")?;
+    if policy.valid() {
+        Ok(())
+    } else {
+        Err("Invalid map policy.".into())
+    }
+}
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DispositionPolicy {
@@ -803,7 +900,8 @@ impl AutomationSettings {
                 .disposition
                 .as_ref()
                 .map_or(true, DispositionPolicy::valid)
-            && self.supply.as_ref().map_or(true, SupplySettings::valid);
+            && self.supply.as_ref().map_or(true, SupplySettings::valid)
+            && self.map_policy.as_ref().map_or(true, MapPolicy::valid);
         if valid {
             Ok(())
         } else {
@@ -1338,5 +1436,25 @@ mod tests {
             .unwrap()
             .remove("supply");
         assert!(valid(value));
+    }
+    #[test]
+    fn map_policy_shared_boundary_cases() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../src/data/map-policy-cases.json")).unwrap();
+        for case in cases {
+            assert_eq!(
+                super::validate_map_policy(&case["policy"]).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+        let mut value = settings();
+        value["automation"] = automation();
+        value["automation"]["mapPolicy"] = json!({"mode":"legacy","allow":[],"deny":[],"penalties":[],"lockArea":{"map":"prontera","minX":0,"minY":0,"maxX":10,"maxY":10}});
+        assert!(serde_json::from_value::<Settings>(value)
+            .unwrap()
+            .validate()
+            .is_err());
     }
 }

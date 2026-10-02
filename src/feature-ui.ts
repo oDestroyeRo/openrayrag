@@ -1,3 +1,5 @@
+import { DEFAULT_MAP_POLICY, insideLockArea, mapPolicy, policySummary, validateMapPolicy } from './map-policy';
+import { routeBetweenMaps } from './travel';
 import { ActorPredicateEditor, actorSnapshotAt } from './actor-predicate-ui';
 import { SocialUi, validSocialSnapshot } from './social-ui';
 import { validActorSnapshot, type ActorObservationSnapshot } from './actor-observations';
@@ -55,6 +57,7 @@ const fields: Record<Section, Field[]> = {
     { path:'respawn.enabled',label:'Respawn after death',kind:'checkbox' }, { path:'respawn.maxDeaths',label:'Wait after deaths',min:1,max:100 },
   ],
   travel: [
+    {path:'mapPolicy.mode',label:'Portal routing',options:[['legacy','Fewest crossings (legacy)'],['weighted','Weighted walking + map penalties']]},
     {path:'supply.enabled',label:'Enable bounded supply trips',kind:'checkbox'},
     {path:'supply.stockEnabled',label:'Trigger below protected stock minimum',kind:'checkbox'},
     {path:'supply.weightEnabled',label:'Trigger at carried weight',kind:'checkbox'},
@@ -161,6 +164,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     return false;
   }
   if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','supply','supplyGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if(object(value.travel).policy!==undefined){try{validateMapPolicy(object(value.travel).policy);}catch{return false;}}
   if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
   if(value.social!==undefined&&!validSocialSnapshot(value.social))return false;
   if(value.ruleConditions!==undefined&&!bounded(value.ruleConditions,0))return false;
@@ -202,13 +206,13 @@ export class FeatureUi {
     const footnote = combat.querySelector('.footnote')!; footnote.textContent = 'Game input yields briefly. Temporary interruptions wait and resume; Stop cancels the run. Profiles never start automation.'; actions.append(footnote);
     combat.querySelector('.routing-settings .hint')?.remove();
     this.rules(); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.servicePanel(); this.profilePanel(); this.navigation();
-    this.dispositionPanel();this.supplyPanel();
+    this.dispositionPanel();this.supplyPanel();this.mapPolicyPanel();
     this.social = new SocialUi(action => this.hooks.social(action), (message, error) => this.hooks.notify(message, error)); this.panel('workflows').append(this.social.root);
     for (const [id,catalog] of [['itemId',ITEM_CATALOG],['skillId',SKILL_CATALOG]] as const) {
       const list=document.createElement('datalist');list.id=`${id}-catalog`;
       for(const [value,entry]of Object.entries(catalog)){const option=document.createElement('option');option.value=value;option.label=entry.name;list.append(option);}this.host.append(list);
     }
-    this.host.addEventListener('input',event => { if ((event.target as HTMLElement).dataset.setting) this.hooks.changed(); });
+    this.host.addEventListener('input',event => { if ((event.target as HTMLElement).dataset.setting || (event.target as HTMLElement).id.startsWith('map-policy-')) this.hooks.changed(); });
     this.write(DEFAULT_AUTOMATION);
   }
   private panel(section: Section): HTMLElement { return this.panels.get(section)!; }
@@ -238,6 +242,25 @@ export class FeatureUi {
         connected:this.status.connected===true,alive:p.dead===false,fresh:true,settled:disposition.workflow.idle,canPrepare:false,fieldRequested:false,inventoryRevision:0,currencyRevision:0,economicUncertain:false,disposition});
     }catch(error){output.textContent=error instanceof Error?error.message:'Invalid supply settings.';}});
     panel.append(button,output);this.note('travel','Supply trips use your protected stock rules. Each shop batch opens a fresh verified service. Stop, manual input, death or an uncertain transaction pauses the trip and prevents automatic field resume. The captured return map and cell appear in status.');
+  }
+  private mapPolicyPanel():void {
+    const panel=this.panel('travel'),grid=document.createElement('div');grid.className='form-grid';panel.append(grid);
+    for(const [id,label] of [['allow','Allowed maps · blank permits all'],['deny','Denied maps · takes precedence']]){
+      const input=this.input(grid,`map-policy-${id}`,label!,'text','');input.maxLength=16400;input.dataset.config='true';
+    }
+    const toggle=document.createElement('label');toggle.className='toggle-row';toggle.textContent='Restrict field movement to an inclusive rectangle';
+    const enabled=document.createElement('input');enabled.type='checkbox';enabled.id='map-policy-area';enabled.dataset.config='true';toggle.append(enabled);panel.append(toggle);
+    for(const [key,label]of [['map','Rectangle map code'],['minX','Minimum X'],['minY','Minimum Y'],['maxX','Maximum X'],['maxY','Maximum Y']]){
+      const input=this.input(grid,`map-policy-${key}`,label!,key==='map'?'text':'number',key==='map'?'':'0',0,511);input.dataset.config='true';
+    }
+    this.editor('travel','mapPolicy.penalties','Departing-map penalties',[{key:'map',label:'Known map code',kind:'text'},{key:'cost',label:'Routing units',min:0,max:1000000}],{map:'prt_fild08',cost:0},256);
+    this.note('travel','Separate map codes with commas or spaces. Deny wins. Cardinal steps cost 10, diagonals 14 plus wall avoidance; weighted crossings cost 200 plus the departing-map penalty and include final arrival escape. Legacy ignores penalties. Field targets must stay inside the rectangle. Service travel can leave it; field work waits for a verified return. Server transitions can still place you outside.');
+    const output=document.createElement('p');output.id='map-policy-preview';output.className='telemetry-summary';panel.append(output);
+    const button=document.createElement('button');button.type='button';button.className='secondary compact';button.dataset.config='true';button.textContent='Preview map policy and route';
+    button.addEventListener('click',()=>{try{const a=this.read(),policy=mapPolicy({automation:a}),p=object(this.status.player),destination=policy.lockArea?.map||a.travel.destinationMap;
+      let route='No destination selected.';if(destination&&typeof p.x==='number'&&typeof p.y==='number'){const steps=routeBetweenMaps(this.hooks.map(),{x:Math.floor(p.x),y:Math.floor(p.y)},destination,this.hooks.settings().route_avoidWalls,policy);route=steps?`Route: ${[this.hooks.map(),...steps.map(s=>s.portal.toMap)].join(' → ')}`:'No allowed verified route. Search is bounded to 64 crossings and 4096 states.';}
+      output.textContent=policySummary(policy,this.hooks.map())+'\n'+route;
+    }catch(error){output.textContent=error instanceof Error?error.message:'Invalid map policy.';}});panel.append(button);
   }
   private dispositionOutput(): HTMLElement { return this.host.querySelector<HTMLElement>('#disposition-preview')!; }
   private note(section: Section, message: string): void { const p = document.createElement('p'); p.className = 'hint'; p.textContent = message; this.panel(section).append(p); }
@@ -304,7 +327,7 @@ export class FeatureUi {
   }
   read(): AutomationSettings {
     const automation = structuredClone(DEFAULT_AUTOMATION) as unknown as Record<string,unknown>;
-    automation.disposition=structuredClone(DEFAULT_DISPOSITION);automation.supply=structuredClone(DEFAULT_SUPPLY);
+    automation.mapPolicy=structuredClone(DEFAULT_MAP_POLICY);automation.disposition=structuredClone(DEFAULT_DISPOSITION);automation.supply=structuredClone(DEFAULT_SUPPLY);
     object(automation.disposition).maxSpend=Number(this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!.value);
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
@@ -317,10 +340,12 @@ export class FeatureUi {
       setPath(automation,path,rows);
     }
     object(automation.disposition).rules=this.dispositionEditor.read().map(row=>({...row,store:row.store==='1',cart:row.cart==='1',sell:row.sell==='1',allowUnique:row.allowUnique==='1'}));
+    const mp=object(automation.mapPolicy);for(const key of ['allow','deny'])mp[key]=this.host.querySelector<HTMLInputElement>(`#map-policy-${key}`)!.value.split(/[\s,]+/).filter(Boolean);
+    mp.lockArea=this.host.querySelector<HTMLInputElement>('#map-policy-area')!.checked?Object.fromEntries(['map','minX','minY','maxX','maxY'].map(key=>{const value=this.host.querySelector<HTMLInputElement>(`#map-policy-${key}`)!.value;return [key,key==='map'?value:Number(value)];})):null;
     return validateAutomation(automation as unknown as AutomationSettings);
   }
   write(automation: AutomationSettings): void {
-    automation = validateAutomation(automation);automation={...automation,supply:automation.supply??structuredClone(DEFAULT_SUPPLY)};
+    automation = validateAutomation(automation);automation={...automation,mapPolicy:automation.mapPolicy??structuredClone(DEFAULT_MAP_POLICY),supply:automation.supply??structuredClone(DEFAULT_SUPPLY)};
     this.attackStrategiesPresent=Object.hasOwn(automation,'attackStrategies');
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
@@ -328,6 +353,9 @@ export class FeatureUi {
       if (field.kind === 'checkbox') (input as HTMLInputElement).checked = value === true; else input.value = String(value ?? '');
     }
     for (const [path,editor] of this.editors) editor.write((getPath(automation,path)??[]) as Row[]);
+    const mp=automation.mapPolicy!;for(const key of ['allow','deny'] as const)this.host.querySelector<HTMLInputElement>(`#map-policy-${key}`)!.value=mp[key].join(', ');
+    this.host.querySelector<HTMLInputElement>('#map-policy-area')!.checked=mp.lockArea!==null;
+    for(const key of ['map','minX','minY','maxX','maxY'] as const)this.host.querySelector<HTMLInputElement>(`#map-policy-${key}`)!.value=String(mp.lockArea?.[key]??(key==='map'?'':0));
     const policy=automation.disposition??DEFAULT_DISPOSITION;
     this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!.value=String(policy.maxSpend);
     this.dispositionEditor.write(policy.rules.map(row=>({...row,store:row.store?'1':'0',cart:row.cart?'1':'0',sell:row.sell?'1':'0',allowUnique:row.allowUnique?'1':'0'})));
@@ -435,14 +463,14 @@ export class FeatureUi {
       if(Array.isArray(c.inventory))for(const raw of c.inventory){const row=object(raw);if(typeof row.itemId==='number'&&typeof row.count==='number')stock[row.itemId]=(stock[row.itemId]??0)+row.count;}
       const actors:Entity[]=Array.isArray(status.actors)?status.actors.map(object).filter(a=>typeof a.id==='number'&&typeof a.x==='number'&&typeof a.y==='number'&&typeof a.kind==='number'&&typeof a.name==='string').map(a=>({id:Number(a.id),x:Number(a.x),y:Number(a.y),kind:Number(a.kind),name:text(a.name),classId:Number(a.classId),level:Number(a.level),hp:Number(a.hp),maxHp:Number(a.maxHp),dead:a.dead===true})):[];
       const skill=Array.isArray(c.learned)?c.learned.map(object).find(skill=>skill.skillId===1):undefined;
-      const result=previewService(JSON.parse(editor.value),{map:this.hooks.map(),player:typeof p.x==='number'&&typeof p.y==='number'?{x:p.x,y:p.y}:null,actors,inventoryKnown:c.inventoryKnown===true,zeny:number(stats.zeny),basicSkillLevel:c.skillsKnown===true?number(skill?.level)??0:null,stock});
+      const result=previewService(JSON.parse(editor.value),{map:this.hooks.map(),player:typeof p.x==='number'&&typeof p.y==='number'?{x:p.x,y:p.y}:null,actors,inventoryKnown:c.inventoryKnown===true,zeny:number(stats.zeny),basicSkillLevel:c.skillsKnown===true?number(skill?.level)??0:null,stock},validateMapPolicy(this.read().mapPolicy));
       preview.textContent=[result.available?'Verified contract':'Unavailable draft',result.summary,...result.reasons].filter(Boolean).join('\n');
     });
     button('Save / update',()=>{const existing=select.value.startsWith('saved:')?select.value.slice(6):undefined;const saved=this.services.save(JSON.parse(editor.value),existing);refresh('saved:'+saved.id);show();return 'NPC service saved on this Mac.';});
     button('Delete saved',()=>{if(!select.value.startsWith('saved:'))throw new Error('Choose a saved service.');this.services.remove(select.value.slice(6));refresh();show();return 'Saved NPC service deleted.';});
     button('Export saved',()=>{if(!select.value.startsWith('saved:'))throw new Error('Choose a saved service.');documents.value=this.services.export(select.value.slice(6));details.open=true;});
     button('Import document',()=>{const imported=this.services.import(documents.value);refresh('saved:'+imported[0]!.id);show();return 'NPC services imported on this Mac.';});
-    button('Run service',()=>this.hooks.service(validateServiceRequest(JSON.parse(editor.value))),true);
+    button('Run service',()=>this.hooks.service({service:validateServiceRequest(JSON.parse(editor.value)),executionPolicy:validateMapPolicy(this.read().mapPolicy)}),true);
     select.addEventListener('change',show);refresh();show();
   }
 
@@ -503,6 +531,14 @@ export class FeatureUi {
       if(supplyOutput.dataset.supply!==supplyText)supplyOutput.textContent=supplyText;
       supplyOutput.dataset.supply=supplyText;
     }
+    const policyOutput=this.host.querySelector<HTMLElement>('#map-policy-preview')!;const travel=object(s.travel);
+    try {
+      let telemetry='';
+      if(['walking','transition','complete','failed','cancelled'].includes(text(travel.state)))telemetry=policySummary(validateMapPolicy(travel.policy??DEFAULT_MAP_POLICY),this.hooks.map())+'\n'+text(travel.state)+' · '+text(travel.purpose)+' · '+text(travel.reason);
+      else {const policy=mapPolicy(this.hooks.settings());if(policy.lockArea&&typeof player.x==='number'&&typeof player.y==='number')telemetry=policySummary(policy,this.hooks.map())+'\n'+(insideLockArea(policy,this.hooks.map(),{x:player.x,y:player.y})?'Inside field lock area.':'Outside field lock area; field actions wait.');}
+      if(telemetry&&policyOutput.dataset.telemetry!==telemetry)policyOutput.textContent=telemetry;
+      policyOutput.dataset.telemetry=telemetry;
+    }catch(error){policyOutput.textContent='Map policy: '+(error instanceof Error?error.message:'Validate the current settings.');delete policyOutput.dataset.telemetry;}
     const experience=object(character.experience);const task=object(s.task);const escape=object(s.escape);this.host.querySelector<HTMLElement>('#session-details')!.textContent=`${Math.floor((number(s.elapsedSeconds)??0)/60)}m ${(number(s.elapsedSeconds)??0)%60}s · ${number(s.deaths)??0} deaths · Base EXP +${number(experience.baseGained)??'—'} · Job EXP +${number(experience.jobGained)??'—'}${task.label?' · '+text(task.label):''}${escape.state&&escape.state!=='idle'?' · '+text(escape.reason):''}`;
     const npcChoice=this.host.querySelector<HTMLSelectElement>('#visible-npcs')!;const actors=Array.isArray(s.actors)?s.actors.map(object).filter(actor=>actor.kind===2||actor.kind===4):[];const actorKey=actors.map(actor=>`${actor.id}:${text(actor.name)}`).join('|');
     if(npcChoice.dataset.actors!==actorKey){const selected=npcChoice.value;npcChoice.dataset.actors=actorKey;npcChoice.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='Choose a visible NPC';npcChoice.append(empty);for(const actor of actors){const option=document.createElement('option');option.value=String(actor.id);option.textContent=`${text(actor.name)||'NPC'} · #${actor.id}`;npcChoice.append(option);}npcChoice.value=actors.some(actor=>String(actor.id)===selected)?selected:'';}

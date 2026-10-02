@@ -1,3 +1,5 @@
+import { DEFAULT_MAP_POLICY } from './map-policy';
+import { DEFAULT_AUTOMATION } from './settings';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FeatureUi } from './feature-ui';
 import { NpcServiceStore } from './npc-service-store';
@@ -39,7 +41,7 @@ class Element {
     await Promise.resolve();
   }
 }
-function setup() {
+function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
   vi.stubGlobal('document', { createElement: (tag: string) => new Element(tag) });
   const panel = new Element('section'),
     host = new Element('main');
@@ -61,6 +63,7 @@ function setup() {
   };
   const view: object = Object.create(FeatureUi.prototype);
   Object.assign(view, {
+    read:()=>({...structuredClone(DEFAULT_AUTOMATION),mapPolicy:structuredClone(executionPolicy)}),
     panels: new Map([['workflows', panel]]),
     editors: new Map(),
     dispositionEditor: { lock: () => {} },
@@ -101,6 +104,11 @@ describe('NPC service UI ownership gates', () => {
     expect(s.hooks.service).not.toHaveBeenCalled();
     expect(s.hooks.notify.mock.calls.flat().join(' ')).not.toContain('Waiting for the game');
   });
+  it('previews restrictions and sends the same detached policy beside the service definition',async()=>{
+    const executionPolicy={...structuredClone(DEFAULT_MAP_POLICY),deny:['prontera']},s=setup(executionPolicy);s.lock(false,true,false);await s.button('Preview').click();
+    expect(s.panel.all().some(node=>node.textContent.includes('forbidden by the map policy'))).toBe(true);await s.button('Run service').click();
+    expect(s.hooks.service.mock.calls[0]?.[0]).toMatchObject({executionPolicy});
+  });
   it('runs a verified service during field automation while keeping configuration locked', async () => {
     const s = setup();
     s.lock(true, true, false);
@@ -109,6 +117,8 @@ describe('NPC service UI ownership gates', () => {
     await s.button('Run service').click();
     expect(s.hooks.service).toHaveBeenCalledOnce();
     expect(s.hooks.service.mock.calls[0]?.[0]).not.toHaveProperty('npcId');
+    expect(s.hooks.service.mock.calls[0]?.[0]).toMatchObject({executionPolicy:DEFAULT_MAP_POLICY,service:{contractId:expect.any(String)}});
+    expect(s.hooks.service.mock.calls[0]?.[0]).not.toHaveProperty('service.mapPolicy');
     s.lock(true, true, true);
     await s.button('Run service').click();
     expect(s.hooks.service).toHaveBeenCalledOnce();

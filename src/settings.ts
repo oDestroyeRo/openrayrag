@@ -1,3 +1,4 @@
+import { validateMapPolicy, type MapPolicy } from './map-policy';
 import type { Position } from './protocol';
 import { validActorConditions, type ActorPredicate } from './actor-observations';
 import { validateDispositionPolicy, type DispositionPolicy } from './disposition';
@@ -34,6 +35,7 @@ export interface AutomationSettings {
   schedule: { enabled: boolean; startHour: number; endHour: number };
   disposition?: DispositionPolicy;
   supply?: SupplySettings;
+  mapPolicy?: MapPolicy;
 }
 export interface Settings {
   map: string; targets: number[]; radius: number; minHpPercent: number; loot: boolean;
@@ -71,7 +73,8 @@ export function automationSettings(settings: Settings): AutomationSettings { ret
 export function escapeSettings(settings: Settings): EscapeSettings { return automationSettings(settings).escape ?? DEFAULT_ESCAPE; }
 export function validateAutomation(a: AutomationSettings): AutomationSettings {
   try {
-    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies']);
+    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies','mapPolicy']);
+    if (Object.hasOwn(a,'mapPolicy')) validateMapPolicy(a.mapPolicy);
     if (Object.hasOwn(a,'supply')) validateSupplySettings(a.supply);
     const escape = a.escape === undefined ? DEFAULT_ESCAPE : a.escape;
     strictKeys(escape,['enabled','hpBelowPercent','mode','method','minStock','cooldownSeconds']);
@@ -138,6 +141,7 @@ export function validateSettings(value: Settings): Settings {
   }
   const automation = value.automation ? validateAutomation(value.automation) : undefined;
   if (!value.targets.length && automation && ['selected','both'].includes(automation.combat.mode) && !automation.combat.rules.some(r=>r.action==='attack')) throw new Error('Choose selected monsters or disable selected combat.');
+  if (automation?.mapPolicy?.lockArea && (automation.mapPolicy.lockArea.map !== value.map || (automation.travel.destinationMap && automation.travel.destinationMap !== value.map))) throw new Error('The field lock map, rectangle map and field destination must match.');
   if (automation?.recovery.enabled && automation.recovery.hpStart <= value.minHpPercent) throw new Error('Recovery HP start must be above the emergency HP stop limit.');
   return { ...value, targets: value.targets.slice(), ...(automation ? { automation } : {}) };
 }

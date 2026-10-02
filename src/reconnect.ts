@@ -186,7 +186,7 @@ export class PersistentFieldRun {
       || status.player.name !== this.character || !/^[a-zA-Z0-9_-]{1,64}$/.test(status.map)
       || !status.sessionId || status.sessionId === this.session || status.sessionId === this.pendingSession) return null;
     this.pendingSession = status.sessionId;
-    const settings = validateSettings({ ...this.desired, map: status.map });
+    const settings = validateSettings({ ...this.desired, map: this.desired.automation?.mapPolicy?.lockArea ? this.desired.map : status.map });
     if (settings.automation) {
       const a = settings.automation;
       if (a.limits.minutes) a.limits.minutes = Math.max(1, Math.ceil((a.limits.minutes * 60_000 - (this.now() - this.startedAt)) / 60_000));

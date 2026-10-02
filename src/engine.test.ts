@@ -1,3 +1,4 @@
+import { DEFAULT_MAP_POLICY, insideLockArea } from './map-policy';
 import { describe, expect, it, vi } from 'vitest';
 import { BotEngine, DEFAULT_SETTINGS, DEFAULT_AUTOMATION, type Action, validateSettings } from './engine';
 import { GridNavigator, routeSegment, searchGrid, type WalkGrid } from './navigation';
@@ -619,5 +620,62 @@ describe('opt-in ammo ownership and reserve receipts',()=>{
     const t=ammoSetup();t.engine.settings.automation!.loadout.ammoPreferences=[{itemId:1751}];
     t.engine.receive([{type:'walk',id:1,walk:{cells:[{x:100,y:100},{x:101,y:100}],secondsPerCell:2,firstSeconds:2,origin:{x:100.5,y:100.5},locked:false}}]);
     t.step(100);expect(t.sent).toEqual([]);t.step(100);expect(t.sent).toEqual([]);t.step(2000);expect(t.sent).toEqual([{type:'equip',bagId:1751,equipped:true}]);
+  });
+});
+
+describe('field lock area ownership',()=>{
+  function area(minX=95,maxX=102){return {...structuredClone(DEFAULT_MAP_POLICY),lockArea:{map:'prt_fild08',minX,minY:95,maxX,maxY:105}};}
+  function bounded(minX=95,maxX=102){return {...settings,automation:{...structuredClone(DEFAULT_AUTOMATION),mapPolicy:area(minX,maxX)}};}
+  it('uses incoming policy and changes a warmed same-map navigator on the next Start',()=>{
+    const {engine,sent,step}=setup();engine.start(bounded());step(100);expect(sent.at(-1)).toEqual({type:'attack',id:2});engine.stop();sent.length=0;
+    engine.start(bounded(95,100));step(100);expect(sent).toEqual([]);expect(engine.snapshot().navigation!.reachable).toBeLessThan(100);
+    engine.stop();sent.length=0;engine.entities.get(1)!.x=103;expect(()=>engine.start(bounded())).toThrow('lock area');expect(engine.running).toBe(false);expect(sent).toEqual([]);
+  });
+  it('never clicks an outside target even when a ranged bow could hit it without walking',()=>{
+    const {engine,sent,step}=setup();engine.receive([{type:'inventory',items:[{bagId:1701,itemId:1701,type:1,count:1},{bagId:1750,itemId:1750,type:1,count:100}],equipment:[-1,-1,-1,-1,1701,-1,-1,-1,-1,-1],ammoId:1750}]);
+    engine.start(bounded(95,100));step(100);expect(sent).toEqual([]);
+  });
+  it('stops an owned direct chase when its moving target crosses the rectangle and holds late walk ownership',()=>{
+    const {engine,sent,step}=setup();engine.entities.get(2)!.x=104;engine.start(bounded(95,104));step(100);expect(sent.at(-1)).toEqual({type:'attack',id:2});
+    engine.receive([{type:'position',id:2,position:{x:106,y:100}}]);step(100);expect(sent.at(-1)).toEqual({type:'stop'});
+    engine.receive([{type:'spawn',entity:{...monster,id:3,x:101}},{type:'walk',id:1,walk:{origin:{x:100,y:100},cells:[{x:100,y:100},{x:101,y:100},{x:102,y:100},{x:103,y:100}],secondsPerCell:1,firstSeconds:1,locked:false}}]);
+    step(100);expect(sent.filter(a=>a.type==='attack')).toHaveLength(1);
+    engine.stop();step(100);expect(sent.filter(a=>a.type==='attack')).toHaveLength(1);
+  });
+  it.each(['boundary','Stop'] as const)('retains an explicit unacknowledged walk through %s cancellation and late movement',cause=>{
+    let now=100000;const sent:Action[]=[];const physical={...openGrid,walkable:(p:Position)=>!(p.x===102&&p.y===100)};
+    const engine=new BotEngine(a=>sent.push(a),()=>now,()=>physical);
+    engine.connect(true);engine.receive([{type:'enter',id:1,map:'prt_fild08'},{type:'spawn',entity:{...player}},{type:'spawn',entity:{...monster,x:104}}]);
+    const value=bounded(95,104);engine.start(value);now+=100;engine.tick();expect(sent[0]?.type).toBe('walk');
+    if(cause==='boundary'){engine.receive([{type:'position',id:2,position:{x:106,y:100}}]);now+=100;engine.tick();}
+    else engine.stop();
+    expect(sent.at(-1)).toEqual({type:'stop'});engine.receive([{type:'spawn',entity:{...monster,id:3}}]);
+    // Neither the former target nor a legitimate future actor ID zero can
+    // correlate an own Attack reply to this outstanding explicit Walk.
+    for(const target of [2,0]){
+      engine.receive([{type:'attack',source:1,target,position:{x:100,y:100}}]);now+=500;engine.tick();expect(sent.map(a=>a.type)).toEqual(['walk','stop']);
+      expect(()=>engine.start(value)).toThrow('Wait');expect(()=>engine.manualAction({type:'sit',sitting:false})).toThrow('wait');
+    }
+    if(cause==='Stop')expect(()=>engine.resumeRequested(value)).toThrow('Wait');
+    const cells=[{x:100,y:100},{x:100,y:101}];engine.receive([{type:'walk',id:1,walk:{origin:cells[0]!,cells,secondsPerCell:2,firstSeconds:2,locked:false}}]);
+    now+=1000;engine.tick();expect(sent.map(a=>a.type)).toEqual(['walk','stop']);
+    now+=1200;if(cause==='Stop')engine.resumeRequested(value);engine.tick();expect(sent.at(-1)).toEqual({type:'attack',id:3});
+  });
+  it('rejects outside adjacent loot, follow actors and waypoints before their range shortcuts',()=>{
+    const {engine,sent,step}=setup();engine.entities.delete(2);engine.receive([{type:'drop',drop:{id:10,itemId:501,count:1,isNew:true,x:101,y:100}}]);
+    const a=bounded(95,100).automation;a.combat.mode='off';a.loot.ownership='all';a.follow.name='Friend';
+    engine.receive([{type:'spawn',entity:{...player,id:3,name:'Friend',x:101}}]);engine.start({...settings,targets:[],automation:a});step(100);expect(sent).toEqual([]);expect(engine.reason).toContain('outside');
+    engine.stop();sent.length=0;a.follow.name='';a.travel.waypoints=[{map:'prt_fild08',x:101,y:100}];engine.start({...settings,targets:[],automation:a});step(100);expect(sent).toEqual([{type:'stop'}]);expect(engine.reason).toContain('Waypoint');
+  });
+  it('stops before another request if an accepted implicit walk or correction exits the area',()=>{
+    const {engine,sent,step}=setup();engine.start(bounded());step(100);
+    engine.receive([{type:'walk',id:1,walk:{origin:{x:100,y:100},cells:[{x:100,y:100},{x:101,y:100},{x:102,y:100},{x:103,y:100}],secondsPerCell:1,firstSeconds:1,locked:false}}]);
+    expect(engine.running).toBe(false);expect(sent.at(-1)).toEqual({type:'stop'});const count=sent.length;step(100);expect(sent).toHaveLength(count);
+    const next=setup();next.engine.start(bounded());next.engine.receive([{type:'position',id:1,position:{x:103,y:100}}]);expect(next.engine.running).toBe(false);expect(next.engine.reason).toContain('lock area');
+  });
+  it('random search legs stay inside the inclusive mask and a policy mutation cancels the old owner',()=>{
+    const {engine,sent,step}=setup();engine.entities.delete(2);const value={...bounded(),route_randomWalk:2 as const};engine.start(value);step(100);
+    const walk=sent.find(a=>a.type==='walk');expect(walk?.type).toBe('walk');if(walk?.type==='walk')expect(insideLockArea(area(),'prt_fild08',walk.destination)).toBe(true);
+    engine.settings.automation!.mapPolicy!.lockArea!.maxX=100;step(100);expect(engine.running).toBe(false);expect(sent.at(-1)).toEqual({type:'stop'});
   });
 });
