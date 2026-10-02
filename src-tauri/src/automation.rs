@@ -850,9 +850,29 @@ struct SkillAllocation {
     target: u8,
 }
 
+fn deserialize_follow_value<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Follow {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_follow_value",
+        skip_serializing_if = "Option::is_none"
+    )]
+    mode: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_follow_value",
+        skip_serializing_if = "Option::is_none"
+    )]
+    rendezvous: Option<bool>,
     name: String,
     distance: u8,
     lost_seconds: u8,
@@ -1014,6 +1034,14 @@ impl AutomationSettings {
                 .skills
                 .iter()
                 .all(|r| (1..=255).contains(&r.skill_id) && (1..=10).contains(&r.target))
+            && self
+                .follow
+                .mode
+                .as_deref()
+                .map_or(true, |mode| matches!(mode, "name" | "partyLeader"))
+            && (self.follow.mode.as_deref() != Some("partyLeader") || self.follow.name.is_empty())
+            && (self.follow.rendezvous != Some(true)
+                || self.follow.mode.as_deref() == Some("partyLeader"))
             && self.follow.name.encode_utf16().count() <= 48
             && !self.follow.name.chars().any(|c| c <= '\u{001f}')
             && (1..=20).contains(&self.follow.distance)
@@ -1118,6 +1146,32 @@ mod tests {
 
     fn valid(value: Value) -> bool {
         serde_json::from_value::<Settings>(value).is_ok_and(|settings| settings.validate().is_ok())
+    }
+
+    #[test]
+    fn party_follow_policy_matches_typescript_and_preserves_legacy() {
+        let cases: Value = serde_json::from_str(include_str!(
+            "../../src/data/party-follow-settings-cases.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let mut value = settings();
+            value["automation"] = automation();
+            value["automation"]["follow"] = case["follow"].clone();
+            assert_eq!(
+                valid(value.clone()),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["follow"]
+            );
+            if case["valid"] == true {
+                let parsed: Settings = serde_json::from_value(value.clone()).unwrap();
+                assert_eq!(
+                    serde_json::to_value(parsed).unwrap()["automation"]["follow"],
+                    value["automation"]["follow"]
+                );
+            }
+        }
     }
 
     #[test]

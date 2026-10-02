@@ -1,5 +1,5 @@
 import { describe,expect,it } from 'vitest';
-import { validFeatureStatus } from './feature-ui';
+import { FeatureUi, chooseFollowMode, validFeatureStatus } from './feature-ui';
 describe('extended controller telemetry',()=>{
   it('accepts bounded character and workflow state without requiring unavailable fields',()=>{
     expect(validFeatureStatus({})).toBe(true);
@@ -34,4 +34,22 @@ it('bounds attack strategy ledger telemetry without allowing non-finite counts',
 it('bounds party engagement diagnostics without exposing affiliation or permitting invalid counts',()=>{
  expect(validFeatureStatus({partyEngagement:{enabled:true,accepted:1,blocked:2,reasons:['Party engagement unavailable: revoked party membership.']}})).toBe(true);
  for(const change of [{partyId:5},{enabled:1},{accepted:NaN},{accepted:151},{accepted:-1},{blocked:150,accepted:1},{reasons:Array(5).fill('unknown')},{reasons:['x'.repeat(161)]}])expect(validFeatureStatus({partyEngagement:{enabled:true,accepted:0,blocked:0,reasons:[],...change}})).toBe(false);
+});
+
+it('mode selection explicitly clears conflicts and rendezvous telemetry remains strict',()=>{
+ expect(chooseFollowMode({name:'Leader',distance:8,lostSeconds:15},'partyLeader')).toEqual({name:'',distance:8,lostSeconds:15,mode:'partyLeader'});
+ expect(chooseFollowMode({name:'',distance:4,lostSeconds:10,mode:'partyLeader',rendezvous:true},'name').rendezvous).toBe(false);
+ const status={state:'preparing',reason:'Waiting for movement.',destination:'prontera',remainingSeconds:8,attemptUsed:true,ownsTravel:true};
+ expect(validFeatureStatus({partyFollow:status})).toBe(true);
+ for(const changed of [{...status,remainingSeconds:121},{...status,remainingSeconds:NaN},{...status,memberId:7},{...status,state:'unknown'},{...status,ownsTravel:1}])expect(validFeatureStatus({partyFollow:changed})).toBe(false);
+});
+
+it('locks the actual follow controls according to mutually exclusive mode and configuration ownership',()=>{
+ const mode={value:'partyLeader'},name={disabled:false},rendezvous={disabled:false};
+ const controls:Record<string,object>={'follow.mode':mode,'follow.name':name,'follow.rendezvous':rendezvous};
+ const view=Object.assign(Object.create(FeatureUi.prototype),{locked:false,host:{querySelector:(selector:string)=>controls[selector.match(/"([^"]+)"/)![1]!]}});
+ const sync=()=>Reflect.apply(Reflect.get(FeatureUi.prototype,'syncFollowMode'),view,[]);
+ sync();expect(name.disabled).toBe(true);expect(rendezvous.disabled).toBe(false);
+ mode.value='name';sync();expect(name.disabled).toBe(false);expect(rendezvous.disabled).toBe(true);
+ view.locked=true;mode.value='partyLeader';sync();expect(name.disabled).toBe(true);expect(rendezvous.disabled).toBe(true);
 });

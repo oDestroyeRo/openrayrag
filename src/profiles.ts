@@ -35,8 +35,11 @@ function checkedSettings(value: unknown): Settings {
       if (Array.isArray(template)) {
         if (!Array.isArray(child) || !child.every(entry => record(entry) && ruleKeys(entry, arrayKeys[key]!,key))) throw new Error('Profile contains unknown rule settings.');
       } else {
+        if (!record(child)) throw new Error('Profile contains unknown automation settings.');
         const optional = key === 'escape' ? ['hpEnabled','threatEnabled','threatCount','threatWindowSeconds'] : key === 'combat' ? ['partyEngagement'] : [];
-        if (!record(child) || !keys(child, Object.keys(template).filter(field => !optional.includes(field) || Object.hasOwn(child, field)))) throw new Error('Profile contains unknown automation settings.');
+        const fields = Object.keys(template).filter(field => !optional.includes(field) || Object.hasOwn(child, field));
+        if (key === 'follow') fields.push(...['mode','rendezvous'].filter(field => Object.hasOwn(child, field)));
+        if (!keys(child, fields)) throw new Error('Profile contains unknown automation settings.');
         for (const [field, fields] of Object.entries(arrayKeys)) if (field.startsWith(`${key}.`)) {
           const entries = child[field.slice(key.length + 1)];
           if (!Array.isArray(entries) || !entries.every(entry => record(entry) && ruleKeys(entry, fields,field))) throw new Error('Profile contains unknown rule settings.');

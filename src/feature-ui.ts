@@ -1,3 +1,4 @@
+import { validPartyFollowSnapshot } from './party-follow';
 import { validateDeathRecoveryGuard } from './death-recovery';
 import { DEFAULT_MAP_POLICY, insideLockArea, mapPolicy, policySummary, validateMapPolicy } from './map-policy';
 import { ManualTargetUi } from './manual-target-ui';
@@ -49,6 +50,10 @@ function checkedAction(input: unknown): Record<string, unknown> {
   return validateWorldAction(input) as unknown as Record<string,unknown>;
 }
 function isAction(input: unknown): input is Record<string,unknown> { try { checkedAction(input); return true; } catch { return false; } }
+/** Mode selection explicitly clears incompatible policy in the form. */
+export function chooseFollowMode(follow:AutomationSettings['follow'],mode:'name'|'partyLeader'):AutomationSettings['follow'] {
+  return {...follow,mode,...(mode==='partyLeader'?{name:''}:{rendezvous:false})};
+}
 const fields: Record<Section, Field[]> = {
   combat: [
     { path:'combat.mode', label:'Combat mode', options:[['selected','Selected monsters'],['retaliate','Retaliate only'],['both','Selected + retaliation'],['off','Combat off']] },
@@ -86,6 +91,8 @@ const fields: Record<Section, Field[]> = {
     ...(['storage','buy','sell'] as const).map(kind=>({path:`supply.${kind}Service`,label:`Supply ${kind} service`,options:[['','Select a verified service'],...BUILTIN_SERVICES.filter(def=>kind==='storage'?def.outcome.type==='storageOpened':def.outcome.type==='shopOpened'&&def.outcome.mode===kind).map(def=>[def.contractId,def.name] as [string,string])] as Array<[string,string]>})),
     { path:'travel.destinationMap',label:'Destination map code',kind:'text' },
     { path:'travel.loop',label:'Repeat waypoint route',kind:'checkbox' },
+    { path:'follow.mode',label:'Follow selection',options:[['name','Player name'],['partyLeader','Current party leader']] },
+    { path:'follow.rendezvous',label:'Allow one bounded trip to the leader map per Start',kind:'checkbox' },
     { path:'follow.name',label:'Follow player name',kind:'text' }, { path:'follow.distance',label:'Follow distance, cells',min:1,max:20 },
     { path:'follow.lostSeconds',label:'Wait when player lost, seconds',min:1,max:120 },
   ],
@@ -181,12 +188,13 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     if (v && typeof v === 'object') return Object.keys(v).length <= 256 && Object.values(v).every(entry => bounded(entry,depth+1));
     return false;
   }
-  if (!['character','world','workflow','routine','service','task','actionResult','travel','escape','supply','supplyGuard','deathRecoveryGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies','manualTarget'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if (!['character','world','workflow','routine','service','task','actionResult','travel','partyFollow','escape','supply','supplyGuard','deathRecoveryGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies','manualTarget'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
   if(object(value.travel).policy!==undefined){try{validateMapPolicy(object(value.travel).policy);}catch{return false;}}
   if(value.partyEngagement!==undefined) {
     const p=object(value.partyEngagement);
     if(Object.keys(p).length!==4||Object.keys(p).some(key=>!['enabled','accepted','blocked','reasons'].includes(key))||typeof p.enabled!=='boolean'||!Number.isInteger(p.accepted)||!Number.isInteger(p.blocked)||Number(p.accepted)<0||Number(p.blocked)<0||Number(p.accepted)+Number(p.blocked)>150||!Array.isArray(p.reasons)||p.reasons.length>4||!p.reasons.every(reason=>typeof reason==='string'&&reason.length<=160))return false;
   }
+  if(value.partyFollow!==undefined&&!validPartyFollowSnapshot(value.partyFollow))return false;
   if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
   if(value.social!==undefined&&!validSocialSnapshot(value.social))return false;
   if(value.memo!==undefined&&!validMemoSnapshot(value.memo))return false;
@@ -261,6 +269,14 @@ export class FeatureUi {
       const grid = document.createElement('div'); grid.className = 'form-grid'; for (const field of definitions) grid.append(fieldElement(field)); this.panels.get(section)!.append(grid);
     }
     const travel = this.panels.get('travel')!;
+    const followProgress=document.createElement('p');followProgress.id='party-follow-state';followProgress.className='hint';travel.append(followProgress);
+    this.host.querySelector<HTMLSelectElement>('[data-setting="follow.mode"]')!.addEventListener('change',()=>{
+      const mode=this.host.querySelector<HTMLSelectElement>('[data-setting="follow.mode"]')!.value as 'name'|'partyLeader';
+      const follow=chooseFollowMode({name:this.host.querySelector<HTMLInputElement>('[data-setting="follow.name"]')!.value,distance:4,lostSeconds:10},mode);
+      if(mode==='partyLeader')this.host.querySelector<HTMLInputElement>('[data-setting="follow.name"]')!.value=follow.name;
+      else this.host.querySelector<HTMLInputElement>('[data-setting="follow.rendezvous"]')!.checked=false;
+      this.syncFollowMode();this.hooks.changed();
+    });
     travel.prepend(combat.querySelector('.routing-field')!,combat.querySelector('.routing-settings')!);
     const recovery = this.panels.get('recovery')!; recovery.append(combat.querySelector('#min-hp')!.previousElementSibling!,combat.querySelector('#min-hp')!);
     this.note('combat','Loot all considers observed drops inside your pickup radius and allowed field area. Item ignore rules still apply. The server decides pickup rights and inventory capacity; sending Pickup is not success.');
@@ -354,7 +370,7 @@ export class FeatureUi {
     this.note('recovery','Automatic respawn is off by default. It sends one save-point request per death and waits for your living character. When sitting recovery is enabled, it reaches the configured HP/SP targets and confirms standing before return. Stop cancels continuation; an unanswered request never retries. The farming map is captured at Start: lock map, journey destination, then starting map. Recovery or return failure keeps the run waiting.');
     this.note('recovery','Emergency escape is opt-in: random uses Fly Wing or Teleport; save point uses Butterfly Wing or Return. Enabled HP and observed-attack triggers combine with OR. Recent attackers count only living visible monsters observed attacking you, not nearby monsters or hidden server aggro. After arrival, recovery requires HP plus a full quiet attack window and cooldown; changing settings does not shorten a spent episode. Stock reserve applies to wings. A rejected or uncertain attempt never falls back to another action.');
     this.editor('travel','travel.waypoints','Waypoints',[{key:'map',label:'Map code',kind:'text'},{key:'x',label:'X',min:0,max:511},{key:'y',label:'Y',min:0,max:511}],{map:'prt_fild08',x:150,y:150},64);
-    this.note('travel','Travel uses verified portal routes. NPC or conditional portals may require a manual action. A blank player name disables follow.');
+    this.note('travel','Travel uses verified portal routes. NPC or conditional portals may require a manual action. A blank player name disables name follow. Party mode requires a verified visible leader before one optional fixed-portal trip. The original loss allowance includes travel and arrival visibility; Stop and Start explicitly retries. Reconnect does not arm a trip.');
     this.editor('inventory','loot.rules','Pickup filters & priority',[idColumn('itemId','Item ID'),{key:'action',label:'Action',options:[['pickup','Pick up'],['ignore','Ignore']]},priority],{itemId:501,action:'pickup',priority:0},128);
     this.editor('inventory','items','Recovery items',[idColumn('itemId','Item ID'),{key:'resource',label:'Resource',options:[['hp','HP'],['sp','SP']]},{key:'belowPercent',label:'Below %',min:1,max:100},{key:'minStock',label:'Keep quantity',min:0,max:9999},{key:'cooldownSeconds',label:'Cooldown seconds',min:1,max:3600}],{itemId:501,resource:'hp',belowPercent:60,minStock:0,cooldownSeconds:5},32);
     this.editor('inventory','skills','Skill rules',[idColumn('skillId','Skill ID',255),{key:'level',label:'Level',min:1,max:10},{key:'target',label:'Target',options:[['self','Your character'],['enemy','Current enemy']]},{key:'hpBelowPercent',label:'HP below %',min:1,max:100},{key:'spAbovePercent',label:'SP above %',min:0,max:100},{key:'cooldownSeconds',label:'Cooldown seconds',min:1,max:3600}],{skillId:1,level:1,target:'self',hpBelowPercent:100,spAbovePercent:0,cooldownSeconds:10},32);
@@ -429,7 +445,7 @@ export class FeatureUi {
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
       const value = getPath(automation,field.path);
-      if (field.kind === 'checkbox') (input as HTMLInputElement).checked = value === true; else input.value = String(value ?? '');
+      if (field.kind === 'checkbox') (input as HTMLInputElement).checked = value === true; else input.value = String(value ?? (field.path==='follow.mode'?'name':''));
     }
     for (const [path,editor] of this.editors) editor.write((getPath(automation,path)??[]) as Row[]);
     const mp=automation.mapPolicy!;for(const key of ['allow','deny'] as const)this.host.querySelector<HTMLInputElement>(`#map-policy-${key}`)!.value=mp[key].join(', ');
@@ -438,7 +454,12 @@ export class FeatureUi {
     const policy=automation.disposition??DEFAULT_DISPOSITION;
     this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!.value=String(policy.maxSpend);
     this.dispositionEditor.write(policy.rules.map(row=>({...row,store:row.store?'1':'0',cart:row.cart?'1':'0',sell:row.sell?'1':'0',allowUnique:row.allowUnique?'1':'0'})));
-    this.dispositionPlan=null;this.dispositionOutput().textContent='No preview generated. No items will be moved or sold.';
+    this.dispositionPlan=null;this.dispositionOutput().textContent='No preview generated. No items will be moved or sold.';this.syncFollowMode();
+  }
+  private syncFollowMode():void {
+    const party=this.host.querySelector<HTMLSelectElement>('[data-setting="follow.mode"]')!.value==='partyLeader';
+    this.host.querySelector<HTMLInputElement>('[data-setting="follow.name"]')!.disabled=this.locked||party;
+    this.host.querySelector<HTMLInputElement>('[data-setting="follow.rendezvous"]')!.disabled=this.locked||!party;
   }
   levelDifference(): number { return Number(this.host.querySelector<HTMLInputElement>('[data-setting="combat.levelDifference"]')!.value); }
   private async operation(action: () => Promise<unknown>, locked=this.manualLocked, request=true): Promise<void> {
@@ -586,6 +607,7 @@ export class FeatureUi {
   lock(config: boolean, manual: boolean, service=manual): void {
     this.locked=config;this.manualLocked=manual;this.serviceLocked=service;
     for(const input of this.host.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('[data-setting], [data-config], .feature-panel input, .feature-panel select, .feature-panel textarea, .rule-editor button')) input.disabled=config;
+    this.syncFollowMode();
     for(const editor of this.editors.values())editor.lock(config);
     this.dispositionEditor.lock(config);
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-manual]'))button.disabled=manual;
@@ -593,10 +615,10 @@ export class FeatureUi {
     this.social.lock(manual);
     this.memo.lock(manual);this.socket.lock(manual);this.manualTargets.lock(manual);
   }
-  serviceBlocked(): boolean { return object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
+  serviceBlocked(): boolean { return object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
   clearSocial(): void { delete this.status.social; this.social.clear(); delete this.status.socket; this.socket.clear(); }
   clearMemo(): void { delete this.status.memo; this.memo.clear(); }
-  active(): boolean { return object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
+  active(): boolean { return object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
   private observation(): RoutineObservation {
     const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:this.hooks.map(),elapsedSeconds:0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;
@@ -613,6 +635,7 @@ export class FeatureUi {
     this.manualTargets.render(s);
     const conditionState=this.host.querySelector<HTMLElement>('#actor-condition-state')!;const traces=Array.isArray(s.ruleConditions)?s.ruleConditions:[];conditionState.hidden=traces.length===0;conditionState.textContent=traces.slice(0,32).map(entry=>{const rule=object(entry);const conditions=Array.isArray(rule.conditions)?rule.conditions:[];return text(rule.rule)+(rule.truncated===true?' · additional evidence omitted':'')+conditions.map(condition=>{const trace=object(condition);return '\n  '+text(trace.state)+' · '+text(trace.reason);}).join('');}).join('\n');
     if(this.dispositionPlan){try{const settings=this.read();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
+    const follow=object(s.partyFollow);this.host.querySelector<HTMLElement>('#party-follow-state')!.textContent=follow.state&&follow.state!=='disabled'?`${text(follow.state)} · ${text(follow.reason)}${follow.destination?' · '+text(follow.destination):''} · ${Math.ceil(number(follow.remainingSeconds)??0)}s remaining`:'';
     const supply=object(s.supply),supplyOutput=this.host.querySelector<HTMLElement>('#supply-preview')!;
     const supplyText=`${text(supply.state)} · ${text(supply.reason)} · ${number(supply.actions)??0} commands · ${number(supply.spent)??0}z spent / ${number(supply.reserved)??0}z reserved · ${number(supply.remainingTrips)??0} trips left`;
     if(supply.active===true||supply.uncertain===true||(number(supply.actions)??0)>0||supply.returnDestination){

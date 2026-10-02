@@ -1,3 +1,4 @@
+import followCases from './data/party-follow-settings-cases.json';
 import {describe,it,expect} from 'vitest';
 import {DEFAULT_SETTINGS,DEFAULT_AUTOMATION,DEFAULT_ESCAPE,validateSettings,type Settings} from './settings';
 import { CurrentForm, formDocument, type FormDocument } from './current-form';
@@ -75,4 +76,9 @@ describe('shared threat escape policy and ephemeral guard boundary', () => {
       for (const key of Object.keys(runtime)) delete (input.automation!.escape as unknown as Record<string, unknown>)[key];
     }
   });
+});
+
+it('shares strict optional party-follow policy cases with native validation',()=>{
+ for(const row of followCases){const value=settings();Object.assign(value.automation!,{follow:row.follow});expect((()=>{try{validateSettings(value);return true;}catch{return false;}})(),JSON.stringify(row.follow)).toBe(row.valid);}
+ const legacy=settings();expect(validateSettings(legacy).automation!.follow).toEqual(DEFAULT_AUTOMATION.follow);
 });

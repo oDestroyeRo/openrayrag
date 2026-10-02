@@ -169,3 +169,10 @@ it('preserves legacy explicit escape profiles while strictly validating new thre
     expect(() => f.store.import(JSON.stringify(invalid))).toThrow();
   }
 });
+
+it('round-trips party-follow policy while rejecting captured runtime fields atomically',()=>{
+ const f=fixture(),automation=structuredClone(DEFAULT_AUTOMATION);automation.follow={...automation.follow,mode:'partyLeader',rendezvous:true};
+ const saved=f.store.save('Leader','Test',{...settings(),automation});
+ const exported=f.store.export(saved.id);expect(f.store.import(exported)[0]!.settings.automation!.follow).toEqual(automation.follow);
+ for(const field of ['partyId','memberId','associationEpoch','trip','mapObservedAt']){const document=JSON.parse(exported);document.profiles[0].settings.automation.follow[field]=1;expect(()=>f.store.import(JSON.stringify(document))).toThrow();}
+});

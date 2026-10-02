@@ -26,6 +26,18 @@ describe('deployed Rebuild V8 protocol', () => {
       {type:'look',direction:0,head:-1},{type:'look',direction:0,head:3},{type:'look',direction:0,head:1,nonce:'private'}] as const)
       expect(()=>lookCommand(action)).toThrow();
   });
+  it('retains bounded removal reason metadata for both pinned single and multi-recipient forms', () => {
+    for (const id of [0,1]) for (const reason of [0,1,2,3,4,5,6,7]) {
+      const packet=new BitWriter().u8(OP.remove).i32(id).u8(reason).finish();
+      expect(decode(packet)).toEqual([{type:'remove',id,reason,dead:reason===3}]);
+      expect(decode(new BitWriter().take(packet).f32(-1).finish())).toEqual(decode(packet));
+    }
+    const invalidFloat=new BitWriter().u8(OP.remove).i32(1).u8(0).f32(-1).finish();new DataView(invalidFloat.buffer).setFloat32(6,NaN,true);
+    for (const packet of [new BitWriter().u8(OP.remove).i32(1).u8(8).finish(),
+      new BitWriter().u8(OP.remove).i32(1).u8(0).u8(0).finish(),
+      invalidFloat,
+      new BitWriter().u8(OP.remove).i32(1).u8(0).f32(-1).u8(0).finish()]) expect(()=>decode(packet)).toThrow();
+  });
   it('decodes the observed MemoryPack monster schema', () => {
     expect(decode(poring)[0]).toEqual({ type:'spawn', entryType:0, entity: { id:1638, classId:4000, name:'Poring', kind:1, x:320,y:153,level:1,hp:51,maxHp:51,sp:0,maxSp:0,sitting:false,statuses:[],dead:false } });
     expect(decode(poring)[1]).toMatchObject({type:'walk', id:1638, walk:{cells:[{x:321,y:152},{x:320,y:153},{x:319,y:154},{x:318,y:155},{x:317,y:156},{x:316,y:156},{x:315,y:156},{x:314,y:156},{x:313,y:156}]}});

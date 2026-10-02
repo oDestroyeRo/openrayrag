@@ -27,6 +27,19 @@ export class PartyActorBindings {
   get(memberId:number):PartyActorBinding|null {
     const binding=this.associations.get(memberId)?.binding;return binding?{...binding}:null;
   }
+  /** A verified trip may carry one unrevoked member association into a new world.
+   * This detached eligibility check does not restore roster/resource bindings. */
+  capturedArrival(captured:PartyActorBinding & {name:string;partyName:string}, party:Party, map:string, observations:ActorObservations):PartyActorBinding|null {
+    const member=party?.members.get(captured.memberId), actor=observations.partyActor(captured.entityId);
+    if(!party||party.id!==captured.partyId||party.name!==captured.partyName||!member||!member.leader
+      ||member.entityId<=0||member.entityId!==captured.entityId||member.name!==captured.name||member.map!==map
+      ||[...party.members.values()].filter(row=>row.entityId>0&&row.entityId===member.entityId).length!==1
+      ||new Set([...party.members.values()].filter(row=>row.entityId>0).map(row=>row.entityId)).size!==[...party.members.values()].filter(row=>row.entityId>0).length
+      ||!actor||actor.world===captured.world||actor.kind!==0||actor.name!==member.name||actor.partyId!==party.id||actor.partyName!==party.name||!observations.livingPlayer(member.entityId))return null;
+    const at=observations.context().at,visibleAt=observations.visibleAt(member.entityId);
+    if(visibleAt===null||at<visibleAt||at-visibleAt>RESOURCE_STALE_MS)return null;
+    return {partyId:party.id,memberId:member.memberId,entityId:member.entityId,map,world:actor.world,incarnation:actor.incarnation,affiliationRevision:actor.affiliationRevision};
+  }
   observe(event:WorldEvent, party:Party, map:string, observations:ActorObservations, selfId:number|null):void {
     if(event.type==='partyJoined'||event.type==='partyLeft'||!party)this.clear(observations);
     const remember=(member:PartyMember)=>{

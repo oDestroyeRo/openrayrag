@@ -146,3 +146,38 @@ describe('shared visible party actor binding',()=>{
  it('never binds cross-map health and does not fabricate a visible actor',()=>{const s=setup(false);s.join([{...member,map:'geffen'}]);s.event({type:'partyHealth',memberId:7,hp:10,maxHp:100,sp:50,maxSp:100});expect(s.snapshot().actors).toEqual([]);s.observations.spawn({...entity});s.event({type:'partyMap',memberId:7,map:'prontera'});s.event({type:'partyHealth',memberId:7,hp:100,maxHp:100,sp:50,maxSp:100});expect(s.world.partyActors.get(7)).toBeNull();expect(s.trace(sp).state).toBe('unavailable');});
  it('does not reuse persistent roster resource rows after a map/session reset',()=>{const s=setup();s.join();s.world.reset('prontera',true);s.observations.reset();s.observations.spawn({...entity});s.observations.frame();s.sync();s.event({type:'partyHealth',memberId:7,hp:100,maxHp:100,sp:50,maxSp:100});expect(s.trace(sp).state).toBe('unavailable');});
 });
+
+it('captured arrival eligibility is detached, positive, fresh and globally unambiguous without restoring party resources',()=>{
+ const s=setup();s.join([{...member,leader:true}]);const captured={...s.world.partyActors.get(7)!,name:member.name,partyName:'Party'};
+ expect(s.world.partyActors.capturedArrival(captured,s.world.party,s.world.map,s.observations)).toBeNull();
+ s.world.reset('prontera',true);s.observations.reset();s.observations.spawn({...entity});s.observations.frame();
+ expect(s.world.partyActors.capturedArrival(captured,s.world.party,s.world.map,s.observations)).not.toBeNull();
+ expect(s.world.partyActors.get(7)).toBeNull();expect(s.trace(sp).state).toBe('unavailable');
+ s.world.party!.members.set(8,{...member,memberId:8,entityId:3});s.world.party!.members.set(9,{...member,memberId:9,entityId:3});
+ expect(s.world.partyActors.capturedArrival(captured,s.world.party,s.world.map,s.observations)).toBeNull();
+ s.world.party!.members.delete(8);s.world.party!.members.delete(9);s.advance(15001);
+ expect(s.world.partyActors.capturedArrival(captured,s.world.party,s.world.map,s.observations)).toBeNull();
+});
+
+
+it('detached captured arrival requires authoritative living HP and never repairs shared resources',()=>{
+ const s=setup();s.join([{...member,leader:true}]);const captured={...s.world.partyActors.get(7)!,name:member.name,partyName:'Party'};
+ s.world.reset('prontera',true);s.observations.reset();s.observations.spawn({...entity});s.observations.frame();
+ s.observations.partyResources(2,{hp:0,maxHp:100},s.observations.context(2));expect(s.observations.livingPlayer(2)).toBe(false);
+ expect(s.world.partyActors.capturedArrival(captured,s.world.party,s.world.map,s.observations)).toBeNull();
+ s.observations.clearPartyResources(2,s.observations.context(2));expect(s.observations.livingPlayer(2)).toBe(false);
+ expect(s.world.partyActors.capturedArrival(captured,s.world.party,s.world.map,s.observations)).toBeNull();
+ s.observations.apply({type:'heal',id:2,hp:100,maxHp:100});expect(s.world.partyActors.capturedArrival(captured,s.world.party,s.world.map,s.observations)).not.toBeNull();
+ expect(s.world.partyActors.get(7)).toBeNull();expect(s.trace(sp).state).toBe('unavailable');
+});
+
+it('visible position evidence belongs to one actor lifetime and never refreshes resources, affiliation or status clocks',()=>{
+ const s=setup();s.join();const old=s.observations.context(2),before=s.snapshot().actors[0]!;
+ s.advance(16000);s.observations.apply({type:'position',id:2,position:{x:10,y:10}});s.observations.frame();
+ expect(s.observations.visibleAt(2)).toBe(old.at+16000);expect(s.snapshot().actors[0]!).toMatchObject({observedAt:before.observedAt,hp:before.hp,sp:before.sp});
+ expect(s.trace(sp).state).toBe('unavailable');expect(s.observations.partyActor(2)?.affiliationRevision).toBe(0);
+ s.observations.apply({type:'position',id:2,position:{x:10,y:10}},old);expect(s.observations.visibleAt(2)).toBe(old.at+16000);
+ s.observations.spawn({...entity});const replacement=s.observations.visibleAt(2);s.advance(1);s.observations.apply({type:'position',id:2,position:{x:10,y:10}},old);expect(s.observations.visibleAt(2)).toBe(replacement);
+ s.observations.remove(2);s.observations.apply({type:'position',id:2,position:{x:10,y:10}});expect(s.observations.visibleAt(2)).toBeNull();
+ s.observations.reset();s.observations.spawn({...entity});const reset=s.observations.visibleAt(2);s.advance(1);s.observations.apply({type:'position',id:2,position:{x:10,y:10}},old);expect(s.observations.visibleAt(2)).toBe(reset);
+});

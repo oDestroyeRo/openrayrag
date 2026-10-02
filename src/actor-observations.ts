@@ -25,7 +25,7 @@ export interface ActorObservationSnapshot {
 export interface ObservationContext { world: string; at: number; incarnation?: number; sequence?: number }
 export interface PartyActorEvidence { world: string; incarnation: number; kind: number; name: string; partyId: number | null; partyName: string | null; affiliationRevision: number }
 interface RecordState extends Omit<ActorObservation, 'statuses'> {
-  statuses: Map<number, StatusObservation>; startedAt: number; hpSequence: number; spSequence: number; hpUsesParty: boolean;
+  statuses: Map<number, StatusObservation>; startedAt: number; visibleAt: number; hpSequence: number; spSequence: number; hpUsesParty: boolean;
   partyId: number | null; partyName: string | null; affiliationRevision: number; affiliationSequence: number; affiliationAt: number;
   partyHp?: ResourceObservation; partySp?: ResourceObservation;
 }
@@ -156,13 +156,15 @@ export class ActorObservations {
     const sp=own&&entryType===1&&placeholder&&initialization?.sp?{...initialization.sp}
       :own&&entity.sp!==undefined?absoluteResource(entity.sp,entity.maxSp,at,'spawn'):undefined;
     this.actors.set(entity.id,{id:entity.id,incarnation:++this.nextIncarnation,kind:entity.kind,name:entity.name.slice(0,64),observedAt:at,
-      statusesKnown:entity.statuses!==undefined,statuses,cast:unknownCast(),startedAt:at,hpSequence:++this.sequence,spSequence:this.sequence,hpUsesParty:false,
+      statusesKnown:entity.statuses!==undefined,statuses,cast:unknownCast(),startedAt:at,visibleAt:at,hpSequence:++this.sequence,spSequence:this.sequence,hpUsesParty:false,
       partyId:entity.partyId??null,partyName:entity.partyName??null,affiliationRevision:0,affiliationSequence:this.sequence,affiliationAt:at,
       hp:absoluteResource(entity.hp,entity.maxHp,at,'spawn'),
       ...(sp?{sp}:{})});
   }
   /** Current observed HP, including a party update, can revoke a visible player's availability. */
   livingPlayer(id:number): boolean { const actor=this.actors.get(id);return actor?.kind===0&&actor.hp?.reason===null&&actor.hp.value!==null&&actor.hp.value>0; }
+  /** Actual world positions refresh visibility only, never resource/status or party-map evidence. */
+  visibleAt(id:number):number|null {return this.actors.get(id)?.visibleAt??null;}
   partyActor(id:number): PartyActorEvidence | null {
     const actor=this.actors.get(id);return actor?{world:this.world,incarnation:actor.incarnation,kind:actor.kind,name:actor.name,
       partyId:actor.partyId,partyName:actor.partyName,affiliationRevision:actor.affiliationRevision}:null;
@@ -211,6 +213,9 @@ export class ActorObservations {
     const actor=id===null?undefined:this.actors.get(id);
     if (!actor || context.at < actor.startedAt || context.incarnation!==undefined && context.incarnation!==actor.incarnation || (actor.kind!==0&&actor.kind!==1)) return;
     const at=context.at;
+    if(event.type==='position'||event.type==='walk') {
+      actor.visibleAt=Math.max(actor.visibleAt,at);return;
+    }
     if (event.type==='heal'||event.type==='hit'||event.type==='stats'||event.type==='sp') {
       const sequence=context.sequence??++this.sequence;
       if (event.type!=='sp'&&sequence>actor.hpSequence) {
@@ -239,13 +244,16 @@ export class ActorObservations {
       const deadline=at+event.remainingSeconds*1000;
       actor.cast=event.remainingSeconds>0&&clock(deadline)?{state:'casting',observedAt:at,deadline,skillId:event.skillId}:unknownCast();actor.observedAt=at;
     } else if(event.type==='castExtend') {
-      actor.observedAt=at;
+      actor.observedAt=at;actor.visibleAt=Math.max(actor.visibleAt,at);
       if(actor.cast.state!=='casting'||actor.cast.deadline===null||at>=actor.cast.deadline) {actor.cast=unknownCast();return;}
       const deadline=actor.cast.deadline+event.deltaSeconds*1000;
       actor.cast=clock(deadline)&&deadline>at?{...actor.cast,observedAt:at,deadline}:unknownCast();actor.observedAt=at;
     } else if(event.type==='castStop' || event.type==='skillResult' && !event.indirect && actor.cast.state==='casting' && actor.cast.skillId===event.skillId) {
       actor.cast={state:'idle',observedAt:at,deadline:null,skillId:null};actor.observedAt=at;
     }
+    // Keep visibility from the existing supported world status/cast evidence.
+    // Resource and affiliation packets do not supply a newer visibility clock.
+    actor.visibleAt=Math.max(actor.visibleAt,actor.observedAt);
   }
   snapshot(selfId: number | null, targetId: number | null, connected: boolean, requested: ActorPredicate[]=[], includeRest=true,candidateId:number|null=null): ActorObservationSnapshot {
     const ids=new Set<number>([...(selfId!==null?[selfId]:[]),...(targetId!==null?[targetId]:[]),...(candidateId!==null?[candidateId]:[]),...requested.flatMap(p=>p.actor.scope==='actor'?[p.actor.id]:[]),...(includeRest?this.actors.keys():[])]);

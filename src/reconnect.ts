@@ -235,6 +235,8 @@ export class PersistentFieldRun {
     const settings = validateSettings({ ...this.desired, map: this.desired.automation?.respawn.enabled||this.desired.automation?.travel.returnToLockMap||this.desired.automation?.mapPolicy?.lockArea ? farmingDestination(this.desired) : status.map });
     if (settings.automation) {
       const a = settings.automation;
+      // A new page has no captured leader association or explicit trip allowance.
+      if (a.follow.mode === 'partyLeader') a.follow.rendezvous = false;
       if (a.limits.minutes) a.limits.minutes = Math.max(1, Math.ceil((a.limits.minutes * 60_000 - (this.now() - this.startedAt)) / 60_000));
       if (a.limits.kills) a.limits.kills -= this.totals.kills;
       if (a.limits.pickups) a.limits.pickups -= this.totals.looted;

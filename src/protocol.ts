@@ -35,7 +35,7 @@ export type GameEvent = FeatureEvent | SocialEvent | MemoEvent
   | { type: 'enter'; id: number; map: string }
   | { type: 'map'; map: string }
   | { type: 'spawn'; entity: Entity; entryType?: number }
-  | { type: 'remove'; id: number; dead: boolean }
+  | { type: 'remove'; id: number; dead: boolean; reason?: number }
   | { type: 'clear' }
   | { type: 'stop'; id: number }
   | { type: 'position' | 'tracking'; id: number; position: Position }
@@ -208,7 +208,14 @@ export function decode(data: Uint8Array): GameEvent[] {
     case OP.enter: return [{ type: 'enter', id: actorId(r.i32()), map: mapName(r.string()) }];
     case OP.map: return [{ type: 'map', map: mapName(r.string()) }];
     case OP.spawn: return spawn(r);
-    case OP.remove: return [{ type: 'remove', id: actorId(r.i32()), dead: r.u8() === 3 }];
+    case OP.remove: {
+      const id=actorId(r.i32()),reason=r.u8();
+      if(reason>7)throw new Error('Unknown removal reason');
+      // Pinned direct packets omit the float; multi-recipient packets include it.
+      if(r.offset<data.length)r.f32();
+      if(r.offset!==data.length)throw new Error('Unknown removal trailer');
+      return [{type:'remove',id,reason,dead:reason===3}];
+    }
     case OP.clear: return [{ type: 'clear' }];
     case OP.stop: return [{ type: 'stop', id: actorId(r.i32()) }];
     case OP.walk: {

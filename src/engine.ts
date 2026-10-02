@@ -59,7 +59,7 @@ const MAX_DROP_ENGAGEMENTS = 8;
 type DropIdentity = Pick<Drop,'itemId'|'count'|'x'|'y'>;
 const sameDrop = (a:DropIdentity|undefined,b:DropIdentity):boolean => !!a&&a.itemId===b.itemId&&a.count===b.count&&a.x===b.x&&a.y===b.y;
 const cell = (p: Position): Position => ({ x: Math.floor(p.x), y: Math.floor(p.y) });
-interface RouteTask { engagement?:EngagementIdentity|null; strategy?:Extract<StrategyChoice,{state:'cast'}>; type: 'skill' | 'search' | 'attack' | 'pickup' | 'follow' | 'waypoint' | 'travel'; id?: number; destination: Position; cells: Position[]; since: number | null; attackRange?: number }
+interface RouteTask { followIdentity?:string; engagement?:EngagementIdentity|null; strategy?:Extract<StrategyChoice,{state:'cast'}>; type: 'skill' | 'search' | 'attack' | 'pickup' | 'follow' | 'waypoint' | 'travel'; id?: number; destination: Position; cells: Position[]; since: number | null; attackRange?: number }
 interface RouteLeg { destination: Position; cells: Position[]; since: number; acceptedUntil: number | null }
 
 export class BotEngine {
@@ -100,6 +100,7 @@ export class BotEngine {
   private aggressors = new Set<number>();
   readonly actors = new Map<number, Entity>();
   private readonly revivableActors=new Map<number,Entity>();
+  partyFollowBinding:(()=>PartyActorBinding|null)|undefined;
   private followLostAt: number | null = null;
   private waypointIndex = 0;
   private runKills = 0; private runPickups = 0;
@@ -583,8 +584,8 @@ export class BotEngine {
     if (this.awaitsImplicitWalk() && !this.pending?.direct) {
       // Cancellation holds movement ownership, but cannot extend a named
       // player's visibility deadline while waiting for its late walk reply.
-      if(a.follow.name){
-        if([...this.actors.values()].some(e=>e.kind===0&&e.name===a.follow.name&&!e.dead))this.followLostAt=null;
+      if(a.follow.name||a.follow.mode==='partyLeader'){
+        if(a.follow.mode==='partyLeader'?!!this.partyFollowBinding?.():[...this.actors.values()].some(e=>e.kind===0&&e.name===a.follow.name&&!e.dead))this.followLostAt=null;
         else {this.followLostAt??=now;if(now-this.followLostAt>=a.follow.lostSeconds*1000){this.stop('Follow target is no longer visible.');return;}}
       }
       this.reason = 'Waiting for the previous monster approach to acknowledge before another action.'; return;
@@ -733,7 +734,7 @@ export class BotEngine {
     }
     const choice = chooseMonster();
     if (choice) { this.pursue('attack', choice.target.id, cell(choice.target), choice.cells); this.routeTick(p, now); }
-    else if (a.follow.name) { this.followTick(p,now); }
+    else if (a.follow.name || a.follow.mode==='partyLeader') { this.followTick(p,now); }
     else if (a.travel.waypoints.length) { this.waypointTick(p,now); }
     else if (this.settings.route_randomWalk === 2) {
       if (!this.route) {
@@ -1061,6 +1062,7 @@ export class BotEngine {
           && nav.clearWalkCorridor(cell(p), route.destination)))) {
       this.act('attack', route.id!, !nav.canAttack(cell(p), route.destination, attackRange)); return;
     }
+    if(route.type==='follow'&&automationSettings(this.settings).follow.mode==='partyLeader'&&route.followIdentity!==JSON.stringify(this.partyFollowBinding?.()??null)){this.cancelRoute();return;}
     const range = route.type === 'follow' ? automationSettings(this.settings).follow.distance : navigationTask ? 0 : 1;
     const index = route.cells.findIndex(c => distance(c, p) === 0);
     if (index >= 0) route.cells = route.cells.slice(index);
@@ -1309,7 +1311,10 @@ export class BotEngine {
   }
   private followTick(p: Entity, now: number): void {
     const follow=automationSettings(this.settings).follow;
-    const actor=[...this.actors.values()].find(e=>e.kind===0&&e.name===follow.name&&!e.dead);
+    const binding=follow.mode==='partyLeader'?this.partyFollowBinding?.():null;
+    const actor=follow.mode==='partyLeader'?binding?this.actors.get(binding.entityId):undefined:[...this.actors.values()].find(e=>e.kind===0&&e.name===follow.name&&!e.dead);
+    const identity=binding?JSON.stringify(binding):undefined;
+    if(this.route?.type==='follow'&&this.route.followIdentity!==identity)this.cancelRoute();
     if(!actor) {
       this.followLostAt??=now;if(now-this.followLostAt>=follow.lostSeconds*1000)this.stop('Follow target is no longer visible.');
       else this.reason='Waiting for the named follow target.';return;
@@ -1317,7 +1322,7 @@ export class BotEngine {
     if(!this.fieldContains(actor)){if(this.route?.type==='follow')this.cancelRoute();this.reason='Follow target is outside the field lock area.';return;}
     this.followLostAt=null;
     if(distance(p,actor)<=follow.distance) {if(this.route?.type==='follow')this.cancelRoute();this.reason='Within follow distance.';return;}
-    if(!this.route||this.route.type!=='follow')this.route={type:'follow',id:actor.id,destination:cell(actor),cells:[],since:null};
+    if(!this.route||this.route.type!=='follow')this.route={type:'follow',followIdentity:identity,id:actor.id,destination:cell(actor),cells:[],since:null};
     else if(distance(cell(actor),this.route.destination)!==0){this.route.destination=cell(actor);this.route.cells=[];}
     this.routeTick(p,now);
   }
