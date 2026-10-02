@@ -1076,6 +1076,8 @@ export class BotEngine {
     }
   }
   idleForActions(): boolean { this.advanceMovement(); return !this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&!this.loadout.blocked; }
+  /** Installation is gated by sent owners, not HP or an equipment policy fault. */
+  settledForMaintenance(): boolean { this.advanceMovement(); return !this.running&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled; }
   /** Death recovery owns only the existing posture scheduler, never field decisions. */
   recoveryOnly(settings: Settings): { complete: boolean; reason: string } {
     const p=this.player,a=automationSettings(settings);

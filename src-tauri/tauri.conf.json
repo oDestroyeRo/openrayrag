@@ -10,11 +10,46 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "Rayrag Companion", "width": 1100, "height": 880, "minWidth": 820, "minHeight": 750 }],
+    "windows": [
+      {
+        "label": "main",
+        "title": "Rayrag Companion",
+        "width": 1100,
+        "height": 880,
+        "minWidth": 820,
+        "minHeight": 750
+      }
+    ],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-src 'none'",
-      "capabilities": ["controller", "game-telemetry"]
+      "capabilities": [
+        "controller",
+        "game-telemetry"
+      ]
     }
   },
-  "bundle": { "active": true, "targets": ["app"], "icon": ["icons/icon.icns", "icons/icon.png"], "macOS": { "minimumSystemVersion": "13.0", "signingIdentity": "-" } }
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "icon": [
+      "icons/icon.icns",
+      "icons/icon.png"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": "-"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI1RjhDQjQzOEJGRjM2QkEKUldTNk52K0xROHY0SmZDUVNVbEVmQStUL2tZMFc4a2xmWHV6Y1dWRysrVXc0bjVwdEllbHFUR0QK",
+      "endpoints": [
+        "https://github.com/oDestroyeRo/openrayrag/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true
+    }
+  }
 }

@@ -14,7 +14,7 @@ npm run app:dev
 Build a local macOS application:
 
 ```sh
-npm run app:build
+npm run app:build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
 The output is `src-tauri/target/release/bundle/macos/Rayrag Companion.app`. It uses an [ad-hoc signature](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing) for local use and is not notarized. `npm run dev` previews the controller in a browser; native game control requires the Tauri app.
@@ -96,6 +96,12 @@ One danger episode permits one escape request. The app stops field movement, let
 
 After arrival, the field run stays requested and waits for HP recovery above the ordinary stop floor and escape hysteresis (trigger + 10 points, capped at 100%, or the configured recovery end if higher). Returning to a save point does not heal you. The episode rearms only after a real self HP recovery update and the cooldown; continuously low HP cannot spend wings repeatedly. Known map collision and the configured return-to-start-map policy still apply. Map teleport restrictions and other server action gates remain authoritative; a rejected escape is reported without a fallback.
 
+## Client updates
+
+Signed Apple Silicon macOS updates download in the background and install/restart automatically after the field run and every game/login action are fully stopped. The updater never clicks Stop for you. Unresolved action receipts, login drafts and invalid or unsaved settings defer installation. The sidebar shows the installed native version, and **Client updates** provides a manual release link.
+
+Your current settings and configured target choices restore before optional sign-in, without starting the bot. Named profiles and local login storage retain their existing paths. **Reconnect after connection loss · this session** remains a session preference. Existing installations need one bootstrap installation of an updater-enabled build. See [update behavior and limitations](docs/AUTO_UPDATES.md) and [signed release pipeline](docs/RELEASES.md).
+
 ## Accounts and compatibility
 
 Credentials are session-only by default. **Save login on this Mac** explicitly saves one native profile in the application data directory. The directory has user-only access (0700), and the file has user-only read/write access (0600). The app does not encrypt this file. **Sign in when app opens** restores the saved account and character slot at launch. **Forget local saved login** removes that profile and its launch preference. The local controller never retrieves the saved password or writes credentials into configuration, profile exports, browser storage or logs. Leave the game's own Remember Password option off. See [local login storage](docs/LOCAL_LOGIN.md).
@@ -115,7 +121,7 @@ Under **Workflows & social → Social**, each Send button requests one message o
 ```sh
 npm run check
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-npm run app:build
+npm run app:build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
 `check` builds the frontend and injected bridge, typechecks TypeScript, runs behavioral/protocol/login tests and Rust boundary tests, and runs Clippy. Tests use synthetic events and a public monster fixture; no unattended account test is bundled. Local-login persistence tests use isolated synthetic temporary directories, never the real saved profile or Keychain:

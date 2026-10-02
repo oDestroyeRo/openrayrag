@@ -27,10 +27,16 @@ pub(crate) struct Settings {
 
 impl Settings {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        self.validate_for(false)
+    }
+    pub(crate) fn validate_form(&self) -> Result<(), String> {
+        self.validate_for(true)
+    }
+    fn validate_for(&self, form: bool) -> Result<(), String> {
         if !(1..=20).contains(&self.radius)
             || !(20..=95).contains(&self.min_hp_percent)
-            || !crate::supported_map(&self.map)
-            || !map_code(&self.map, false)
+            || !(form && self.map.is_empty() || crate::supported_map(&self.map))
+            || !map_code(&self.map, form)
             || !matches!(self.route_random_walk, 0 | 2)
             || !(1..=20).contains(&self.route_step)
             || !(1..=600).contains(&self.route_random_walk_max_route_time)
@@ -43,7 +49,7 @@ impl Settings {
             return Err("Invalid combat settings.".into());
         }
         let Some(automation) = &self.automation else {
-            return if self.targets.is_empty() {
+            return if !form && self.targets.is_empty() {
                 Err("Choose selected monsters.".into())
             } else {
                 Ok(())
@@ -62,7 +68,8 @@ impl Settings {
                 return Err("Field lock and destination maps must match.".into());
             }
         }
-        if self.targets.is_empty()
+        if !form
+            && self.targets.is_empty()
             && matches!(
                 automation.combat.mode,
                 CombatMode::Selected | CombatMode::Both

@@ -1,0 +1,180 @@
+name: Verify and release macOS
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PYTHONDONTWRITEBYTECODE: "1"
+  RUSTUP_TOOLCHAIN: "1.98.1"
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "26.10.0"
+          cache: npm
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: "1.98.1"
+          targets: aarch64-apple-darwin
+          components: clippy,rustfmt
+      - name: Verify source and release behavior (no signing secrets)
+        run: |
+          test "$(uname -m)" = arm64
+          npm ci
+          node --test scripts/release-tests.mjs
+          python3 -m unittest discover -s scripts -p 'release_test.py'
+          npm run build
+          npm test
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          cargo clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+  reconcile:
+    needs: verify
+    if: github.repository == 'oDestroyeRo/openrayrag' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 15
+    # GitHub lists drafts only with push access. This job only reads releases.
+    permissions:
+      contents: write
+    outputs:
+      state: ${{ steps.preflight.outputs.state }}
+      version: ${{ steps.preflight.outputs.version }}
+      artifact-id: ${{ steps.preflight.outputs.artifact-id }}
+      artifact-run-id: ${{ steps.preflight.outputs.artifact-run-id }}
+      artifact-digest: ${{ steps.preflight.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "26.10.0"
+      - name: Reconcile an existing exact-source release
+        id: preflight
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release.mjs preflight
+
+  build:
+    needs: reconcile
+    if: github.repository == 'oDestroyeRo/openrayrag' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id || needs.reconcile.outputs.artifact-id }}
+      artifact-run-id: ${{ steps.upload.outputs.artifact-id && github.run_id || needs.reconcile.outputs.artifact-run-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest || needs.reconcile.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "26.10.0"
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        if: needs.reconcile.outputs.state == 'build'
+        with:
+          toolchain: "1.98.1"
+          targets: aarch64-apple-darwin
+      - name: Stamp only this exact CI checkout
+        if: needs.reconcile.outputs.state == 'build'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          test "$(uname -m)" = arm64
+          node scripts/release.mjs stamp
+          npm ci
+      - name: Build signed updater archive and bootstrap DMG
+        if: needs.reconcile.outputs.state == 'build'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --target aarch64-apple-darwin --bundles app,dmg --ci -- --locked
+      - name: Verify signatures, app versions, architecture and provenance
+        if: needs.reconcile.outputs.state == 'build'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release.mjs prepare
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: needs.reconcile.outputs.state == 'build'
+        id: upload
+        with:
+          name: release-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-bundle/*
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+          overwrite: false
+      - name: Restore the original signed bundle for an incomplete draft
+        if: needs.reconcile.outputs.state == 'reuse'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_ARTIFACT_ID: ${{ needs.reconcile.outputs.artifact-id }}
+          RELEASE_ARTIFACT_RUN_ID: ${{ needs.reconcile.outputs.artifact-run-id }}
+          RELEASE_ARTIFACT_DIGEST: ${{ needs.reconcile.outputs.artifact-digest }}
+        run: node scripts/release.mjs restore
+
+  publish:
+    needs: [reconcile, build]
+    if: github.repository == 'oDestroyeRo/openrayrag' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    # Queue order is not commit order. The publisher also compares ancestry/version.
+    concurrency:
+      group: rayrag-release-publication
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "26.10.0"
+      - name: Restore and verify the exact workflow artifact
+        if: needs.reconcile.outputs.state != 'published'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_ARTIFACT_ID: ${{ needs.build.outputs.artifact-id }}
+          RELEASE_ARTIFACT_RUN_ID: ${{ needs.build.outputs.artifact-run-id }}
+          RELEASE_ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+        run: node scripts/release.mjs restore
+      - name: Stage, verify and publish without moving latest backwards
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_STATE: ${{ needs.reconcile.outputs.state }}
+          RELEASE_ARTIFACT_ID: ${{ needs.build.outputs.artifact-id }}
+          RELEASE_ARTIFACT_RUN_ID: ${{ needs.build.outputs.artifact-run-id }}
+          RELEASE_ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+        run: node scripts/release.mjs publish

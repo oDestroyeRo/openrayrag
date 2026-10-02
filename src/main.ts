@@ -1,7 +1,8 @@
+import { CurrentForm, type FormDocument } from './current-form';
 import type { Snapshot } from './engine';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { DEFAULT_SETTINGS, DEFAULT_AUTOMATION, MAX_TARGETS, validateSettings, type Settings } from './settings';
+import { DEFAULT_AUTOMATION, MAX_TARGETS, validateSettings, type Settings } from './settings';
 import { FeatureUi } from './feature-ui';
 import { ReconnectPolicy, PersistentFieldRun } from './reconnect';
 import { GridNavigator, NAVIGATION_MAPS, searchGrid } from './navigation';
@@ -17,7 +18,7 @@ root.innerHTML = `
     <div class="brand"><span class="brand-mark">r<span>∕</span></span><div>rayrag<small>COMPANION</small></div></div>
     <div class="nav-label">YOUR WORKSPACE</div>
     <div class="nav-item"><span>◈</span> Combat & loot <span class="nav-dot"></span></div>
-    <div class="sidebar-bottom"><span class="small-dot"></span> SEA 01 <small>macOS · v0.1</small></div>
+    <div class="sidebar-bottom"><span class="small-dot"></span> SEA 01 <small id="client-version">macOS · preview</small></div>
   </aside>
   <main>
     <header><div><div class="eyebrow">RAY SIDE PROJECT</div><h1>A little help in the field.</h1><p>Combat, recovery and daily routines, with you in control.</p></div><button id="open" class="secondary">Open game <span>↗</span></button></header>
@@ -33,7 +34,7 @@ root.innerHTML = `
         <div class="signin-options">
           <label><input id="remember-login" type="checkbox" /> Save login on this Mac</label>
           <label><input id="auto-login" type="checkbox" disabled /> Sign in when app opens</label>
-          <label><input id="auto-reconnect" type="checkbox" disabled /> Reconnect after connection loss</label>
+          <label><input id="auto-reconnect" type="checkbox" disabled /> Reconnect after connection loss · this session</label>
           <button id="forget-login" type="button" class="text-button" hidden>Forget local saved login</button>
         </div>
         <p class="hint">Saved credentials use a local file with user-only access. The app does not encrypt them.</p>
@@ -79,10 +80,15 @@ root.innerHTML = `
         <div class="activity-title">ACTIVITY <span id="target-label">No active target</span></div><ol id="log" class="log"><li class="empty">Session activity will appear here.</li></ol>
       </section>
     </div>
+    <section class="panel"><div class="panel-title"><h2>Client updates</h2></div><p id="update-status" class="hint">Signed updates install automatically when every game and login action is stopped.</p><a id="update-download" href="https://github.com/oDestroyeRo/openrayrag/releases/latest" target="_blank" rel="noreferrer">Download release manually</a></section>
     <footer><span><i class="small-dot"></i> Session stays on this Mac</span><span>Passwords stay in memory unless you save locally</span></footer>
   </main>`;
 
 function element<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
+element('update-download').addEventListener('click',event=>{
+  if(!isTauri())return;event.preventDefault();
+  void invoke('update_open_release').catch(()=>message('Could not open the release download. Visit the repository Releases page.',true));
+});
 const openButton = element<HTMLButtonElement>('open');
 const startButton = element<HTMLButtonElement>('start');
 const stopButton = element<HTMLButtonElement>('stop');
@@ -92,6 +98,12 @@ let savedLogin: SavedLogin | null = null;
 let loginBusy = false;
 let loginStartedAt = 0;
 let accountReady = !native;
+let accountBaseline:string|null=null;
+function accountFields():string{return JSON.stringify(['username','character-slot'].map(id=>element<HTMLInputElement>(id).value).concat(['remember-login','auto-login'].map(id=>String(element<HTMLInputElement>(id).checked))));}
+function accountDraft():boolean{return !!element<HTMLInputElement>('password').value||accountBaseline!==null&&accountFields()!==accountBaseline;}
+let updateBusy=false;
+let updatePolling=false;
+let saveTimer:ReturnType<typeof setTimeout>|undefined;
 let gameOpen = false;
 let latest: GameStatus | null = null;
 let receivedAt = 0;
@@ -154,8 +166,51 @@ let targetOrder = '';
 const features = new FeatureUi(document.querySelector<HTMLElement>('main')!, {
   settings, apply: applySettings, map: () => targets.map, character: () => latest?.player?.name ?? '',
   command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request), memo: request => featureRequest('memo',request), socketPreview:request=>featureRequest('socketPreview',request),socket:request=>featureRequest('socket',request),
-  notify: message,stop:()=>stopButton.click(), changed: () => { targets.setLevelDifference(features.levelDifference()); renderTargets(); updateButtons(); },
+  notify: message,stop:()=>stopButton.click(), changed: () => { formChanged(); targets.setLevelDifference(features.levelDifference()); renderTargets(); updateButtons(); },
 });
+const currentForm = new CurrentForm(() => ({settings:formSettings(),selectedProfileId:features.selectedProfileId()}),
+  document=>invoke<number>('save_current_form',{document}));
+function formSettings():Settings {
+  const value=settings();return {...value,map:value.automation?.mapPolicy?.lockArea?.map??(targets.configuredMap||value.map),targets:targets.configuredIds};
+}
+function formChanged():void {
+  currentForm.touch();
+  if(!native||!currentForm.initialized||updateBusy)return;
+  if(saveTimer)clearTimeout(saveTimer);
+  saveTimer=setTimeout(()=>{void currentForm.flush().catch(()=>{element('update-status').textContent='Updates are waiting for valid, saved current settings.';});},300);
+}
+function restoreForm(d:FormDocument):void {
+  const v=d.settings;features.write(v.automation??structuredClone(DEFAULT_AUTOMATION));features.restoreProfileSelection(d.selectedProfileId);
+  targets.setLevelDifference(features.levelDifference());targets.restore(v.map,v.targets);
+  const inputs:Record<string,number>={radius:v.radius,'min-hp':v.minHpPercent,'route-step':v.route_step,'route-time':v.route_randomWalk_maxRouteTime,'attack-distance':v.attackRouteMaxPathDistance,'attack-time':v.attackMaxRouteTime};
+  for(const [id,value]of Object.entries(inputs))element<HTMLInputElement>(id).value=String(value);
+  element<HTMLSelectElement>('random-walk').value=String(v.route_randomWalk);element<HTMLInputElement>('avoid-walls').checked=v.route_avoidWalls;element<HTMLInputElement>('loot').checked=v.loot;
+  element('radius-value').textContent=`${v.radius} cells`;element('hp-value').textContent=`${v.minHpPercent}%`;renderTargets();
+}
+function mainSettledForUpdate():boolean {
+  return accountReady&&currentForm.initialized&&!accountDraft()&&!updateBusy&&!busy&&!stopping&&!loginBusy&&!heartbeatPending&&!pendingLogin&&!pendingResume&&!pendingService&&!pendingManual&&!pendingLimitStop
+    &&!limitStopPending&&!runActive()&&!fieldRun.requested&&!reconnect.waitingUntil;
+}
+async function pollUpdate():Promise<void>{
+  if(!native||updatePolling||updateBusy)return;updatePolling=true;
+  try{
+    const state=await invoke<{version:string;phase:string;message:string;availableVersion:string|null}>('update_status');
+    element('client-version').textContent=`macOS · v${state.version}`;element('update-status').textContent=state.message;
+    if(state.phase==='waiting'&&accountDraft()){element('update-status').textContent='Update waits for your account draft. Sign in or clear the draft first.';return;}
+    if(state.phase!=='waiting'||!mainSettledForUpdate())return;
+    updateBusy=true;updateButtons();if(saveTimer){clearTimeout(saveTimer);saveTimer=undefined;}
+    let nonce:string|null=null;
+    try{
+      const document=await currentForm.flush();nonce=await invoke<string>('update_reserve',{document});
+      for(let attempt=0;attempt<20;attempt++){
+        if(await invoke<boolean>('update_install',{nonce}))break;
+        await new Promise(resolve=>setTimeout(resolve,100));
+      }
+    }catch{element('update-status').textContent='Update deferred. Waiting for valid saved settings and settled game actions. Use the release download if needed.';}
+    finally{if(nonce)await invoke('update_release',{nonce}).catch(()=>{});updateBusy=false;updateButtons();}
+  }catch{element('update-status').textContent='Update check unavailable. It will retry automatically.';}
+  finally{updatePolling=false;}
+}
 const configHelp = document.createElement('p'); configHelp.id = 'config-help'; configHelp.className = 'hint'; document.querySelector('.run-controls')!.append(configHelp);
 const monsterCatalog = document.createElement('datalist'); monsterCatalog.id = 'classId-catalog'; document.querySelector('main')!.append(monsterCatalog);
 
@@ -190,7 +245,7 @@ function applySettings(value: Settings): void {
   const inputs: Record<string,number> = {radius:checked.radius,'min-hp':checked.minHpPercent,'route-step':checked.route_step,'route-time':checked.route_randomWalk_maxRouteTime,'attack-distance':checked.attackRouteMaxPathDistance,'attack-time':checked.attackMaxRouteTime};
   for(const [id,value]of Object.entries(inputs))element<HTMLInputElement>(id).value=String(value);
   element<HTMLSelectElement>('random-walk').value=String(checked.route_randomWalk);element<HTMLInputElement>('avoid-walls').checked=checked.route_avoidWalls;element<HTMLInputElement>('loot').checked=checked.loot;
-  element('radius-value').textContent=`${checked.radius} cells`;element('hp-value').textContent=`${checked.minHpPercent}%`;renderTargets();updateButtons();
+  element('radius-value').textContent=`${checked.radius} cells`;element('hp-value').textContent=`${checked.minHpPercent}%`;renderTargets();formChanged();updateButtons();
 }
 
 function message(text: string, error = false): void {
@@ -214,6 +269,7 @@ function settings(): Settings {
   });
 }
 function updateButtons(): void {
+  if(updateBusy){for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))input.disabled=true;features.lock(true,true,true);return;}
   const fresh = Date.now() - receivedAt < 7000;
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
   let checked:Settings|null = null;
@@ -233,7 +289,7 @@ function updateButtons(): void {
   for (const id of ['radius', 'min-hp', 'loot', 'random-walk', 'route-step', 'route-time', 'attack-distance', 'attack-time', 'avoid-walls']) {
     element<HTMLInputElement>(id).disabled = busy || stopping || loginBusy || runActive();
   }
-  const locked = busy || stopping || loginBusy || !ready || runActive();
+  const locked = updateBusy || busy || stopping || loginBusy || !ready || runActive();
   element<HTMLButtonElement>('select-targets').disabled = locked || !targets.options.some(m => targets.eligible(m.classId));
   element<HTMLButtonElement>('clear-targets').disabled = locked || !targets.options.some(m => targets.checked(m.classId));
   for (const [id, row] of targetRows) row.input.disabled = locked || !targets.eligible(id) || (!targets.checked(id) && targets.ids.length >= MAX_TARGETS);
@@ -256,7 +312,7 @@ function renderTargets(): void {
       const count = document.createElement('span'); count.className = 'target-visible';
       description.append(name, detail); label.append(input, description, count);
       input.addEventListener('change', () => {
-        targets.select(monster.classId, input.checked); renderTargets(); updateButtons();
+        targets.select(monster.classId, input.checked); formChanged(); renderTargets(); updateButtons();
       });
       row = { label, input, name, detail, count }; targetRows.set(monster.classId, row);
     }
@@ -290,8 +346,8 @@ function renderTargets(): void {
     : info?.source === 'loading' ? 'Loading map database… Monsters already in view can be selected.'
     : `Using monsters seen on this map; the map database is unavailable here. Level limit: yours ${features.levelDifference()>=0?'+':''}${features.levelDifference()}.`;
 }
-element('select-targets').addEventListener('click', () => { targets.selectEligible(); renderTargets(); updateButtons(); });
-element('clear-targets').addEventListener('click', () => { targets.clear(); renderTargets(); updateButtons(); });
+element('select-targets').addEventListener('click', () => { targets.selectEligible(); formChanged(); renderTargets(); updateButtons(); });
+element('clear-targets').addEventListener('click', () => { targets.clear(); formChanged(); renderTargets(); updateButtons(); });
 
 function showSavedLogin(profile: SavedLogin | null): void {
   savedLogin = profile;
@@ -322,7 +378,7 @@ async function signIn(): Promise<void> {
     pendingLogin = task;
     await task;
     if (generation !== loginGeneration) return;
-    gameOpen = true;
+    gameOpen = true;accountBaseline=accountFields();
     if (remember) showSavedLogin({ username, characterSlot, autoLogin });
     message('Loading the game for automatic sign-in…');
   } catch (error) {
@@ -351,7 +407,7 @@ element('forget-login').addEventListener('click', () => void perform(async () =>
   showSavedLogin(null);
   element<HTMLInputElement>('remember-login').checked = false;
   element<HTMLInputElement>('auto-login').checked = false;
-  message('Local saved login and app-open sign-in preference removed.');
+  accountBaseline=accountFields();message('Local saved login and app-open sign-in preference removed.');
 }));
 
 async function perform(action: () => Promise<unknown>): Promise<void> {
@@ -517,6 +573,9 @@ if (native) {
     message('Game window closed. Open it again to reconnect.'); updateButtons(); drawRadar(null);
   });
   try {
+    try{currentForm.restore(await invoke('current_form'),restoreForm);}
+    catch{currentForm.initialized=false;element('update-status').textContent='Current settings could not be restored. Automatic updates are waiting.';}
+    if(currentForm.initialized)await currentForm.flush().catch(()=>{element('update-status').textContent='Updates are waiting for valid, saved current settings.';});
     const profile = await invoke<SavedLogin | null>('saved_login');
     accountReady = true;
     showSavedLogin(profile);
@@ -525,13 +584,14 @@ if (native) {
       element<HTMLSelectElement>('character-slot').value = String(profile.characterSlot);
       element<HTMLInputElement>('remember-login').checked = true;
       element<HTMLInputElement>('auto-login').checked = profile.autoLogin;
-      if (profile.autoLogin) await signIn();
+      accountBaseline=accountFields();if (profile.autoLogin) await signIn();
     }
   } catch {
     element<HTMLButtonElement>('forget-login').hidden = false;
     message('Local saved login could not be read. Forget it or enter your account manually.', true);
   }
-  finally { accountReady = true; }
+  finally { accountReady = true;accountBaseline??=accountFields(); }
+  await invoke('update_initialized').catch(()=>{});void pollUpdate();setInterval(()=>{void pollUpdate();},15_000);
   updateButtons();
   })();
   setInterval(() => {
@@ -541,7 +601,7 @@ if (native) {
       message('Sign-in is taking too long. Waiting before reconnecting again.', true);
     }
     updateButtons();
-    const retry = gameOpen && !busy && !stopping && !loginBusy && !(latest?.connected && latest.player)
+    const retry = !updateBusy && gameOpen && !busy && !stopping && !loginBusy && !(latest?.connected && latest.player)
       && !fieldRun.limitReason ? reconnect.takeDue(Date.now()) : null;
     if (retry !== null) {
       const generation = ++loginGeneration;
@@ -563,13 +623,14 @@ if (native) {
       : fieldRun.requested && !sessionLoginAvailable ? 'Waiting for connection recovery. Sign in through Companion to enable session reconnect.'
       : 'A running bot reconnects with this session login and resumes when your character is ready.');
     if (!fieldRun.limitReason && latest?.connected && Date.now() - receivedAt > 7000) message('Waiting for fresh game status. The run will resume when the controller responds.', true);
-    if (!gameOpen || heartbeatPending) return;
+    if(updateBusy||!gameOpen || heartbeatPending) return;
     if (!statusHeartbeatFresh(receivedAt, Date.now())) return;
     heartbeatPending = true;
     void invoke('control_bot', { action: 'heartbeat' }).catch(() => { updateButtons(); })
       .finally(() => { heartbeatPending = false; });
   }, 1000);
 }
-// Credentials are never persisted by the frontend.
-element<HTMLInputElement>('radius').value = String(DEFAULT_SETTINGS.radius);
+// Only the explicit settings projection enters persistence; account inputs are excluded.
+document.querySelector('main')!.addEventListener('input',event=>{const target=event.target as HTMLElement;if(!target.closest('#signin-panel')&&target.closest('.settings,.feature-panel,.rule-editor'))formChanged();});
+document.querySelector('main')!.addEventListener('change',event=>{const target=event.target as HTMLElement;if(target.id==='profile-select')formChanged();});
 updateButtons();
