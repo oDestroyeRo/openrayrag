@@ -437,6 +437,23 @@ impl DispositionPolicy {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Escape {
     enabled: bool,
+    #[serde(
+        default = "escape_hp_enabled",
+        skip_serializing_if = "escape_hp_is_default"
+    )]
+    hp_enabled: bool,
+    #[serde(default, skip_serializing_if = "escape_threat_is_disabled")]
+    threat_enabled: bool,
+    #[serde(
+        default = "escape_threat_count",
+        skip_serializing_if = "escape_count_is_default"
+    )]
+    threat_count: u8,
+    #[serde(
+        default = "escape_threat_window",
+        skip_serializing_if = "escape_window_is_default"
+    )]
+    threat_window_seconds: u8,
     hp_below_percent: u8,
     mode: EscapeMode,
     method: EscapeMethod,
@@ -458,11 +475,36 @@ enum EscapeMethod {
     Skill,
 }
 
+fn escape_hp_is_default(value: &bool) -> bool {
+    *value
+}
+fn escape_threat_is_disabled(value: &bool) -> bool {
+    !*value
+}
+fn escape_count_is_default(value: &u8) -> bool {
+    *value == escape_threat_count()
+}
+fn escape_window_is_default(value: &u8) -> bool {
+    *value == escape_threat_window()
+}
+fn escape_hp_enabled() -> bool {
+    true
+}
+fn escape_threat_count() -> u8 {
+    3
+}
+fn escape_threat_window() -> u8 {
+    10
+}
 impl Default for Escape {
     fn default() -> Self {
         Self {
             enabled: false,
             hp_below_percent: 20,
+            hp_enabled: true,
+            threat_enabled: false,
+            threat_count: 3,
+            threat_window_seconds: 10,
             mode: EscapeMode::Random,
             method: EscapeMethod::Item,
             min_stock: 0,
@@ -481,10 +523,40 @@ impl Escape {
 pub(crate) struct EscapeResumeGuard {
     cooldown_seconds: u16,
     latched: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_escape_recovery"
+    )]
+    recovery: Option<EscapeRecovery>,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EscapeRecovery {
+    hp_percent: u8,
+    threat_count: u8,
+    quiet_seconds: u8,
+}
+fn deserialize_escape_recovery<'de, D>(deserializer: D) -> Result<Option<EscapeRecovery>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    EscapeRecovery::deserialize(deserializer).map(Some)
 }
 impl EscapeResumeGuard {
     pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.cooldown_seconds <= 3600 {
+        if self.cooldown_seconds <= 3600
+            && self.recovery.as_ref().map_or(true, |r| {
+                (1..=100).contains(&r.hp_percent)
+                    && r.threat_count <= 64
+                    && r.quiet_seconds <= 60
+                    && if r.threat_count == 0 {
+                        r.quiet_seconds == 0
+                    } else {
+                        r.quiet_seconds >= 1
+                    }
+            })
+        {
             Ok(())
         } else {
             Err("Invalid escape resume guard.".into())
@@ -875,6 +947,8 @@ impl AutomationSettings {
             && (1..=3600).contains(&self.recovery.timeout_seconds)
             && self.recovery.hp_start < self.recovery.hp_end
             && self.recovery.sp_start < self.recovery.sp_end
+            && (1..=64).contains(&self.escape.threat_count)
+            && (1..=60).contains(&self.escape.threat_window_seconds)
             && (1..=95).contains(&self.escape.hp_below_percent)
             && self.escape.min_stock <= 9999
             && (1..=3600).contains(&self.escape.cooldown_seconds)
@@ -970,7 +1044,7 @@ pub(crate) fn validate_manual_protection_policy(value: &Value) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
-    use super::{EscapeResumeGuard, Settings, SupplyResumeGuard, SupplySettings};
+    use super::{Escape, EscapeResumeGuard, Settings, SupplyResumeGuard, SupplySettings};
     use serde_json::{json, Value};
 
     fn settings() -> Value {
@@ -1185,6 +1259,57 @@ mod tests {
         }
         value["automation"]["escape"] = Value::Null;
         assert!(!valid(value));
+    }
+
+    #[test]
+    fn threat_escape_shared_policy_and_guard_boundaries() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../src/data/threat-escape-cases.json")).unwrap();
+        for case in cases {
+            let accepted = if case["kind"] == "guard" {
+                serde_json::from_value::<EscapeResumeGuard>(case["value"].clone())
+                    .is_ok_and(|guard| guard.validate().is_ok())
+            } else {
+                let mut value = settings();
+                value["automation"] = automation();
+                value["automation"]["escape"] = case["value"].clone();
+                value["automation"]["items"] = json!([{
+                    "itemId": 501, "resource": "hp", "belowPercent": 80, "minStock": 0, "cooldownSeconds": 1,
+                    "conditions": [{"field": "actorSpPercent", "actor": {"scope": "self"}, "operator": "gte", "value": 25.5}]
+                }]);
+                let playable = valid(value.clone());
+                value["map"] = json!("");
+                value["targets"] = json!([]);
+                let form = serde_json::from_value::<crate::current_form::FormDocument>(json!({
+                    "version": 1, "revision": 1, "selectedProfileId": "threat-profile", "settings": value
+                }));
+                let form_accepted = form
+                    .as_ref()
+                    .is_ok_and(|document| document.validate().is_ok());
+                assert_eq!(form_accepted, playable, "current form: {}", case["name"]);
+                if form_accepted {
+                    let document = form.unwrap();
+                    assert!(document.settings.validate().is_err());
+                    let encoded = serde_json::to_value(&document).unwrap();
+                    let decoded: crate::current_form::FormDocument =
+                        serde_json::from_value(encoded.clone()).unwrap();
+                    assert!(decoded.validate().is_ok());
+                    assert_eq!(serde_json::to_value(decoded).unwrap(), encoded);
+                }
+                playable
+            };
+            assert_eq!(
+                accepted,
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+        let legacy: Escape = serde_json::from_value(json!({"enabled":true,"hpBelowPercent":20,"mode":"random","method":"item","minStock":0,"cooldownSeconds":60})).unwrap();
+        assert!(legacy.hp_enabled);
+        assert!(!legacy.threat_enabled);
+        assert_eq!(legacy.threat_count, 3);
+        assert_eq!(legacy.threat_window_seconds, 10);
     }
 
     #[test]

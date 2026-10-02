@@ -143,3 +143,19 @@ describe('loadout profile compatibility',()=>{
   const doc=JSON.parse(f.store.export(saved.id));doc.profiles[0].settings.automation.loadout.prior={guid:'excluded'};expect(()=>f.store.import(JSON.stringify(doc))).toThrow('unknown automation');
  });
 });
+
+
+it('preserves legacy explicit escape profiles while strictly validating new threat settings and rejecting ephemeral state', () => {
+  const f = fixture(), automation = structuredClone(DEFAULT_AUTOMATION);
+  automation.escape = { enabled: true, hpBelowPercent: 20, mode: 'random', method: 'item', minStock: 0, cooldownSeconds: 60 };
+  const saved = f.store.save('Legacy escape', 'Test', { ...settings(), automation });
+  expect(f.store.import(f.store.export(saved.id))[0]!.settings.automation!.escape).toEqual(automation.escape);
+  const doc = JSON.parse(f.store.export(saved.id));
+  Object.assign(doc.profiles[0].settings.automation.escape, { hpEnabled: false, threatEnabled: true, threatCount: 64, threatWindowSeconds: 60 });
+  const imported = f.store.import(JSON.stringify(doc))[0]!;
+  expect(imported.settings.automation!.escape).toMatchObject({ hpEnabled: false, threatEnabled: true, threatCount: 64, threatWindowSeconds: 60 });
+  for (const patch of [{ threatCount: 0 }, { threatWindowSeconds: 61 }, { threatEnabled: null }, { recovery: { hpPercent: 100, threatCount: 1, quietSeconds: 60 } }, { actorId: 0 }, { pending: true }]) {
+    const invalid = structuredClone(doc); Object.assign(invalid.profiles[0].settings.automation.escape, patch);
+    expect(() => f.store.import(JSON.stringify(invalid))).toThrow();
+  }
+});

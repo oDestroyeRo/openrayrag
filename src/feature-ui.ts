@@ -60,7 +60,11 @@ const fields: Record<Section, Field[]> = {
     { path:'recovery.hpStart', label:'Rest below HP %', min:1,max:95 }, { path:'recovery.hpEnd',label:'Resume above HP %',min:2,max:100 },
     { path:'recovery.spStart',label:'Rest below SP %',min:0,max:95 }, { path:'recovery.spEnd',label:'Resume above SP %',min:1,max:100 },
     { path:'recovery.timeoutSeconds',label:'Maximum rest seconds',min:1,max:3600 },
-    { path:'escape.enabled',label:'Emergency escape at low HP',kind:'checkbox' },
+    { path:'escape.enabled',label:'Enable emergency escape',kind:'checkbox' },
+    { path:'escape.hpEnabled',label:'Escape on low HP',kind:'checkbox' },
+    { path:'escape.threatEnabled',label:'Escape on recently observed monster attackers',kind:'checkbox' },
+    { path:'escape.threatCount',label:'Distinct observed attackers',min:1,max:64 },
+    { path:'escape.threatWindowSeconds',label:'Recent attack window, seconds',min:1,max:60 },
     { path:'escape.hpBelowPercent',label:'Escape at or below HP %',min:1,max:95 },
     { path:'escape.mode',label:'Escape destination',options:[['random','Random location on current map'],['save','Return to save point']] },
     { path:'escape.method',label:'Escape action',options:[['item','Fly Wing / Butterfly Wing'],['skill','Teleport / Return skill']] },
@@ -341,7 +345,7 @@ export class FeatureUi {
     this.note('combat','An empty attack strategy list uses ordinary combat. Earlier matching rules win, even when two rules use the same skill. Opener means before this controller first sends a normal attack at that observed actor. Attempts and confirmations survive Stop/Start and target switches. An unresolved cast cannot be retried on that actor lifetime. Unknown prerequisites wait up to 30 seconds, then skip that actor for 30 seconds while retaining run intent. Only the three bolt skills have automatic cast positioning; combos, kiting, party support and automatic ground AoE remain unavailable.');
     const strategyState=document.createElement('div');strategyState.id='attack-strategy-state';strategyState.className='telemetry-summary';strategyState.hidden=true;this.panel('combat').append(strategyState);
     this.note('recovery','Automatic respawn is off by default. It sends one save-point request per death and waits for your living character. When sitting recovery is enabled, it reaches the configured HP/SP targets and confirms standing before return. Stop cancels continuation; an unanswered request never retries. The farming map is captured at Start: lock map, journey destination, then starting map. Recovery or return failure keeps the run waiting.');
-    this.note('recovery','Emergency escape is opt-in: random uses Fly Wing or Teleport; save point uses Butterfly Wing or Return. It waits for your refreshed character, then for HP recovery. Stock reserve applies to wings. A rejected or uncertain attempt never falls back to another action.');
+    this.note('recovery','Emergency escape is opt-in: random uses Fly Wing or Teleport; save point uses Butterfly Wing or Return. Enabled HP and observed-attack triggers combine with OR. Recent attackers count only living visible monsters observed attacking you, not nearby monsters or hidden server aggro. After arrival, recovery requires HP plus a full quiet attack window and cooldown; changing settings does not shorten a spent episode. Stock reserve applies to wings. A rejected or uncertain attempt never falls back to another action.');
     this.editor('travel','travel.waypoints','Waypoints',[{key:'map',label:'Map code',kind:'text'},{key:'x',label:'X',min:0,max:511},{key:'y',label:'Y',min:0,max:511}],{map:'prt_fild08',x:150,y:150},64);
     this.note('travel','Travel uses verified portal routes. NPC or conditional portals may require a manual action. A blank player name disables follow.');
     this.editor('inventory','loot.rules','Pickup filters & priority',[idColumn('itemId','Item ID'),{key:'action',label:'Action',options:[['pickup','Pick up'],['ignore','Ignore']]},priority],{itemId:501,action:'pickup',priority:0},128);
@@ -412,6 +416,7 @@ export class FeatureUi {
     return validateAutomation(automation as unknown as AutomationSettings);
   }
   write(automation: AutomationSettings): void {
+    automation = { ...automation, escape: { ...DEFAULT_AUTOMATION.escape!, ...automation.escape } };
     automation = validateAutomation(automation);automation={...automation,mapPolicy:automation.mapPolicy??structuredClone(DEFAULT_MAP_POLICY),supply:automation.supply??structuredClone(DEFAULT_SUPPLY)};
     this.attackStrategiesPresent=Object.hasOwn(automation,'attackStrategies');
     for (const definitions of Object.values(fields)) for (const field of definitions) {
@@ -614,7 +619,7 @@ export class FeatureUi {
       if(telemetry&&policyOutput.dataset.telemetry!==telemetry)policyOutput.textContent=telemetry;
       policyOutput.dataset.telemetry=telemetry;
     }catch(error){policyOutput.textContent='Map policy: '+(error instanceof Error?error.message:'Validate the current settings.');delete policyOutput.dataset.telemetry;}
-    const experience=object(character.experience);const task=object(s.task);const escape=object(s.escape);this.host.querySelector<HTMLElement>('#session-details')!.textContent=`${Math.floor((number(s.elapsedSeconds)??0)/60)}m ${(number(s.elapsedSeconds)??0)%60}s · ${number(s.deaths)??0} deaths · Base EXP +${number(experience.baseGained)??'—'} · Job EXP +${number(experience.jobGained)??'—'}${task.label?' · '+text(task.label):''}${escape.state&&escape.state!=='idle'?' · '+text(escape.reason):''}`;
+    const experience=object(character.experience);const task=object(s.task);const escape=object(s.escape);this.host.querySelector<HTMLElement>('#session-details')!.textContent=`${Math.floor((number(s.elapsedSeconds)??0)/60)}m ${(number(s.elapsedSeconds)??0)%60}s · ${number(s.deaths)??0} deaths · Base EXP +${number(experience.baseGained)??'—'} · Job EXP +${number(experience.jobGained)??'—'}${task.label?' · '+text(task.label):''}${escape.state&&escape.state!=='idle'?' · '+text(escape.reason):''}${object(escape.threats).enabled?' · Observed monster attackers: '+(number(object(escape.threats).count)??'unavailable')+' / '+number(object(escape.threats).threshold)+' in '+number(object(escape.threats).windowSeconds)+'s (recent attacks, not server aggro)':''}`;
     const npcChoice=this.host.querySelector<HTMLSelectElement>('#visible-npcs')!;const actors=Array.isArray(s.actors)?s.actors.map(object).filter(actor=>actor.kind===2||actor.kind===4):[];const actorKey=actors.map(actor=>`${actor.id}:${text(actor.name)}`).join('|');
     if(npcChoice.dataset.actors!==actorKey){const selected=npcChoice.value;npcChoice.dataset.actors=actorKey;npcChoice.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='Choose a visible NPC';npcChoice.append(empty);for(const actor of actors){const option=document.createElement('option');option.value=String(actor.id);option.textContent=`${text(actor.name)||'NPC'} · #${actor.id}`;npcChoice.append(option);}npcChoice.value=actors.some(actor=>String(actor.id)===selected)?selected:'';}
     const inventory=Array.isArray(character.inventory)?character.inventory:[];const skills=Array.isArray(character.learned)?character.learned:[];
