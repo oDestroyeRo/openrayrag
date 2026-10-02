@@ -1,0 +1,157 @@
+[
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10
+    },
+    "valid": true
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "mode": "name"
+    },
+    "valid": true
+  },
+  {
+    "follow": {
+      "name": "Leader",
+      "distance": 4,
+      "lostSeconds": 10,
+      "mode": "name",
+      "rendezvous": false
+    },
+    "valid": true
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "mode": "partyLeader"
+    },
+    "valid": true
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "mode": "partyLeader",
+      "rendezvous": true
+    },
+    "valid": true
+  },
+  {
+    "follow": {
+      "name": "Leader",
+      "distance": 4,
+      "lostSeconds": 10,
+      "mode": "partyLeader"
+    },
+    "valid": false
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "mode": "name",
+      "rendezvous": true
+    },
+    "valid": false
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "rendezvous": true
+    },
+    "valid": false
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "mode": "other"
+    },
+    "valid": false
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "mode": null
+    },
+    "valid": false
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "rendezvous": null
+    },
+    "valid": false
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "rendezvous": 1
+    },
+    "valid": false
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "mode": 1
+    },
+    "valid": false
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "memberId": 7
+    },
+    "valid": false
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "associationEpoch": 1
+    },
+    "valid": false
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "trip": {}
+    },
+    "valid": false
+  },
+  {
+    "follow": {
+      "name": "",
+      "distance": 4,
+      "lostSeconds": 10,
+      "deadline": 12
+    },
+    "valid": false
+  }
+]

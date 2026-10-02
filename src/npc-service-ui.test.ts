@@ -69,6 +69,7 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
     panels: new Map([['workflows', panel]]),
     editors: new Map(),
     dispositionEditor: { lock: () => {} },
+    syncFollowMode: () => {}, // This fixture mounts only the service panel.
     social: { lock: () => {} },
     memo: { lock: () => {} },
     socket: { lock: () => {} },

@@ -176,3 +176,10 @@ describe('field run across game reloads', () => {
     expect(run.completeResume(request,true)).toBe(false);
   });
 });
+
+it('automatic reconnect disarms rendezvous without changing saved user policy',()=>{
+ const run=new PersistentFieldRun(),automation=structuredClone(DEFAULT_AUTOMATION);automation.follow={...automation.follow,mode:'partyLeader',rendezvous:true};
+ run.begin({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[1002],automation},'Test','old');
+ const request=run.resumeFor({sessionId:'new',connected:true,compatible:true,map:'prontera',player:{name:'Test'}})!;
+ expect(request.settings.automation!.follow.rendezvous).toBe(false);expect(automation.follow.rendezvous).toBe(true);
+});

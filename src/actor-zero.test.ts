@@ -47,7 +47,7 @@ describe('field-specific actor-zero wire contracts',()=>{
  it('decodes literal zero enter, spawn and core lifecycle packets',()=>{
   expect(decode(Uint8Array.of(3,0,0,0,0,1,0,109))).toEqual([{type:'enter',id:0,map:'m'}]);
   for(const kind of [0,1,2])expect(decode(spawn({...own,kind}))[0]).toMatchObject({type:'spawn',entity:{id:0,kind}});
-  const rows:Array<[number[],object]>=[[[15,0,0,0,0,0],{type:'remove',id:0,dead:false}],[[19,0,0,0,0],{type:'stop',id:0}],[[10,0,0,0,0,10,0,11,0],{type:'position',id:0,position:{x:10,y:11}}],[[36,0,0,0,0],{type:'death',id:0}],[[46,0,0,0,0,10,0,11,0,50,0,0,0],{type:'resurrection',id:0,hp:50,position:{x:10,y:11}}],[[82,0,0,0,0,1,0,0,0],{type:'pickup',picker:0,id:1}]];
+  const rows:Array<[number[],object]>=[[[15,0,0,0,0,0],{type:'remove',id:0,reason:0,dead:false}],[[19,0,0,0,0],{type:'stop',id:0}],[[10,0,0,0,0,10,0,11,0],{type:'position',id:0,position:{x:10,y:11}}],[[36,0,0,0,0],{type:'death',id:0}],[[46,0,0,0,0,10,0,11,0,50,0,0,0],{type:'resurrection',id:0,hp:50,position:{x:10,y:11}}],[[82,0,0,0,0,1,0,0,0],{type:'pickup',picker:0,id:1}]];
   for(const [bytes,event]of rows)expect(decode(Uint8Array.from(bytes))).toEqual([event]);
   expect(decode(new BitWriter().u8(OP.walk).i32(0).position({x:10,y:10}).f32(10).f32(10).f32(.2).f32(.2).u8(1).u8(0).finish())[0]).toMatchObject({type:'walk',id:0});
   expect(decode(new BitWriter().u8(OP.attack).i32(-1).i32(0).i32(0).position({x:10,y:10}).finish())[0]).toMatchObject({source:-1,target:0});

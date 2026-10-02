@@ -8,7 +8,14 @@ import { planArrivalEscape, planPortalApproach, routeBetweenMaps, routeBetweenMa
 
 export interface TravelSnapshot {
   state: 'idle' | 'planning' | 'walking' | 'transition' | 'complete' | 'failed' | 'cancelled';
-  destination: string; reason: string; policy: MapPolicy; purpose: 'travel' | 'service' | 'return' | 'field-entry'; remainingMaps: string[]; route: Position[]; leg: Position[];
+  destination: string; reason: string; policy: MapPolicy; purpose: 'travel' | 'service' | 'return' | 'field-entry' | 'party-follow'; remainingMaps: string[]; route: Position[]; leg: Position[];
+}
+export interface TravelTransition {
+  trip:number; phase:'remove'|'map'|'spawn'; fromMap:string; toMap:string; event:GameEvent;
+}
+interface MovementReceipt {
+  map:string; ownId:number; ownName:string; identity:string|null; requestedEnd:Position; cells:Position[]; acceptedUntil:number|null;
+  expectedMap:string|null; expectedArrival:Position|null; portalArea:{x:number;y:number;halfWidth:number;halfHeight:number}|null; awaitingSpawn:boolean;
 }
 export interface TravelPlanningContext {
   /** Connection, world and observed own-actor lifetime, independent of actor ID reuse. */
@@ -19,6 +26,8 @@ export interface TravelPlanningContext {
 export interface TravelPlanningOptions {
   context?: () => TravelPlanningContext;
   dispatchReady?: () => boolean;
+  /** The same verified retired walk may reconcile the transport's original endpoint owner. */
+  retiredWalkAccepted?: (requested:Position,accepted:Position) => void;
   scheduler?: PlanningOptions['scheduler'];
   plan?: typeof routeBetweenMapsAsync;
 }
@@ -35,7 +44,13 @@ const cell = (p: Position): Position => ({ x: Math.floor(p.x), y: Math.floor(p.y
 export class TravelController {
   private planning: PlanningRequest | null = null;
   private generation = 0;
+  private trip = 0;
+  private ownName = '';
+  private transitionFrom = '';
+  private lastMovement:MovementReceipt|null=null;
+  private retiredMovement:MovementReceipt|null=null;
   private executionIdentity: string | null = null;
+  private preparedDeparture:TravelTransition|null=null;
   private installedStart: Position | null = null;
   private latest: { map: string; player: Entity | undefined } = { map: '', player: undefined };
   private policy:MapPolicy=DEFAULT_MAP_POLICY;
@@ -62,8 +77,62 @@ export class TravelController {
   constructor(private readonly send: (action: Action) => void, private readonly now = Date.now, private readonly gridFor: (map: string) => WalkGrid | null = searchGrid, private readonly planningOptions: TravelPlanningOptions = {}) {}
   get active(): boolean { return this.state === 'planning' || this.state === 'walking' || this.state === 'transition'; }
 
+  get tripId():number {return this.trip;}
+  /** Cancellation cannot erase a walk already written to the transport. */
+  movementSettled(map:string,player:Entity|undefined):boolean {
+    const receipt=this.retiredMovement;
+    if(receipt&&receipt.expectedMap===null&&receipt.acceptedUntil!==null&&this.now()>=receipt.acceptedUntil&&map===receipt.map&&player?.id===receipt.ownId
+      &&player.name===receipt.ownName&&this.planningOptions.context?.().identity===receipt.identity&&distance(cell(player),receipt.cells.at(-1)!)===0)
+      this.retiredMovement=null;
+    return this.retiredMovement===null;
+  }
+  connectionChanged():void {this.retiredMovement=null;this.lastMovement=null;}
+  private observeRetired(event:GameEvent):void {
+    const receipt=this.retiredMovement;if(!receipt)return;
+    if(event.type==='map') {receipt.awaitingSpawn=event.map===receipt.expectedMap;return;}
+    if(event.type==='spawn'&&receipt.awaitingSpawn&&event.entity.id===receipt.ownId&&event.entity.name===receipt.ownName
+      &&event.entity.kind===0&&event.entryType===1&&!event.entity.dead&&event.entity.hp>0
+      &&!!receipt.expectedArrival&&distance(receipt.expectedArrival,event.entity)<=6) {this.retiredMovement=null;return;}
+    if(this.planningOptions.context&&this.planningOptions.context().identity!==receipt.identity)return;
+    if(event.type==='walk'&&event.id===receipt.ownId&&!event.walk.locked&&event.walk.cells.length>0&&event.walk.cells.length<=21
+      &&distance(cell(event.walk.origin),receipt.cells[0]!)<=1
+      &&distance(event.walk.cells[0]!,receipt.cells[0]!)<=1
+      &&event.walk.cells.every((p,index)=>!!receipt.cells[index]&&distance(p,receipt.cells[index]!)===0)
+      &&travelNavigator(receipt.map,receipt.cells)?.validRoute(event.walk.cells)&&walkDuration(event.walk)>0&&walkDuration(event.walk)<=15_000) {
+      receipt.cells=event.walk.cells.map(p=>({...p}));receipt.acceptedUntil=this.now()+walkDuration(event.walk)+100;
+      if(!this.receiptAtPortal(receipt,event.walk.cells.at(-1)!)){receipt.expectedMap=null;receipt.expectedArrival=null;}
+      const context=this.planningOptions.context?.();
+      if(receipt.expectedMap===null&&context?.identity&&context.identity===receipt.identity&&context.map===receipt.map
+        &&context.player?.id===receipt.ownId&&context.player.name===receipt.ownName)
+        this.planningOptions.retiredWalkAccepted?.({...receipt.requestedEnd},{...event.walk.cells.at(-1)!});
+    } else if(receipt.acceptedUntil!==null&&'id' in event&&event.id===receipt.ownId&&(event.type==='stop'||event.type==='position')
+      &&(event.type==='position'?!this.receiptAtPortal(receipt,event.position):receipt.expectedMap===null))this.retiredMovement=null;
+  }
+
+  private receiptAtPortal(receipt:MovementReceipt,position:Position):boolean {
+    const area=receipt.portalArea;
+    return !!area&&Math.abs(position.x-area.x)<=area.halfWidth&&Math.abs(position.y-area.y)<=area.halfHeight;
+  }
+
+  /** Capture the source lifetime before applying the own removal erases it.
+   * OutOfSight at the sent final portal leg holds uncertainty; it is not arrival. */
+  prepareObservation(events:GameEvent[]):void {
+    this.preparedDeparture=null;
+    const event=events.length===1?events[0]:undefined,step=this.steps[0],receipt=this.lastMovement,context=this.planningOptions.context?.();
+    if(this.purpose!=='party-follow'||!this.active||this.state==='planning'||this.awaitingSpawn
+      ||event?.type!=='remove'||event.reason!==0||event.dead||event.id!==this.playerId
+      ||!step||!receipt||!context?.identity||context.identity!==this.executionIdentity||receipt.identity!==context.identity
+      ||context.map!==this.map||receipt.map!==this.map||receipt.expectedMap!==step.portal.toMap
+      ||context.player?.id!==receipt.ownId||context.player.name!==this.ownName||context.player.kind!==0||context.player.dead||context.player.hp<=0)return;
+    const end=this.leg?.cells.at(-1)??(this.state==='transition'?this.route.at(-1):undefined);
+    if(!end||!this.inPortal(end,step)||!this.receiptAtPortal(receipt,receipt.cells.at(-1)!))return;
+    this.preparedDeparture={trip:this.trip,phase:'remove',fromMap:this.map,toMap:step.portal.toMap,event};
+  }
+
   start(map: string, player: Entity, destination: string, stepSize: number, avoidWalls: boolean, policy:MapPolicy=DEFAULT_MAP_POLICY, purpose:TravelSnapshot['purpose']='travel'): void {
     if (this.active) throw new Error('Stop the current trip first.');
+    if(!this.movementSettled(map,player))throw new Error('Waiting for the canceled travel movement to settle.');
+    this.trip++;this.ownName=player.name;this.lastMovement=null;
     if (!Number.isInteger(stepSize) || stepSize < 1 || stepSize > 20) throw new Error('Invalid travel step size.');
     if(!mapAllowed(policy,destination))throw new Error('The destination map is forbidden by the map policy.');
     const steps = policy.mode === 'weighted' ? null : routeBetweenMaps(map, cell(player), destination, avoidWalls,policy);
@@ -107,6 +176,8 @@ export class TravelController {
   /** Bounded final approach shares the trip's accepted-leg ownership and deadlines. */
   startApproach(map: string, player: Entity, target: Position, stepSize = 10, policy:MapPolicy=DEFAULT_MAP_POLICY,purpose:TravelSnapshot['purpose']='service'): void {
     if (this.active) throw new Error('Stop the current trip first.');
+    if(!this.movementSettled(map,player))throw new Error('Waiting for the canceled travel movement to settle.');
+    this.trip++;this.ownName=player.name;this.lastMovement=null;
     if (!Number.isInteger(stepSize) || stepSize < 1 || stepSize > 20) throw new Error('Invalid travel step size.');
     if(!mapAllowed(policy,map))throw new Error('The approach map is forbidden by the map policy.');
     if(purpose==='field-entry'&&!insideLockArea(policy,map,target))throw new Error('Entry target must be inside the field lock area.');
@@ -146,9 +217,12 @@ export class TravelController {
     if(!mapAllowed(this.policy,this.map))this.reason+=' Current map is forbidden: departure only; no reentry.';
   }
 
-  observe(events: GameEvent[]): void {
+  observe(events: GameEvent[]): TravelTransition[] {
+    const proofs:TravelTransition[]=[];
+    const departure=this.preparedDeparture;this.preparedDeparture=null;
     for (const event of events) {
-      if (!this.active) return;
+      this.observeRetired(event);
+      if (!this.active) continue;
       if (this.state === 'planning') {
         if (event.type === 'map' || event.type === 'enter' || event.type === 'clear'
           || event.type === 'spawn' && event.entity.id === this.playerId
@@ -157,6 +231,13 @@ export class TravelController {
         continue;
       }
       if (event.type === 'death' && event.id === this.playerId) { this.cancel('Travel stopped because the character died.', true); continue; }
+      if(event.type==='remove'&&event.id===this.playerId&&this.purpose==='party-follow') {
+        if(!departure||departure.event!==event||departure.trip!==this.trip||departure.fromMap!==this.map||departure.toMap!==this.steps[0]?.portal.toMap) {
+          this.cancel('Travel stopped after an unverified own removal.',true);continue;
+        }
+        proofs.push(departure);this.state='transition';this.deadline=this.now()+20_000;
+        this.reason='Waiting for the planned map transition.';continue;
+      }
       if (event.type === 'enter') { this.cancel('Travel stopped because the game session changed.', true); continue; }
       if (event.type === 'map') {
         const step = this.steps[0];
@@ -167,11 +248,14 @@ export class TravelController {
         // never during an unrelated leg elsewhere on the same source map.
         const end = this.leg?.cells.at(-1) ?? this.route.at(-1);
         if (!end || !this.inPortal(end, step)) { this.cancel('Map changed before the planned portal was reached.', true); continue; }
+        this.transitionFrom=this.map;proofs.push({trip:this.trip,phase:'map',fromMap:this.map,toMap:event.map,event});
+        if(this.lastMovement)this.lastMovement.awaitingSpawn=true;
         this.map = event.map; this.awaitingSpawn = true; this.leg = null; this.route = []; this.nudgeNavigator = null;
         this.state = 'transition'; this.deadline = this.now() + 20_000; this.reason = `Loading ${event.map}.`;
       } else if (event.type === 'spawn' && event.entity.id === this.playerId && this.awaitingSpawn) {
         const expected = this.steps[0]?.portal.arrival;
-        if (!expected || distance(expected, event.entity) > 6) { this.cancel('Portal arrival did not match its verified destination.', true); continue; }
+        if (!expected || distance(expected, event.entity) > 6 || this.purpose==='party-follow'&&(event.entity.name!==this.ownName||event.entity.kind!==0||event.entryType!==1||event.entity.dead||event.entity.hp<=0)) { this.cancel('Portal arrival did not match its verified destination.', true); continue; }
+        proofs.push({trip:this.trip,phase:'spawn',fromMap:this.transitionFrom,toMap:this.map,event});this.lastMovement=null;
         this.executionIdentity = this.planningOptions.context?.().identity ?? null;
         this.awaitingSpawn = false; this.steps.shift(); this.plan(event.entity);
       } else if (event.type === 'walk' && event.id === this.playerId) {
@@ -186,6 +270,7 @@ export class TravelController {
         }
         this.leg.cells = event.walk.cells;
         this.leg.acceptedUntil = this.now() + walkDuration(event.walk) + 100;
+        if(this.lastMovement){this.lastMovement.cells=event.walk.cells.map(p=>({...p}));this.lastMovement.acceptedUntil=this.leg.acceptedUntil;}
       } else if ((event.type === 'position' || event.type === 'stop') && event.id === this.playerId && this.leg) {
         const step = this.steps[0];
         if (event.type === 'position' && step && this.leg.acceptedUntil !== null && !this.leg.nudged
@@ -200,6 +285,7 @@ export class TravelController {
         this.cancel('Travel stopped after a movement correction. Choose the destination again.', true);
       }
     }
+    return proofs;
   }
 
   private acceptNudge(walk: Walk): boolean {
@@ -218,6 +304,7 @@ export class TravelController {
     // Unlike a planned portal leg, a server occupancy adjustment cannot enter a trigger.
     if (!this.nudgeNavigator.validRoute(walk.cells)) return false;
     leg.cells = walk.cells; leg.acceptedUntil = this.now() + duration + 100; leg.nudged = true;
+    if(this.lastMovement){this.lastMovement.cells=walk.cells.map(p=>({...p}));this.lastMovement.acceptedUntil=leg.acceptedUntil;}
     this.consecutiveNudges++; return true;
   }
 
@@ -248,7 +335,7 @@ export class TravelController {
       if (this.leg.acceptedUntil !== null && now >= this.leg.acceptedUntil) {
         if (distance(cell(player), this.leg.cells.at(-1)!) !== 0) { this.cancel('Travel movement did not finish at its accepted destination.', true); return; }
         if (this.leg.nudged) this.plan(player);
-        else { this.leg = null; this.consecutiveNudges = 0; }
+        else { this.leg = null; this.consecutiveNudges = 0; if(!this.steps[0]||!this.inPortal(cell(player),this.steps[0]))this.lastMovement=null; }
         if (!this.active) return;
       } else {
         if (this.leg.acceptedUntil === null && now - this.leg.since > 4_000)
@@ -269,10 +356,15 @@ export class TravelController {
     const cells = routeSegment(this.route, this.stepSize);
     this.leg = { cells, since: now, acceptedUntil: null, nudged: false };
     this.installedStart = null;
+    const portal=this.steps[0]&&this.inPortal(cells.at(-1)!,this.steps[0])?this.steps[0].portal:null;
+    this.lastMovement={map:this.map,ownId:player.id,ownName:player.name,identity:this.planningOptions.context?.().identity??null,requestedEnd:{...cells.at(-1)!},cells:cells.map(p=>({...p})),acceptedUntil:null,
+      expectedMap:portal?.toMap??null,expectedArrival:portal?{...portal.arrival}:null,portalArea:portal?{...portal.area}:null,awaitingSpawn:false};
     this.send({ type: 'walk', destination: cells.at(-1)! }); this.lastAction = now;
   }
   cancel(reason = 'Travel stopped by you.', failed = false): void {
     const wasActive = this.active && this.state !== 'planning';
+    if(this.purpose==='party-follow'&&this.lastMovement)this.retiredMovement=structuredClone(this.lastMovement);
+    this.lastMovement=null;
     this.generation++; this.planning?.abort.abort(); this.planning = null; this.installedStart = null;
     this.state = failed ? 'failed' : 'cancelled'; this.reason = reason;
     this.leg = null; this.route = []; this.awaitingSpawn = false;

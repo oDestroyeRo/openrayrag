@@ -29,7 +29,7 @@ export interface AutomationSettings {
   equipment: EquipmentRule[];
   attackStrategies?: AttackStrategyRule[];
   allocation: { stats: Array<{ stat: number; target: number }>; skills: Array<{ skillId: number; target: number }> };
-  follow: { name: string; distance: number; lostSeconds: number };
+  follow: { mode?: 'name' | 'partyLeader'; rendezvous?: boolean; name: string; distance: number; lostSeconds: number };
   travel: { destinationMap: string; returnToLockMap: boolean; waypoints: Array<Position & { map: string }>; loop: boolean };
   limits: { minutes: number; kills: number; pickups: number; weightPercent: number };
   respawn: { enabled: boolean; maxDeaths: number };
@@ -98,7 +98,7 @@ export function validateAutomation(a: AutomationSettings): AutomationSettings {
     for(const r of a.loadout.ammoPreferences) strictKeys(r,['itemId']);
     strictKeys(a.combat,['mode','levelDifference','rules','partyEngagement']); strictKeys(a.loot,['ownership','defaultAction','rules']);
     strictKeys(a.recovery,['enabled','hpStart','hpEnd','spStart','spEnd','timeoutSeconds']); strictKeys(a.allocation,['stats','skills']);
-    strictKeys(a.follow,['name','distance','lostSeconds']); strictKeys(a.travel,['destinationMap','returnToLockMap','waypoints','loop']);
+    strictKeys(a.follow,['name','distance','lostSeconds','mode','rendezvous']); strictKeys(a.travel,['destinationMap','returnToLockMap','waypoints','loop']);
     strictKeys(a.limits,['minutes','kills','pickups','weightPercent']); strictKeys(a.respawn,['enabled','maxDeaths']); strictKeys(a.schedule,['enabled','startHour','endHour']);
     for(const r of a.combat.rules) strictKeys(r,['classId','action','priority','conditions']); for(const r of a.loot.rules) strictKeys(r,['itemId','action','priority']);
     for(const r of a.items) strictKeys(r,['itemId','resource','belowPercent','minStock','cooldownSeconds','conditions']);
@@ -124,6 +124,10 @@ export function validateAutomation(a: AutomationSettings): AutomationSettings {
       || !list(a.allocation.stats,6,r=>bounded(r.stat,0,5)&&bounded(r.target,1,99),r=>r.stat)
       || !list(a.allocation.skills,64,r=>bounded(r.skillId,1,255)&&bounded(r.target,1,10),r=>r.skillId)
       || typeof a.follow.name !== 'string' || a.follow.name.length > 48 || /[\u0000-\u001f]/.test(a.follow.name)
+      || Object.hasOwn(a.follow,'mode') && !['name','partyLeader'].includes(a.follow.mode!)
+      || Object.hasOwn(a.follow,'rendezvous') && typeof a.follow.rendezvous !== 'boolean'
+      || a.follow.mode === 'partyLeader' && a.follow.name !== ''
+      || a.follow.rendezvous === true && a.follow.mode !== 'partyLeader'
       || !bounded(a.follow.distance,1,20) || !bounded(a.follow.lostSeconds,1,120)
       || !map(a.travel.destinationMap,true) || typeof a.travel.returnToLockMap !== 'boolean' || typeof a.travel.loop !== 'boolean'
       || !Array.isArray(a.travel.waypoints) || a.travel.waypoints.length > 64
