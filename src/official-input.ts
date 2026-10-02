@@ -30,3 +30,10 @@ export function couldOwnOfficialGameplay(data:unknown):boolean {
     :ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,Math.min(1,data.byteLength)):null;
   return bytes===null||bytes.length===0||!benignMaintenanceOpcodes.has(bytes[0]!);
 }
+
+/** Refine has no terminal acknowledgement; only the opcode is inspected. */
+export function isOfficialRefineCommand(data:unknown):boolean {
+  const bytes=data instanceof ArrayBuffer?new Uint8Array(data,0,Math.min(1,data.byteLength))
+    :ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,Math.min(1,data.byteLength)):null;
+  return bytes?.[0]===80;
+}

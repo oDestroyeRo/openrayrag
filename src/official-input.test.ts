@@ -33,3 +33,12 @@ describe('pinned official outgoing command ownership', () => {
     expect(read).not.toHaveBeenCalled();
   });
 });
+
+it('identifies only binary official refine opcode 80 at the view offset',async()=>{
+ const {isOfficialRefineCommand}=await import('./official-input');
+ expect(isOfficialRefineCommand(new Uint8Array([3,80,1]).subarray(1,2))).toBe(true);
+ expect(isOfficialRefineCommand(new Uint8Array([80]).buffer)).toBe(true);
+ const blob=new Blob([new Uint8Array([80])]),read=vi.spyOn(blob,'arrayBuffer');
+ for(const value of [new Uint8Array([3,80]),new Uint8Array([63,80]),new ArrayBuffer(0),blob,'80',null])expect(isOfficialRefineCommand(value)).toBe(false);
+ expect(read).not.toHaveBeenCalled();
+});

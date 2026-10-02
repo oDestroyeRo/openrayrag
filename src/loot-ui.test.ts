@@ -6,6 +6,7 @@ import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, DEFAULT_RETREAT } from './setting
 // panels are stubbed so this fixture needs no browser or account-bearing main.
 vi.mock('./social-ui', () => ({ SocialUi: class { root = document.createElement('div'); lock() {} }, validSocialSnapshot: () => true }));
 vi.mock('./memo-ui', () => ({ MemoUi: class { root = document.createElement('div'); lock() {} }, validMemoSnapshot: () => true }));
+vi.mock('./refine-ui', () => ({ RefineUi: class { root = document.createElement('div'); lock() {} policyChanged() {} settledForMaintenance() { return true; } }, validRefineSnapshot: () => true }));
 vi.mock('./socket-ui', () => ({ SocketUi: class { root = document.createElement('div'); lock() {} policyChanged() {} }, validSocketSnapshot: () => true }));
 
 class Element {

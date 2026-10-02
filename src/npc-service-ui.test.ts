@@ -74,6 +74,7 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
     memo: { lock: () => {} },
     socket: { lock: () => {} },
     manualTargets:{lock:()=>{}},
+    refine: {render:()=>{},lock:()=>{},clear:()=>{}},
     host,
     hooks,
     services: store,

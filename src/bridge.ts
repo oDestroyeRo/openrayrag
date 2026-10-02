@@ -1,7 +1,8 @@
 import type { DeathRecoveryGuard } from './death-recovery';
 import { MaintenanceLease } from './maintenance';
 import { socketCommand } from './socket-protocol';
-import { couldOwnOfficialGameplay, isOfficialGameplayCommand, isOfficialLookCommand } from './official-input';
+import { couldOwnOfficialGameplay, isOfficialGameplayCommand, isOfficialLookCommand, isOfficialRefineCommand } from './official-input';
+import { refineCommand } from './refine-protocol';
 import { type Settings } from './engine';
 import { command, walkCommand, lookCommand, decode, OP, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
 import { featureCommand, validateExpandedAction } from './protocol-feature';
@@ -20,7 +21,7 @@ interface BridgeWindow extends Window {
   __TAURI_INTERNALS__?: { invoke: (name: string, args: unknown) => Promise<unknown> };
   __RAYRAG__?: {
     control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard) => void;
-    perform: (action: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket', request: unknown) => void;
+    perform: (action: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance', request: unknown) => void;
     maintenance:(nonce:string,reserve:boolean|'commit')=>void;
     snapshot: () => CompanionSnapshot;
   };
@@ -80,6 +81,10 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
     maintenance.assertDispatch();
     if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
     NativeSocket.prototype.send.call(active, socketCommand(action));
+  }, packet => {
+    maintenance.assertDispatch();
+    if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
+    NativeSocket.prototype.send.call(active, Uint8Array.from(refineCommand(packet)));
   });
   const engine = controller.engine;
   const publish = () => {
@@ -155,10 +160,11 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
       // Suppress every payload on the owned socket during final settlement,
       // before even inspecting opcodes. No replay/queue and no body logging.
       if(this.gameSocket&&maintenance.blocked)return;
-      if(this.gameplayReady&&this.readyState===NativeSocket.OPEN&&page.buildUrl===VERIFIED_BUILD&&couldOwnOfficialGameplay(data)) {
+      if(this.gameSocket&&(this.gameplayReady||isOfficialRefineCommand(data))&&this.readyState===NativeSocket.OPEN&&page.buildUrl===VERIFIED_BUILD&&couldOwnOfficialGameplay(data)) {
         officialRevision++;officialUncertain=true;
         if(officialOwners.size<32||officialOwners.has(this))officialOwners.add(this);else officialOwnerOverflow=true;
         mutation();
+        if(isOfficialRefineCommand(data))controller.officialRefineCommand(this.gameplayCharacter);
       }
       if (active === this && this.readyState === NativeSocket.OPEN && engine.connected && engine.compatible && page.buildUrl === VERIFIED_BUILD
         &&engine.actorActionIdentity()&&isOfficialLookCommand(data)) {
@@ -174,6 +180,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
     }
     private readonly gameSocket:boolean;
     private gameplayReady=false;
+    private gameplayCharacter:string|null=null;
     constructor(url: string | URL, protocols?: string | string[]) {
       super(url, protocols);
       this.gameSocket=String(url)===SOCKET_URL;
@@ -185,6 +192,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
       active = this;
       let failed = false;
       let initialEnter=false;let fullResources=false;let enterCount=0;let reconciliationEligible=false;let reconciliationRevision:number|null=null;let readyOwn:string|null=null;
+      let refineResources:string|null=null;let refineBaselineConsumed=false;
       let opcode = -1;
       let connectionGeneration = -1;
       let queue = Promise.resolve();receiveQueue=queue;
@@ -207,16 +215,21 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
           login?.receive(data);
           mutation();
           controller.receive(data, connectionGeneration);
-          if(engine.actorActionIdentity(undefined,true))this.gameplayReady=true;
-          if(data[0]===OP.enter){enterCount++;initialEnter=enterCount===1;fullResources=false;readyOwn=null;reconciliationEligible=initialEnter&&officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0;reconciliationRevision=reconciliationEligible?officialRevision:null;}
+          if(engine.actorActionIdentity(undefined,true)){this.gameplayReady=true;this.gameplayCharacter=engine.player?.name??null;}
+          if(data[0]===OP.enter){enterCount++;initialEnter=enterCount===1;fullResources=false;readyOwn=null;refineResources=null;refineBaselineConsumed=false;reconciliationEligible=initialEnter&&officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0;reconciliationRevision=reconciliationEligible?officialRevision:null;}
           if(data[0]===OP.clear||data[0]===OP.map){reconciliationEligible=false;readyOwn=null;}
-          if(initialEnter&&data[0]===56){const events=decode(data);fullResources=events.some(e=>e.type==='inventory')&&events.some(e=>e.type==='skills')&&events.some(e=>e.type==='stats');}
+          if(initialEnter&&data[0]===56){const events=decode(data);fullResources=events.some(e=>e.type==='inventory')&&events.some(e=>e.type==='skills')&&events.some(e=>e.type==='stats');if(!refineBaselineConsumed)refineResources=fullResources?controller.officialRefineResourceRevision():null;}
           if(initialEnter&&data[0]===OP.spawn){const own=decode(data).find(e=>e.type==='spawn'&&e.entity.kind===0&&e.entity.id===engine.playerId);
             if(own?.type==='spawn'){const identity=engine.actorActionIdentity(undefined,true);readyOwn=fullResources&&own.entryType===1&&identity?JSON.stringify(identity):null;}}
           // A new, complete initialization restores availability, never an old
           // request's outcome. Same-socket map changes and timers cannot do this.
-          if(officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0&&reconciliationEligible&&reconciliationRevision===officialRevision&&fullResources&&readyOwn!==null&&readyOwn===JSON.stringify(engine.actorActionIdentity(undefined,true))&&controller.settledForMaintenance()){
-            officialUncertain=false;officialOwners.clear();reconciliationEligible=false;reconciliationRevision=null;readyOwn=null;
+          if(officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0&&reconciliationEligible&&reconciliationRevision===officialRevision&&fullResources&&readyOwn!==null&&readyOwn===JSON.stringify(engine.actorActionIdentity(undefined,true))){
+            // Consume the economic baseline once, independently of the updater's
+            // global settlement (which includes this very economic hold).
+            if(!refineBaselineConsumed){refineBaselineConsumed=true;if(refineResources!==null)controller.reconcileOfficialRefineInitialization(refineResources);}
+            if(controller.settledForMaintenance()){
+              officialUncertain=false;officialOwners.clear();reconciliationEligible=false;reconciliationRevision=null;readyOwn=null;
+            }
           }
           if (engine.player) { enteredWorld = true; login?.complete(); }
         }).catch(error => {

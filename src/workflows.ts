@@ -172,7 +172,7 @@ function barterConsumption(action: Extract<WorldAction, { type: 'npcBarter' }>, 
 }
 
 /** Context checks apply to manual actions and routine actions as well as workflows. */
-export function worldActionBlockers(input: WorldAction, context: WorkflowContext): string[] {
+export function worldActionBlockers(input: WorldAction, context: WorkflowContext, refineAdvance = false): string[] {
   let action: WorldAction;
   try { action = validateWorldAction(input); } catch (error) { return [error instanceof Error ? error.message : 'Invalid action']; }
   const reasons: string[] = []; const state = context.world;
@@ -193,7 +193,7 @@ export function worldActionBlockers(input: WorldAction, context: WorkflowContext
       if (!context.visibleNpcIds.includes(action.id)) reasons.push('Select a visible NPC.');
       if (state.npc.mode !== 'idle' || state.npc.id !== null) reasons.push('Finish the current NPC interaction first.');
       break;
-    case 'npcAdvance': npcContext(); if (state.npc.mode !== 'dialog') reasons.push('NPC is not waiting at a dialog.'); break;
+    case 'npcAdvance': npcContext(); if (state.npc.mode !== 'dialog' && !(refineAdvance && state.npc.mode === 'refine')) reasons.push('NPC is not waiting at a dialog.'); break;
     case 'npcOption':
       npcContext(); if (state.npc.mode !== 'options' || !state.npc.options[action.index]?.trim()) reasons.push('NPC option is unavailable.'); break;
     case 'shop':

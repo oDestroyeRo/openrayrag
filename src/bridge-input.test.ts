@@ -3,11 +3,12 @@ import type { CompanionController } from './controller';
 import { BitWriter } from './binary';
 import { GAME_URL, OP, SOCKET_URL, VERIFIED_BUILD, walkCommand, lookCommand, command, type Entity } from './protocol';
 import { FEATURE_OP, featureCommand } from './protocol-feature';
-import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
+import { automationSettings, DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
 import type { Settings } from './settings';
 import { worldCommand } from './world-protocol';
 import { memoCommand } from './memo-protocol';
 import { socketCommand } from './socket-protocol';
+import { refineCommand } from './refine-protocol';
 import { socialCommand } from './social-protocol';
 
 const captured=vi.hoisted(()=>({controller:null as CompanionController|null,senders:[] as Array<(...args:never[])=>void>}));
@@ -15,8 +16,8 @@ vi.mock('./controller',async original=>{
   const actual=await original<typeof import('./controller')>();
   return {...actual,CompanionController:class extends actual.CompanionController {
     constructor(...args:ConstructorParameters<typeof actual.CompanionController>){
-      super(args[0],args[1],()=>({width:200,height:200,walkable:()=>true}),args[3],args[4],args[5]);
-      captured.controller=this;captured.senders=[args[0],args[3]!,args[4]!,args[5]!] as typeof captured.senders;
+      super(args[0],args[1],()=>({width:200,height:200,walkable:()=>true}),args[3],args[4],args[5],args[6]);
+      captured.controller=this;captured.senders=[args[0],args[3]!,args[4]!,args[5]!,args[6]!] as typeof captured.senders;
     }
   }};
 });
@@ -36,8 +37,8 @@ function spawn(e:Entity,entryType=0):Uint8Array {
     .u8(e.kind).u8(0).u8(0).i32(e.x).i32(e.y).u8(e.level).i32(e.hp).i32(e.maxHp).i32(e.sp??0).i32(e.maxSp??0).i32(0).u8(0).finish();
   return new BitWriter().u8(OP.spawn).u8(entryType).i32(body.length).take(body).finish();
 }
-type Page={WebSocket:typeof NativeSocket;buildUrl:string;__RAYRAG__?:{control:(action:'start',settings:Settings)=>void;maintenance:(nonce:string,reserve:boolean|'commit')=>void}};
-async function fixture(ready=true){
+type Page={WebSocket:typeof NativeSocket;buildUrl:string;__RAYRAG__?:{control:(action:'start'|'heartbeat',settings?:Settings)=>void;maintenance:(nonce:string,reserve:boolean|'commit')=>void}};
+async function fixture(ready=true,ownId=0){
   const invoke=vi.fn(async(name:string)=>name==='update_ack'||name==='update_lease_alive'?true:undefined);
   const page:Page & Pick<Window,'addEventListener'> & {__TAURI_INTERNALS__:{invoke:typeof invoke}}={WebSocket:NativeSocket,buildUrl:VERIFIED_BUILD,addEventListener:()=>{},__TAURI_INTERNALS__:{invoke}},listeners=new Map<string,EventListener>();
   vi.stubGlobal('window',page);vi.stubGlobal('location',{origin:new URL(GAME_URL).origin,pathname:'/'});
@@ -50,12 +51,67 @@ async function fixture(ready=true){
     for(let i=0;i<12;i++)await Promise.resolve();
   };
   const packet=(data:Uint8Array)=>packetOn(socket,data);
-  if(ready){await packet(new BitWriter().u8(OP.enter).i32(0).string('prt_fild08').finish());await packet(spawn(player));await packet(spawn(monster));}
+  if(ready){await packet(new BitWriter().u8(OP.enter).i32(ownId).string('prt_fild08').finish());await packet(spawn({...player,id:ownId}));await packet(spawn(monster));}
   const input=(type='keydown',trusted=true)=>listeners.get(type)!({isTrusted:trusted} as Event);
   return {page,socket,c,packet,packetOn,input,invoke,start:(settings:Settings)=>page.__RAYRAG__!.control('start',settings),step:async(ms:number)=>vi.advanceTimersByTimeAsync(ms)};
 }
 beforeEach(()=>{vi.useFakeTimers();vi.setSystemTime(100_000);});
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks();captured.controller=null;captured.senders=[];});
+
+function skillResources():Uint8Array {
+  const f=new BitWriter().u8(FEATURE_OP.stats);
+  for(const value of [15,15,10000,1,1,1,1,1,1,0,0,0])f.i32(value);
+  for(const value of [100,100,200,200,...Array(16).fill(1),2000])f.i32(value);
+  f.f32(.5).i32(100).i32(0).bool(true).i16(1).i16(42).u8(1).i16(0)
+    .bool(true).u8(1).i32(0).i32(0).u8(0);
+  for(let i=0;i<10;i++)f.i32(0);
+  return f.i32(-1).finish();
+}
+describe('passive skill deadline during an official refine hold',()=>{
+  it.each([0,1].flatMap(ownId=>[false,true].map(obsolete=>({ownId,obsolete}))))('own $ownId, obsolete socket $obsolete retains only the original skill deadline',async({ownId,obsolete})=>{
+    const f=await fixture(true,ownId);
+    const current=new f.page.WebSocket(SOCKET_URL);current.dispatchEvent(new Event('open'));
+    await f.packetOn(current,new BitWriter().u8(OP.enter).i32(ownId).string('prt_fild08').finish());
+    await f.packetOn(current,skillResources());await f.packetOn(current,spawn({...player,id:ownId},1));
+    expect(f.socket.readyState).toBe(NativeSocket.OPEN);expect(current.readyState).toBe(NativeSocket.OPEN);
+    const counters=[f.c.engine.deaths,f.c.engine.kills,f.c.engine.looted];
+    f.c.perform('command',{type:'skill',mode:'self',skillId:42,level:1});
+    expect(f.c.engine.actionResult).toMatchObject({sequence:1,status:'pending'});
+    expect(current.writes).toHaveLength(1);
+    const skill=current.writes[0];
+    const economic=vi.spyOn(f.c,'officialRefineCommand'),takeover=vi.spyOn(f.c,'manualCommand');
+    const frame=Uint8Array.from(refineCommand({targetBagId:700,oreItemId:1010,catalystBagId:0}));
+    const native=NativeSocket.prototype.send;
+    vi.spyOn(NativeSocket.prototype,'send').mockImplementation(function(this:NativeSocket,data){
+      if(data===frame)expect(f.c.snapshot().refine.blocked).toBe(true);
+      native.call(this,data);
+    });
+    const writer=obsolete?f.socket:current;writer.send(frame);
+    expect(economic).toHaveBeenCalledOnce();expect(takeover).toHaveBeenCalledTimes(obsolete?0:1);
+    expect(writer.writes.at(-1)).toBe(frame);
+    if(obsolete)expect(f.c.engine.pendingFeatureAction).toEqual({type:'skill',mode:'self',skillId:42,level:1});
+    else expect(f.c.engine.pendingFeatureAction).toBeNull();
+    for(let second=1;second<=31;second++){
+      f.page.__RAYRAG__!.control('heartbeat');
+      await f.packetOn(current,new BitWriter().u8(OP.stop).i32(ownId).finish());await f.step(1000);
+      if(second===29){
+        expect(f.c.engine.featureActionsSettled).toBe(false);
+        if(obsolete)expect(f.c.engine.actionResult).toMatchObject({sequence:1,status:'pending'});
+      }
+      if(second===30)expect(f.c.engine.actionResult).toMatchObject({sequence:1,status:'failed'});
+    }
+    expect(f.c.engine.pendingFeatureAction).toBeNull();expect(f.c.engine.featureActionsSettled).toBe(true);
+    expect(f.c.engine.actionResult.reason).toBe(obsolete?'No server confirmation for skill.':'Action canceled.');
+    expect(f.c.snapshot()).toMatchObject({running:false,runRequested:false,refine:{blocked:true,state:'uncertain'}});
+    // Only the existing skill's Stop cancellation may accompany the original
+    // official frame. No Look, retry, refine replay or other decision is sent.
+    expect(current.writes).toEqual(obsolete?[skill,command('stop')]:[skill,command('stop'),frame]);
+    expect(f.socket.writes).toEqual(obsolete?[frame]:[]);
+    expect([f.c.engine.deaths,f.c.engine.kills,f.c.engine.looted]).toEqual(counters);
+    expect(automationSettings(f.c.engine.settings).respawn.maxDeaths).toBe(1);
+    expect(automationSettings(f.c.engine.settings).recovery.enabled).toBe(false);
+  });
+});
 
 describe('official page input and socket boundary',()=>{
   it('gives official Look manual grace without routing it through resource cancellation, and forwards exactly once',async()=>{
@@ -82,7 +138,7 @@ describe('official page input and socket boundary',()=>{
   });
   it.each([walkCommand({x:102,y:100}),command('attack',2),featureCommand({type:'useItem',itemId:501}),
     featureCommand({type:'equip',bagId:1001,equipped:true}),worldCommand({type:'npcTalk',id:7}),memoCommand(0),
-    socketCommand({type:'socket',targetBagId:20001,cardBagId:4002})])('takes over before forwarding the same official gameplay frame once',async source=>{
+    socketCommand({type:'socket',targetBagId:20001,cardBagId:4002}),refineCommand({targetBagId:700,oreItemId:1010,catalystBagId:0})])('takes over before forwarding the same official gameplay frame once',async source=>{
     const frame=Uint8Array.from(source);
     const f=await fixture(),order:string[]=[];
     vi.spyOn(f.c,'manualCommand').mockImplementation(()=>{order.push('takeover');});
@@ -114,10 +170,10 @@ describe('official page input and socket boundary',()=>{
   });
   it('bypasses the official hook for each Companion transport and ignores untrusted DOM events',async()=>{
     const f=await fixture(),takeover=vi.spyOn(f.c,'manualCommand'),input=vi.spyOn(f.c,'manualInput');
-    const [field,social,memo,socket]=captured.senders;
+    const [field,social,memo,socket,refine]=captured.senders;
     Reflect.apply(field!,null,[{type:'attack',id:2}]);Reflect.apply(social!,null,[{type:'emote',id:1}]);
-    Reflect.apply(memo!,null,[0]);Reflect.apply(socket!,null,[{type:'socket',targetBagId:20001,cardBagId:4002}]);
-    f.input('keydown',false);expect(input).not.toHaveBeenCalled();expect(takeover).not.toHaveBeenCalled();expect(f.socket.writes).toHaveLength(4);
+    Reflect.apply(memo!,null,[0]);Reflect.apply(socket!,null,[{type:'socket',targetBagId:20001,cardBagId:4002}]);Reflect.apply(refine!,null,[{targetBagId:700,oreItemId:1010,catalystBagId:0}]);
+    f.input('keydown',false);expect(input).not.toHaveBeenCalled();expect(takeover).not.toHaveBeenCalled();expect(f.socket.writes).toHaveLength(5);
   });
   it('does not prevent or repeat the official send when the takeover hook throws',async()=>{
     const f=await fixture();vi.spyOn(f.c,'manualCommand').mockImplementation(()=>{throw new Error('synthetic hook failure');});
@@ -126,12 +182,12 @@ describe('official page input and socket boundary',()=>{
 });
 
 describe('update dispatch freeze',()=>{
-  it('gates every official payload and all four prototype transports before forwarding, with no replay after release',async()=>{
+  it('gates every official payload and all five prototype transports before forwarding, with no replay after release',async()=>{
     const f=await fixture();vi.spyOn(f.c,'settledForMaintenance').mockReturnValue(true);
     const nonce='a'.repeat(32);f.page.__RAYRAG__!.maintenance(nonce,true);
     for(let i=0;i<15;i++)await Promise.resolve();expect(f.invoke.mock.calls.some(c=>c[0]==='update_ack')).toBe(true);
     for(const packet of [command('attack',2),new Uint8Array([2]),'opaque',new Blob(['opaque'])])f.socket.send(packet);
-    for(const [sender,args]of captured.senders.map((sender,i)=>[sender,[[{type:'attack',id:2}],[{type:'emote',id:1}],[0],[{type:'socket',targetBagId:20001,cardBagId:4002}]][i]!] as const))expect(()=>Reflect.apply(sender,null,args)).toThrow('Client update');
+    for(const [sender,args]of captured.senders.map((sender,i)=>[sender,[[{type:'attack',id:2}],[{type:'emote',id:1}],[0],[{type:'socket',targetBagId:20001,cardBagId:4002}],[{targetBagId:700,oreItemId:1010,catalystBagId:0}]][i]!] as const))expect(()=>Reflect.apply(sender,null,args)).toThrow('Client update');
     expect(f.socket.writes).toEqual([]);await f.step(5000);f.socket.send('still held');expect(f.socket.writes).toEqual([]);
     f.page.__RAYRAG__!.maintenance(nonce,false);f.socket.send('new payload');expect(f.socket.writes).toEqual(['new payload']);
   });
@@ -156,11 +212,13 @@ it('freezes obsolete game sockets and rejects a second ACK after socket replacem
  expect(f.invoke.mock.calls.some(c=>c[0]==='update_invalidate')).toBe(true);
 });
 
-function initializedResources():Uint8Array {
+function initializedResources(ore?:number):Uint8Array {
  const f=new BitWriter().u8(FEATURE_OP.stats);
  for(const value of [15,7,500,3,4,5,6,7,8,0,0,123])f.i32(value);
  for(const value of [100,100,200,200,...Array(16).fill(1),2000])f.i32(value);
- f.f32(.5).i32(0).i32(0).bool(true).i16(0).i16(0).bool(true).u8(0).u8(0);
+ f.f32(.5).i32(0).i32(0).bool(true).i16(0).i16(0).bool(true).u8(ore===undefined?0:1);
+ if(ore!==undefined){f.i32(1).i32(1010).i16(ore).i32(1).i32(700).i32(1201).i16(1).u8(0).u8(0);for(let i=0;i<16;i++)f.u8(1);for(let i=0;i<4;i++)f.i32(0);}
+ f.u8(0);
  for(let i=0;i<10;i++)f.i32(0);return f.i32(-1).finish();
 }
 it('reconciles official uncertainty only after closed old transport and complete first new initialization',async()=>{
@@ -245,4 +303,51 @@ it('retains updater uncertainty when the bounded transport tracker overflows',as
  await f.packetOn(next,new BitWriter().u8(OP.enter).i32(0).string('prt_fild08').finish());await f.packetOn(next,initializedResources());await f.packetOn(next,spawn(player,1));
  f.page.__RAYRAG__!.maintenance('a'.repeat(32),true);for(let i=0;i<15;i++)await Promise.resolve();expect(f.invoke.mock.calls.some(c=>c[0]==='update_ack')).toBe(false);
  expect(owners.every(owner=>owner.writes.length===1)).toBe(true);expect(next.writes).toEqual([]);
+});
+
+
+it('owns idle official80 before forwarding and never double-spends protected ore from delayed pre-cost state',async()=>{
+ const f=await fixture(),npc={...player,id:3,kind:2 as const,name:'Refiner'};
+ await f.packet(initializedResources(3));await f.packet(spawn(npc));
+ const prompt=async()=>{await f.packet(new BitWriter().u8(77).u8(0).i32(3).bool(true).finish());await f.packet(new BitWriter().u8(77).u8(5).finish());};
+ await prompt();const policy=structuredClone(DEFAULT_AUTOMATION);policy.items=[{itemId:1010,resource:'hp',belowPercent:50,minStock:2,cooldownSeconds:1}];
+ const input={targetBagId:700,catalystBagId:0,policy,maxSpend:200,minZeny:0};f.c.perform('refinePreview',input);
+ const request={...input,previewToken:f.c.snapshot().refine.preview!.token};
+ const frame=Uint8Array.from(refineCommand({targetBagId:700,oreItemId:1010,catalystBagId:0}));
+ vi.spyOn(NativeSocket.prototype,'send').mockImplementation(function(this:NativeSocket,data){expect(f.c.snapshot().refine.blocked).toBe(true);this.writes.push(data);});
+ f.socket.send(frame);expect(f.socket.writes).toEqual([frame]);
+ for(const elapsed of [0,2001,10001]){await f.step(elapsed);await f.packet(initializedResources(3));await prompt();expect(()=>f.c.perform('refinePreview',input)).toThrow();expect(()=>f.c.perform('refine',request)).toThrow();}
+ f.c.stop();await f.packet(new BitWriter().u8(77).u8(3).finish());
+ expect(f.c.settledForMaintenance()).toBe(false);expect(f.c.snapshot().refine.blocked).toBe(true);expect(f.socket.writes).toEqual([frame]);
+});
+
+it.each(['valid','oldOpen','sameSocket','wrongCharacter','preliminary','readyBeforeFull','entryType0','sparseAfterFull','newOfficial80','obsoleteOfficial80'] as const)(
+ 'releases official refine uncertainty only for one newer complete same-character initialization: %s',async kind=>{
+ const f=await fixture(),frame=Uint8Array.from(refineCommand({targetBagId:700,oreItemId:1010,catalystBagId:0}));f.socket.send(frame);
+ if(!['oldOpen','sameSocket','obsoleteOfficial80'].includes(kind))f.socket.dispatchEvent(new Event('close'));
+ const next=kind==='sameSocket'?f.socket:new f.page.WebSocket(SOCKET_URL);if(next!==f.socket)next.dispatchEvent(new Event('open'));
+ await f.packetOn(next,new BitWriter().u8(OP.enter).i32(0).string('prt_fild08').finish());
+ if(kind==='readyBeforeFull')await f.packetOn(next,spawn(player,1));
+ if(kind!=='preliminary')await f.packetOn(next,initializedResources(2));
+ else await f.packetOn(next,new BitWriter().u8(40).i32(300).finish());
+ if(kind==='sparseAfterFull')await f.packetOn(next,new BitWriter().u8(50).bool(false).i32(1010).i16(1).i32(0).bool(false).finish());
+ if(kind==='newOfficial80')next.send(frame);
+ if(kind==='obsoleteOfficial80'){f.socket.send(frame);f.socket.dispatchEvent(new Event('close'));}
+ if(kind!=='readyBeforeFull')await f.packetOn(next,spawn(kind==='wrongCharacter'?{...player,name:'Another'}:player,kind==='entryType0'?0:1));
+ expect(f.c.snapshot().refine.blocked).toBe(kind!=='valid');expect(f.c.runRequested).toBe(false);
+ if(kind==='valid'){
+  expect(f.c.snapshot().refine.reason).toContain('remains unknown');await f.step(2001);expect(f.c.settledForMaintenance()).toBe(true);expect(next.writes).toEqual([]);
+  const npc={...player,id:3,kind:2 as const,name:'Refiner'};await f.packetOn(next,spawn(npc));await f.packetOn(next,new BitWriter().u8(77).u8(0).i32(3).bool(true).finish());await f.packetOn(next,new BitWriter().u8(77).u8(5).finish());
+  f.c.perform('refinePreview',{targetBagId:700,catalystBagId:0,policy:structuredClone(DEFAULT_AUTOMATION),maxSpend:200,minZeny:0});expect(f.c.snapshot().refine.preview).not.toBeNull();expect(next.writes).toEqual([]);
+ }else{
+  // Delayed closure, renewed resources or a replacement own actor cannot repair
+  // an invalid/consumed initialization baseline on that same transport.
+  f.socket.dispatchEvent(new Event('close'));await f.packetOn(next,initializedResources(2));await f.packetOn(next,spawn(player,0));
+  expect(f.c.snapshot().refine.blocked).toBe(true);
+ }
+});
+
+it('keeps panel input and non-economic official commands free of the refine hold',async()=>{
+ const f=await fixture();f.input();f.socket.send(command('attack',2));expect(f.c.snapshot().refine.blocked).toBe(false);
+ const unrelated=new f.page.WebSocket('wss://unrelated.invalid');unrelated.send(new Uint8Array([80]));expect(f.c.snapshot().refine.blocked).toBe(false);
 });

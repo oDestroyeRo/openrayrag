@@ -17,5 +17,5 @@ it('manual edits win a delayed restore and saves are serialized by revision',asy
 });
 it('unknown secret/intent fields and invalid dirty input reject without writing',async()=>{
  const save=vi.fn();const form=new CurrentForm(()=>({settings:{...DEFAULT_SETTINGS,radius:99},selectedProfileId:null}),save);await expect(form.flush()).rejects.toThrow();expect(save).not.toHaveBeenCalled();
- for(const key of ['password','running','runRequested'])expect(()=>formDocument({version:1,revision:0,selectedProfileId:null,settings:DEFAULT_SETTINGS,[key]:true})).toThrow();
+ for(const key of ['password','running','runRequested','refine','previewToken','refineReceipt','refineConfirmation'])expect(()=>formDocument({version:1,revision:0,selectedProfileId:null,settings:DEFAULT_SETTINGS,[key]:true})).toThrow();
 });
