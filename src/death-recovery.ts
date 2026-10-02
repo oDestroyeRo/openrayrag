@@ -10,6 +10,9 @@ export interface DeathRecoveryGuard {
 export function farmingDestination(settings: Settings): string {
   return mapPolicy(settings).lockArea?.map || settings.automation?.travel.destinationMap || settings.map;
 }
+export function deathLimitGuidance(deaths: number, allowance: number): string {
+  return `Automatic respawn paused (${deaths} deaths; limit ${allowance}). Press Stop, then Start to begin a new run. Any pending game action must finish first.`;
+}
 export function validateDeathRecoveryGuard(value: unknown): DeathRecoveryGuard {
   const keys=['version','character','destination','phase','uncertain','recoverySeconds','returnSeconds','recoveryDeadline','returnDeadline'];
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Invalid death recovery state.');

@@ -1,4 +1,4 @@
-import { farmingDestination, validateDeathRecoveryGuard, type DeathRecoveryGuard } from './death-recovery';
+import { deathLimitGuidance, farmingDestination, validateDeathRecoveryGuard, type DeathRecoveryGuard } from './death-recovery';
 import { validateSettings, type Settings } from './settings';
 import { validateSupplyResumeGuard, type SupplyResumeGuard } from './supply-trip';
 import type { EscapeResumeGuard, EscapeSnapshot } from './escape';
@@ -174,7 +174,7 @@ export class PersistentFieldRun {
     if (a.limits.minutes && this.now() - this.startedAt >= a.limits.minutes * 60_000) return 'Waiting: session time limit reached. Press Stop to change settings.';
     if (a.limits.kills && this.totals.kills >= a.limits.kills) return 'Waiting: monster limit reached. Press Stop to change settings.';
     if (a.limits.pickups && this.totals.looted >= a.limits.pickups) return 'Waiting: pickup limit reached. Press Stop to change settings.';
-    if (a.respawn.enabled && this.totals.deaths > a.respawn.maxDeaths) return 'Waiting: death limit reached. Press Stop to change settings.';
+    if (a.respawn.enabled && this.totals.deaths > a.respawn.maxDeaths) return `Waiting: death limit reached. ${deathLimitGuidance(this.totals.deaths, a.respawn.maxDeaths)}`;
     return '';
   }
   guardForStart(settings: Settings, character: string, sessionId: string): EscapeResumeGuard | undefined {

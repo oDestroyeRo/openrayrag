@@ -1,4 +1,5 @@
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
+import { deathLimitGuidance } from './death-recovery';
 import { AttackStrategyPolicy, engagementIdentity, type StrategyChoice, type AttackStrategySnapshot, type EngagementIdentity } from './attack-strategy';
 import { castReadiness, skillAfterCastSeconds, CAST_PREREQUISITES, BLIND_CONDITION, AUTOMATIC_ATTACK_SKILLS, MANUAL_GROUND_SKILL } from './cast-policy';
 import { fieldGrid, insideLockArea, mapAllowed, mapPolicy, policyIdentity } from './map-policy';
@@ -184,7 +185,7 @@ export class BotEngine {
     if ((!p.dead && (p.maxHp <= 0 || p.hp / p.maxHp * 100 <= settings.minHpPercent))
       || (p.dead && (!continuing || !automationSettings(validated).respawn.enabled))) throw new Error('Recover above the HP stop limit before starting.');
     this.advanceMovement();
-    if(respawnOnly&&this.deaths>automationSettings(validated).respawn.maxDeaths)throw new Error('Death limit reached; waiting for revival.');
+    if(respawnOnly&&this.deaths>automationSettings(validated).respawn.maxDeaths)throw new Error(`Death limit reached. ${deathLimitGuidance(this.deaths,automationSettings(validated).respawn.maxDeaths)}`);
     // A dead character cannot enter the field. Its authorized respawn owner is
     // admitted here; the alive tick still requires the physical field boundary.
     if(!respawnOnly){
@@ -959,7 +960,9 @@ export class BotEngine {
     const a=automationSettings(this.settings);
     if(this.running&&a.respawn.enabled&&this.deaths<=a.respawn.maxDeaths) {
       this.pending=null;this.route=null;this.leg=null;this.automation.reset();this.reason='Character died; automatic respawn is enabled.';this.note(this.reason);
-    } else this.stop(a.respawn.enabled?'Death limit reached. Recover manually before restarting.':'Character died. Recover manually before restarting.');
+    } else this.stop(a.respawn.enabled&&this.deaths>a.respawn.maxDeaths
+      ?`Death limit reached. ${deathLimitGuidance(this.deaths,a.respawn.maxDeaths)}`
+      :a.respawn.enabled?'Character died. Waiting for revival.':'Character died. Recover manually before restarting.');
   }
   acknowledgeLoadoutOverride():void {this.loadout.acknowledgeOverride();}
   get pendingFeatureAction(): ExpandedAction | null { return this.automation.pendingAction; }
