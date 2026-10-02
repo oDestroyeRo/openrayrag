@@ -1,8 +1,22 @@
 {
   "identifier": "game-telemetry",
   "description": "The fixed game window can report status and claim one explicitly queued login. It cannot read the local saved profile or access the filesystem or shell.",
-  "windows": ["game"],
+  "windows": [
+    "game"
+  ],
   "local": false,
-  "remote": { "urls": ["https://websea01.rayrag.com/"] },
-  "permissions": ["allow-bridge-status", "allow-take-pending-login", "allow-cancel-pending-login"]
+  "remote": {
+    "urls": [
+      "https://websea01.rayrag.com/"
+    ]
+  },
+  "permissions": [
+    "allow-bridge-status",
+    "allow-take-pending-login",
+    "allow-cancel-pending-login",
+    "allow-update-ack",
+    "allow-update-lease-alive",
+    "allow-update-invalidate",
+    "allow-update-final-ack"
+  ]
 }

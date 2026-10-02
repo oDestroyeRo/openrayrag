@@ -6,6 +6,11 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: ipc.listen }));
 vi.mock('./feature-ui', async () => {
   const { DEFAULT_AUTOMATION } = await import('./settings');
   return { FeatureUi: class {
+    private profile:string|null=null;
+    selectedProfileId(){return this.profile;}
+    restoreProfileSelection(id:string|null){this.profile=id;}
+    write():void{}
+    levelDifference(){return 1;}
     active(): boolean { return false; }
     serviceBlocked(): boolean { return false; }
     read() { return structuredClone(DEFAULT_AUTOMATION); }
@@ -17,9 +22,9 @@ vi.mock('./feature-ui', async () => {
 // No browser, app data, real account or persistent frontend store is involved.
 class Element {
   value = ''; checked = false; disabled = false; hidden = false; textContent = ''; placeholder = '';
-  id = ''; className = ''; style: Record<string, string> = {}; width = 400; height = 400;
+  id = ''; className = ''; dataset:Record<string,string>={}; style: Record<string, string> = {}; width = 400; height = 400;
   classList = { toggle() {}, add() {}, remove() {} };
-  listeners = new Map<string, Array<(event: { preventDefault(): void }) => unknown>>();
+  listeners = new Map<string, Array<(event: { preventDefault(): void;target?:Element }) => unknown>>();
   markup = '';
   constructor(private readonly elements: Map<string, Element>) {}
   set innerHTML(html: string) {
@@ -34,28 +39,33 @@ class Element {
   append(): void {}
   replaceChildren(): void {}
   getContext() { return { clearRect() {}, fillText() {} }; }
-  addEventListener(type: string, callback: (event: { preventDefault(): void }) => unknown): void {
+  addEventListener(type: string, callback: (event: { preventDefault(): void;target?:Element }) => unknown): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), callback]);
   }
-  async emit(type: string): Promise<void> {
-    for (const callback of this.listeners.get(type) ?? []) callback({ preventDefault() {} });
+  closest(selector:string):Element|null{return selector.includes('.settings')?this:null;}
+  async emit(type: string,target?:Element): Promise<void> {
+    for (const callback of this.listeners.get(type) ?? []) callback({ preventDefault() {},target });
     for (let i = 0; i < 12; i++) await Promise.resolve();
   }
 }
-async function fixture(saved: { username: string; characterSlot: number; autoLogin: boolean } | null = null, readFails = false) {
+async function fixture(saved: { username: string; characterSlot: number; autoLogin: boolean } | null = null, readFails = false, savedForm:unknown=null) {
   const elements = new Map<string, Element>(), root = new Element(elements), main = new Element(elements);
   vi.useFakeTimers(); vi.stubGlobal('document', {
     querySelector: (selector: string) => selector === '#app' ? root : main,
+    querySelectorAll:()=>[],
     getElementById: (id: string) => elements.get(id), createElement: () => new Element(elements),
   });
   ipc.invoke.mockReset(); ipc.listen.mockClear();
-  ipc.invoke.mockImplementation(async (command: string) => {
+  ipc.invoke.mockImplementation(async (command: string,args?:{document?:{revision:number}}) => {
+    if(command==='current_form')return savedForm;
+    if(command==='save_current_form')return args?.document?.revision;
+    if(command==='update_status')return {version:'0.2.27',phase:'current',message:'Current'};
     if (command === 'saved_login') { if (readFails) throw 'synthetic store failure'; return saved; }
     return undefined;
   });
   vi.resetModules(); await import('./main');
-  for (let i = 0; i < 15; i++) await Promise.resolve();
-  return { root, get: (id: string) => elements.get(id)!, calls: (command: string) => ipc.invoke.mock.calls.filter(call => call[0] === command) };
+  for (let i = 0; i < 40; i++) await Promise.resolve();
+  return { root, main, get: (id: string) => elements.get(id)!, calls: (command: string) => ipc.invoke.mock.calls.filter(call => call[0] === command) };
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -107,4 +117,50 @@ describe('native local-login form and metadata', () => {
       expect(f.get('password').value).toBe('');
     }
   });
+});
+
+describe('current form before app-open login',()=>{
+  it('restores native current settings and logical targets before optional sign-in without starting the bot',async()=>{
+    const {DEFAULT_SETTINGS}=await import('./settings');
+    const document={version:1,revision:12,selectedProfileId:'profile_one',settings:{...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],radius:17}};
+    const f=await fixture({username:'synthetic-user',characterSlot:2,autoLogin:true},false,document);
+    expect(f.get('radius').value).toBe('17');expect(f.calls('control_bot')).toEqual([]);
+    const save=f.calls('save_current_form')[0]![1] as {document:{settings:{map:string;targets:number[];radius:number};selectedProfileId:string}};
+    expect(save.document.settings).toMatchObject({map:'prt_fild08',targets:[4000],radius:17});expect(save.document.selectedProfileId).toBe('profile_one');
+    expect(ipc.invoke.mock.calls.findIndex(c=>c[0]==='save_current_form')).toBeLessThan(ipc.invoke.mock.calls.findIndex(c=>c[0]==='login_game'));
+    expect(JSON.stringify(save)).not.toMatch(/password|username|running|runRequested/);
+  });
+});
+
+it('recovers continuous saves when an edit during delayed restore is invalid then corrected',async()=>{
+ const {DEFAULT_SETTINGS}=await import('./settings');let release:(v:unknown)=>void=()=>{};const delayed=new Promise(r=>{release=r;});const f=await fixture(null,false,delayed);
+ f.get('radius').value='99';await f.main.emit('input',f.get('radius'));release({version:1,revision:12,selectedProfileId:null,settings:DEFAULT_SETTINGS});for(let i=0;i<40;i++)await Promise.resolve();expect(f.get('radius').value).toBe('99');expect(f.calls('save_current_form')).toEqual([]);
+ f.get('radius').value='12';await f.main.emit('input',f.get('radius'));await vi.advanceTimersByTimeAsync(1000);expect(f.calls('save_current_form')).toHaveLength(1);
+});
+
+describe('unsent account draft update fence',()=>{
+  it.each(['password','username','character-slot','remember-login','auto-login'])('defers installation for %s, then permits it after restoring the baseline',async(id)=>{
+    const f=await fixture();
+    const input=f.get(id),beforeValue=input.value,beforeChecked=input.checked;
+    if(id.endsWith('-login'))input.checked=true;
+    else input.value=id==='character-slot'?'1':'synthetic-unsent';
+    ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
+      if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+      if(command==='save_current_form')return args!.document.revision;
+      if(command==='update_reserve')return 'a'.repeat(32);
+      if(command==='update_install')return true;
+    });
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(f.calls('update_reserve')).toHaveLength(0);
+    expect(f.get('update-status').textContent).toContain('account draft');
+    input.value=beforeValue;input.checked=beforeChecked;
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(f.calls('update_reserve')).toHaveLength(1);
+    expect(f.calls('control_bot')).toEqual([]);
+    expect(f.get('client-version').textContent).toBe('macOS · v0.2.27');
+  });
+});
+
+it('opens the manual release through a fixed native command without gameplay commands',async()=>{
+ const f=await fixture();await f.get('update-download').emit('click');expect(f.calls('update_open_release')).toEqual([['update_open_release']]);expect(f.calls('control_bot')).toEqual([]);
 });

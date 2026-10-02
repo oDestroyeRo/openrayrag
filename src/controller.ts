@@ -305,6 +305,16 @@ export class CompanionController {
       throw new Error('Enter a character in the verified game build first.');
     if (this.now() - this.lastFrame > 15_000) throw new Error('Game status is stale.');
   }
+  settledForMaintenance():boolean {
+    const e=this.engine,cast=e.observations.snapshot(e.playerId,null,e.connected,[],false).actors.find(row=>row.id===e.playerId)?.cast;
+    const stationary=this.movementSettled();
+    return stationary&&e.connected&&e.compatible&&!!e.actorActionIdentity(undefined,true)
+      &&!this.runRequested&&!this.returning&&!this.pending&&!this.featureReceipt&&!this.workflowOutstanding&&!this.unresolvedWorld
+      &&!this.travel.active&&!this.service.active&&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)
+      &&!this.supply.ownsField&&!this.supply.uncertain&&!this.escape.busy&&!this.memo.blocked&&!this.socket.busy&&!this.social.busy
+      &&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture&&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil
+      &&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending&&cast?.state!=='casting'&&e.settledForMaintenance();
+  }
   private requireIdle(): void {
     this.requireReady();
     if (this.deathCycle?.guard.uncertain || this.deathCycle?.posture || this.socket.busy || this.memo.blocked || this.active || this.escape.busy || this.supply.uncertain || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');

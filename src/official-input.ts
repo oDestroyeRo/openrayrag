@@ -15,3 +15,13 @@ export function isOfficialGameplayCommand(data: unknown): boolean {
     : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, Math.min(1, data.byteLength)) : null;
   return bytes !== null && bytes.length === 1 && gameplayOpcodes.has(bytes[0]!);
 }
+
+// Maintenance conservatively owns opaque/unsupported sends from an already
+// verified-ready game transport, without reading any body or awaiting a Blob.
+// Known readiness/keepalive, cosmetic/social and text-query families stay inert.
+const benignMaintenanceOpcodes=new Set([2,3,4,13,17,44,54,55]);
+export function couldOwnOfficialGameplay(data:unknown):boolean {
+  const bytes=data instanceof ArrayBuffer?new Uint8Array(data,0,Math.min(1,data.byteLength))
+    :ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,Math.min(1,data.byteLength)):null;
+  return bytes===null||bytes.length===0||!benignMaintenanceOpcodes.has(bytes[0]!);
+}

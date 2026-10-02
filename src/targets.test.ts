@@ -14,12 +14,12 @@ describe('map monster selection', () => {
     expect(targets.ids).toEqual([4000]);
     targets.select(4000,false);targets.update('session',info,7);expect(targets.ids).toEqual([]);
   });
-  it('clears old choices and types when map or game session changes', () => {
+  it('clears live types across maps while retaining configured choices across a new same-map session', () => {
     const targets=new MapTargets();targets.update('session',info,7);targets.selectEligible();
     targets.update('session',{...info,code:'prontera',monsters:[]},7);
     expect(targets.ids).toEqual([]);expect(targets.options).toEqual([]);
     targets.update('session',info,7);targets.selectEligible();
-    targets.update('next-session',info,7);expect(targets.ids).toEqual([]);
+    targets.update('next-session',info,7);expect(targets.ids).toEqual([4000,4007]);
   });
   it('retains observed types leaving view and selection when metadata arrives', () => {
     const targets=new MapTargets();

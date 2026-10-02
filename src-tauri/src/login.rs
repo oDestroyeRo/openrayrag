@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use tauri::{Manager, WebviewWindow};
 
 #[path = "local_login_store.rs"]
-mod local_store;
+pub(crate) mod local_store;
 const VERIFIED_BUILD: &str = "Build_2569-09-01-01-55";
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -72,6 +72,9 @@ pub(crate) struct PendingLoginResult {
 }
 
 impl LoginState {
+    pub(crate) fn maintenance_busy(&self) -> bool {
+        self.pending.is_some() || self.candidate.is_some()
+    }
     fn queue(&mut self, profile: LoginProfile) -> u64 {
         self.generation = self.generation.wrapping_add(1);
         self.candidate_session = None;
@@ -275,6 +278,7 @@ pub(crate) async fn login_game(
     request: LoginRequest,
 ) -> Result<(), String> {
     super::require_window(&window, "main")?;
+    let mut _permit = crate::maintenance::admit(&app)?;
     let remember = request.remember;
     let profile = resolve_profile(request, || login_store(&app)?.load())?;
     let state = app.state::<SharedLogin>();
@@ -298,7 +302,13 @@ pub(crate) async fn login_game(
         state.reconnect_blocked = false;
         state.queue(profile);
     }
-    reopen_game(&app)
+    _permit.ever_game = true;
+    _permit.authorize_navigation();
+    let result = reopen_game(&app);
+    if result.is_err() {
+        _permit.cancel_navigation();
+    }
+    result
 }
 
 fn reopen_game(app: &tauri::AppHandle) -> Result<(), String> {
@@ -324,6 +334,7 @@ pub(crate) async fn reconnect_game(
     window: WebviewWindow,
 ) -> Result<(), String> {
     super::require_window(&window, "main")?;
+    let mut _permit = crate::maintenance::admit(&app)?;
     // Reuse this exact window. A concurrent close must never create a new one.
     let game = app
         .get_webview_window("game")
@@ -343,11 +354,14 @@ pub(crate) async fn reconnect_game(
             return Err("Reconnect was cancelled.".into());
         }
     }
+    _permit.ever_game = true;
+    _permit.authorize_navigation();
     let result = game
         .navigate(super::GAME_URL.parse().unwrap())
         .and_then(|()| game.set_focus())
         .map_err(|_| "Could not reopen the game.".to_string());
     if result.is_err() {
+        _permit.cancel_navigation();
         if let Ok(mut state) = state.lock() {
             if state.generation == generation {
                 state.pending = None;
@@ -379,6 +393,7 @@ pub(crate) fn take_pending_login(
     session_id: String,
 ) -> Result<PendingLoginResult, String> {
     super::require_window(&window, "game")?;
+    let mut _permit = crate::maintenance::admit(&app)?;
     if window
         .url()
         .map_err(|_| "Game URL is unavailable.")?

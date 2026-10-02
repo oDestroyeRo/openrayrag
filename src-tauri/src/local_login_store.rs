@@ -16,12 +16,17 @@ const READ_ERROR: &str =
 const SAVE_ERROR: &str = "Could not save the login on this Mac.";
 const FORGET_ERROR: &str = "Could not remove the local saved login.";
 
-pub(super) struct LocalLoginStore {
+pub(crate) struct LocalLoginStore {
     directory: PathBuf,
 }
 
 impl LocalLoginStore {
-    pub(super) fn new(app_data: PathBuf) -> Self {
+    pub(crate) fn settings(app_data: PathBuf) -> Self {
+        Self {
+            directory: app_data.join("settings"),
+        }
+    }
+    pub(crate) fn new(app_data: PathBuf) -> Self {
         Self {
             directory: app_data.join("login"),
         }
@@ -113,7 +118,7 @@ impl LocalLoginStore {
         forget().map_err(|_| FORGET_ERROR.into())
     }
 
-    fn open_directory(&self, create: bool) -> io::Result<Option<File>> {
+    pub(crate) fn open_directory(&self, create: bool) -> io::Result<Option<File>> {
         self.open_directory_with(create, |parent| parent.sync_all())
     }
 
@@ -185,7 +190,7 @@ fn c_string(name: &OsStr) -> io::Result<CString> {
     CString::new(name.as_bytes()).map_err(|_| invalid())
 }
 
-fn verify_private(file: &File, directory: bool) -> io::Result<()> {
+pub(crate) fn verify_private(file: &File, directory: bool) -> io::Result<()> {
     verify_owner_mode(file, directory)?;
     access_list::require_empty(file)
 }
@@ -209,7 +214,7 @@ fn verify_owner_mode(file: &File, directory: bool) -> io::Result<()> {
 // macOS extended ACLs are independent of the POSIX mode bits. These bindings
 // match the platform SDK's sys/acl.h and acl_get_entry(3)/acl_set_fd(3).
 #[cfg(target_os = "macos")]
-mod access_list {
+pub(crate) mod access_list {
     use super::*;
     use libc::{c_int, c_void};
     extern "C" {
@@ -265,7 +270,7 @@ mod access_list {
             Err(error)
         }
     }
-    pub(super) fn clear(file: &File) -> io::Result<()> {
+    pub(crate) fn clear(file: &File) -> io::Result<()> {
         // SAFETY: acl_init(0) returns an owned empty extended ACL.
         let empty = Acl::checked(unsafe { acl_init(0) })?;
         // SAFETY: valid fd/ACL; this affects that new inode, never a path target.
@@ -277,17 +282,22 @@ mod access_list {
 }
 
 #[cfg(not(target_os = "macos"))]
-mod access_list {
+pub(crate) mod access_list {
     use super::*;
     pub(super) fn require_empty(_: &File) -> io::Result<()> {
         Err(invalid())
     }
-    pub(super) fn clear(_: &File) -> io::Result<()> {
+    pub(crate) fn clear(_: &File) -> io::Result<()> {
         Err(invalid())
     }
 }
 
-fn open_at(directory: &File, name: &str, flags: i32, mode: libc::mode_t) -> io::Result<File> {
+pub(crate) fn open_at(
+    directory: &File,
+    name: &str,
+    flags: i32,
+    mode: libc::mode_t,
+) -> io::Result<File> {
     let name = c_string(OsStr::new(name))?;
     // SAFETY: live fd/name; mode supplied when O_CREAT is present. Nonblocking
     // open prevents a FIFO masquerading as a profile from hanging a read.
@@ -306,7 +316,7 @@ fn open_at(directory: &File, name: &str, flags: i32, mode: libc::mode_t) -> io::
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn private_file(directory: &File, name: &str) -> io::Result<Option<File>> {
+pub(crate) fn private_file(directory: &File, name: &str) -> io::Result<Option<File>> {
     let file = match open_at(directory, name, libc::O_RDONLY, 0) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -316,7 +326,7 @@ fn private_file(directory: &File, name: &str) -> io::Result<Option<File>> {
     Ok(Some(file))
 }
 
-fn remove_private_file(directory: &File, name: &str) -> io::Result<()> {
+pub(crate) fn remove_private_file(directory: &File, name: &str) -> io::Result<()> {
     if private_file(directory, name)?.is_none() {
         return Ok(());
     }
@@ -328,7 +338,7 @@ fn remove_private_file(directory: &File, name: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn rename_at(directory: &File, from: &str, to: &str) -> io::Result<()> {
+pub(crate) fn rename_at(directory: &File, from: &str, to: &str) -> io::Result<()> {
     let from = c_string(OsStr::new(from))?;
     let to = c_string(OsStr::new(to))?;
     // SAFETY: both names are live; same-directory rename replaces atomically.

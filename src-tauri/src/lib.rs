@@ -3,7 +3,11 @@ use std::sync::OnceLock;
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 mod automation;
 mod control;
+mod current_form;
 mod login;
+mod maintenance;
+mod update_install;
+mod updater;
 
 const GAME_URL: &str = "https://websea01.rayrag.com/";
 const BRIDGE: &str = include_str!("../generated/game-bridge.js");
@@ -35,7 +39,18 @@ fn require_window(window: &WebviewWindow, label: &str) -> Result<(), String> {
 #[tauri::command]
 async fn open_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
     require_window(&window, "main")?;
-    open_game_window(&app)
+    let mut permit = maintenance::admit(&app)?;
+    permit.ever_game = true;
+    permit.game_generation += 1;
+    permit.identity = None;
+    if app.get_webview_window("game").is_none() {
+        permit.authorize_navigation();
+    }
+    let result = open_game_window(&app);
+    if result.is_err() {
+        permit.cancel_navigation();
+    }
+    result
 }
 
 fn open_game_window(app: &tauri::AppHandle) -> Result<(), String> {
@@ -51,7 +66,32 @@ fn open_game_window(app: &tauri::AppHandle) -> Result<(), String> {
         .min_inner_size(1000.0, 720.0)
         .incognito(true)
         .initialization_script(BRIDGE)
-        .on_navigation(|url| url.as_str() == GAME_URL)
+        .on_navigation({
+            let app = app.clone();
+            move |url| {
+                if url.as_str() != GAME_URL {
+                    return false;
+                }
+                let shared = app.state::<maintenance::SharedGate>();
+                let allowed = if let Ok(mut gate) = shared.try_lock() {
+                    if let Some(l) = gate.lease.as_mut() {
+                        l.invalidated = true;
+                        l.acknowledged = false;
+                        return false;
+                    }
+                    if !shared.take_authorized_navigation() {
+                        gate.page_navigation();
+                    }
+                    gate.cancel_navigation();
+                    gate.game_generation += 1;
+                    gate.identity = None;
+                    true
+                } else {
+                    shared.take_authorized_navigation()
+                };
+                allowed
+            }
+        })
         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
         .build()
         .map_err(|_| "Could not open the game window.".to_string())?;
@@ -71,6 +111,7 @@ fn control_bot(
     death_recovery_guard: Option<automation::DeathRecoveryGuard>,
 ) -> Result<(), String> {
     require_window(&window, "main")?;
+    let _permit = maintenance::admit(&app)?;
     if let Some(guard) = &death_recovery_guard {
         if action != "start" {
             return Err("Death recovery state is only accepted by start.".into());
@@ -180,6 +221,31 @@ fn bridge_status(
     if encoded.len() > MAX_STATUS_BYTES || !status.is_object() {
         return Err("Status exceeds its limit.".into());
     }
+    if let Ok(mut gate) = app.state::<maintenance::SharedGate>().lock() {
+        let identity = if status.get("connected").and_then(|v| v.as_bool()) == Some(true)
+            && status.get("compatible").and_then(|v| v.as_bool()) == Some(true)
+            && status.get("player").is_some_and(|v| v.is_object())
+        {
+            status
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .zip(status.get("connectionId").and_then(|v| v.as_str()))
+                .map(|(session, connection)| maintenance::GameIdentity {
+                    session_id: session.to_owned(),
+                    connection_id: connection.to_owned(),
+                })
+        } else {
+            None
+        };
+        if identity != gate.identity {
+            if !gate.lease.as_ref().is_some_and(|l| l.committed) {
+                gate.lease = None;
+            }
+            gate.game_generation += 1;
+        }
+        gate.identity = identity;
+        gate.observed = Some(std::time::Instant::now());
+    }
     if let Ok(mut state) = app.state::<login::SharedLogin>().lock() {
         state.observe(
             status
@@ -214,14 +280,34 @@ fn bridge_status(
     } else {
         status["reconnectAvailable"] = false.into();
     }
+    if let Ok(mut update) = app.state::<updater::SharedUpdate>().lock() {
+        update.wait_for_official(
+            status.get("maintenanceWaiting").and_then(|v| v.as_bool()) == Some(true),
+        );
+    }
     app.emit_to("main", "game-status", status)
         .map_err(|_| "Controller is unavailable.".into())
 }
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(maintenance::SharedGate::default())
+        .manage(updater::SharedUpdate::default())
         .manage(login::SharedLogin::default())
         .invoke_handler(tauri::generate_handler![
+            updater::update_status,
+            updater::current_form,
+            updater::save_current_form,
+            updater::update_initialized,
+            updater::update_reserve,
+            updater::update_ack,
+            updater::update_release,
+            updater::update_install,
+            updater::update_lease_alive,
+            updater::update_invalidate,
+            updater::update_final_ack,
+            updater::update_open_release,
             open_game,
             control_bot,
             bridge_status,
@@ -239,6 +325,21 @@ pub fn run() {
                         let _ = game.destroy();
                     }
                 } else if window.label() == "game" {
+                    if let Ok(mut gate) = window
+                        .app_handle()
+                        .state::<maintenance::SharedGate>()
+                        .lock()
+                    {
+                        if !gate.lease.as_ref().is_some_and(|l| l.committed) {
+                            gate.page_closed();
+                            gate.game_generation += 1;
+                            gate.identity = None;
+                            if let Some(l) = gate.lease.as_mut() {
+                                l.invalidated = true;
+                                l.acknowledged = false;
+                            }
+                        }
+                    }
                     if let Ok(mut state) = window.app_handle().state::<login::SharedLogin>().lock()
                     {
                         state.close();

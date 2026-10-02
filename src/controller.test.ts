@@ -1,3 +1,4 @@
+import { manualTargetPolicy } from './manual-target';
 import { DEFAULT_MAP_POLICY } from './map-policy';
 import { describe, expect, it, vi } from 'vitest';
 import { CompanionController, type ControllerAction } from './controller';
@@ -695,5 +696,16 @@ describe('loadout receipt survival through external revival',()=>{
   t.receive({type:'death',id:1});t.receive({type:'resurrection',id:1,hp:100,position:{x:100,y:100}});t.advance(12000);
   expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);expect(t.controller.engine.running).toBe(false);expect(t.controller.engine.snapshot().loadout.state).toBe('fault');
   t.packet(new BitWriter().u8(OP.equipment).i32(1750).u8(13).bool(true));t.step();t.step();expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);expect(t.sent.filter(a=>a.type==='attack')).toHaveLength(1);
+ });
+});
+
+describe('maintenance settlement',()=>{
+ it('admits a quiet connected own-zero-capable world while resource receipts and run intent still block',()=>{
+  const f=setup();expect(f.controller.settledForMaintenance()).toBe(true);f.advance(20_000);expect(f.controller.settledForMaintenance()).toBe(true);
+  f.controller.start(settings);expect(f.controller.settledForMaintenance()).toBe(false);f.controller.stop();f.advance(5000);expect(f.controller.settledForMaintenance()).toBe(true);
+  f.packet(new BitWriter().u8(OP.heal).i32(1).i32(0).i32(100).i32(100));f.controller.engine.player!.classId=6;f.controller.perform('command',{type:'sit',sitting:true});expect(f.controller.settledForMaintenance()).toBe(false);f.advance(15000);expect(f.controller.settledForMaintenance()).toBe(false);
+ });
+ it('never admits an unacknowledged physical Walk after Stop and timer expiry',()=>{
+  const f=setup();f.controller.perform('command',{type:'manualTarget',command:{type:'walk',destination:{x:105,y:100}},owner:f.controller.engine.manualActorIdentity(1),map:'prt_fild08',policy:manualTargetPolicy(settings),timeoutSeconds:10});f.step();expect(f.sent.some(a=>a.type==='walk')).toBe(true);f.controller.stop();f.advance(10000);expect(f.controller.settledForMaintenance()).toBe(false);
  });
 });

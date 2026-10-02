@@ -128,19 +128,22 @@ export function validateAutomation(a: AutomationSettings): AutomationSettings {
   } catch { throw new Error('Invalid automation settings. Check rules, recovery thresholds and session limits.'); }
   return structuredClone({ ...a, escape: a.escape ?? DEFAULT_ESCAPE });
 }
-export function validateSettings(value: Settings): Settings {
+export function validateSettings(value: Settings): Settings { return checkSettings(value, false); }
+/** A form can be configured before a map or monsters are available; Start remains stricter. */
+export function validateFormSettings(value: Settings): Settings { return checkSettings(value, true); }
+function checkSettings(value: Settings, form: boolean): Settings {
   strictKeys(value,['map','targets','radius','minHpPercent','loot','route_randomWalk','route_step','route_avoidWalls','route_randomWalk_maxRouteTime','attackRouteMaxPathDistance','attackMaxRouteTime','automation']);
   if (!bounded(value.radius,1,20) || !bounded(value.minHpPercent,20,95)
     || ![0,2].includes(value.route_randomWalk) || !bounded(value.route_step,1,20)
     || typeof value.route_avoidWalls !== 'boolean' || !bounded(value.route_randomWalk_maxRouteTime,1,600)
     || !bounded(value.attackRouteMaxPathDistance,1,200) || !bounded(value.attackMaxRouteTime,1,60)
-    || typeof value.loot !== 'boolean' || !map(value.map)
-    || !Array.isArray(value.targets) || (value.targets.length < 1 && !value.automation) || value.targets.length > MAX_TARGETS
+    || typeof value.loot !== 'boolean' || !map(value.map,form)
+    || !Array.isArray(value.targets) || (!form && value.targets.length < 1 && !value.automation) || value.targets.length > MAX_TARGETS
     || new Set(value.targets).size !== value.targets.length || value.targets.some(v=>!id(v))) {
     throw new Error('Invalid settings. Choose current-map monsters and valid combat and routing limits.');
   }
   const automation = value.automation ? validateAutomation(value.automation) : undefined;
-  if (!value.targets.length && automation && ['selected','both'].includes(automation.combat.mode) && !automation.combat.rules.some(r=>r.action==='attack')) throw new Error('Choose selected monsters or disable selected combat.');
+  if (!form && !value.targets.length && automation && ['selected','both'].includes(automation.combat.mode) && !automation.combat.rules.some(r=>r.action==='attack')) throw new Error('Choose selected monsters or disable selected combat.');
   if (automation?.mapPolicy?.lockArea && (automation.mapPolicy.lockArea.map !== value.map || (automation.travel.destinationMap && automation.travel.destinationMap !== value.map))) throw new Error('The field lock map, rectangle map and field destination must match.');
   if (automation?.recovery.enabled && automation.recovery.hpStart <= value.minHpPercent) throw new Error('Recovery HP start must be above the emergency HP stop limit.');
   return { ...value, targets: value.targets.slice(), ...(automation ? { automation } : {}) };

@@ -1,6 +1,18 @@
 fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
+            "update_status",
+            "update_open_release",
+            "current_form",
+            "save_current_form",
+            "update_initialized",
+            "update_reserve",
+            "update_ack",
+            "update_release",
+            "update_install",
+            "update_lease_alive",
+            "update_invalidate",
+            "update_final_ack",
             "open_game",
             "control_bot",
             "bridge_status",
