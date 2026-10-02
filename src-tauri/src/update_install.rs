@@ -191,8 +191,8 @@ fn replace(
     Ok(())
 }
 #[cfg(unix)]
-fn lock_cache(cache: &Path) -> io::Result<fs::File> {
-    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+fn lock_cache(cache: &Path) -> io::Result<crate::login::local_store::FileLock> {
+    use std::os::unix::fs::OpenOptionsExt;
     let lock = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -202,11 +202,8 @@ fn lock_cache(cache: &Path) -> io::Result<fs::File> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(cache.join("transaction.lock"))?;
     crate::login::local_store::verify_private(&lock, false)?;
-    // SAFETY: the regular private descriptor stays open for the entire install.
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(lock)
+    // Keep acquired operation ownership through the entire install transaction.
+    crate::login::local_store::FileLock::acquire(lock)
 }
 pub(crate) fn install(bytes: &[u8], version: &str) -> Result<(), String> {
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
@@ -341,6 +338,35 @@ mod tests {
         drop(first);
         assert!(lock_cache(t.path()).is_ok());
     }
+    #[cfg(unix)]
+    #[test]
+    fn cache_lock_release_is_owned_by_the_acquiring_process() {
+        use crate::login::local_store::InheritedLock;
+        use std::os::fd::AsRawFd;
+        let t = tempfile::tempdir().unwrap();
+        let mut first = lock_cache(t.path()).unwrap();
+        let mut retained = InheritedLock::new(first.as_raw_fd());
+        let mut dropping = InheritedLock::dropping_copy(&mut first);
+        let active_exclusion = lock_cache(t.path()).err().map(|e| e.kind());
+        // Failed acquisitions cannot release the still-active owning operation.
+        let repeated_exclusion = lock_cache(t.path()).err().map(|e| e.kind());
+        drop(first);
+        let reopened = lock_cache(t.path());
+        let completion_releases = reopened.is_ok();
+        let next_operation_excludes = lock_cache(t.path()).err().map(|e| e.kind());
+        drop(reopened);
+        let next_completion_releases = lock_cache(t.path()).is_ok();
+        let dropping_status = dropping.finish();
+        let retained_status = retained.finish();
+        assert_eq!(dropping_status, 0);
+        assert_eq!(retained_status, 0);
+        assert_eq!(active_exclusion, Some(io::ErrorKind::WouldBlock));
+        assert_eq!(repeated_exclusion, Some(io::ErrorKind::WouldBlock));
+        assert!(completion_releases);
+        assert_eq!(next_operation_excludes, Some(io::ErrorKind::WouldBlock));
+        assert!(next_completion_releases);
+    }
+
     fn archive(entries: &[(&str, u32, tar::EntryType)]) -> Vec<u8> {
         let mut tar = tar::Builder::new(Vec::new());
         for (path, mode, kind) in entries {
