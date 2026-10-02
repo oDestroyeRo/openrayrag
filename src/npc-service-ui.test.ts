@@ -67,6 +67,7 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
   Object.assign(view, {
     read:()=>({...structuredClone(DEFAULT_AUTOMATION),mapPolicy:structuredClone(executionPolicy)}),
     panels: new Map([['workflows', panel]]),
+    mounts: { manualTools: panel },
     editors: new Map(),
     dispositionEditor: { lock: () => {} },
     syncFollowMode: () => {}, // This fixture mounts only the service panel.

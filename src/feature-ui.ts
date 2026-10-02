@@ -1,3 +1,4 @@
+import type { ClientShell } from './client-shell';
 import { validPartyFollowSnapshot } from './party-follow';
 import { validPartyHealSnapshot } from './party-heal';
 import { validateDeathRecoveryGuard } from './death-recovery';
@@ -27,6 +28,7 @@ import { previewSupplyTrip } from './supply-plan';
 import { DEFAULT_DISPOSITION, dispositionPreviewIsCurrent, planDisposition, type DispositionPlan } from './disposition';
 import { dispositionContextFromStatus, dispositionPreviewText, dispositionStockFloors } from './disposition-ui';
 
+type FeatureUiMounts = Pick<ClientShell, 'sections' | 'manualTools' | 'sessionDetails'>;
 type Section = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows' | 'profiles';
 interface Hooks {
   settings(): Settings; apply(settings: Settings): void; map(): string; character(): string;
@@ -277,16 +279,12 @@ export class FeatureUi {
   private readonly socket: SocketUi;
   private readonly refine: RefineUi;
   private readonly warp:WarpUi;
-  constructor(private readonly host: HTMLElement, private readonly hooks: Hooks) {
+  constructor(private readonly host: HTMLElement, private readonly hooks: Hooks, private readonly mounts: FeatureUiMounts) {
     let storage: Pick<Storage,'getItem'|'setItem'>;
     try { storage = localStorage; } catch { storage = {getItem:()=>null,setItem:()=>{throw new Error('Profile storage is unavailable.');}}; }
     this.profiles = new ProfileStore(storage); this.services = new NpcServiceStore(storage);
-    const combat = host.querySelector<HTMLElement>('.settings')!; combat.dataset.section = 'combat'; this.panels.set('combat',combat);
-    for (const [id,title] of [['recovery','Recovery'],['travel','Travel & follow'],['inventory','Inventory & skills'],['workflows','Workflows & social'],['profiles','Profiles & features']] as Array<[Section,string]>) {
-      const panel = document.createElement('section'); panel.className = 'panel settings feature-panel'; panel.dataset.section = id; panel.hidden = true;
-      const heading = document.createElement('div'); heading.className = 'panel-title'; const h2 = document.createElement('h2'); h2.textContent = title; heading.append(h2); panel.append(heading);
-      combat.parentElement!.insertBefore(panel,host.querySelector('.activity')); this.panels.set(id,panel);
-    }
+    for (const [section, panel] of Object.entries(mounts.sections) as Array<[Section, HTMLElement]>) this.panels.set(section, panel);
+    const combat = this.panel('combat');
     for (const [section, definitions] of Object.entries(fields) as Array<[Section,Field[]]>) {
       const grid = document.createElement('div'); grid.className = 'form-grid'; for (const field of definitions) grid.append(fieldElement(field)); this.panels.get(section)!.append(grid);
     }
@@ -299,22 +297,16 @@ export class FeatureUi {
       else this.host.querySelector<HTMLInputElement>('[data-setting="follow.rendezvous"]')!.checked=false;
       this.syncFollowMode();this.hooks.changed();
     });
-    travel.prepend(combat.querySelector('.routing-field')!,combat.querySelector('.routing-settings')!);
-    const recovery = this.panels.get('recovery')!; recovery.append(combat.querySelector('#min-hp')!.previousElementSibling!,combat.querySelector('#min-hp')!);
     this.note('combat','Loot all considers observed drops inside your pickup radius and allowed field area. Item ignore rules still apply. The server decides pickup rights and inventory capacity; sending Pickup is not success.');
-    const actions = combat.querySelector('.actions')!; actions.classList.add('run-controls'); host.insertBefore(actions,host.querySelector('footer'));
-    const sessionDetails=document.createElement('p');sessionDetails.id='session-details';sessionDetails.className='session-details';sessionDetails.textContent='Session time, experience and task state appear after connection.';host.querySelector('.session-card')!.append(sessionDetails);
-    const footnote = combat.querySelector('.footnote')!; footnote.textContent = 'Game input yields briefly. Temporary interruptions wait and resume; Stop cancels the run. Profiles never start automation.'; actions.append(footnote);
-    combat.querySelector('.routing-settings .hint')?.remove();
-    this.rules();const retreatState=document.createElement('p');retreatState.id='retreat-state';retreatState.className='telemetry-summary';retreatState.hidden=true;combat.append(retreatState); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.servicePanel(); this.profilePanel(); this.navigation();
-    this.manualTargets=new ManualTargetUi(this.hooks);this.panel('workflows').prepend(this.manualTargets.root);
+    this.rules();const retreatState=document.createElement('p');retreatState.id='retreat-state';retreatState.className='telemetry-summary';retreatState.hidden=true;combat.append(retreatState); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.servicePanel(); this.profilePanel();
+    this.manualTargets=new ManualTargetUi(this.hooks);this.mounts.manualTools.prepend(this.manualTargets.root);
     this.dispositionPanel();this.supplyPanel();this.mapPolicyPanel();
-    this.social = new SocialUi(action => this.hooks.social(action), (message, error) => this.hooks.notify(message, error)); this.panel('workflows').append(this.social.root);
-    this.memo = new MemoUi(request=>this.hooks.memo(request),(message,error)=>this.hooks.notify(message,error));this.panel('travel').append(this.memo.root);
-    this.socket=new SocketUi(request=>this.hooks.socketPreview?.(request)??Promise.reject(new Error('Socket preview unavailable.')),request=>this.hooks.socket?.(request)??Promise.reject(new Error('Socket action unavailable.')),(message,error)=>this.hooks.notify(message,error),()=>this.read());this.panel('inventory').append(this.socket.root);
+    this.social = new SocialUi(action => this.hooks.social(action), (message, error) => this.hooks.notify(message, error)); this.mounts.manualTools.append(this.social.root);
+    this.memo = new MemoUi(request=>this.hooks.memo(request),(message,error)=>this.hooks.notify(message,error));this.mounts.manualTools.append(this.memo.root);
+    this.socket=new SocketUi(request=>this.hooks.socketPreview?.(request)??Promise.reject(new Error('Socket preview unavailable.')),request=>this.hooks.socket?.(request)??Promise.reject(new Error('Socket action unavailable.')),(message,error)=>this.hooks.notify(message,error),()=>this.read());this.socket.root.classList.add('manual-group');this.mounts.manualTools.append(this.socket.root);
     this.host.addEventListener('input',()=>{this.socket.policyChanged();this.refine.policyChanged();});this.host.addEventListener('change',()=>{this.socket.policyChanged();this.refine.policyChanged();});
-    this.refine = new RefineUi(() => this.read(), request => this.hooks.refinePreview?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), request => this.hooks.refine?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), promptToken => this.hooks.refineAdvance?.(promptToken) ?? Promise.reject(new Error('Refining transport unavailable.')), (message, error) => this.hooks.notify(message, error)); this.panel('inventory').append(this.refine.root);
-    this.warp=new WarpUi(request=>this.hooks.warp?this.hooks.warp(request):Promise.reject(new Error('Warp request transport unavailable.')),(message,error)=>this.hooks.notify(message,error),request=>this.hooks.warpPreview?.(request)??Promise.reject(new Error('Warp preview unavailable.')),()=>this.read(),()=>this.hooks.warpCancel?.()??Promise.reject(new Error('Warp cancel unavailable.')));this.panel('travel').append(this.warp.root);
+    this.refine = new RefineUi(() => this.read(), request => this.hooks.refinePreview?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), request => this.hooks.refine?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), promptToken => this.hooks.refineAdvance?.(promptToken) ?? Promise.reject(new Error('Refining transport unavailable.')), (message, error) => this.hooks.notify(message, error)); this.mounts.manualTools.append(this.refine.root);
+    this.warp=new WarpUi(request=>this.hooks.warp?this.hooks.warp(request):Promise.reject(new Error('Warp request transport unavailable.')),(message,error)=>this.hooks.notify(message,error),request=>this.hooks.warpPreview?.(request)??Promise.reject(new Error('Warp preview unavailable.')),()=>this.read(),()=>this.hooks.warpCancel?.()??Promise.reject(new Error('Warp cancel unavailable.')));this.mounts.manualTools.append(this.warp.root);
     this.host.addEventListener('input',()=>this.warp.policyChanged());this.host.addEventListener('change',()=>this.warp.policyChanged());
     for (const [id,catalog] of [['itemId',ITEM_CATALOG],['skillId',SKILL_CATALOG]] as const) {
       const list=document.createElement('datalist');list.id=`${id}-catalog`;
@@ -408,7 +400,7 @@ export class FeatureUi {
     this.editor('inventory','allocation.stats','Stat allocation targets',[{key:'stat',label:'Stat',options:[['0','STR'],['1','AGI'],['2','VIT'],['3','INT'],['4','DEX'],['5','LUK']]},{key:'target',label:'Target value',min:1,max:99}],{stat:0,target:10},6);
     this.editor('inventory','allocation.skills','Skill allocation targets',[idColumn('skillId','Skill ID',255),{key:'target',label:'Target level',min:1,max:10}],{skillId:1,target:1},64);
     this.note('inventory','Rules use server item and skill IDs. Spending stat or skill points changes the character; configure only the targets you intend.');
-    const manual=document.createElement('details');manual.className='manual-group';const title=document.createElement('summary');title.textContent='Manual character actions';manual.append(title);this.panel('inventory').append(manual);
+    const manual=document.createElement('details');manual.className='manual-group';const title=document.createElement('summary');title.textContent='Manual character actions';manual.append(title);this.mounts.manualTools.append(manual);
     const grid=document.createElement('div');grid.className='form-grid';manual.append(grid);
     const item=this.input(grid,'manual-item','Usable item ID','number','501',1);item.setAttribute('list','itemId-catalog');
     const bag=this.input(grid,'manual-equip','Equipment bag ID','number','1',1);
@@ -422,30 +414,13 @@ export class FeatureUi {
     this.manualButton('Equip',()=>({type:'equip',bagId:Number(bag.value),equipped:true}),buttons);this.manualButton('Unequip',()=>({type:'equip',bagId:Number(bag.value),equipped:false}),buttons);
     this.manualButton('Self skill',()=>({type:'skill',mode:'self',skillId:Number(skill.value),level:Number(level.value)}),buttons);
     this.manualButton('Target skill',()=>({type:'skill',mode:'target',skillId:Number(skill.value),level:Number(level.value),target:actorInput(target.value)}),buttons);
-    this.note('inventory','Manual Thunderstorm uses verified range 9 (5 while Blind), stationary projectile sight and exact ground confirmation. Its center may be blocked terrain. Other unverified skills retain adjacent manual targeting. Effective SP needs observed equipment/card/refine metadata; server-only cooldown or disabled state can still reject a cast.');
+    const manualHelp=document.createElement('p');manualHelp.className='hint';manualHelp.textContent='Manual Thunderstorm uses verified range 9 (5 while Blind), stationary projectile sight and exact ground confirmation. Its center may be blocked terrain. Other unverified skills retain adjacent manual targeting. Effective SP needs observed equipment/card/refine metadata; server-only cooldown or disabled state can still reject a cast.';manual.append(manualHelp);
     this.manualButton('Ground skill',()=>({type:'skill',mode:'ground',skillId:Number(skill.value),level:Number(level.value),position:{x:Number(x.value),y:Number(y.value)}}),buttons);
     this.manualButton('Spend 1 skill point',()=>({type:'allocateSkill',skillId:Number(skill.value)}),buttons);
     const allocation=document.createElement('div');allocation.className='form-grid';manual.append(allocation);const attributes=['STR','AGI','VIT','INT','DEX','LUK'].map((stat,index)=>this.input(allocation,`manual-stat-${index}`,`${stat} increments`,'number','0',0,99));
     this.manualButton('Spend stat points',()=>({type:'allocateStats',attributes:attributes.map(input=>Number(input.value))}),manual);
-    const summary = document.createElement('div'); summary.id = 'character-data'; summary.className = 'telemetry-summary'; summary.textContent = 'Connect a character to inspect SP, inventory and learned skills.'; this.panel('inventory').append(summary);
+    const summary = document.createElement('div'); summary.id = 'character-data'; summary.className = 'telemetry-summary'; summary.textContent = 'Connect a character to inspect SP, inventory and learned skills.'; this.mounts.sessionDetails.append(summary);
     this.note('workflows','Limits and hours are checked while automation runs. These controls never launch the app or start a stopped session.');
-  }
-  private navigation(): void {
-    const sidebar = document.querySelector('.sidebar')!; const existing = sidebar.querySelector('.nav-item')!; existing.remove();
-    const nav = document.createElement('nav'); nav.className = 'feature-nav'; nav.setAttribute('aria-label','Bot settings');
-    const titles: Array<[Section,string,string]> = [['combat','◈','Combat'],['recovery','♡','Recovery'],['travel','⌁','Travel & follow'],['inventory','▣','Inventory & skills'],['workflows','◇','Workflows & social'],['profiles','☷','Profiles & features']];
-    for (const [section,icon,title] of titles) {
-      const button = document.createElement('button'); button.className = 'nav-item'; button.type = 'button'; button.dataset.sectionTab = section;
-      const symbol = document.createElement('span'); symbol.textContent = icon; button.append(symbol,document.createTextNode(title));
-      button.addEventListener('click',()=>this.show(section)); nav.append(button);
-    }
-    sidebar.insertBefore(nav,sidebar.querySelector('.sidebar-bottom')); const mobile = nav.cloneNode(true) as HTMLElement; mobile.classList.add('mobile-nav');
-    for (const button of mobile.querySelectorAll<HTMLButtonElement>('button')) button.addEventListener('click',()=>this.show(button.dataset.sectionTab as Section));
-    this.host.insertBefore(mobile,this.host.querySelector('.columns')); this.show('combat');
-  }
-  private show(section: Section): void {
-    for (const [key,panel] of this.panels) panel.hidden = key !== section;
-    for (const button of document.querySelectorAll<HTMLButtonElement>('[data-section-tab]')) { const active = button.dataset.sectionTab === section; button.classList.toggle('selected',active); button.setAttribute('aria-current',active ? 'page' : 'false'); }
   }
   read(): AutomationSettings {
     const automation = structuredClone(DEFAULT_AUTOMATION) as unknown as Record<string,unknown>;
@@ -508,7 +483,7 @@ export class FeatureUi {
     const field = fieldElement({path:id,label,kind:kind==='text'?'text':undefined,min,max}); const input = field.querySelector<HTMLInputElement>('input')!;
     delete input.dataset.setting; input.id = id; input.value = value; parent.append(field); return input;
   }
-  private detail(title: string): HTMLDetailsElement { const details = document.createElement('details'); details.className = 'manual-group'; const summary = document.createElement('summary'); summary.textContent = title; details.append(summary); this.panel('workflows').append(details); return details; }
+  private detail(title: string): HTMLDetailsElement { const details = document.createElement('details'); details.className = 'manual-group'; const summary = document.createElement('summary'); summary.textContent = title; details.append(summary); this.mounts.manualTools.append(details); return details; }
   private workflows(): void {
     const npc = this.detail('NPC dialogue'); const npcGrid = document.createElement('div'); npcGrid.className = 'form-grid'; npc.append(npcGrid);
     const npcId = this.input(npcGrid,'npc-id','Visible NPC ID','number','',0); const option = this.input(npcGrid,'npc-option','Option index','number','0',0,31);
@@ -690,7 +665,7 @@ export class FeatureUi {
       if(telemetry&&policyOutput.dataset.telemetry!==telemetry)policyOutput.textContent=telemetry;
       policyOutput.dataset.telemetry=telemetry;
     }catch(error){policyOutput.textContent='Map policy: '+(error instanceof Error?error.message:'Validate the current settings.');delete policyOutput.dataset.telemetry;}
-    const experience=object(character.experience);const task=object(s.task);const escape=object(s.escape);this.host.querySelector<HTMLElement>('#session-details')!.textContent=`${Math.floor((number(s.elapsedSeconds)??0)/60)}m ${(number(s.elapsedSeconds)??0)%60}s · ${number(s.deaths)??0} deaths · Base EXP +${number(experience.baseGained)??'—'} · Job EXP +${number(experience.jobGained)??'—'}${task.label?' · '+text(task.label):''}${escape.state&&escape.state!=='idle'?' · '+text(escape.reason):''}${object(escape.threats).enabled?' · Observed monster attackers: '+(number(object(escape.threats).count)??'unavailable')+' / '+number(object(escape.threats).threshold)+' in '+number(object(escape.threats).windowSeconds)+'s (recent attacks, not server aggro)':''}`;
+    const experience=object(character.experience);const task=object(s.task);const escape=object(s.escape);this.host.querySelector<HTMLElement>('#session-details')!.textContent=`${Math.floor((number(s.elapsedSeconds)??0)/60)}m ${(number(s.elapsedSeconds)??0)%60}s · ${number(s.deaths)??0} deaths in current game run · Base EXP +${number(experience.baseGained)??'—'} · Job EXP +${number(experience.jobGained)??'—'}${task.label?' · '+text(task.label):''}${escape.state&&escape.state!=='idle'?' · '+text(escape.reason):''}${object(escape.threats).enabled?' · Observed monster attackers: '+(number(object(escape.threats).count)??'unavailable')+' / '+number(object(escape.threats).threshold)+' in '+number(object(escape.threats).windowSeconds)+'s (recent attacks, not server aggro)':''}`;
     const npcChoice=this.host.querySelector<HTMLSelectElement>('#visible-npcs')!;const actors=Array.isArray(s.actors)?s.actors.map(object).filter(actor=>actor.kind===2||actor.kind===4):[];const actorKey=actors.map(actor=>`${actor.id}:${text(actor.name)}`).join('|');
     if(npcChoice.dataset.actors!==actorKey){const selected=npcChoice.value;npcChoice.dataset.actors=actorKey;npcChoice.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='Choose a visible NPC';npcChoice.append(empty);for(const actor of actors){const option=document.createElement('option');option.value=String(actor.id);option.textContent=`${text(actor.name)||'NPC'} · #${actor.id}`;npcChoice.append(option);}npcChoice.value=actors.some(actor=>String(actor.id)===selected)?selected:'';}
     const inventory=Array.isArray(character.inventory)?character.inventory:[];const skills=Array.isArray(character.learned)?character.learned:[];

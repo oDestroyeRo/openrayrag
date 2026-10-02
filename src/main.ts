@@ -10,79 +10,12 @@ import { validStatus, statusHeartbeatFresh, type GameStatus } from './game-statu
 import { SettingsForm } from './settings-form';
 import { normalAttackProfile } from './combat';
 import { canStartField } from './field-controls';
-import './style.css';
+import { mountClientShell } from './client-shell';
+import { clientStatus, clientSp, clientDeaths, clientDeathCap } from './client-status';
+import './client-shell.css';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
-root.innerHTML = `
-  <aside class="sidebar">
-    <div class="brand"><span class="brand-mark">r<span>∕</span></span><div>rayrag<small>COMPANION</small></div></div>
-    <div class="nav-label">YOUR WORKSPACE</div>
-    <div class="nav-item"><span>◈</span> Combat & loot <span class="nav-dot"></span></div>
-    <div class="sidebar-bottom"><span class="small-dot"></span> SEA 01 <small id="client-version">macOS · preview</small></div>
-  </aside>
-  <main>
-    <header><div><div class="eyebrow">RAY SIDE PROJECT</div><h1>A little help in the field.</h1><p>Combat, recovery and daily routines, with you in control.</p></div><button id="open" class="secondary">Open game <span>↗</span></button></header>
-    <div id="notice" class="notice" role="status" aria-live="polite">Open the game, sign in, and select a character to begin.</div>
-    <details id="signin-panel" class="signin panel" open>
-      <summary>Account & character <span id="saved-account">Session only</span></summary>
-      <form id="signin-form" autocomplete="off">
-        <div class="signin-fields">
-          <label>Username<input id="username" type="text" maxlength="64" autocomplete="off" spellcheck="false" required /></label>
-          <label>Password<input id="password" type="password" maxlength="256" autocomplete="off" /></label>
-          <label>Character<select id="character-slot"><option value="0">Slot 1</option><option value="1">Slot 2</option><option value="2">Slot 3</option></select></label>
-        </div>
-        <div class="signin-options">
-          <label><input id="remember-login" type="checkbox" /> Save login on this Mac</label>
-          <label><input id="auto-login" type="checkbox" disabled /> Sign in when app opens</label>
-          <label><input id="auto-reconnect" type="checkbox" disabled /> Reconnect after connection loss · this session</label>
-          <button id="forget-login" type="button" class="text-button" hidden>Forget local saved login</button>
-        </div>
-        <p class="hint">Saved credentials use a local file with user-only access. The app does not encrypt them.</p>
-        <p id="reconnect-help" class="hint">A running bot reconnects with this session login and resumes when your character is ready.</p>
-        <div class="signin-actions"><p id="login-help" class="hint">Select an existing slot. Sign-in enters the field with combat stopped.</p><button id="signin" type="submit" class="primary">Sign in & enter</button></div>
-      </form>
-    </details>
-    <section class="session-card">
-      <div class="session-heading"><span class="eyebrow">CURRENT SESSION</span><span id="status" class="pill">OFFLINE</span></div>
-      <div class="character"><div class="avatar">✦</div><div><h2 id="character">No character connected</h2><p id="location">Your adventure starts in the game window.</p></div><div class="health"><div><span>HEALTH</span><b id="hp-text">— / —</b></div><div class="health-track"><i id="hp-bar"></i></div></div></div>
-      <div class="stats"><div><strong id="attacks">0</strong><span>Targets engaged</span></div><div><strong id="kills">0</strong><span>Monsters defeated</span></div><div><strong id="looted">0</strong><span>Pickups confirmed</span></div><div><strong id="nearby">0</strong><span>Monsters nearby</span></div></div>
-    </section>
-    <div class="columns">
-      <section class="panel settings"><div class="panel-title"><h2>Combat & loot</h2><span>01</span></div>
-        <fieldset class="map-targets"><legend>Target monsters</legend>
-          <div id="target-map" class="target-map">Enter a map to choose monsters</div>
-          <div class="target-tools"><span id="target-count">0 selected</span><div><button id="select-targets" type="button" class="text-button" disabled>Select eligible</button><button id="clear-targets" type="button" class="text-button" disabled>Clear</button></div></div>
-          <div id="targets" class="target-options"><p class="target-empty">Map monsters will appear after you enter the field.</p></div>
-          <p id="target-source" class="hint">Choose what to attack. Up to one level above you.</p>
-        </fieldset>
-        <div class="field-row"><label for="radius">Monster scan radius</label><output id="radius-value">12 cells</output></div><input id="radius" type="range" min="1" max="20" value="12" />
-        <div class="field-row"><label for="min-hp">Wait below HP</label><output id="hp-value">45%</output></div><input id="min-hp" type="range" min="20" max="95" value="45" />
-        <div class="routing-field"><label for="random-walk">Find monsters <code>route_randomWalk</code></label><select id="random-walk"><option value="0">Off · approach visible targets only</option><option value="2">2 · Search the current map</option></select><p class="hint">Search connected walkable ground and avoid portal areas.</p></div>
-        <details class="routing-settings"><summary>OpenKore routing settings</summary>
-          <div class="routing-grid">
-            <label>Steps per walk <code>route_step</code><input id="route-step" type="number" min="1" max="20" value="10" /></label>
-            <label>Search route seconds <code>route_randomWalk_maxRouteTime</code><input id="route-time" type="number" min="1" max="600" value="75" /></label>
-            <label>Attack path cells <code>attackRouteMaxPathDistance</code><input id="attack-distance" type="number" min="1" max="200" value="20" /></label>
-            <label>Approach seconds <code>attackMaxRouteTime</code><input id="attack-time" type="number" min="1" max="60" value="4" /></label>
-          </div>
-          <label class="toggle-row">Avoid walls <code>route_avoidWalls</code><input id="avoid-walls" type="checkbox" checked /></label>
-          <p id="attack-range" class="hint">Normal attack: conservative 1 cell until equipment is verified.</p>
-        </details>
-        <label class="toggle-row" for="loot"><div>Collect loot<small>Use Pickup scope below to choose own drops or all nearby drops</small></div><input id="loot" type="checkbox" checked role="switch" /></label>
-        <div class="actions"><button id="start" class="primary" disabled>▶ &nbsp; Start bot</button><button id="stop" class="secondary" disabled>■ &nbsp; Stop</button></div>
-        <p class="footnote">Click or type in the game to pause briefly. The bot waits through low HP, map changes and connection loss. Stop cancels the run.</p>
-      </section>
-      <section class="panel activity"><div class="panel-title"><h2>In the field</h2><span id="map-label">WAITING</span></div>
-        <div class="radar-wrap"><canvas id="radar" width="400" height="400" aria-label="Map collision: blocked terrain, walkable ground, portal exclusions and planned route"></canvas><div class="radar-label"><span class="legend-dot you"></span>You <span class="legend-dot mob"></span>Monster <span class="legend-dot drop"></span>Loot</div></div>
-        <p id="navigation-info" class="navigation-info">Enter a supported map to inspect walkability.</p>
-        <div class="map-legend"><span class="terrain-key"></span>Blocked <span class="walkable-key"></span>Walkable <span class="portal-key"></span>Portal exclusion <span class="route-key"></span>Planned route</div>
-        <div id="monster-list" class="monster-list">No monsters in sight.</div>
-        <div class="activity-title">ACTIVITY <span id="target-label">No active target</span></div><ol id="log" class="log"><li class="empty">Session activity will appear here.</li></ol>
-      </section>
-    </div>
-    <section class="panel"><div class="panel-title"><h2>Client updates</h2></div><p id="update-status" class="hint">Signed updates install automatically when every game and login action is stopped.</p><a id="update-download" href="https://github.com/oDestroyeRo/openrayrag/releases/latest" target="_blank" rel="noreferrer">Download release manually</a></section>
-    <footer><span><i class="small-dot"></i> Session stays on this Mac</span><span>Passwords stay in memory unless you save locally</span></footer>
-  </main>`;
+const shell = mountClientShell(root);
 
 function element<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
 element('update-download').addEventListener('click',event=>{
@@ -160,13 +93,14 @@ function resumeFieldRun(s: GameStatus): void {
       if (fieldRun.completeResume(request, false) && generation === runGeneration) message('Waiting to reach the game controller before resuming.');
     }).finally(() => { if (pendingResume === task) pendingResume = null; updateButtons(); });
 }
-const features = new FeatureUi(document.querySelector<HTMLElement>('main')!, {
+const features = new FeatureUi(shell.main, {
   settings: () => form.runSettings(), apply: value => form.applyProfile(value), map: () => latest?.map ?? '', character: () => latest?.player?.name ?? '',
   command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request), memo: request => featureRequest('memo',request), socketPreview:request=>featureRequest('socketPreview',request),socket:request=>featureRequest('socket',request), warp:request=>featureRequest('warp',request),warpPreview:request=>featureRequest('warpPreview',request),warpCancel:()=>invoke('control_bot',{action:'warpCancel',request:{}}),
   refinePreview: request => featureRequest('refinePreview',request), refine: request => featureRequest('refine',request), refineAdvance: promptToken => featureRequest('refineAdvance',{promptToken}),
   notify: message,stop:()=>stopButton.click(), changed: () => { formChanged(); updateButtons(); },
-});
-const form = new SettingsForm(document.querySelector<HTMLElement>('main')!, features, {
+}, shell);
+shell.refreshManualIndex();
+const form = new SettingsForm(shell.main, features, {
   context: () => ({
     sessionId: latest?.sessionId ?? '',
     mapInfo: latest?.mapInfo ?? { code: '', name: '', source: 'observed', monsters: [] },
@@ -211,7 +145,7 @@ async function pollUpdate():Promise<void>{
   }catch{element('update-status').textContent='Update check unavailable. It will retry automatically.';}
   finally{updatePolling=false;}
 }
-const configHelp = document.createElement('p'); configHelp.id = 'config-help'; configHelp.className = 'hint'; document.querySelector('.run-controls')!.append(configHelp);
+const configHelp = element('config-help');
 
 async function featureRequest(action: string, request: unknown): Promise<unknown> {
   if (!native || busy || stopping || loginBusy || !latest?.connected || !latest.compatible || !latest.player || (action==='service'?features.serviceBlocked():(action==='warp'||action==='warpPreview')&&features.warpActivationReady()?fieldRun.requested:runActive()) || Date.now()-receivedAt >= 7000) {
@@ -241,7 +175,11 @@ function message(text: string, error = false): void {
   element('notice').classList.toggle('error', error);
 }
 function updateButtons(): void {
-  if(updateBusy){for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))input.disabled=true;features.lock(true,true,true);return;}
+  const navigation = new Set(shell.main.querySelectorAll<HTMLButtonElement>('button[data-client-page-nav], button[data-client-bot-nav], #client-manual-index > button'));
+  for (const button of navigation) button.disabled = false;
+  try { element('death-cap').textContent = clientDeathCap(form.snapshot().settings.automation?.respawn); }
+  catch { element('death-cap').textContent = '—'; }
+  if(updateBusy){for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.lock(true,true,true);return;}
   form.refresh();
   const fresh = Date.now() - receivedAt < 7000;
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
@@ -381,12 +319,14 @@ function render(s: GameStatus): void {
   reconnect.observe(s.connected, !!s.player, s.login.phase, Date.now(), s.login.message);
   fieldRun.observe(s); holdAtRunLimit();
   form.refresh();
+  features.render(s);
   if (['complete','failed','cancelled'].includes(s.login.phase)) loginBusy = false;
   if (justSignedIn) element<HTMLDetailsElement>('signin-panel').open = false;
   element('login-help').textContent = s.login.message || 'Select an existing slot. Sign-in enters the field with combat stopped.';
-  const state = s.running && !fieldRun.limitReason ? 'RUNNING' : fieldRun.requested || s.runRequested ? 'WAITING' : s.player && s.compatible ? 'READY' : s.connected ? 'CONNECTED' : 'OFFLINE';
+  const { state, reason } = clientStatus(s, { fieldRequested: fieldRun.requested, held: features.active(), limitReason: fieldRun.limitReason, loginBusy });
   element('status').textContent = state;
-  element('status').classList.toggle('active', s.running);
+  element('status').classList.toggle('active', state === 'RUNNING');
+  element('status').dataset.state = state;
   element('character').textContent = s.player?.name ?? 'No character connected';
   element('location').textContent = s.player ? `Level ${s.player.level} · ${s.map} · ${s.player.x}, ${s.player.y}` : 'Your adventure starts in the game window.';
   const attack = normalAttackProfile(s.character);
@@ -394,6 +334,9 @@ function render(s: GameStatus): void {
   element('attack-range').textContent = `Normal attack: ${attack.range} cells · ${attack.source}${rawRange}. ${attack.limitation} Projectile sight is checked; skill range and kiting are separate.`;
   element('hp-text').textContent = s.player ? `${s.player.hp} / ${s.player.maxHp}` : '— / —';
   element('hp-bar').style.width = `${s.player?.maxHp ? Math.max(0, Math.min(100, s.player.hp / s.player.maxHp * 100)) : 0}%`;
+  const sp = clientSp(s.character.stats);
+  element('sp-text').textContent = sp.text; element('sp-bar').style.width = sp.width;
+  element('death-count').textContent = clientDeaths(fieldRun.requested ? fieldRun.metrics.deaths : s.deaths);
   for (const key of ['attacks','kills','looted'] as const) element(key).textContent = String(fieldRun.requested ? fieldRun.metrics[key] : s[key]);
   element('nearby').textContent = String(s.monsters.length);
   element('map-label').textContent = s.map || 'WAITING';
@@ -402,8 +345,7 @@ function render(s: GameStatus): void {
     distance: s.player ? Math.max(Math.abs(e.x-s.player.x), Math.abs(e.y-s.player.y)) : 0 }))
     .sort((a,b) => a.distance-b.distance).slice(0,3);
   element('monster-list').textContent = nearby.length ? nearby.map(e => `${e.name} · Lv ${e.level} · ${Math.ceil(e.distance)} cells`).join('  /  ') : 'No monsters in sight.';
-  const loginMessage = s.login.phase === 'failed' || s.login.phase === 'cancelled' || loginBusy;
-  message(fieldRun.limitReason || (loginMessage ? s.login.message || 'Loading the game for automatic sign-in…' : s.reason),
+  message(reason,
     s.login.phase === 'failed' || s.connected && !s.compatible);
   const list = element('log'); list.replaceChildren();
   for (const entry of s.log.slice(0,6)) {
@@ -411,7 +353,7 @@ function render(s: GameStatus): void {
     time.textContent = new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     text.textContent = entry.text; li.append(time, text); list.append(li);
   }
-  features.render(s);drawRadar(s); updateButtons(); resumeFieldRun(s);
+  drawRadar(s); updateButtons(); resumeFieldRun(s);
 }
 let rasterMap = '';
 let raster: HTMLCanvasElement | null = null;
@@ -473,7 +415,7 @@ if (native) {
     sessionLoginAvailable = false; pendingResume = null; pendingLogin = null; limitHeld = false; previousSession = undefined;
     gameOpen = false; latest = null; receivedAt = 0; loginBusy = false;
     form.refresh();
-    element('status').textContent = 'OFFLINE'; element('status').classList.remove('active');
+    element('status').textContent = 'OFFLINE'; element('status').classList.remove('active'); element('status').dataset.state = 'OFFLINE';
     message('Game window closed. Open it again to reconnect.'); updateButtons(); drawRadar(null);
   });
   try {

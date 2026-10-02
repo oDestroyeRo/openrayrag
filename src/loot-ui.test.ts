@@ -7,7 +7,7 @@ import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, DEFAULT_RETREAT } from './setting
 vi.mock('./social-ui', () => ({ SocialUi: class { root = document.createElement('div'); lock() {} }, validSocialSnapshot: () => true }));
 vi.mock('./memo-ui', () => ({ MemoUi: class { root = document.createElement('div'); lock() {} }, validMemoSnapshot: () => true }));
 vi.mock('./refine-ui', () => ({ RefineUi: class { root = document.createElement('div'); lock() {} policyChanged() {} settledForMaintenance() { return true; } }, validRefineSnapshot: () => true }));
-vi.mock('./socket-ui', () => ({ SocketUi: class { root = document.createElement('div'); lock() {} policyChanged() {} }, validSocketSnapshot: () => true }));
+vi.mock('./socket-ui', () => ({ SocketUi: class { root = Object.assign(document.createElement('details'), { className: 'manual-details' }); lock() {} policyChanged() {} }, validSocketSnapshot: () => true }));
 vi.mock('./warp-ui', () => ({ WarpUi: class { root = document.createElement('div'); lock() {} policyChanged() {} }, validWarpSnapshot: () => true }));
 
 class Element {
@@ -38,15 +38,15 @@ class Element {
 function setup() {
   vi.stubGlobal('document', { createElement: (tag: string) => new Element(tag) });
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} });
-  const host = new Element('main'), combat = new Element('section'), activity = new Element('section'), footer = new Element('footer'), session = new Element('section');
-  combat.className = 'settings'; activity.className = 'activity'; session.className = 'session-card'; host.append(combat, activity, session, footer);
+  const host = new Element('main'), combat = new Element('section');
+  const sections = { combat, recovery: new Element('section'), travel: new Element('section'), inventory: new Element('section'), workflows: new Element('section'), profiles: new Element('section') };
+  const manualTools = new Element('section'), sessionDetails = new Element('div');
+  for (const panel of Object.values(sections)) panel.className = 'settings feature-panel';
+  manualTools.className = 'feature-panel'; host.append(...Object.values(sections), manualTools, sessionDetails);
   const masterRow = new Element('label'), master = new Element('input'); master.id = 'loot'; master.checked = true; masterRow.append(master); combat.append(masterRow);
-  const routing = new Element('div'), routeSettings = new Element('div'); routing.className = 'routing-field'; routeSettings.className = 'routing-settings';
-  const hpLabel = new Element('label'), hp = new Element('input'); hp.id = 'min-hp';
-  const actions = new Element('div'), footnote = new Element('p'); actions.className = 'actions'; footnote.className = 'footnote'; combat.append(routing, routeSettings, hpLabel, hp, actions, footnote);
-  type PanelMethod = 'rules' | 'workflows' | 'servicePanel' | 'profilePanel' | 'navigation' | 'supplyPanel' | 'dispositionPanel' | 'mapPolicyPanel';
+  type PanelMethod = 'rules' | 'workflows' | 'servicePanel' | 'profilePanel' | 'supplyPanel' | 'dispositionPanel' | 'mapPolicyPanel';
   const prototype = FeatureUi.prototype as unknown as Record<PanelMethod, () => void>;
-  for (const name of ['rules', 'workflows', 'servicePanel', 'profilePanel', 'navigation', 'supplyPanel'] as const) vi.spyOn(prototype, name).mockImplementation(() => {});
+  for (const name of ['rules', 'workflows', 'servicePanel', 'profilePanel', 'supplyPanel'] as const) vi.spyOn(prototype, name).mockImplementation(() => {});
   vi.spyOn(prototype, 'dispositionPanel').mockImplementation(function (this: unknown) {
     const input = new Element('input'); input.dataset.setting = 'disposition.maxSpend';
     const output = new Element('div'); output.id = 'disposition-preview'; host.append(input, output);
@@ -57,10 +57,23 @@ function setup() {
   });
   const hooks = { settings: () => ({ ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [4000] }), apply: vi.fn(), map: () => 'prt_fild08', character: () => 'Test',
     command: vi.fn(async () => {}), workflow: vi.fn(async () => {}), routine: vi.fn(async () => {}), service: vi.fn(async () => {}), social: vi.fn(async () => {}), memo: vi.fn(async () => {}), notify: vi.fn(), changed: vi.fn() };
-  const ui = new FeatureUi(host as unknown as HTMLElement, hooks);
-  return { ui, host, combat, master };
+  const ui = new FeatureUi(host as unknown as HTMLElement, hooks, { sections, manualTools, sessionDetails } as unknown as ConstructorParameters<typeof FeatureUi>[2]);
+  return { ui, host, combat, master, sections, manualTools, sessionDetails };
 }
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+it('uses the supplied mounts once and separates manual roots from Bot and profiles',()=>{
+  const {ui,host,sections,manualTools}=setup();
+  const panels=Reflect.get(ui,'panels') as Map<string,Element>;
+  for(const [name,panel] of Object.entries(sections))expect(panels.get(name)).toBe(panel);
+  expect(host.querySelectorAll('.settings')).toHaveLength(6);
+  for(const name of ['manualTargets','social','memo','socket','refine','warp']){
+    const root=Reflect.get(ui,name).root as Element;
+    expect(root.parentElement).toBe(manualTools);
+    for(const panel of Object.values(sections))expect(panel.all()).not.toContain(root);
+  }
+  expect(manualTools.children).toHaveLength(6);
+  expect((Reflect.get(ui,'socket').root as Element).className).toBe('manual-details manual-group');
+});
 describe('discoverable canonical loot controls', () => {
   it('shows one own/all scope beside the existing master on the initial Combat & loot panel', () => {
     const { host, combat, master } = setup();
