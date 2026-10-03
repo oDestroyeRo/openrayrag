@@ -330,3 +330,10 @@ body:has(.client-shell) { margin: 0; background: var(--client-bg); }
 @media (prefers-reduced-motion: reduce) {
   .client-shell *, .client-shell *::before, .client-shell *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
+
+.client-shell .macro-panel > label { display: block; margin: 16px 0 8px; font-weight: 600; }
+.client-shell #macro-document { width: 100%; min-height: 320px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; tab-size: 2; }
+.client-shell .macro-actions { flex-wrap: wrap; margin-block: 14px; }
+.client-shell .macro-actions select { flex: 1 1 160px; }
+.client-shell .macro-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; font-size: 12px; line-height: 1.6; }
+.client-shell #macro-state { white-space: pre-wrap; }

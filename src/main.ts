@@ -95,7 +95,7 @@ function resumeFieldRun(s: GameStatus): void {
 }
 const features = new FeatureUi(shell.main, {
   settings: () => form.runSettings(), apply: value => form.applyProfile(value), map: () => latest?.map ?? '', character: () => latest?.player?.name ?? '',
-  command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request), memo: request => featureRequest('memo',request), socketPreview:request=>featureRequest('socketPreview',request),socket:request=>featureRequest('socket',request), warp:request=>featureRequest('warp',request),warpPreview:request=>featureRequest('warpPreview',request),warpCancel:()=>invoke('control_bot',{action:'warpCancel',request:{}}),
+  command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), macro: request => featureRequest('macro',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request), memo: request => featureRequest('memo',request), socketPreview:request=>featureRequest('socketPreview',request),socket:request=>featureRequest('socket',request), warp:request=>featureRequest('warp',request),warpPreview:request=>featureRequest('warpPreview',request),warpCancel:()=>invoke('control_bot',{action:'warpCancel',request:{}}),
   refinePreview: request => featureRequest('refinePreview',request), refine: request => featureRequest('refine',request), refineAdvance: promptToken => featureRequest('refineAdvance',{promptToken}),
   notify: message,stop:()=>stopButton.click(), changed: () => { formChanged(); updateButtons(); },
 }, shell);
@@ -123,7 +123,7 @@ function formChanged():void {
 }
 function mainSettledForUpdate():boolean {
   return accountReady&&currentForm.initialized&&!accountDraft()&&!updateBusy&&!busy&&!stopping&&!loginBusy&&!heartbeatPending&&!pendingLogin&&!pendingResume&&!pendingService&&!pendingManual&&!pendingLimitStop
-    &&!limitStopPending&&features.settledForMaintenance()&&!runActive()&&!fieldRun.requested&&!reconnect.waitingUntil;
+    &&!limitStopPending&&!features.hasUnsavedMacro()&&features.settledForMaintenance()&&!runActive()&&!fieldRun.requested&&!reconnect.waitingUntil;
 }
 async function pollUpdate():Promise<void>{
   if(!native||updatePolling||updateBusy)return;updatePolling=true;
@@ -171,6 +171,14 @@ async function featureRequest(action: string, request: unknown): Promise<unknown
       if(generation!==runGeneration||stopping)throw new Error('Service request canceled by Stop.');
       const task=invoke('control_bot',{action,request});pendingService=task;
       try{return await task;}finally{if(pendingService===task)pendingService=null;}
+    }
+    if(action==='macro') {
+      const generation=++runGeneration;fieldRun.stop();reconnect.cancel();limitHeld=false;
+      const pending=pendingResume;if(pending)await pending.catch(()=>{});
+      if(generation!==runGeneration||stopping)throw new Error('Macro request canceled by Stop.');
+      const task=invoke('control_bot',{action,request});pendingManual=task;
+      try { const result=await task;if(generation!==runGeneration)await invoke('control_bot',{action:'stop'});return result; }
+      finally { if(pendingManual===task)pendingManual=null; }
     }
     if(action==='command'&&request&&typeof request==='object'&&'type' in request&&request.type==='manualTarget') {
       const generation=++runGeneration;reconnect.cancel();
