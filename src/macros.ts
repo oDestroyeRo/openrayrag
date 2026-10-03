@@ -258,6 +258,7 @@ export class MacroRuntime {
     } else { this.state = 'running'; this.reason = 'Preparing the next ordered macro step.'; }
     return true;
   }
+  fail(reason: string): void { if (this.active) this.finish('failed', reason); }
   cancel(reason = 'Macro stopped by you.'): void { this.finish('cancelled', reason); }
   snapshot(): MacroSnapshot {
     const selector = this.selector.snapshot();

@@ -242,6 +242,18 @@ describe('macro owned ordered execution', () => {
 });
 
 describe('macro field supervision', () => {
+  it('fails monitoring after the controller loses world ownership', () => {
+    const { runtime } = setup();
+    runtime.start(script({ rules: [rule({ steps: [farm] })] }));
+    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    expect(runtime.snapshot().state).toBe('monitoring');
+    runtime.fail('Unexpected map change.');
+    expect(runtime.snapshot()).toMatchObject({ state: 'failed', fieldIntentActive: false, reason: 'Unexpected map change.' });
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    runtime.fail('A later stale event.');
+    expect(runtime.snapshot().reason).toBe('Unexpected map change.');
+  });
+
   it('monitors a one-run farm until duration even when every allowance is exhausted', () => {
     const { runtime, advance } = setup();
     runtime.start(script({ durationSeconds: 300, maxActions: 1, rules: [rule({ steps: [farm] })] }));
