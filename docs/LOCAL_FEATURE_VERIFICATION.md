@@ -4,6 +4,29 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Conditional macro scripts
+
+Checked on 2026-10-03 for issue #101. Live checks used the local native v0.2.50 QA package; packaging and published-release verification are separate proof surfaces.
+
+| Proof | Result |
+| --- | --- |
+| Full Vitest suite | 3,380 passed across 110 files |
+| Native suite, Clippy and Rust formatting | 120 passed; one optional public probe ignored; Clippy and formatting passed |
+| Build/typecheck and scoped diff | Passed |
+| Release helper tests | 38 Node and six Python tests passed |
+| Script and execution contracts | Strict shared native/TypeScript cases; finite budgets, exact service outcomes, protected stock, ordered receipts, Stop, uncertainty and actor-lifetime regressions passed |
+| Source-shaped level updates | Encoded base/job stat packets selected the next farm stage without directly changing test player state; later SP readback preserved the levels |
+| Browser macro editor | Valid preview, local save/reload, invalid-save preservation, offline Start lock and retained draft passed |
+| Local ARM64 package | Built and strict ad-hoc signature verified; launched for both modes below |
+| With game client, `prt_fild08` | 90-second macro completed its duration; two steps confirmed (field activation and one conditional healing step), then farming continued: 10 defeats, 22 confirmed pickups, zero deaths |
+| Bot only, `prt_fild08` | 45-second macro completed its duration; field activation confirmed, two defeats, three confirmed pickups, zero deaths. The healing skill condition remained unmatched while HP was full; this does not establish a live skill cast. |
+| Negative live checks | Unconfirmed item/skill attempts stopped at their finite deadlines without automatic retries; fresh connections were explicit |
+| Independent review | Core/native, controller, UI and movement/lifetime review passed after corrections |
+
+Live testing exposed a controller fence that retained the original destination after the server accepted a shorter field walk. The controller now adopts a bounded, verified route from the captured own actor lifetime and still waits for actual movement completion. Raw-packet regressions retain fences for unacknowledged, locked and foreign movement. A separate ended manual Respawn/posture receipt could unnecessarily block Macro Start; ended non-resource receipts now clear while resource uncertainty remains held.
+
+The successful runs used current-map farming and finite healing rules. Healing attempts at full HP were unconfirmed, so the subsequent test scripts required missing HP. A temporary approach limit was restored afterward. No live level-up, different-map macro trip, purchase, storage transaction or target skill was exercised. Those paths have local protocol/controller tests, not live-server proof. Saved scripts never resume automatically or across a reconnect in version 1.
+
 ### Real gameplay in both connection modes
 
 Checked on 2026-10-03 for issue #99. Both final combat/loot runs used the local native v0.2.48 QA package; the initial respawn observation used the released v0.2.47 package.
@@ -81,6 +104,7 @@ The full `npm run check` command runs build/typechecking, all Vitest suites, nat
 | NPC, shops, storage, cart, supply and vending | World protocol/state, workflows, NPC services/controller, disposition and supply suites: preview revisions, stock/capacity/spending bounds and canceled or uncertain transactions. |
 | Chat, emotes, memo, socketing, refining and Warp | The corresponding protocol/controller/UI suites: supported wire layouts, previews, prerequisites, response ordering and no duplicate resource request after uncertainty. |
 | Settings, profiles and routines | SettingsForm/current-form/profile, profiles, routines, UI and native persistence: strict schemas, round trips, restoration without starting a bot and finite automation budgets. |
+| Conditional macro scripts | Macro core/controller/UI/native suites: level/job/HP/SP/inventory/actor conditions, retained farming, travel identities, guarded catalog buying/storage, consumables/skills, ordered confirmations, finite spending/action limits and local draft saving. |
 | Bot console and character monitor | Bot console, shell/status and game-status tests: HP/SP/EXP/weight observations, drafts/focus, inventory actions, route/target overlays and immediate action locks. |
 | Updates and releases | Maintenance, bridge input and Rust maintenance/updater/install tests; separate Node/Python release helpers: leases, cancellation, artifact bounds, signatures, source identity and publication order. |
 

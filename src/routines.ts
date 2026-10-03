@@ -3,7 +3,7 @@ import { evaluateActorPredicate, validActorPredicate, type ActorPredicate, type 
 export type NumericOperator = 'lt' | 'lte' | 'eq' | 'gte' | 'gt';
 export type RoutineCondition =
   | ActorPredicate
-  | { field: 'hpPercent' | 'spPercent' | 'zeny' | 'elapsedSeconds'; operator: NumericOperator; value: number }
+  | { field: 'hpPercent' | 'spPercent' | 'weightPercent' | 'level' | 'jobLevel' | 'zeny' | 'elapsedSeconds'; operator: NumericOperator; value: number }
   | { field: 'map'; operator: 'eq' | 'ne'; value: string }
   | { field: 'inventory'; itemId: number; operator: NumericOperator; value: number };
 export interface RoutineRule<Action> {
@@ -15,7 +15,7 @@ export interface RoutineSpec<Action> {
 }
 export interface RoutineObservation {
   actors?: ActorObservationSnapshot;
-  hpPercent?: number; spPercent?: number; map?: string; zeny?: number;
+  hpPercent?: number; spPercent?: number; weightPercent?: number; level?: number; jobLevel?: number; map?: string; zeny?: number;
   inventory?: Readonly<Record<number, number>>;
   // Dry runs may supply elapsed time; a running routine always uses its own clock.
   elapsedSeconds?: number;
@@ -35,7 +35,11 @@ export interface RuleTrace<Action> {
   state: ConditionTrace['state'] | 'cooldown' | 'exhausted'; reason: string; conditions: ConditionTrace[];
 }
 export interface RoutineTrace<Action> { rules: RuleTrace<Action>[]; action: Action | null; rule: string | null }
-export interface RoutineOptions { actionTimeoutSeconds?: number; maxSteps?: number }
+export interface RoutineOptions {
+  actionTimeoutSeconds?: number; maxSteps?: number;
+  /** Internal selector owners may raise the ceiling; legacy routines retain 120 seconds. */
+  actionTimeoutLimitSeconds?: number;
+}
 
 export const ROUTINE_LIMITS = {
   rules: 32, conditions: 16, actions: 1_000, durationSeconds: 86_400,
@@ -61,7 +65,7 @@ const keys = (value: Record<string, unknown>, expected: string[]): boolean => {
   return actual.length === expected.length && actual.every(key => expected.includes(key));
 };
 
-function validCondition(value: unknown): value is RoutineCondition {
+export function validRoutineCondition(value: unknown): value is RoutineCondition {
   if (!record(value)) return false;
   if (value.field==='actorStatus'||value.field==='actorCasting'||value.field==='actorHpPercent'||value.field==='actorSpPercent') return validActorPredicate(value);
   if (value.field === 'map') return keys(value, ['field', 'operator', 'value'])
@@ -70,7 +74,8 @@ function validCondition(value: unknown): value is RoutineCondition {
   if (value.field === 'inventory') return keys(value, ['field', 'itemId', 'operator', 'value'])
     && integer(value.itemId, 1, MAX_NUMBER) && integer(value.value, 0, MAX_NUMBER);
   if (!keys(value, ['field', 'operator', 'value'])) return false;
-  if (value.field === 'hpPercent' || value.field === 'spPercent') return finite(value.value, 0, 100);
+  if (value.field === 'hpPercent' || value.field === 'spPercent' || value.field === 'weightPercent') return finite(value.value, 0, 100);
+  if (value.field === 'level' || value.field === 'jobLevel') return integer(value.value, 1, 1_000);
   if (value.field === 'zeny') return integer(value.value, 0, MAX_NUMBER);
   return value.field === 'elapsedSeconds' && finite(value.value, 0, ROUTINE_LIMITS.durationSeconds);
 }
@@ -105,7 +110,7 @@ export function validateRoutineSpec<Action>(value: unknown, isAction: ActionVali
       || !integer(rule.cooldownSeconds, 0, ROUTINE_LIMITS.durationSeconds)
       || !integer(rule.maxRuns, 1, ROUTINE_LIMITS.actions) || !Array.isArray(rule.conditions)
       || rule.conditions.length < 1 || rule.conditions.length > ROUTINE_LIMITS.conditions
-      || !rule.conditions.every(validCondition)) throw new Error('Invalid routine rule or condition.');
+      || !rule.conditions.every(validRoutineCondition)) throw new Error('Invalid routine rule or condition.');
     return { name: rule.name, priority: rule.priority, cooldownSeconds: rule.cooldownSeconds, maxRuns: rule.maxRuns,
       conditions: structuredClone(rule.conditions), action: cloneAction(rule.action, isAction) };
   });
@@ -125,7 +130,7 @@ function compare(actual: number, operator: NumericOperator, expected: number): b
   }
 }
 
-function conditionTrace(condition: RoutineCondition, observation: RoutineObservation): ConditionTrace {
+export function evaluateRoutineCondition(condition: RoutineCondition, observation: RoutineObservation): ConditionTrace {
   if (condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent') return evaluateActorPredicate(condition,observation.actors);
   let matched: boolean;
   if (condition.field === 'map') {
@@ -135,7 +140,8 @@ function conditionTrace(condition: RoutineCondition, observation: RoutineObserva
     const actual = condition.field === 'inventory'
       ? (record(observation.inventory) && Object.hasOwn(observation.inventory, condition.itemId) ? observation.inventory[condition.itemId] : undefined)
       : observation[condition.field];
-    const available = condition.field === 'hpPercent' || condition.field === 'spPercent' ? finite(actual, 0, 100)
+    const available = condition.field === 'hpPercent' || condition.field === 'spPercent' || condition.field === 'weightPercent' ? finite(actual, 0, 100)
+      : condition.field === 'level' || condition.field === 'jobLevel' ? integer(actual, 1, 1_000)
       : condition.field === 'elapsedSeconds' ? finite(actual, 0, ROUTINE_LIMITS.durationSeconds)
         : integer(actual, 0, MAX_NUMBER);
     if (!available || typeof actual !== 'number') return { condition: { ...condition }, state: 'unavailable',
@@ -150,7 +156,7 @@ interface RuleProgress { runs: number; lastIssued: number | null }
 function traceRules<Action>(spec: RoutineSpec<Action>, observation: RoutineObservation,
   progress?: RuleProgress[], now = 0): RoutineTrace<Action> {
   const rules = spec.rules.map((rule, index): RuleTrace<Action> => {
-    const conditions = rule.conditions.map(condition => conditionTrace(condition, observation));
+    const conditions = rule.conditions.map(condition => evaluateRoutineCondition(condition, observation));
     let state: RuleTrace<Action>['state'] = conditions.some(condition => condition.state === 'unmatched') ? 'unmatched'
       : conditions.some(condition => condition.state === 'unavailable') ? 'unavailable' : 'matched';
     let reason = state === 'matched' ? 'All conditions matched.'
@@ -188,8 +194,10 @@ export class RoutineRuntime<Action> {
 
   constructor(private readonly isAction: ActionValidator<Action>, private readonly now = Date.now, options: RoutineOptions = {}) {
     const timeout = options.actionTimeoutSeconds ?? 10;
+    const timeoutLimit = options.actionTimeoutLimitSeconds ?? 120;
     const maxSteps = options.maxSteps ?? ROUTINE_LIMITS.defaultSteps;
-    if (!integer(timeout, 1, 120) || !integer(maxSteps, 1, ROUTINE_LIMITS.maxSteps)) throw new Error('Invalid routine runtime limits.');
+    if (!integer(timeoutLimit, 1, ROUTINE_LIMITS.durationSeconds) || !integer(timeout, 1, timeoutLimit)
+      || !integer(maxSteps, 1, ROUTINE_LIMITS.maxSteps)) throw new Error('Invalid routine runtime limits.');
     this.timeoutMs = timeout * 1_000; this.maxSteps = maxSteps;
   }
 

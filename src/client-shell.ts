@@ -79,7 +79,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
             <button id="client-bot-tab-recovery" type="button" role="tab" data-client-bot-nav="recovery" aria-controls="client-bot-recovery" aria-selected="false" tabindex="-1">Recovery</button>
             <button id="client-bot-tab-travel" type="button" role="tab" data-client-bot-nav="travel" aria-controls="client-bot-travel" aria-selected="false" tabindex="-1">Travel</button>
             <button id="client-bot-tab-inventory" type="button" role="tab" data-client-bot-nav="inventory" aria-controls="client-bot-inventory" aria-selected="false" tabindex="-1">Inventory & skills</button>
-            <button id="client-bot-tab-workflows" type="button" role="tab" data-client-bot-nav="workflows" aria-controls="client-bot-workflows" aria-selected="false" tabindex="-1">Limits & hours</button>
+            <button id="client-bot-tab-workflows" type="button" role="tab" data-client-bot-nav="workflows" aria-controls="client-bot-workflows" aria-selected="false" tabindex="-1">Macros & limits</button>
           </nav>
           <section id="client-bot-combat" class="panel settings feature-panel" data-section="combat" role="tabpanel" aria-labelledby="client-bot-tab-combat">
             <div class="panel-title"><h3 id="client-bot-combat-title" tabindex="-1">Combat</h3></div>
@@ -112,7 +112,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
             </details>
           </section>
           <section id="client-bot-inventory" class="panel settings feature-panel" data-section="inventory" role="tabpanel" aria-labelledby="client-bot-tab-inventory" hidden><div class="panel-title"><h3 id="client-bot-inventory-title" tabindex="-1">Inventory & skills</h3></div></section>
-          <section id="client-bot-workflows" class="panel settings feature-panel" data-section="workflows" role="tabpanel" aria-labelledby="client-bot-tab-workflows" hidden><div class="panel-title"><h3 id="client-bot-workflows-title" tabindex="-1">Limits & hours</h3></div></section>
+          <section id="client-bot-workflows" class="panel settings feature-panel" data-section="workflows" role="tabpanel" aria-labelledby="client-bot-tab-workflows" hidden><div class="panel-title"><h3 id="client-bot-workflows-title" tabindex="-1">Macros & limits</h3></div></section>
         </section>
 
         <section id="client-page-manual" class="client-page" role="tabpanel" aria-labelledby="client-tab-manual" hidden>

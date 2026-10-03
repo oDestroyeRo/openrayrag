@@ -23,3 +23,11 @@ _Avoid_: Character session
 **Run intent**:
 The user’s request to continue field automation subject to its configured limits and unresolved actions. A temporary wait does not itself create a new run or renew its allowances.
 _Avoid_: Running status
+
+**Macro script**:
+A validated, versioned JSON document whose conditions select bounded ordered sequences of existing game actions. The saved document is separate from active execution and credentials; saving or restoring it never starts automation.
+_Avoid_: Executable code, profile
+
+**Macro field intent**:
+The field activated by a confirmed farm step and retained while later conditions are monitored. Temporary item, skill or NPC sequences suspend that intent; confirmed travel clears it. Every stage shares the original run allowances and existing action receipts.
+_Avoid_: New run, completed farming

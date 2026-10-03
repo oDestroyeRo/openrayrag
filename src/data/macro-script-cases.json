@@ -1,0 +1,3044 @@
+[
+  {
+    "name": "minimal farm",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "all numeric observations",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "gte",
+              "value": 1
+            },
+            {
+              "field": "jobLevel",
+              "operator": "lte",
+              "value": 1000
+            },
+            {
+              "field": "weightPercent",
+              "operator": "eq",
+              "value": 0
+            },
+            {
+              "field": "inventory",
+              "itemId": 501,
+              "operator": "eq",
+              "value": 0
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "all six step kinds",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "travel",
+              "map": "prontera",
+              "timeoutSeconds": 86400
+            },
+            {
+              "type": "buy",
+              "serviceId": "tool-dealer-buy",
+              "itemId": 501,
+              "quantity": 100000,
+              "maxSpend": 1000,
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "store",
+              "serviceId": "kafra-south-storage",
+              "itemId": 501,
+              "quantity": 100000,
+              "keep": 100000,
+              "maxSpend": 0,
+              "timeoutSeconds": 86400
+            },
+            {
+              "type": "useItem",
+              "itemId": 2147483647,
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "skill",
+              "skillId": 32767,
+              "level": 10,
+              "mode": "self",
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "skill",
+              "skillId": 255,
+              "level": 1,
+              "mode": "target",
+              "timeoutSeconds": 1
+            }
+          ]
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "version unknown",
+    "script": {
+      "version": 2,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "extra script field",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ],
+      "commands": []
+    },
+    "valid": false
+  },
+  {
+    "name": "missing spend cap",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "duration too long",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 86401,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "fractional duration",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 1.5,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "too many actual steps",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 1001,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "negative spend",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": -1,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "too much spend",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 2000000001,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "empty rules",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": []
+    },
+    "valid": false
+  },
+  {
+    "name": "33 rules",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "0",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "1",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "2",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "3",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "4",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "5",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "6",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "7",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "8",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "9",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "10",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "11",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "12",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "13",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "14",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "15",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "16",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "17",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "18",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "19",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "20",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "21",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "22",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "23",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "24",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "25",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "26",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "27",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "28",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "29",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "30",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "31",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "32",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "duplicate rule name",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        },
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown rule field",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ],
+          "action": {
+            "type": "stop"
+          }
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "empty conditions",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "17 conditions",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            },
+            {
+              "field": "level",
+              "operator": "eq",
+              "value": 1
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "level zero",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 0
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "job level too high",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "jobLevel",
+              "operator": "lte",
+              "value": 1001
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "weight too high",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "weightPercent",
+              "operator": "gte",
+              "value": 101
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "condition unknown field",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30,
+              "code": "true"
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "empty steps",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": []
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "17 steps",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            },
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "unsupported wait",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "wait",
+              "timeoutSeconds": 1
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "unsupported eval",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "eval",
+              "timeoutSeconds": 1
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "unsupported command",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "command",
+              "timeoutSeconds": 1
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "unsupported macro",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "macro",
+              "timeoutSeconds": 1
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "map traversal",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "../prontera",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "farm target zero",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                0
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "farm target too high",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                2147483648
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "farm duplicate targets",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002,
+                1002
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "farm no targets",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "farm 65 targets",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                30,
+                31,
+                32,
+                33,
+                34,
+                35,
+                36,
+                37,
+                38,
+                39,
+                40,
+                41,
+                42,
+                43,
+                44,
+                45,
+                46,
+                47,
+                48,
+                49,
+                50,
+                51,
+                52,
+                53,
+                54,
+                55,
+                56,
+                57,
+                58,
+                59,
+                60,
+                61,
+                62,
+                63,
+                64,
+                65
+              ],
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "step unknown field",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "farm",
+              "map": "prt_fild08",
+              "targets": [
+                1002
+              ],
+              "timeoutSeconds": 120,
+              "command": "attack"
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown service",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "buy",
+              "serviceId": "unverified-shop",
+              "itemId": 501,
+              "quantity": 1,
+              "maxSpend": 50,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "contract id instead of service id",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "buy",
+              "serviceId": "trader.prt-fild05.tool-dealer.buy.v1",
+              "itemId": 501,
+              "quantity": 1,
+              "maxSpend": 50,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong shop mode",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "buy",
+              "serviceId": "tool-dealer-sell",
+              "itemId": 501,
+              "quantity": 1,
+              "maxSpend": 50,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "buy with storage service",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "buy",
+              "serviceId": "kafra-south-storage",
+              "itemId": 501,
+              "quantity": 1,
+              "maxSpend": 50,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "buy cap above script",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "buy",
+              "serviceId": "tool-dealer-buy",
+              "itemId": 501,
+              "quantity": 1,
+              "maxSpend": 1001,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "buy quantity zero",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "buy",
+              "serviceId": "tool-dealer-buy",
+              "itemId": 501,
+              "quantity": 0,
+              "maxSpend": 50,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "buy quantity too high",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "buy",
+              "serviceId": "tool-dealer-buy",
+              "itemId": 501,
+              "quantity": 100001,
+              "maxSpend": 50,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "buy item zero",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "buy",
+              "serviceId": "tool-dealer-buy",
+              "itemId": 0,
+              "quantity": 1,
+              "maxSpend": 50,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "buy missing timeout",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "buy",
+              "serviceId": "tool-dealer-buy",
+              "itemId": 501,
+              "quantity": 1,
+              "maxSpend": 50
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "store with shop service",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "store",
+              "serviceId": "tool-dealer-buy",
+              "itemId": 501,
+              "quantity": 1,
+              "keep": 0,
+              "maxSpend": 0,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "store negative keep",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "store",
+              "serviceId": "kafra-south-storage",
+              "itemId": 501,
+              "quantity": 1,
+              "keep": -1,
+              "maxSpend": 0,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "store keep too high",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "store",
+              "serviceId": "kafra-south-storage",
+              "itemId": 501,
+              "quantity": 1,
+              "keep": 100001,
+              "maxSpend": 0,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "store missing keep",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "store",
+              "serviceId": "kafra-south-storage",
+              "itemId": 501,
+              "quantity": 1,
+              "maxSpend": 0,
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "use item timeout too long",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "useItem",
+              "itemId": 501,
+              "timeoutSeconds": 121
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "zero timeout",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "useItem",
+              "itemId": 501,
+              "timeoutSeconds": 0
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "skill target too high",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "skill",
+              "skillId": 256,
+              "level": 1,
+              "mode": "target",
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "skill self too high",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "skill",
+              "skillId": 32768,
+              "level": 1,
+              "mode": "self",
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "automatic warp excluded",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "skill",
+              "skillId": 55,
+              "level": 1,
+              "mode": "self",
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "skill level zero",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "skill",
+              "skillId": 28,
+              "level": 0,
+              "mode": "self",
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "skill level too high",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "skill",
+              "skillId": 28,
+              "level": 11,
+              "mode": "self",
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "skill invalid mode",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "skill",
+              "skillId": 28,
+              "level": 1,
+              "mode": "ground",
+              "timeoutSeconds": 120
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "skill timeout too long",
+    "script": {
+      "version": 1,
+      "name": "Train",
+      "durationSeconds": 3600,
+      "maxActions": 20,
+      "maxSpend": 1000,
+      "rules": [
+        {
+          "name": "Farm",
+          "priority": 0,
+          "cooldownSeconds": 0,
+          "maxRuns": 1,
+          "conditions": [
+            {
+              "field": "level",
+              "operator": "lt",
+              "value": 30
+            }
+          ],
+          "steps": [
+            {
+              "type": "skill",
+              "skillId": 28,
+              "level": 1,
+              "mode": "self",
+              "timeoutSeconds": 121
+            }
+          ]
+        }
+      ]
+    },
+    "valid": false
+  }
+]

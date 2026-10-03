@@ -24,6 +24,7 @@ import { NpcServiceStore } from './npc-service-store';
 import { BUILTIN_SERVICES, previewServiceAsync, validateServiceRequest } from './npc-services';
 import type { Entity } from './protocol';
 import { dryRunRoutine, validateRoutineSpec, type RoutineObservation } from './routines';
+import { MacroUi, macroActive, validMacroSnapshot } from './macro-ui';
 import { DEFAULT_SUPPLY } from './supply-trip';
 import { previewSupplyTrip } from './supply-plan';
 import { DEFAULT_DISPOSITION, dispositionPreviewIsCurrent, planDisposition, type DispositionPlan } from './disposition';
@@ -33,8 +34,9 @@ type FeatureUiMounts = Pick<ClientShell, 'sections' | 'manualTools' | 'sessionDe
 type Section = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows' | 'profiles';
 interface Hooks {
   settings(): Settings; apply(settings: Settings): void; map(): string; character(): string;
+  macroSettings?(): Settings;
   command(action: Record<string, unknown>): Promise<unknown>;
-  workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>; social(spec: unknown): Promise<unknown>; memo(spec: unknown): Promise<unknown>; socketPreview?(spec:unknown):Promise<unknown>; socket?(spec:unknown):Promise<unknown>; warp?(spec:unknown):Promise<unknown>;warpPreview?(spec:unknown):Promise<unknown>;warpCancel?():Promise<unknown>;
+  workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; macro?(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>; social(spec: unknown): Promise<unknown>; memo(spec: unknown): Promise<unknown>; socketPreview?(spec:unknown):Promise<unknown>; socket?(spec:unknown):Promise<unknown>; warp?(spec:unknown):Promise<unknown>;warpPreview?(spec:unknown):Promise<unknown>;warpCancel?():Promise<unknown>;
   refinePreview?(spec: unknown): Promise<unknown>; refine?(spec: unknown): Promise<unknown>; refineAdvance?(promptToken: string): Promise<unknown>;
   notify(text: string, error?: boolean): void; changed(): void;
   stop?():void;
@@ -195,6 +197,7 @@ const countColumn: Column = {key:'count',label:'Quantity',min:1,max:9999};
 // Bounded telemetry is treated as data. A new packet field cannot inject HTML or
 // make a native status event grow an unbounded tree in the controller.
 export function validFeatureStatus(value: Record<string, unknown>): boolean {
+  if(value.macro!==undefined&&!validMacroSnapshot(value.macro))return false;
   if(value.partyHeal!==undefined&&!validPartyHealSnapshot(value.partyHeal))return false;
   if(value.deathRecoveryGuard!==undefined){try{validateDeathRecoveryGuard(value.deathRecoveryGuard);}catch{return false;}}
   let remaining = 100_000;
@@ -207,7 +210,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
     if (v && typeof v === 'object') return Object.keys(v).length <= 256 && Object.values(v).every(entry => bounded(entry,depth+1));
     return false;
   }
-  if (!['character','world','workflow','routine','service','task','actionResult','travel','partyFollow','escape','supply','supplyGuard','deathRecoveryGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies','manualTarget','partyHeal','retreat'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
+  if (!['character','world','workflow','routine','macro','service','task','actionResult','travel','partyFollow','escape','supply','supplyGuard','deathRecoveryGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies','manualTarget','partyHeal','retreat'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
   if(object(value.travel).policy!==undefined){try{validateMapPolicy(object(value.travel).policy);}catch{return false;}}
   if(value.partyEngagement!==undefined) {
     const p=object(value.partyEngagement);
@@ -239,6 +242,7 @@ export class FeatureUi {
   private attackStrategiesPresent = false;
   private partyHealPresent=false;
   private retreatPresent=false;
+  private macroUi!: MacroUi;
   private routePreview: { abort: AbortController; identity: string; settings: string; output: HTMLElement; current?: () => string; evidence?: string } | null = null;
   private previewIdentity(): string {
     const p = object(this.status.player), observations = object(this.status.actorObservations);
@@ -486,6 +490,10 @@ export class FeatureUi {
   }
   private detail(title: string): HTMLDetailsElement { const details = document.createElement('details'); details.className = 'manual-group'; const summary = document.createElement('summary'); summary.textContent = title; details.append(summary); this.mounts.manualTools.append(details); return details; }
   private workflows(): void {
+    this.macroUi = new MacroUi({ settings: () => this.hooks.macroSettings?.()??this.hooks.settings(), start: request => this.hooks.macro?.(request) ?? Promise.reject(new Error('Macro transport unavailable.')),
+      stop: () => this.hooks.stop?.(), changed: () => this.hooks.changed(), notify: (message, error) => this.hooks.notify(message, error) });
+    const heading=this.panel('workflows').querySelector('.panel-title');
+    if(heading)heading.after(this.macroUi.root);else this.panel('workflows').append(this.macroUi.root);
     const npc = this.detail('NPC dialogue'); const npcGrid = document.createElement('div'); npcGrid.className = 'form-grid'; npc.append(npcGrid);
     const npcId = this.input(npcGrid,'npc-id','Visible NPC ID','number','',0); const option = this.input(npcGrid,'npc-option','Option index','number','0',0,31);
     const npcChoiceLabel=document.createElement('label');npcChoiceLabel.className='form-field';npcChoiceLabel.textContent='NPCs in view';const npcChoice=document.createElement('select');npcChoice.id='visible-npcs';const emptyNpc=document.createElement('option');emptyNpc.value='';emptyNpc.textContent='Choose a visible NPC';npcChoice.append(emptyNpc);npcChoiceLabel.append(npcChoice);npcGrid.append(npcChoiceLabel);npcChoice.addEventListener('change',()=>{if(npcChoice.value)npcId.value=npcChoice.value;});
@@ -544,7 +552,7 @@ export class FeatureUi {
     const startDocument=document.createElement('button');startDocument.type='button';startDocument.className='secondary compact';startDocument.textContent='Start document';startDocument.dataset.manual='true';startDocument.addEventListener('click',()=>void this.operation(()=>this.hooks.workflow(validateWorkflowSpec(JSON.parse(workflowText.value)))));workflowDocument.append(startDocument);
     const workflowHelp = document.createElement('p'); workflowHelp.className='hint'; workflowHelp.textContent='Choose exact option labels, observed NPC fees and a spending cap. Talk, continue and option fees count toward that cap. The workflow checks the map, NPC, stock and server acknowledgements before each step.'; workflow.append(workflowHelp);
     const workflowState=document.createElement('p');workflowState.id='workflow-state';workflowState.className='telemetry-summary';workflow.append(workflowState);
-    const routine=this.detail('Advanced condition routines'); const routineHelp=document.createElement('p');routineHelp.className='hint';routineHelp.textContent='Bounded rules use HP %, SP %, zeny, elapsed seconds, map, inventory, actor status or casting evidence. An unknown observation never matches. Actions use the typed command names; raw packets, scripts and arbitrary code are unavailable.';routine.append(routineHelp);
+    const routine=this.detail('Advanced condition routines'); const routineHelp=document.createElement('p');routineHelp.className='hint';routineHelp.textContent='Bounded rules use HP %, SP %, zeny, elapsed seconds, map, inventory, actor status or casting evidence. An unknown observation never matches. Actions use typed commands. Use Macro scripts for field progression and supply sequences. Executable code and raw packets are unavailable.';routine.append(routineHelp);
     const routineText=document.createElement('textarea');routineText.id='routine-document';routineText.className='document-editor';routineText.spellcheck=false;routineText.maxLength=65000;routineText.rows=12;routineText.value=JSON.stringify({name:'Rest when hurt',durationSeconds:300,maxActions:1,rules:[{name:'Sit below 60% HP',priority:1,cooldownSeconds:30,maxRuns:1,conditions:[{field:'hpPercent',operator:'lt',value:60}],action:{type:'sit',sitting:true}}]},null,2);routine.append(routineText);
     const routineConditions=new ActorPredicateEditor(()=>actorSnapshotAt(this.status.actorObservations),()=>undefined);routine.append(routineConditions.root);
     const appendCondition=document.createElement('button');appendCondition.type='button';appendCondition.className='secondary compact';appendCondition.textContent='Append actor conditions to first routine rule';appendCondition.dataset.config='true';appendCondition.addEventListener('click',()=>{try{const checked=validateRoutineSpec(JSON.parse(routineText.value),isAction);checked.rules[0]!.conditions.push(...(routineConditions.read()??[]));routineText.value=JSON.stringify(validateRoutineSpec(checked,isAction),null,2);}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid routine.',true);}});routine.append(appendCondition);
@@ -613,6 +621,7 @@ export class FeatureUi {
     for(const[id,label]of rows){const row=document.createElement('div');const name=document.createElement('span');name.textContent=label;const state=document.createElement('span');state.className='coverage-state';state.textContent=ready.has(id)?'Local implementation':partial.has(id)?'Partial implementation':unverified.has(id)?'No verified game adapter':'Not implemented';row.append(name,state);table.append(row);}
   }
   lock(config: boolean, manual: boolean, service=manual,warp=manual): void {
+    this.macroUi.lock(config, manual);
     this.locked=config;this.manualLocked=manual;this.serviceLocked=service;
     for(const input of this.host.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('[data-setting], [data-config], .feature-panel input, .feature-panel select, .feature-panel textarea, .rule-editor button')) input.disabled=config;
     this.syncFollowMode();
@@ -623,19 +632,23 @@ export class FeatureUi {
     this.social.lock(manual);this.refine.lock(manual);
     this.memo.lock(manual);this.warp.lock(warp);this.socket.lock(manual);this.manualTargets.lock(manual);
   }
-  settledForMaintenance(): boolean { return this.refine.settledForMaintenance(); }
-  serviceBlocked(): boolean { return object(this.status.warp).blocked===true || object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
+  settledForMaintenance(): boolean { return !macroActive(this.status.macro) && this.refine.settledForMaintenance(); }
+  serviceBlocked(): boolean { return macroActive(this.status.macro) || object(this.status.warp).blocked===true || object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
   clearSocial(): void { delete this.status.social; this.social.clear(); delete this.status.socket; this.socket.clear();delete this.status.refine;this.refine.clear(); }
   clearMemo(): void { delete this.status.memo; this.memo.clear();delete this.status.warp;this.warp.clear(); }
-  active(): boolean { return object(this.status.warp).blocked===true || object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
+  clearMacro(): void { delete this.status.macro; this.macroUi.render(undefined, {}); }
+  active(): boolean { return macroActive(this.status.macro) || object(this.status.warp).blocked===true || object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
   warpActivationReady():boolean{return validWarpSnapshot(this.status.warp)&&this.status.warp.activation!==null;}
+  hasUnsavedMacro(): boolean { return this.macroUi.dirty; }
   private observation(): RoutineObservation {
-    const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:this.hooks.map(),elapsedSeconds:0};
+    const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:text(this.status.map),elapsedSeconds:number(this.status.elapsedSeconds)??0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;
+    const level=number(stats.level)??number(player.level),jobLevel=number(stats.jobLevel),weight=number(stats.weight),maxWeight=number(stats.maxWeight);
+    if(level!==null)result.level=level;if(jobLevel!==null)result.jobLevel=jobLevel;if(weight!==null&&maxWeight!==null&&maxWeight>0)result.weightPercent=weight/maxWeight*100;
     const character=object(this.status.character);if(character.inventoryKnown===true&&Array.isArray(character.inventory)){const counts:Record<number,number>={};for(const entry of character.inventory){const row=object(entry);const id=number(row.itemId);const count=number(row.count);if(id!==null&&count!==null)counts[id]=(counts[id]??0)+count;}result.inventory=counts;}return result;
   }
   render(value: unknown): void {
-    this.status=object(value);if(this.routePreview&&(this.routePreview.identity!==this.previewIdentity()||this.routePreview.evidence!==this.routePreview.current?.()))this.cancelRoutePreview();const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
+    this.status=object(value);this.macroUi.render(this.status.macro,this.observation());if(this.routePreview&&(this.routePreview.identity!==this.previewIdentity()||this.routePreview.evidence!==this.routePreview.current?.()))this.cancelRoutePreview();const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
     const engagement=object(s.partyEngagement);const reasons=Array.isArray(engagement.reasons)?engagement.reasons.map(text):[];
     this.host.querySelector<HTMLElement>('#party-engagement-state')!.textContent=engagement.enabled===true?`Party exception active · ${number(engagement.accepted)??0} verified engagements · ${number(engagement.blocked)??0} excluded${reasons.length?'\n'+reasons.join('\n'):''}`:'Party exception is off; outside engagements remain excluded.';
     const heal=object(s.partyHeal);this.host.querySelector<HTMLElement>('#party-heal-state')!.textContent=`${text(heal.reason)||'Party Heal is off.'} · ${number(heal.attempts)??0} attempts · ${number(heal.confirmed)??0} executions confirmed${heal.resourceReadback===true?' · fresh resource readback':''}`;

@@ -1,6 +1,15 @@
 import { describe,expect,it } from 'vitest';
 import { FeatureUi, chooseFollowMode, validFeatureStatus } from './feature-ui';
 describe('extended controller telemetry',()=>{
+  it('clears macro ownership on game close while preserving the editor draft',()=>{
+    let rendered:unknown='previous';
+    const draft={text:'unsaved script'};
+    const view=Object.assign(Object.create(FeatureUi.prototype),{status:{macro:{state:'monitoring'}},macroUi:{draft,render:(value:unknown)=>{rendered=value;}},refine:{settledForMaintenance:()=>true}});
+    expect(view.active()).toBe(true);expect(view.settledForMaintenance()).toBe(false);
+    view.clearMacro();
+    expect(view.active()).toBe(false);expect(view.settledForMaintenance()).toBe(true);expect(rendered).toBeUndefined();
+    expect(draft.text).toBe('unsaved script');
+  });
   it('accepts bounded character and workflow state without requiring unavailable fields',()=>{
     expect(validFeatureStatus({})).toBe(true);
     expect(validFeatureStatus({loadout:{state:'holding',reason:'Waiting for target clear.',stock:3}})).toBe(true);

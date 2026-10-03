@@ -1358,6 +1358,15 @@ export class BotEngine {
     this.send({type:'walk',destination});this.lastAction=now;this.reason=task.reason;
   }
   get manualTargetActive():boolean {return this.manualTask!==null;}
+  /** A shortened field walk is authoritative only for its captured own lifetime and verified ground. */
+  fieldMovementReceiptOwner(event:GameEvent,captured:ActionIdentity|null):EngagementIdentity|null {
+    if(!captured||!sameActionIdentity(captured,this.actorActionIdentity()))return null;
+    const owner={world:captured.world,id:captured.selfId,incarnation:captured.selfIncarnation};
+    if(event.type==='stop'&&event.id===owner.id)return owner;
+    if(event.type==='walk'&&event.id===owner.id&&!event.walk.locked&&event.walk.cells.length>0&&event.walk.cells.length<=21
+      &&walkDuration(event.walk)<=15000&&this.navigation()?.validRoute(event.walk.cells))return owner;
+    return null;
+  }
   /** Movement readback can settle only the captured manual owner's lifetime. */
   manualMovementReceiptOwner(event:GameEvent):EngagementIdentity|null {
     const owner=this.manualTask?.request.owner??this.manualReceiptOwner;
@@ -1483,7 +1492,7 @@ export class BotEngine {
       &&!(target.x===Math.floor(p.x)&&target.y===Math.floor(p.y))
       &&![...this.actors.values(),...this.entities.values()].some(actor=>actor.id!==p.id&&!actor.dead&&Math.floor(actor.x)===target.x&&Math.floor(actor.y)===target.y);
   }
-  manualAction(action: ExpandedAction): void {
+  manualAction(action: ExpandedAction, reserved?: (sequence:number,identity:ActionIdentity)=>void): void {
     action=validateExpandedAction(action);
     if(!this.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
     if(!this.idleForActions())throw new Error('Stop automation and wait for movement and action confirmation first.');
@@ -1532,7 +1541,8 @@ export class BotEngine {
       }
     }
     this.loadout.acknowledgeOverride();
-    this.automation.submit(action,this.character,undefined,action.type==='skill'?skillAfterCastSeconds(action.skillId):0);this.reason=this.automation.task().label;
+    this.automation.submit(action,this.character,undefined,action.type==='skill'?skillAfterCastSeconds(action.skillId):0,
+      reserved?{receipt:matchesSkillExecution,reserved}:undefined);this.reason=this.automation.task().label;
   }
   private followTick(p: Entity, now: number): void {
     const follow=automationSettings(this.settings).follow;
@@ -1565,6 +1575,17 @@ export class BotEngine {
   }
   get currentTargetId():number|null {
     return this.serverTargetId;
+  }
+  /** Macros may use only the engine's currently eligible observed combat target. */
+  macroTargetIdentity():ActionIdentity|null {
+    const id=this.currentTargetId,p=this.player,target=id===null?undefined:this.entities.get(id);
+    return p&&!p.dead&&target&&this.eligible(target,this.now(),false)?this.actorActionIdentity(target.id):null;
+  }
+  /** A normal attack or an unsent route can be canceled after physical/resource owners drain. */
+  macroHandoffSettled():boolean {
+    this.advanceMovement();
+    return this.observedOwnCastSettled()&&this.featureActionsSettled&&!this.manualTargetOwned&&!this.leg&&!this.ownMotion()
+      &&!this.awaitsImplicitWalk()&&!this.loadout.blocked;
   }
   snapshot(): Snapshot {
     const nav = this.navigation();

@@ -77,6 +77,7 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
     manualTargets:{lock:()=>{}},
     refine: {render:()=>{},lock:()=>{},clear:()=>{}},
     warp:{lock:()=>{}},
+    macroUi:{lock:()=>{}},
     host,
     hooks,
     services: store,

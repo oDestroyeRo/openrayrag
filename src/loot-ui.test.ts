@@ -46,7 +46,10 @@ function setup() {
   const masterRow = new Element('label'), master = new Element('input'); master.id = 'loot'; master.checked = true; masterRow.append(master); combat.append(masterRow);
   type PanelMethod = 'rules' | 'workflows' | 'servicePanel' | 'profilePanel' | 'supplyPanel' | 'dispositionPanel' | 'mapPolicyPanel';
   const prototype = FeatureUi.prototype as unknown as Record<PanelMethod, () => void>;
-  for (const name of ['rules', 'workflows', 'servicePanel', 'profilePanel', 'supplyPanel'] as const) vi.spyOn(prototype, name).mockImplementation(() => {});
+  for (const name of ['rules', 'servicePanel', 'profilePanel', 'supplyPanel'] as const) vi.spyOn(prototype, name).mockImplementation(() => {});
+  vi.spyOn(prototype, 'workflows').mockImplementation(function (this: unknown) {
+    Object.assign(this as object, { macroUi: { render: () => {}, lock: () => {}, dirty: false } });
+  });
   vi.spyOn(prototype, 'dispositionPanel').mockImplementation(function (this: unknown) {
     const input = new Element('input'); input.dataset.setting = 'disposition.maxSpend';
     const output = new Element('div'); output.id = 'disposition-preview'; host.append(input, output);
