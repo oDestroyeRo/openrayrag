@@ -4,6 +4,12 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Server Database travel
+
+Checked locally on 2026-10-04 for issue #105. Shared production encoders send the pinned map-only opcode-64 request in both connection modes. Targeted protocol/controller tests cover requested-map arrival, ordered Ready, fresh own actor identity, wrong/foreign/dead arrivals, retained Stop/timeout/write uncertainty, finite supply command reservation, macro travel/farm/service paths, configured destinations and death return. Local NPC approaches and same-map movement remain collision checked; party-leader rendezvous retains verified portals.
+
+The implementation lane has not run deployed-game travel. These fixture checks do not establish live server acceptance, successful cross-map farming or release/installed-app availability. Those require separate verification after handoff.
+
 ### Conditional macro scripts
 
 Checked on 2026-10-03 for issue #101. Live checks used the local native v0.2.50 QA package; packaging and published-release verification are separate proof surfaces.

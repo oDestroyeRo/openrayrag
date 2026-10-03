@@ -99,6 +99,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
           </section>
           <section id="client-bot-travel" class="panel settings feature-panel" data-section="travel" role="tabpanel" aria-labelledby="client-bot-tab-travel" hidden>
             <div class="panel-title"><h3 id="client-bot-travel-title" tabindex="-1">Travel</h3></div>
+            <p class="hint">Supported map changes use the server's Database teleport. Local walking and NPC approaches follow walkable ground. Party leader rendezvous follows verified portals.</p>
             <div class="routing-field"><label for="random-walk">Find monsters</label><select id="random-walk"><option value="0">Off · approach visible targets only</option><option value="2">Search the current map</option></select><p class="hint">Search connected walkable ground and avoid portal areas.</p></div>
             <details class="routing-settings"><summary>Movement & approach limits</summary>
               <div class="routing-grid">
