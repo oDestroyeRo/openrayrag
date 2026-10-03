@@ -2,6 +2,15 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 export const REPOSITORY = "oDestroyeRo/openrayrag";
 export const TARGET = "aarch64-apple-darwin";
+export const WINDOWS_TARGET = "x86_64-pc-windows-msvc";
+export const LINUX_TARGET = "x86_64-unknown-linux-gnu";
+export const PLATFORM_CHECKS = [
+  "frontend-build",
+  "native-package",
+  "package-contents",
+];
+export const MAX_RELEASE_ASSET = 256 * 1024 * 1024;
+export const MAX_RELEASE_BUNDLE = 9 * MAX_RELEASE_ASSET;
 export const IDENTIFIER = "com.rayrag.companion";
 // Match the installed client's download and signature limits before publishing.
 export const MAX_UPDATER_ARCHIVE = 128 * 1024 * 1024;
@@ -69,14 +78,19 @@ export function assetNames(version) {
     archive: `${base}.app.tar.gz`,
     signature: `${base}.app.tar.gz.sig`,
     dmg: `${base}.dmg`,
+    windows: `Rayrag_Companion_${version}_x64-setup.exe`,
+    deb: `Rayrag_Companion_${version}_amd64.deb`,
+    appimage: `Rayrag_Companion_${version}_x86_64.AppImage`,
   };
 }
-export function expectedNames(version) {
+export function expectedNames(version, schemaVersion = 2) {
+  requireValue([1, 2].includes(schemaVersion), "Unsupported release schema.");
   const n = assetNames(version);
   return [
     n.archive,
     n.signature,
     n.dmg,
+    ...(schemaVersion === 2 ? [n.windows, n.deb, n.appimage] : []),
     "provenance.json",
     "SHA256SUMS",
     "latest.json",
@@ -220,13 +234,175 @@ export function validateArtifact(artifact) {
   );
   return artifact;
 }
+export function platformNames(version, target) {
+  const n = assetNames(version);
+  requireValue(
+    [TARGET, WINDOWS_TARGET, LINUX_TARGET].includes(target),
+    "Unexpected platform target.",
+  );
+  return target === TARGET
+    ? [n.archive, n.signature, n.dmg]
+    : target === WINDOWS_TARGET
+      ? [n.windows]
+      : [n.appimage, n.deb].sort();
+}
+function validateBuildIdentity(receipt, id, build, target) {
+  exactKeys(
+    receipt,
+    [
+      "schemaVersion",
+      "sourceSha",
+      "version",
+      "target",
+      "runId",
+      "runAttempt",
+      "files",
+      "checks",
+    ],
+    "platform build",
+  );
+  requireValue(
+    receipt.schemaVersion === 1 &&
+      receipt.sourceSha === id.sourceSha &&
+      receipt.version === id.version &&
+      receipt.target === target &&
+      numericId(receipt.runId) &&
+      numericId(receipt.runAttempt) &&
+      receipt.runId === build.runId &&
+      receipt.runAttempt === build.runAttempt,
+    "Platform build source, version, target or workflow run differs.",
+  );
+  requireValue(
+    JSON.stringify(receipt.checks) === JSON.stringify(PLATFORM_CHECKS),
+    "Platform package verification is incomplete.",
+  );
+}
+export function platformReceipt(files, id, build, target) {
+  return {
+    schemaVersion: 1,
+    sourceSha: id.sourceSha,
+    version: id.version,
+    target,
+    runId: build.runId,
+    runAttempt: build.runAttempt,
+    files: platformNames(id.version, target)
+      .sort()
+      .map((name) => fileRecord(name, files.get(name))),
+    checks: [...PLATFORM_CHECKS],
+  };
+}
+export function validateInstaller(name, bytes, version) {
+  requireValue(
+    Buffer.isBuffer(bytes) &&
+      bytes.length > 0 &&
+      bytes.length <= MAX_RELEASE_ASSET,
+    "Invalid platform installer size.",
+  );
+  const n = assetNames(version);
+  if (name === n.windows) {
+    requireValue(
+      bytes.length >= 64 && bytes.subarray(0, 2).toString() === "MZ",
+      "Windows installer is not PE.",
+    );
+    const offset = bytes.readUInt32LE(60);
+    requireValue(
+      offset >= 64 &&
+        offset <= bytes.length - 26 &&
+        bytes.subarray(offset, offset + 4).equals(Buffer.from([80, 69, 0, 0])),
+      "Invalid Windows PE header.",
+    );
+    const machine = bytes.readUInt16LE(offset + 4),
+      format = bytes.readUInt16LE(offset + 24);
+    // NSIS can use a 32-bit installer stub for a verified 64-bit application payload.
+    requireValue(
+      (machine === 0x14c && format === 0x10b) ||
+        (machine === 0x8664 && format === 0x20b),
+      "Unexpected Windows installer architecture.",
+    );
+  } else if (name === n.appimage) {
+    requireValue(
+      bytes.length >= 64 &&
+        bytes.subarray(0, 4).equals(Buffer.from([127, 69, 76, 70])) &&
+        bytes[4] === 2 &&
+        bytes[5] === 1 &&
+        bytes[6] === 1 &&
+        bytes.readUInt16LE(18) === 62 &&
+        bytes.subarray(8, 11).equals(Buffer.from([65, 73, 2])),
+      "AppImage is not type 2 ELF64 x86_64.",
+    );
+  } else if (name === n.deb) {
+    requireValue(
+      bytes.subarray(0, 8).toString() === "!<arch>\n",
+      "Debian package is not ar.",
+    );
+    let offset = 8;
+    const members = new Map();
+    while (offset < bytes.length) {
+      requireValue(offset <= bytes.length - 60, "Truncated Debian ar header.");
+      const header = bytes.subarray(offset, offset + 60),
+        member = header.subarray(0, 16).toString().trim().replace(/\/$/, ""),
+        sizeText = header.subarray(48, 58).toString().trim(),
+        size = Number(sizeText);
+      requireValue(
+        header.subarray(58).toString() === "`\n" &&
+          /^\d+$/.test(sizeText) &&
+          Number.isSafeInteger(size) &&
+          size > 0 &&
+          !members.has(member) &&
+          offset + 60 + size <= bytes.length,
+        "Invalid Debian ar member.",
+      );
+      members.set(member, bytes.subarray(offset + 60, offset + 60 + size));
+      offset += 60 + size;
+      if (size % 2) {
+        requireValue(bytes[offset] === 10, "Invalid Debian ar padding.");
+        offset++;
+      }
+    }
+    const keys = [...members.keys()];
+    requireValue(
+      keys.length === 3 &&
+        keys[0] === "debian-binary" &&
+        /^control\.tar\.(gz|xz|zst)$/.test(keys[1]) &&
+        /^data\.tar\.(gz|xz|zst)$/.test(keys[2]) &&
+        members.get("debian-binary").toString() === "2.0\n",
+      "Unexpected Debian package members.",
+    );
+  } else throw new Error("Unexpected platform installer name.");
+}
+export function validatePlatformBuild(files, id, build, target) {
+  requireValue(
+    files instanceof Map && [WINDOWS_TARGET, LINUX_TARGET].includes(target),
+    "Invalid platform bundle.",
+  );
+  const names = platformNames(id.version, target);
+  requireValue(
+    [...files.keys()].sort().join("|") ===
+      [...names, "platform-build.json"].sort().join("|"),
+    "Platform bundle has missing or unexpected files.",
+  );
+  const receipt = parseJson(files.get("platform-build.json"), "platform build");
+  validateBuildIdentity(receipt, id, build, target);
+  for (const name of names)
+    validateInstaller(name, files.get(name), id.version);
+  requireValue(
+    JSON.stringify(receipt.files) ===
+      JSON.stringify(
+        names.sort().map((name) => fileRecord(name, files.get(name))),
+      ),
+    "Platform package hashes or sizes differ.",
+  );
+  return receipt;
+}
 export function createBundle(id, payload, build, publicKey) {
   const names = assetNames(id.version);
+  const schemaVersion = build.schemaVersion ?? 2;
+  const payloadNames = expectedNames(id.version, schemaVersion).filter(
+    (n) => !["provenance.json", "SHA256SUMS", "latest.json"].includes(n),
+  );
   requireValue(
-    payload.size === 3 &&
-      [names.archive, names.signature, names.dmg].every((n) =>
-        Buffer.isBuffer(payload.get(n)),
-      ),
+    payload.size === payloadNames.length &&
+      payloadNames.every((n) => Buffer.isBuffer(payload.get(n))),
     "Incomplete build payload.",
   );
   const files = new Map(payload),
@@ -254,7 +430,7 @@ export function createBundle(id, payload, build, publicKey) {
   files.set(
     "provenance.json",
     jsonBuffer({
-      schemaVersion: 1,
+      schemaVersion,
       repository: REPOSITORY,
       sourceSha: id.sourceSha,
       firstParentCount: countOf(id.version),
@@ -265,6 +441,14 @@ export function createBundle(id, payload, build, publicKey) {
       runAttempt: build.runAttempt,
       artifactName: build.artifactName,
       toolchain: { node: NODE_VERSION, rust: RUST_VERSION },
+      ...(schemaVersion === 2
+        ? {
+            platforms: [
+              platformReceipt(payload, id, build, TARGET),
+              ...(build.platforms ?? []),
+            ].sort((a, b) => compareNames(a.target, b.target)),
+          }
+        : {}),
       files: [...files]
         .map(([name, bytes]) => fileRecord(name, bytes))
         .sort((a, b) => compareNames(a.name, b.name)),
@@ -276,17 +460,18 @@ export function createBundle(id, payload, build, publicKey) {
 }
 export function validateBundle(files, id, publicKey) {
   const names = assetNames(id.version);
+  requireValue(files instanceof Map, "Release asset set must be a map.");
+  const p = parseJson(files.get("provenance.json"), "provenance");
   requireValue(
-    files instanceof Map &&
-      [...files.keys()].sort().join("|") ===
-        expectedNames(id.version).sort().join("|"),
+    [...files.keys()].sort().join("|") ===
+      expectedNames(id.version, p.schemaVersion).sort().join("|"),
     "Release asset set is incomplete or has unexpected files.",
   );
   for (const bytes of files.values())
     requireValue(
       Buffer.isBuffer(bytes) &&
         bytes.length > 0 &&
-        bytes.length <= 256 * 1024 * 1024,
+        bytes.length <= MAX_RELEASE_ASSET,
       "Release asset is empty or exceeds the limit.",
     );
   const latest = parseJson(files.get("latest.json"), "latest.json");
@@ -320,7 +505,6 @@ export function validateBundle(files, id, publicKey) {
     publicKey,
     id.version,
   );
-  const p = parseJson(files.get("provenance.json"), "provenance");
   exactKeys(
     p,
     [
@@ -336,11 +520,12 @@ export function validateBundle(files, id, publicKey) {
       "artifactName",
       "toolchain",
       "files",
+      ...(p.schemaVersion === 2 ? ["platforms"] : []),
     ],
     "provenance",
   );
   requireValue(
-    p.schemaVersion === 1 &&
+    [1, 2].includes(p.schemaVersion) &&
       p.repository === REPOSITORY &&
       p.sourceSha === id.sourceSha &&
       p.firstParentCount === countOf(id.version) &&
@@ -360,22 +545,54 @@ export function validateBundle(files, id, publicKey) {
     p.toolchain.node === NODE_VERSION && p.toolchain.rust === RUST_VERSION,
     "Unexpected release toolchain.",
   );
-  const expected = [names.archive, names.signature, names.dmg, "latest.json"]
+  const expected = expectedNames(id.version, p.schemaVersion)
+    .filter((name) => !["provenance.json", "SHA256SUMS"].includes(name))
     .sort()
     .map((name) => fileRecord(name, files.get(name)));
   requireValue(
     JSON.stringify(p.files) === JSON.stringify(expected),
     "Provenance asset hashes or sizes differ.",
   );
+  if (p.schemaVersion === 2) {
+    requireValue(
+      Array.isArray(p.platforms) &&
+        p.platforms.length === 3 &&
+        p.platforms.map((receipt) => receipt?.target).join("|") ===
+          [TARGET, WINDOWS_TARGET, LINUX_TARGET].sort().join("|"),
+      "Release platform receipt set is incomplete or duplicated.",
+    );
+    for (const receipt of p.platforms) {
+      validateBuildIdentity(receipt, id, p, receipt.target);
+      const platformFiles = platformNames(id.version, receipt.target)
+        .sort()
+        .map((name) => fileRecord(name, files.get(name)));
+      requireValue(
+        JSON.stringify(receipt.files) === JSON.stringify(platformFiles),
+        "Platform receipt asset hashes or sizes differ.",
+      );
+      if (receipt.target !== TARGET)
+        for (const name of platformNames(id.version, receipt.target))
+          validateInstaller(name, files.get(name), id.version);
+    }
+  }
   requireValue(
     files.get("SHA256SUMS").equals(checksums(files)),
     "Release checksums differ.",
   );
   return p;
 }
-export function releaseBody(id, artifact) {
+export function releaseBody(id, artifact, schemaVersion = 2) {
   validateArtifact(artifact);
-  return `Rayrag Companion ${id.version} for Apple Silicon (ARM64).\n\nBootstrap: download the DMG. Existing updater-enabled clients use the signed archive. Apple signing is ad-hoc; this build is not notarized.\n\nSource: ${id.sourceSha}\n\n<!-- rayrag-release:${JSON.stringify({ schemaVersion: 1, version: id.version, sourceSha: id.sourceSha, artifact })} -->`;
+  requireValue([1, 2].includes(schemaVersion), "Unsupported release schema.");
+  const platforms =
+    schemaVersion === 2
+      ? "Apple Silicon macOS, Windows x64 and Linux x86_64"
+      : "Apple Silicon (ARM64)";
+  const installers =
+    schemaVersion === 2
+      ? " Download the Windows NSIS installer, Linux DEB or AppImage for those systems; their updater remains disabled."
+      : "";
+  return `Rayrag Companion ${id.version} for ${platforms}.\n\nBootstrap: download the DMG for macOS.${installers} Existing updater-enabled macOS clients use the signed archive. Apple signing is ad-hoc; this build is not notarized.\n\nSource: ${id.sourceSha}\n\n<!-- rayrag-release:${JSON.stringify({ schemaVersion, version: id.version, sourceSha: id.sourceSha, artifact })} -->`;
 }
 export function releaseMetadata(release) {
   requireValue(
@@ -408,7 +625,8 @@ export function releaseMetadata(release) {
     "release provenance",
   );
   requireValue(
-    meta.schemaVersion === 1 && release.tag_name === `v${meta.version}`,
+    [1, 2].includes(meta.schemaVersion) &&
+      release.tag_name === `v${meta.version}`,
     "Release tag/metadata conflict.",
   );
   countOf(meta.version);
@@ -438,11 +656,11 @@ async function verifiedRelease(ctx, release) {
     );
   const files = await ctx.api.downloadRelease(
     release,
-    expectedNames(id.version),
+    expectedNames(id.version, meta.schemaVersion),
   );
   const p = validateBundle(files, id, ctx.publicKey);
   requireValue(
-    p.runId === meta.artifact.runId,
+    p.runId === meta.artifact.runId && p.schemaVersion === meta.schemaVersion,
     "Release and build run provenance differ.",
   );
   await ctx.verifyNative(files, id);
@@ -523,7 +741,7 @@ export async function publishRelease(ctx) {
     try {
       release = await ctx.api.createDraft(
         ctx.id,
-        releaseBody(ctx.id, ctx.artifact),
+        releaseBody(ctx.id, ctx.artifact, provenance.schemaVersion),
       );
     } catch {
       release = await ctx.api.release(ctx.id.tag);
@@ -537,15 +755,17 @@ export async function publishRelease(ctx) {
   requireValue(
     release.draft &&
       meta.sourceSha === ctx.id.sourceSha &&
+      meta.schemaVersion === provenance.schemaVersion &&
       JSON.stringify(meta.artifact) === JSON.stringify(ctx.artifact),
     "Draft belongs to another build. Reuse its original artifact; never mix rebuilds.",
   );
-  for (const name of expectedNames(ctx.id.version)) {
+  const releaseNames = expectedNames(ctx.id.version, provenance.schemaVersion);
+  for (const name of releaseNames) {
     let assets = await ctx.api.assets(release.id);
     requireValue(
-      assets.length <= 6 &&
+      assets.length <= releaseNames.length &&
         new Set(assets.map((a) => a.name)).size === assets.length &&
-        assets.every((a) => expectedNames(ctx.id.version).includes(a.name)),
+        assets.every((a) => releaseNames.includes(a.name)),
       "Unexpected or duplicate draft assets.",
     );
     let asset = assets.find((a) => a.name === name);

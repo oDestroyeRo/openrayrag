@@ -15,10 +15,14 @@ import { fileURLToPath } from "node:url";
 import {
   REPOSITORY,
   TARGET,
+  WINDOWS_TARGET,
+  LINUX_TARGET,
   IDENTIFIER,
   ENDPOINT,
   NODE_VERSION,
   RUST_VERSION,
+  MAX_RELEASE_ASSET,
+  MAX_RELEASE_BUNDLE,
   sha256,
   requireValue,
   identity,
@@ -27,6 +31,7 @@ import {
   createBundle,
   validateBundle,
   validateArtifact,
+  validatePlatformBuild,
   preflight,
   publishRelease,
 } from "./release-core.mjs";
@@ -130,7 +135,15 @@ async function readConfig() {
 async function filesAt(folder, version) {
   const names = await readdir(folder);
   requireValue(
-    names.sort().join("|") === expectedNames(version).sort().join("|"),
+    names.includes("provenance.json") && names.length <= 9,
+    "Invalid release bundle directory.",
+  );
+  const schemaVersion = JSON.parse(
+    await readFile(join(folder, "provenance.json"), "utf8"),
+  ).schemaVersion;
+  requireValue(
+    names.sort().join("|") ===
+      expectedNames(version, schemaVersion).sort().join("|"),
     "Unexpected files in release bundle directory.",
   );
   return new Map(
@@ -335,7 +348,7 @@ export class GitHubReleaseApi {
       `releases/${id}/assets?per_page=100`,
     );
     requireValue(
-      Array.isArray(assets) && assets.length <= 6,
+      Array.isArray(assets) && assets.length <= 9,
       "Unexpected release asset list.",
     );
     return assets;
@@ -347,7 +360,7 @@ export class GitHubReleaseApi {
         asset.state === "uploaded" &&
         Number.isSafeInteger(asset.size) &&
         asset.size > 0 &&
-        asset.size <= 256 * 1024 * 1024,
+        asset.size <= MAX_RELEASE_ASSET,
       "Invalid uploaded asset.",
     );
     return this.request("GET", `releases/assets/${asset.id}`, undefined, {
@@ -429,7 +442,10 @@ export class GitHubReleaseApi {
           "extract-zip",
           zip,
           folder,
-          JSON.stringify(expectedNames(id.version)),
+          JSON.stringify([
+            expectedNames(id.version, 1),
+            expectedNames(id.version, 2),
+          ]),
         ],
         { stdio: "inherit" },
       );
@@ -444,7 +460,7 @@ async function boundedBytes(response) {
   for await (const chunk of response.body) {
     size += chunk.length;
     requireValue(
-      size <= 512 * 1024 * 1024,
+      size <= MAX_RELEASE_BUNDLE + 1024 * 1024,
       "Download exceeds release size bound.",
     );
     chunks.push(chunk);
@@ -540,15 +556,31 @@ async function main() {
     const runId = process.env.GITHUB_RUN_ID,
       runAttempt = process.env.GITHUB_RUN_ATTEMPT,
       artifactName = `release-${id.sourceSha}-${runId}-${runAttempt}`;
-    const files = createBundle(
-      id,
-      payload,
-      { runId, runAttempt, artifactName },
-      publicKey,
-    );
+    const build = { runId, runAttempt, artifactName },
+      platforms = [];
+    for (const [platform, target] of [
+      ["windows", WINDOWS_TARGET],
+      ["linux", LINUX_TARGET],
+    ]) {
+      const directory = join(repositoryRoot, "platform-bundles", platform);
+      const platformFiles = new Map(
+        await Promise.all(
+          (await readdir(directory)).map(async (name) => [
+            name,
+            await readFile(join(directory, name)),
+          ]),
+        ),
+      );
+      platforms.push(validatePlatformBuild(platformFiles, id, build, target));
+      for (const [name, bytes] of platformFiles)
+        if (name !== "platform-build.json") payload.set(name, bytes);
+    }
+    const files = createBundle(id, payload, { ...build, platforms }, publicKey);
     await verifyNative(files, id);
     await writeFiles(join(repositoryRoot, "release-bundle"), files);
-    console.log(`Verified signed ARM64 release ${id.version}.`);
+    console.log(
+      `Verified complete macOS, Windows and Linux release ${id.version}.`,
+    );
   } else if (command === "restore") {
     await context.api.restoreArtifact(
       artifactFromEnv(),

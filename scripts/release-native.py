@@ -13,6 +13,8 @@ import tempfile
 import zipfile
 
 LIMIT = 512 * 1024 * 1024
+ASSET_LIMIT = 256 * 1024 * 1024
+BUNDLE_LIMIT = 9 * ASSET_LIMIT
 APP = 'Rayrag Companion.app'
 
 
@@ -123,8 +125,9 @@ def verify(folder, version):
 def extract_zip(archive, destination, names):
     with zipfile.ZipFile(archive) as source:
         members = source.infolist()
-        checked(sorted(m.filename for m in members) == sorted(names), 'Workflow artifact has unexpected or duplicate paths.')
-        checked(sum(m.file_size for m in members) <= LIMIT, 'Workflow artifact exceeds bounds.')
+        layouts = names if names and isinstance(names[0], list) else [names]
+        checked(any(sorted(m.filename for m in members) == sorted(layout) for layout in layouts), 'Workflow artifact has unexpected or duplicate paths.')
+        checked(sum(m.file_size for m in members) <= BUNDLE_LIMIT and all(0 < m.file_size <= ASSET_LIMIT for m in members), 'Workflow artifact exceeds bounds.')
         for member in members:
             checked(pathlib.PurePosixPath(member.filename).name == member.filename and not member.is_dir(), 'Invalid workflow artifact path.')
             checked(not stat.S_ISLNK(member.external_attr >> 16), 'Workflow artifact links are forbidden.')
