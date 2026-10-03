@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BotEngine } from './engine';
 
-const ipc = vi.hoisted(() => ({ featureSettled: true, invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
+const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, isTauri: () => true }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: ipc.listen }));
 vi.mock('./feature-ui', async () => {
@@ -24,6 +24,8 @@ vi.mock('./feature-ui', async () => {
     serviceBlocked(): boolean { return false; }
     warpActivationReady(): boolean { return false; }
     settledForMaintenance(): boolean { return ipc.featureSettled; }
+    hasUnsavedMacro(): boolean { return ipc.macroDirty; }
+    clearMacro():void{ipc.clearMacro();}
     clearSocial():void{}
     clearMemo():void{}
     read() { return structuredClone(DEFAULT_AUTOMATION); }
@@ -91,7 +93,7 @@ async function fixture(saved: { username: string; characterSlot: number; autoLog
     querySelectorAll:(selector:string)=>main.querySelectorAll(selector),
     getElementById: (id: string) => elements.get(id), createElement: (tag:string) => new Element(elements,tag),
   });
-  ipc.featureSettled=true;ipc.invoke.mockReset(); ipc.listen.mockClear();
+  ipc.featureSettled=true;ipc.macroDirty=false;ipc.clearMacro.mockClear();ipc.invoke.mockReset(); ipc.listen.mockClear();
   ipc.invoke.mockImplementation(async (command: string,args?:{document?:{revision:number}}) => {
     if(command==='current_form')return savedForm;
     if(command==='save_current_form')return args?.document?.revision;
@@ -213,6 +215,21 @@ it('defers the actual main updater while a refine preview or retained economic o
  ipc.featureSettled=true;await vi.advanceTimersByTimeAsync(15000);expect(f.calls('update_reserve')).toHaveLength(1);expect(f.calls('control_bot')).toEqual([]);
 });
 
+it('defers the actual main updater for an unsaved macro and permits installation once the document is saved',async()=>{
+ const f=await fixture();ipc.macroDirty=true;
+ ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
+  if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+  if(command==='save_current_form')return args!.document.revision;
+  if(command==='update_reserve')return 'd'.repeat(32);
+  if(command==='update_install')return true;
+ });
+ await vi.advanceTimersByTimeAsync(15000);
+ expect(f.calls('update_reserve')).toEqual([]);expect(f.calls('update_install')).toEqual([]);
+ ipc.macroDirty=false;await vi.advanceTimersByTimeAsync(15000);
+ expect(f.calls('update_reserve')).toHaveLength(1);expect(f.calls('update_install')).toEqual([['update_install',{nonce:'d'.repeat(32)}]]);
+ expect(f.calls('control_bot')).toEqual([]);
+});
+
 it('keeps shell navigation usable through a deferred installation without unlocking actions',async()=>{
  const f=await fixture();let rejectInstall:((error:Error)=>void)|undefined;
  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
@@ -281,6 +298,7 @@ it('requires settled, fresh stopped state for explicit Disconnect and clears tel
  let finish!:()=>void;ipc.invoke.mockImplementation((command:string)=>command==='close_game'?new Promise<void>(resolve=>{finish=resolve;}):Promise.resolve(undefined));
  await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([['close_game']]);expect(f.get('disconnect').disabled).toBe(true);expect(f.get('console-walk').disabled).toBe(true);finish();
  const closed=ipc.listen.mock.calls.find(call=>call[0]==='game-closed')![1];closed({payload:undefined});
+ expect(ipc.clearMacro).toHaveBeenCalledOnce();
  for(let i=0;i<20;i++)await Promise.resolve();
  expect(f.get('connection-mode').disabled).toBe(false);expect(f.get('character').textContent).toBe('No character connected');expect(f.get('hp-text').textContent).toBe('— / —');expect(f.get('console-weight').textContent).toBe('— / —');expect(f.get('signin').disabled).toBe(false);expect(f.calls('login_game')).toEqual([]);
  expect(f.get('character').title).toBe('No character connected');expect(f.get('location').title).toBe('Connect an account to load your character.');
