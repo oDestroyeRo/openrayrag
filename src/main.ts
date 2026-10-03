@@ -391,6 +391,7 @@ if (native) {
   await listen('game-closed', () => {
     features.clearSocial();
     features.clearMemo();
+    features.clearMacro();
     ++runGeneration; ++loginGeneration; fieldRun.stop(); reconnect.cancel();
     sessionLoginAvailable = false; pendingResume = null; pendingLogin = null; limitHeld = false; previousSession = undefined;
     gameOpen = false; latest = null; receivedAt = 0; loginBusy = false;
