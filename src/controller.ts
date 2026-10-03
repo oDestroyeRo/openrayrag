@@ -399,8 +399,14 @@ export class CompanionController {
     if (key === this.seenActionKey) return;
     this.seenActionKey = key;
     if (result.status === 'confirmed') { this.featureReceipt = null; return; }
-    if (!this.runRequested || result.status !== 'failed') return;
+    if (result.status !== 'failed') return;
     const type = this.featureReceipt?.action.type;
+    if (!this.runRequested) {
+      // Ended posture/revival actions have no resource receipt to reconcile.
+      // The engine still owns their confirmation fence; keep uncertain resource actions.
+      if (type === 'sit' || type === 'respawn') this.featureReceipt = null;
+      return;
+    }
     if (result.reason.startsWith('Server rejected')) {
       this.featureReceipt = null; this.retryAt = this.now() + 5_000; this.waitingReason = result.reason;
     } else if (type && ['useItem','allocateStats','allocateSkill','skill'].includes(type)) {

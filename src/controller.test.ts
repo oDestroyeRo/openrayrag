@@ -984,7 +984,9 @@ describe('maintenance settlement',()=>{
  it('admits a quiet connected own-zero-capable world while resource receipts and run intent still block',()=>{
   const f=setup();expect(f.controller.settledForMaintenance()).toBe(true);f.advance(20_000);expect(f.controller.settledForMaintenance()).toBe(true);
   f.controller.start(settings);expect(f.controller.settledForMaintenance()).toBe(false);f.controller.stop();f.advance(5000);expect(f.controller.settledForMaintenance()).toBe(true);
-  f.packet(new BitWriter().u8(OP.heal).i32(1).i32(0).i32(100).i32(100));f.controller.engine.player!.classId=6;f.controller.perform('command',{type:'sit',sitting:true});expect(f.controller.settledForMaintenance()).toBe(false);f.advance(15000);expect(f.controller.settledForMaintenance()).toBe(false);
+  f.packet(new BitWriter().u8(OP.heal).i32(1).i32(0).i32(100).i32(100));
+  f.controller.engine.receive([{type:'inventory',items:[{bagId:501,itemId:501,type:1,count:2}],equipment:Array(10).fill(0),ammoId:-1}]);
+  f.controller.perform('command',{type:'useItem',itemId:501});expect(f.controller.settledForMaintenance()).toBe(false);f.advance(15000);expect(f.controller.settledForMaintenance()).toBe(false);
  });
  it('never admits an unacknowledged physical Walk after Stop and timer expiry',()=>{
   const f=setup();f.controller.perform('command',{type:'manualTarget',command:{type:'walk',destination:{x:105,y:100}},owner:f.controller.engine.manualActorIdentity(1),map:'prt_fild08',policy:manualTargetPolicy(settings),timeoutSeconds:10});f.step();expect(f.sent.some(a=>a.type==='walk')).toBe(true);f.controller.stop();f.advance(10000);expect(f.controller.settledForMaintenance()).toBe(false);
@@ -1078,6 +1080,28 @@ describe('macro controller supervision',()=>{
     f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(40).bool(false));f.advance(1000);
     expect(f.controller.macro.snapshot()).toMatchObject({state:'cancelled',actionsCompleted:1});expect(f.controller.runRequested).toBe(false);
     expect(f.controller.engine.running).toBe(false);expect(f.sent).toHaveLength(count);
+  });
+  it.each(['Stop','official command'] as const)('admits a macro after %s cancels manual Respawn and a fresh living own arrival settles',cancel=>{
+    const f=fixture();f.controller.start(settings);f.packet(new BitWriter().u8(OP.death).i32(1));f.controller.stop();
+    f.controller.perform('command',{type:'respawn'});f.step();
+    if(cancel==='Stop')f.controller.stop();else f.controller.manualCommand();
+    expect(f.controller.engine.actionResult).toMatchObject({sequence:1,status:'failed',reason:'Action canceled.'});
+    expect(()=>macro(f)).toThrow();f.packet(new BitWriter().u8(OP.clear));f.packet(ownPacket({...player,hp:100},2));
+    expect(()=>macro(f)).toThrow();f.advance(6100);
+    expect(()=>macro(f,script([{type:'useItem',itemId:501,timeoutSeconds:20}]))).not.toThrow();
+    expect(f.controller.macro.snapshot()).toMatchObject({state:'waiting',actionsIssued:1});
+    expect(f.sent.filter(action=>action.type==='respawn')).toHaveLength(1);expect(f.sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:501}]);
+  });
+  it('releases a canceled non-resource posture receipt after its action deadline without requiring a field run',()=>{
+    const f=fixture();f.controller.perform('command',{type:'sit',sitting:false});f.step();f.controller.stop();f.advance(6100);
+    expect(()=>macro(f)).not.toThrow();expect(f.controller.engine.running).toBe(true);
+    expect(f.sent.filter(action=>action.type==='sit')).toEqual([{type:'sit',sitting:false}]);
+  });
+  it('keeps a canceled consumable receipt blocked after its deadline and a fresh world arrival',()=>{
+    const f=fixture();f.controller.perform('command',{type:'useItem',itemId:501});f.step();f.controller.stop();
+    f.packet(new BitWriter().u8(OP.clear));f.packet(ownPacket({...player},2));f.advance(6100);
+    expect(()=>macro(f)).toThrow('previous action receipts');expect(f.controller.macro.snapshot().state).toBe('idle');
+    expect(f.sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:501}]);
   });
   it.each(['map','clear'] as const)('fails active macro on unexpected %s and never restores it on reconnect',kind=>{
     const f=fixture();macro(f);f.packet(kind==='map'?new BitWriter().u8(OP.map).string('prontera'):new BitWriter().u8(OP.clear));
