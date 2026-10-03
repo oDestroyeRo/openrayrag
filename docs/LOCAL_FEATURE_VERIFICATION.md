@@ -62,7 +62,7 @@ The first local packaging command reached updater signing and failed because the
 
 ## Implemented feature coverage
 
-The full `npm run check` command runs build/typechecking, all Vitest suites, native Rust tests, and Clippy. These suites exercise the supported subsets; they do not imply complete OpenKore parity.
+The full `npm run check` command runs build/typechecking, all Vitest suites, native Rust tests, and Clippy. These suites exercise the supported subsets; they do not establish complete feature coverage or live-game proof.
 
 | Feature group | Local suites and behavior checked |
 | --- | --- |
@@ -92,4 +92,4 @@ The actual asynchronous native socket loop passed against a local synthetic serv
 
 The bounded live runs above establish current native login, occupied-slot selection, movement, basic combat and confirmed pickup in both connection modes. Automatic respawn and sitting recovery were observed with the game client; its savepoint was on the same field, so return across maps was not exercised. Bot-only death recovery, long-duration/minimized main-window liveness, other maps, real network-loss reconnect, advanced skills/ranged and party behavior, economic/social resource actions, and installed updater/restart still need separate live validation. No synthetic result should be described as a successful live transaction.
 
-Not-implemented or unverified OpenKore families are listed in `OPENKORE_FEATURES.md`; they are not included as working features.
+Unavailable and unverified feature areas are listed in the [Companion feature inventory](FEATURES.md); they are not included as working features.

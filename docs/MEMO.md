@@ -14,7 +14,7 @@ The **10-second observation window** is an app policy. Timeout, clock changes, S
 
 ## Exact source and verification
 
-Rebuild pin: **`4099e2c000c3c550516760b9c1241595aac9aceb`**. OpenKore [`Commands.pm:4050–4055`](https://github.com/openkore/openkore/blob/51de1ddfc4449ae5217f6886de702f87ca934030/src/Commands.pm#L4050) provides the manual slot-update precedent; no OpenKore transport or implementation is copied.
+Rebuild pin: **`4099e2c000c3c550516760b9c1241595aac9aceb`**.
 
 - [`PacketMemoMapLocation.cs:24–53`](https://github.com/Doddler/RagnarokRebuildTcp/blob/4099e2c000c3c550516760b9c1241595aac9aceb/RoRebuildServer/RoRebuildServer/Networking/PacketHandlers/Character/PacketMemoMapLocation.cs#L24): learned skill/slot, CanMemo/current walkability, current server cell, slot event and full readback.
 - [`CommandBuilder.cs:1715–1722`](https://github.com/Doddler/RagnarokRebuildTcp/blob/4099e2c000c3c550516760b9c1241595aac9aceb/RoRebuildServer/RoRebuildServer/Networking/CommandBuilder.cs#L1715) and [`MapMemoLocation.cs:10–31`](https://github.com/Doddler/RagnarokRebuildTcp/blob/4099e2c000c3c550516760b9c1241595aac9aceb/RoRebuildServer/RebuildSharedData/Data/MapMemoLocation.cs#L10): four records, byte presence, u16 UTF8 map and i16 X/Y.

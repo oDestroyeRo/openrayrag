@@ -16,6 +16,6 @@ An unconfirmed old recovery posture can also reconcile against the matching livi
 
 ## Source and proof
 
-Source pin: public protocol commit `4099e2c`. `PacketRespawn.cs` ignores disconnected, alive or input-cooldown requests and ordinarily revives at 1 HP before returning to the save point. `Map.TeleportEntity` emits clear then Warp; `PacketPlayerReady` activates EnterServer. `CommandBuilder.SerializeEntityDataV2` supplies the nearby-player SP placeholders. OpenKore is behavioral precedent; its packet transport is not used.
+Source pin: public protocol commit `4099e2c`. `PacketRespawn.cs` ignores disconnected, alive or input-cooldown requests and ordinarily revives at 1 HP before returning to the save point. `Map.TeleportEntity` emits clear then Warp; `PacketPlayerReady` activates EnterServer. `CommandBuilder.SerializeEntityDataV2` supplies the nearby-player SP placeholders.
 
 Deterministic controller tests cover a complete raw-packet Sit/Stand and real portal/walk return, initial-dead Start, destination B during interrupted entry travel, source-shaped readiness failures, Stop at each phase, no-ACK/send-throw uncertainty, subsequent death budgets, known/unknown SP, recovery/return deadlines, old socket frames, final-allowance reload, missed telemetry, successor ownership, stale completion and the 64-guard bound. Native UI and deployed automatic respawn remain unrun in this implementation lane. No live death or resource-changing action was induced.

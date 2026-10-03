@@ -14,7 +14,7 @@ Stop and world, character, socket or window-session changes cancel local pending
 
 History exists only in memory: at most **200 entries and 32 KiB of serialized UTF8**, with at most **4 KiB text and 256 bytes sender display** per entry. Truncation keeps Unicode code point boundaries and a visible marker. Names/text are rendered with `textContent`. Drafts, history and full outgoing fingerprints are excluded from profiles, browser storage, saved login, reconnect state and logs. Incoming u16 strings can each contain 65,535 UTF8 bytes; these wire bounds are distinct from display caps. Combined status remains subject to the existing 500,000-byte native limit.
 
-Guild, friends, clan, private whispers, automatic replies and other social systems have no adapter here. OpenKore coverage family 25 is a manual subset, not complete parity.
+Guild, friends, clan, private whispers, automatic replies and other social systems have no adapter here. Companion provides the explicit manual chat/emote subset described above.
 
 ## Pinned evidence
 

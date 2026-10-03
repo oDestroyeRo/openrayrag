@@ -1,6 +1,6 @@
 # Rayrag Companion
 
-A Tauri v2 macOS client for automatic sign-in, character selection, combat, looting and configurable game automation on [Ray Side Project SEA 01](https://websea01.rayrag.com/). It opens a bot console with a persistent character monitor, collision map, nearby actors, inventory actions and activity history. Choose **Bot only** for a native TLS WebSocket connection and a bundled controller runtime with no Unity client, or **With game client** to open the visible official game alongside the console. [OpenKore](https://github.com/openkore/openkore) supplies behavioral references; Companion uses its own TypeScript engine, interface and Rebuild protocol adapter.
+A Tauri v2 macOS client for automatic sign-in, character selection, combat, looting and configurable game automation on [Ray Side Project SEA 01](https://websea01.rayrag.com/). It opens a bot console with a persistent character monitor, collision map, nearby actors, inventory actions and activity history. Choose **Bot only** for a native TLS WebSocket connection and a bundled controller runtime with no Unity client, or **With game client** to open the visible official game alongside the console. Companion uses its own TypeScript engine, interface and Rebuild protocol adapter.
 
 ## Run
 
@@ -47,7 +47,7 @@ The six sections keep the common Start and Stop controls available:
 | **Travel & follow** | Optional map allow/deny lists, weighted portal costs and inclusive field lock area; verified portal destination, optional return to the start map after respawn or escape, current-map waypoints, repeat route, named-player follow and routing limits. |
 | **Inventory & skills** | Own-kill or all-drop pickup policy, item filters and priority, recovery consumables with retained quantities, self/enemy skills, conditional equipment and ordered stat/skill allocation. |
 | **Workflows & social** | NPC dialogue, shop buy/sell, storage/cart, item exchange, party and vending controls, explicit manual chat/emotes, reusable NPC service visits, bounded NPC workflows and condition routines. Daily hours and session/kill/pickup/weight limits are also configured here. |
-| **Profiles & features** | Save, apply, remove, import and export named settings profiles; view the 39-family OpenKore coverage inventory. |
+| **Profiles & features** | Save, apply, remove, import and export named settings profiles; view the Companion feature inventory and its implementation limits. |
 
 Recovery, consumables, skills, equipment, allocation, follow, travel, respawn, schedules and limits are opt-in. Missing inventory, SP, learned skills or other required observations prevents the corresponding action. Resource-consuming actions wait for game confirmation. A timeout is uncertain; the client does not automatically repeat that transaction.
 
@@ -81,18 +81,18 @@ In **Combat & loot**, enable **Collect loot**, then choose **Pickup scope**. **O
 
 A route is followed in straight segments, with at most one movement leg outstanding. The protocol has no movement request IDs, so changing targets waits for the accepted leg to finish. Every returned route is checked against collision and the applicable portal policy. Timed positions follow the server's accepted movement; sent walk destinations do not become confirmed positions. Temporary failed endpoints affect avoidance, never the physical grid.
 
-The original routing controls retain these OpenKore names:
+Movement and approach controls use these limits. Stored keys remain stable for existing settings and profiles:
 
-| Setting | Default | Accepted values / behavior |
-| --- | --- | --- |
-| `route_randomWalk` | 0 | 0: off; 2: explore the current connected map area. Inter-map travel has a separate destination control. |
-| `route_step` | 10 | 1–20 steps; bends can shorten a segment. |
-| `route_avoidWalls` | true | Wall-clearance penalties; physical collision remains enforced. |
-| `route_randomWalk_maxRouteTime` | 75 | 1–600 seconds per search goal. |
-| `attackRouteMaxPathDistance` | 20 | 1–200 path cells for an approach, separate from the scan radius. |
-| `attackMaxRouteTime` | 4 | 1–60 seconds from the first pursuit walk or direct Attack request, excluding an inherited search leg; replanning preserves the same deadline. |
+| Control | Stored key | Default | Accepted values / behavior |
+| --- | --- | --- | --- |
+| Find monsters | `route_randomWalk` | 0 | 0: off; 2: explore the current connected map area. Inter-map travel has a separate destination control. |
+| Steps per walk | `route_step` | 10 | 1–20 steps; bends can shorten a segment. |
+| Avoid walls | `route_avoidWalls` | true | Wall-clearance penalties; physical collision remains enforced. |
+| Search route seconds | `route_randomWalk_maxRouteTime` | 75 | 1–600 seconds per search goal. |
+| Attack path cells | `attackRouteMaxPathDistance` | 20 | 1–200 path cells for an approach, separate from the scan radius. |
+| Approach seconds | `attackMaxRouteTime` | 4 | 1–60 seconds from the first pursuit walk or direct Attack request, excluding an inherited search leg; replanning preserves the same deadline. |
 
-These follow [OpenKore's pinned config](https://github.com/openkore/openkore/blob/51de1ddfc4449ae5217f6886de702f87ca934030/control/config.txt), except opt-in random walking. The app does not import OpenKore configuration files or offer complete setting compatibility.
+Current-map search is opt-in. Inter-map travel and field boundaries use separate Companion controls and validated settings.
 
 Emergency escape is disabled by default. In **Recovery**, enable it and choose an HP trigger (1–95%), random location or save point, wings or skills, a wing stock reserve (0–9,999) and a cooldown (1–3,600 seconds; default 60). Random uses **Fly Wing 601** or learned/granted **Teleport 53** (30 SP); save point uses **Butterfly Wing 602** or **Return 54** (10 SP). It never substitutes another method. Existing profiles import with escape disabled.
 
@@ -116,7 +116,7 @@ Authentication rejection or an absent character requires a new explicit sign-in 
 
 The adapter is restricted to `https://websea01.rayrag.com/`, `wss://gamesea01.rayrag.com/ws` and **`Build_2569-09-01-01-55`**. Changed or malformed supported protocols prevent commands until a valid state is available. The remote game window can report bounded status and claim or cancel an explicitly queued login; it cannot read the local saved profile. Controller commands belong to the bundled local window. No shell or filesystem plugin is exposed to the game.
 
-See [protocol evidence](docs/PROTOCOL.md) and the [OpenKore feature inventory](docs/OPENKORE_FEATURES.md). The inventory describes implemented portions and remaining gaps across 39 families; it does not claim full OpenKore parity. RO-specific transports, XKore/Poseidon and privileged GM/debug actions are outside this client's player-automation scope. Guild/friends/clan, private whispers and automatic social replies, catalyst/automated refining, automatic warp casting, full crafting, direct player trade, richer skill range and kiting, and third-party plugins still need implementation or a matching verified game contract.
+See [protocol evidence](docs/PROTOCOL.md) and the [Companion feature inventory](docs/FEATURES.md). The inventory describes implemented portions and remaining gaps across 36 feature areas; implementation coverage does not establish live-game proof. Privileged administration and arbitrary packet or code execution are outside this client's player-automation scope. Guild/friends/clan, private whispers and automatic social replies, catalyst/automated refining, automatic warp casting, full crafting, direct player trade, richer skill range and kiting, and third-party plugins still need implementation or a matching verified game contract.
 
 Under **Workflows & social → Social**, each Send button requests one message or emote while other actions are stopped. Say reaches the entire current map, Shout reaches all players, and Party requires observed membership. The counter measures the server's 140 UTF-16-unit limit. Shout requires learned Basic Mastery 7; novice emotes require learned Basic Mastery 1. The app applies 20-second Shout and 1.8-second emote gaps, without delaying or retrying a send. History and drafts stay in memory for this session. **Sent** means a socket write; **Echo observed** requires a matching own-actor echo. Repeated identical requests remain ambiguous; after 10 seconds the app reports **Unconfirmed**. Stop cancels local intent but cannot unsend a packet. These are source-backed controls with synthetic verification; deployed sending and echoes remain unverified. See [manual social contracts](docs/SOCIAL.md).
 
