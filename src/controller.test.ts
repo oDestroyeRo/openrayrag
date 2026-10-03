@@ -1031,6 +1031,24 @@ describe('macro controller supervision',()=>{
     expect(f.controller.engine.settings.targets).toEqual([1002]);expect(f.controller.snapshot()).toMatchObject({deaths:1,kills:5,looted:4});
     expect(f.sent.filter(action=>action.type==='stop')).toHaveLength(1);
   });
+  it.each(['level','jobLevel'] as const)('reacts to a source-shaped %s update without changing player state directly',field=>{
+    const f=fixture(),next:MacroScript['rules'][number]={name:'Next level',priority:100,cooldownSeconds:0,maxRuns:1,
+      conditions:[{field,operator:'gte',value:field==='level'?8:4}],steps:[{...farm,targets:[4012]}]};
+    const stats=(level:number,jobLevel:number)=>{
+      const w=new BitWriter().u8(56);
+      for(const value of [level,jobLevel,500,3,4,5,6,7,8,2,10,123])w.i32(value);
+      for(const value of [100,100,50,50,...Array(16).fill(1),2000])w.i32(value);
+      return w.f32(.5).i32(125).i32(0).bool(false).bool(false);
+    };
+    f.packet(stats(7,3));macro(f,script([farm],[next]));expect(f.controller.macro.snapshot().actionsCompleted).toBe(1);
+    f.packet(stats(field==='level'?8:7,field==='jobLevel'?4:3));
+    expect(f.controller.macro.snapshot()).toMatchObject({state:'monitoring',actionsCompleted:2});
+    expect(f.controller.engine.settings.targets).toEqual([4012]);
+    f.packet(new BitWriter().u8(FEATURE_OP.sp).i32(40).i32(50));
+    expect(f.controller.engine.player?.level).toBe(field==='level'?8:7);
+    expect(f.controller.engine.character.stats?.jobLevel).toBe(field==='jobLevel'?4:3);
+    expect(f.controller.macro.snapshot().actionsCompleted).toBe(2);
+  });
   it('drains a selected reactive item receipt, then restores the captured farm without renewing session limits',()=>{
     const f=fixture(),automation=policy();automation.limits.kills=3;
     const reactive:MacroScript['rules'][number]={name:'Heal',priority:100,cooldownSeconds:0,maxRuns:1,conditions:[{field:'hpPercent',operator:'lt',value:90}],
