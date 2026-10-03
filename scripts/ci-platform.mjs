@@ -90,7 +90,10 @@ async function inspect(platform,bundle,binary,version,identifier,smoke) {
       const debBinary=await matchingApplication(extract,binary);
       if(smoke)await nativeSmoke(debBinary,join(root,'reports/smoke-deb.json'));
       run(appimage,['--appimage-extract'],{cwd:temporary});
-      await verifyAppImageExecutable(binary,join(bundle,'appimage','Rayrag Companion.AppDir/usr/bin/rayrag-companion'),join(temporary,'squashfs-root/usr/bin/rayrag-companion'));
+      const staged=join(bundle,'appimage','Rayrag Companion.AppDir/usr/bin/rayrag-companion');
+      const extracted=join(temporary,'squashfs-root/usr/bin/rayrag-companion');
+      if(smoke)await writeFile(join(root,'reports/appimage-elf.txt'),[binary,staged].map(path=>run('readelf',['-lW','-SW','-dW',path]).toString()).join('\n'));
+      await verifyAppImageExecutable(binary,staged,extracted);
       if(smoke)await nativeSmoke(join(temporary,'squashfs-root/AppRun'),join(root,'reports/smoke.json'));
       payload.set(names.deb,await readFile(deb));payload.set(names.appimage,await readFile(appimage));
     } else {

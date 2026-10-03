@@ -4,6 +4,13 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Desktop CI
+
+Issue [#112](https://github.com/oDestroyeRo/openrayrag/issues/112) records the exact-head hosted gates, production release and public artifact evidence. Every PR into main runs the full frontend suite and both production/CI-feature native suites, strict Clippy and formatting on macOS ARM64, Windows x64 and Linux x64. Packaged smoke tests exercise the macOS app, extracted NSIS application, Debian application and AppImage launcher with temporary settings; each proves offline initialization, immediate-close persistence and reopening. Platform-specific storage regressions cover ownership, access lists, links, locks and repeated atomic writes. Installer architecture and executable identity are checked independently. Main requires the aggregate result. See [desktop CI](DESKTOP_CI.md).
+
+These checks do not sign into the deployed game. Existing live game-client/bot-only results below remain macOS evidence; they do not establish live Windows/Linux gameplay, every map/server action, installed upgrades or every desktop environment.
+
+
 ### Automatic settings retention
 
 Issue [#110](https://github.com/oDestroyeRo/openrayrag/issues/110) records close/reopen and delivery evidence. Main-window regressions cover closing before the edit debounce, queued saves and late edits, duplicate requests, startup restoration and repaired storage, invalid input and failed-write retry, retained settings/profile/map/targets on reopening, and update admission. Native tests cover pre-registration shutdown, token and revision acknowledgment, Close-to-Quit promotion, cancellation/retry, and updater restart bypass. Packaged Close, Quit and reopen checks are recorded separately in the issue; fixture tests alone do not establish macOS window lifecycle behavior.
