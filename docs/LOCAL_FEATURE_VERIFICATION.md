@@ -4,6 +4,27 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Real gameplay in both connection modes
+
+Checked on 2026-10-03 for issue #99. Both final combat/loot runs used the local native v0.2.48 QA package; the initial respawn observation used the released v0.2.47 package.
+
+| Proof | Result |
+| --- | --- |
+| Full Vitest suite | 3,244 passed across 108 files |
+| Full native suite | 112 passed; one optional anonymous public probe ignored |
+| TypeScript build/typecheck, Clippy, Rust formatting and scoped diff | Passed |
+| Local ARM64 package and strict ad-hoc signature | Passed; native package launched for the live checks below |
+| With game client, `prt_fild08` | Login and occupied slot entered; movement, 4 server-attributed defeats and 6 confirmed pickups in 91 seconds; 0 deaths |
+| Bot only, `prt_fild08` | Login and occupied slot entered without the official renderer; movement, 8 server-attributed defeats and 14 confirmed pickups in 83 seconds; 0 deaths |
+| Stop and explicit mode switching | Stop acknowledged and counters held in both modes. With game client position stayed stable for 20 seconds. Bot only settled three tiles of existing movement, then stayed stable over observations about 30 seconds apart. Disconnect preceded each mode switch. |
+| Target selection | Native checkbox selection/deselection persisted after synchronous form refresh |
+| Automatic respawn, released v0.2.47 | With game client, an initially dead character revived at the same field's savepoint and resumed sitting recovery; no new death was induced |
+| Independent source review | Clear after correcting the mixed small/large-frame reserve regression |
+
+Live testing exposed two failures: target checkbox input was overwritten by the parent form refresh before `change`, and the Bot-only initial entity burst exceeded the native event queue. Target selection now commits on `input` before that refresh. Native reads pause when capacity is low, with space reserved for Ready and terminal events; outgoing writes, Ping and cancellation continue. Regression tests failed before each correction and passed afterward, including successive batches that replace small frames with Ready acknowledgements.
+
+Both final runs used three low-level target types, own-drop pickup, current-map search, sitting recovery and a two-death cap. No purchases, stat allocation, refining or other economic actions were tested. After testing, the app was disconnected and closed, the original connection preference was restored, and original current settings were restored with a newer persistence revision. Local packaging disabled updater artifact creation only for the QA build because the private signing key is CI-only; committed release signing remains enabled. These results concern the local package, separately from CI and published release verification.
+
 ### Run dashboard
 
 Checked on 2026-10-03 for the selected Product Design option 2:
@@ -69,6 +90,6 @@ The actual asynchronous native socket loop passed against a local synthetic serv
 
 ## Live proof limits
 
-Historical basic native evidence covers login, selection, combat, pickup, manual respawn and resting. It is not fresh proof for every current feature. Automatic death return, real network-loss reconnect, advanced skills/ranged and party behavior, economic/social resource actions, installed updater/restart, and new clientless server acceptance need separate live validation. No synthetic result should be described as a successful live transaction.
+The bounded live runs above establish current native login, occupied-slot selection, movement, basic combat and confirmed pickup in both connection modes. Automatic respawn and sitting recovery were observed with the game client; its savepoint was on the same field, so return across maps was not exercised. Bot-only death recovery, long-duration/minimized main-window liveness, other maps, real network-loss reconnect, advanced skills/ranged and party behavior, economic/social resource actions, and installed updater/restart still need separate live validation. No synthetic result should be described as a successful live transaction.
 
 Not-implemented or unverified OpenKore families are listed in `OPENKORE_FEATURES.md`; they are not included as working features.

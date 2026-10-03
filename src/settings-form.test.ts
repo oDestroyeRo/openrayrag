@@ -32,7 +32,10 @@ class Element {
   replaceChildren(...children: Element[]) { for (const child of this.children) child.parentElement = null; this.children = []; this.append(...children); }
   setAttribute(name: string, value: string) { this.attributes.set(name, value); }
   addEventListener(type: string, callback: () => void) { this.listeners.set(type, [...this.listeners.get(type) ?? [], callback]); }
-  emit(type: string) { for (const callback of this.listeners.get(type) ?? []) callback(); }
+  emit(type: string, bubbles = false) {
+    for (const callback of this.listeners.get(type) ?? []) callback();
+    if (bubbles) this.parentElement?.emit(type, true);
+  }
   all(): Element[] { return [this, ...this.children.flatMap(child => child.all())]; }
   querySelector(selector: string): Element | null {
     const found = this.all().find(child => selector.startsWith('#') ? child.id === selector.slice(1) : child.dataset.setting === selector.match(/^\[data-setting="([^"]+)"\]$/)?.[1]);
@@ -115,7 +118,7 @@ describe('settings form interface', () => {
 
   it('updates both projections through target interactions and keeps choices across other maps', () => {
     const f = setup(); f.observe();
-    const target = f.target('Poring'); target.checked = true; target.emit('change');
+    const target = f.target('Poring'); target.checked = true; target.emit('input');
     expect(f.form.runSettings().targets).toEqual([4000]);
     expect(f.form.snapshot().settings.targets).toEqual([4000]);
     f.observe({ mapInfo: { code: 'prontera', name: 'Prontera', source: 'database', monsters: [] } });
@@ -128,6 +131,44 @@ describe('settings form interface', () => {
     f.field('clear-targets').emit('click');
     expect(f.form.snapshot().settings.targets).toEqual([]);
     expect(f.changed).toHaveBeenCalledTimes(3);
+  });
+
+  it('commits checkbox input before a bubbling form refresh and not again on change', () => {
+    const f = setup(); f.observe();
+    const persisted: number[][] = [];
+    // Main refreshes controls synchronously when settings input bubbles.
+    f.host.addEventListener('input', () => {
+      persisted.push(f.form.snapshot().settings.targets);
+      f.form.refresh();
+    });
+    f.changed.mockImplementation(() => f.form.refresh());
+    const target = f.target('Poring');
+
+    target.checked = true; target.emit('input', true); target.emit('change', true);
+    expect(target.checked).toBe(true);
+    expect(f.form.runSettings().targets).toEqual([4000]);
+    expect(persisted).toEqual([[4000]]);
+    expect(f.changed).toHaveBeenCalledTimes(1);
+
+    target.checked = false; target.emit('input', true); target.emit('change', true);
+    expect(target.checked).toBe(false);
+    expect(f.form.runSettings().targets).toEqual([]);
+    expect(f.form.snapshot().settings.targets).toEqual([]);
+    expect(persisted).toEqual([[4000], []]);
+    expect(f.changed).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps DOM-owned loot and wall avoidance edits through the same input refresh', () => {
+    const f = setup(); f.observe();
+    f.host.addEventListener('input', () => f.form.refresh());
+    for (const [id, key] of [['loot', 'loot'], ['avoid-walls', 'route_avoidWalls']] as const) {
+      const input = f.field(id);
+      for (const checked of [false, true]) {
+        input.checked = checked; input.emit('input', true); input.emit('change', true);
+        expect(f.form.runSettings()[key]).toBe(checked);
+        expect(f.form.snapshot().settings[key]).toBe(checked);
+      }
+    }
   });
 
   it('applies a profile using its new level limit and current eligible selection', () => {
@@ -239,12 +280,14 @@ describe('settings form interface', () => {
 
   it('refreshes labels and locks without replacing focused target controls or notifying edits', () => {
     const f = setup(); f.observe(); const input = f.target('Poring');
+    f.host.addEventListener('input', () => f.form.refresh());
     f.field('min-hp').value = '63'; f.field('min-hp').emit('input');
     expect(f.field('hp-value').textContent).toBe('63%');
     f.observe({ controlsLocked: true, targetsLocked: true });
     expect(f.field('radius').disabled).toBe(true); expect(input.disabled).toBe(true);
-    input.checked = true; input.emit('change');
+    input.checked = true; input.emit('input', true); input.emit('change', true);
     expect(f.form.snapshot().settings.targets).toEqual([]);
+    expect(input.checked).toBe(false);
     f.field('select-targets').emit('click'); expect(f.changed).not.toHaveBeenCalled();
     f.observe({ controlsLocked: false, mapInfo: { ...map, monsters: [{ ...map.monsters[0]!, name: 'Updated Poring', visibleCount: 1 }, map.monsters[1]!] } });
     expect(f.target('Updated Poring')).toBe(input); expect(input.checked).toBe(false);

@@ -145,7 +145,8 @@ export class SettingsForm {
         const name = this.host.ownerDocument.createElement('strong'), detail = this.host.ownerDocument.createElement('small');
         const count = this.host.ownerDocument.createElement('span'); count.className = 'target-visible';
         description.append(name, detail); label.append(input, description, count);
-        input.addEventListener('change', () => this.editTargets(() => this.targets.select(monster.classId, input.checked)));
+        // Commit before input bubbles to Main, whose refresh projects this selection.
+        input.addEventListener('input', () => this.editTargets(() => this.targets.select(monster.classId, input.checked)));
         row = { label, input, name, detail, count }; this.rows.set(monster.classId, row);
       }
       row.input.checked = this.targets.checked(monster.classId);
