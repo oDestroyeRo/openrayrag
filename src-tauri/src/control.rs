@@ -588,7 +588,10 @@ fn validate_condition(value: &Value) -> Validation {
     }
     object(value, &["field", "operator", "value"])?;
     match kind {
-        "hpPercent" | "spPercent" => finite(field(condition, "value")?, 0.0, 100.0),
+        "hpPercent" | "spPercent" | "weightPercent" => {
+            finite(field(condition, "value")?, 0.0, 100.0)
+        }
+        "level" | "jobLevel" => integer(condition, "value", 1, 1000).map(|_| ()),
         "elapsedSeconds" => finite(field(condition, "value")?, 0.0, 86_400.0),
         "zeny" => integer(condition, "value", 0, MAX_ID).map(|_| ()),
         _ => Err("Unknown routine condition.".into()),
@@ -656,6 +659,190 @@ fn validate_routine(value: &Value) -> Validation {
             return Err("Routine action exceeds its limit.".into());
         }
         validate_action(action)?;
+    }
+    Ok(())
+}
+
+fn validate_macro_step(value: &Value, max_spend: i64) -> Validation {
+    let step = value.as_object().ok_or_else(invalid)?;
+    let kind = string(step, "type")?;
+    match kind {
+        "farm" => {
+            object(value, &["type", "map", "targets", "timeoutSeconds"])?;
+            map_code(string(step, "map")?)?;
+            let targets = array(field(step, "targets")?, 64)?;
+            if targets.is_empty() {
+                return Err(invalid());
+            }
+            let mut ids = HashSet::new();
+            for target in targets {
+                if !ids.insert(number(target, 1, MAX_ID)?) {
+                    return Err(invalid());
+                }
+            }
+        }
+        "travel" => {
+            object(value, &["type", "map", "timeoutSeconds"])?;
+            map_code(string(step, "map")?)?;
+        }
+        "buy" | "store" => {
+            object(
+                value,
+                if kind == "buy" {
+                    &[
+                        "type",
+                        "serviceId",
+                        "itemId",
+                        "quantity",
+                        "maxSpend",
+                        "timeoutSeconds",
+                    ]
+                } else {
+                    &[
+                        "type",
+                        "serviceId",
+                        "itemId",
+                        "quantity",
+                        "keep",
+                        "maxSpend",
+                        "timeoutSeconds",
+                    ]
+                },
+            )?;
+            integer(step, "itemId", 1, MAX_ID)?;
+            integer(step, "quantity", 1, 100_000)?;
+            integer(step, "maxSpend", 0, max_spend)?;
+            if kind == "store" {
+                integer(step, "keep", 0, 100_000)?;
+            }
+            let service_id = string(step, "serviceId")?;
+            let catalog: Value =
+                serde_json::from_str(include_str!("../../src/data/npc-services.json"))
+                    .map_err(|_| invalid())?;
+            let service = catalog["contracts"]
+                .as_array()
+                .ok_or_else(invalid)?
+                .iter()
+                .find(|service| service["id"].as_str() == Some(service_id))
+                .ok_or("No verified adapter for this service ID.")?;
+            let outcome = &service["outcome"];
+            if !(kind == "buy" && outcome["type"] == "shopOpened" && outcome["mode"] == "buy"
+                || kind == "store" && outcome["type"] == "storageOpened")
+            {
+                return Err("Service outcome does not match the macro step.".into());
+            }
+        }
+        "useItem" => {
+            object(value, &["type", "itemId", "timeoutSeconds"])?;
+            integer(step, "itemId", 1, MAX_ID)?;
+        }
+        "skill" => {
+            object(
+                value,
+                &["type", "skillId", "level", "mode", "timeoutSeconds"],
+            )?;
+            // Targeted skills use the existing byte-sized wire ID. Warp Portal
+            // remains owned by the dedicated staged manual control.
+            let max_skill_id = match string(step, "mode")? {
+                "self" => 32767,
+                "target" => 255,
+                _ => return Err(invalid()),
+            };
+            if integer(step, "skillId", 1, max_skill_id)? == 55 {
+                return Err(invalid());
+            }
+            integer(step, "level", 1, 10)?;
+        }
+        _ => return Err("Unknown macro step.".into()),
+    }
+    integer(
+        step,
+        "timeoutSeconds",
+        1,
+        if matches!(kind, "useItem" | "skill") {
+            120
+        } else {
+            86_400
+        },
+    )?;
+    Ok(())
+}
+
+fn validate_macro(value: &Value) -> Validation {
+    let request = object(value, &["script", "settings"])?;
+    let settings_value = field(request, "settings")?;
+    if serde_json::to_vec(settings_value)
+        .map_err(|_| invalid())?
+        .len()
+        > MAX_REQUEST_BYTES
+    {
+        return Err("Macro settings exceed their limit.".into());
+    }
+    validate_macro_script(field(request, "script")?)?;
+    let settings: crate::automation::Settings =
+        serde_json::from_value(settings_value.clone()).map_err(|_| invalid())?;
+    settings.validate()
+}
+
+fn validate_macro_script(value: &Value) -> Validation {
+    if serde_json::to_vec(value).map_err(|_| invalid())?.len() > MAX_REQUEST_BYTES {
+        return Err("Macro script exceeds its limit.".into());
+    }
+    let script = object(
+        value,
+        &[
+            "version",
+            "name",
+            "durationSeconds",
+            "maxActions",
+            "maxSpend",
+            "rules",
+        ],
+    )?;
+    integer(script, "version", 1, 1)?;
+    text(string(script, "name")?, 64)?;
+    integer(script, "durationSeconds", 1, 86_400)?;
+    integer(script, "maxActions", 1, 1000)?;
+    let max_spend = integer(script, "maxSpend", 0, 2_000_000_000)?;
+    let rules = array(field(script, "rules")?, 32)?;
+    if rules.is_empty() {
+        return Err(invalid());
+    }
+    let mut names = HashSet::new();
+    for value in rules {
+        let rule = object(
+            value,
+            &[
+                "name",
+                "priority",
+                "cooldownSeconds",
+                "maxRuns",
+                "conditions",
+                "steps",
+            ],
+        )?;
+        let rule_name = string(rule, "name")?;
+        text(rule_name, 64)?;
+        if !names.insert(rule_name) {
+            return Err("Macro rule names must be unique.".into());
+        }
+        integer(rule, "priority", -1000, 1000)?;
+        integer(rule, "cooldownSeconds", 0, 86_400)?;
+        integer(rule, "maxRuns", 1, 1000)?;
+        let conditions = array(field(rule, "conditions")?, 16)?;
+        if conditions.is_empty() {
+            return Err(invalid());
+        }
+        for condition in conditions {
+            validate_condition(condition)?;
+        }
+        let steps = array(field(rule, "steps")?, 16)?;
+        if steps.is_empty() {
+            return Err(invalid());
+        }
+        for step in steps {
+            validate_macro_step(step, max_spend)?;
+        }
     }
     Ok(())
 }
@@ -997,7 +1184,14 @@ fn validate_manual_target(value: &Value) -> Validation {
 }
 
 pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
-    if serde_json::to_vec(request).map_err(|_| invalid())?.len() > MAX_REQUEST_BYTES {
+    // Leave room for both bounded macro fields while preserving all existing
+    // request budgets. Validate each macro field before typed deserialization.
+    let max_bytes = if action == "macro" {
+        2 * MAX_REQUEST_BYTES
+    } else {
+        MAX_REQUEST_BYTES
+    };
+    if serde_json::to_vec(request).map_err(|_| invalid())?.len() > max_bytes {
         return Err("Automation request exceeds its limit.".into());
     }
     match action {
@@ -1007,6 +1201,7 @@ pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
         "command" => validate_action(request),
         "workflow" => validate_workflow(request),
         "routine" => validate_routine(request),
+        "macro" => validate_macro(request),
         "service" => {
             if request
                 .as_object()
@@ -1054,6 +1249,300 @@ pub(crate) fn request_script(action: &str, request: &Value) -> Result<String, St
     Ok(format!(
         "window.__RAYRAG__?.perform({action_json},{request_json})"
     ))
+}
+
+#[cfg(test)]
+mod macro_request_tests {
+    use super::{request_script, validate_macro_script, validate_request, MAX_REQUEST_BYTES};
+    use serde_json::{json, Value};
+
+    fn request() -> Value {
+        json!({
+            "settings": {
+                "map":"prt_fild08", "targets":[4000], "radius":12,
+                "minHpPercent":45, "loot":true, "route_randomWalk":0,
+                "route_step":10, "route_avoidWalls":true,
+                "route_randomWalk_maxRouteTime":75,
+                "attackRouteMaxPathDistance":20, "attackMaxRouteTime":4
+            },
+            "script": {
+                "version":1, "name":"Field supply", "durationSeconds":86400,
+                "maxActions":1000, "maxSpend":2000,
+                "rules":[{
+                    "name":"Recover", "priority":-1000, "cooldownSeconds":0,
+                    "maxRuns":1000,
+                    "conditions":[{"field":"hpPercent","operator":"lt","value":65.5}],
+                    "steps":[{"type":"useItem","itemId":501,"timeoutSeconds":120}]
+                }]
+            }
+        })
+    }
+
+    #[test]
+    fn shared_macro_script_corpus_matches_typescript() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../../src/data/macro-script-cases.json")).unwrap();
+        for case in cases.as_array().unwrap() {
+            assert_eq!(
+                validate_macro_script(&case["script"]).is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_typed_steps_and_rejects_extra_or_missing_step_fields() {
+        for step in [
+            json!({"type":"farm","map":"prt_fild08","targets":[1,2147483647],"timeoutSeconds":86400}),
+            json!({"type":"travel","map":"prontera","timeoutSeconds":1}),
+            json!({"type":"buy","serviceId":"tool-dealer-buy","itemId":2147483647,"quantity":100000,"maxSpend":2000,"timeoutSeconds":86400}),
+            json!({"type":"store","serviceId":"kafra-south-storage","itemId":501,"quantity":1,"keep":100000,"maxSpend":0,"timeoutSeconds":1}),
+            json!({"type":"useItem","itemId":2147483647,"timeoutSeconds":120}),
+            json!({"type":"skill","skillId":32767,"level":10,"mode":"self","timeoutSeconds":120}),
+            json!({"type":"skill","skillId":255,"level":1,"mode":"target","timeoutSeconds":1}),
+        ] {
+            let mut value = request();
+            value["script"]["rules"][0]["steps"] = json!([step]);
+            assert!(
+                validate_request("macro", &value).is_ok(),
+                "rejected {value}"
+            );
+            let keys: Vec<String> = value["script"]["rules"][0]["steps"][0]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect();
+            for key in keys {
+                let mut missing = value.clone();
+                missing["script"]["rules"][0]["steps"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(&key);
+                assert!(
+                    validate_request("macro", &missing).is_err(),
+                    "missing {key}"
+                );
+            }
+            value["script"]["rules"][0]["steps"][0]["unknown"] = json!(true);
+            assert!(validate_request("macro", &value).is_err());
+        }
+    }
+
+    #[test]
+    fn denies_unbounded_steps_service_overrides_and_manual_warp() {
+        for step in [
+            json!({"type":"farm","map":"prt_fild08","targets":[],"timeoutSeconds":1}),
+            json!({"type":"farm","map":"prt_fild08","targets":[1,1],"timeoutSeconds":1}),
+            json!({"type":"farm","map":"prt_fild08","targets":[0],"timeoutSeconds":1}),
+            json!({"type":"farm","map":"prt_fild08","targets":vec![1;65],"timeoutSeconds":1}),
+            json!({"type":"travel","map":"../prontera","timeoutSeconds":1}),
+            json!({"type":"travel","map":"prontera","timeoutSeconds":86401}),
+            json!({"type":"buy","serviceId":"tool-dealer-sell","itemId":501,"quantity":1,"maxSpend":0,"timeoutSeconds":1}),
+            json!({"type":"buy","serviceId":"kafra-south-storage","itemId":501,"quantity":1,"maxSpend":0,"timeoutSeconds":1}),
+            json!({"type":"buy","serviceId":"trader.prt-fild05.tool-dealer.buy.v1","itemId":501,"quantity":1,"maxSpend":0,"timeoutSeconds":1}),
+            json!({"type":"buy","serviceId":"tool-dealer-buy","itemId":501,"quantity":1,"maxSpend":2001,"timeoutSeconds":1}),
+            json!({"type":"store","serviceId":"tool-dealer-buy","itemId":501,"quantity":1,"keep":0,"maxSpend":0,"timeoutSeconds":1}),
+            json!({"type":"store","serviceId":"kafra-south-storage","itemId":501,"quantity":100001,"keep":0,"maxSpend":0,"timeoutSeconds":1}),
+            json!({"type":"store","serviceId":"kafra-south-storage","itemId":501,"quantity":1,"keep":-1,"maxSpend":0,"timeoutSeconds":1}),
+            json!({"type":"useItem","itemId":0,"timeoutSeconds":1}),
+            json!({"type":"useItem","itemId":501,"timeoutSeconds":121}),
+            json!({"type":"skill","skillId":256,"level":1,"mode":"target","timeoutSeconds":1}),
+            json!({"type":"skill","skillId":55,"level":1,"mode":"self","timeoutSeconds":1}),
+            json!({"type":"skill","skillId":55,"level":1,"mode":"target","timeoutSeconds":1}),
+            json!({"type":"skill","skillId":1,"level":11,"mode":"self","timeoutSeconds":1}),
+            json!({"type":"skill","skillId":1,"level":1,"mode":"self","timeoutSeconds":121}),
+            json!({"type":"skill","skillId":1,"level":1,"mode":"ground","timeoutSeconds":1}),
+            json!({"type":"wait","timeoutSeconds":1}),
+            json!({"type":"command","action":{"type":"respawn"},"timeoutSeconds":1}),
+        ] {
+            let mut value = request();
+            value["script"]["rules"][0]["steps"] = json!([step]);
+            assert!(
+                validate_request("macro", &value).is_err(),
+                "accepted {value}"
+            );
+        }
+        let mut value = request();
+        value["script"]["rules"][0]["steps"] = json!([{
+            "type":"buy","serviceId":"tool-dealer-buy","itemId":501,
+            "quantity":1,"maxSpend":0,"timeoutSeconds":1,
+            "service":{"workflow":{"steps":[{"type":"option","index":2}]}}
+        }]);
+        assert!(validate_request("macro", &value).is_err());
+    }
+
+    #[test]
+    fn enforces_script_limits_exact_shapes_and_normal_start_settings() {
+        assert!(validate_request("macro", &request()).is_ok());
+        for (path, invalid) in [
+            ("/script/version", json!(2)),
+            ("/script/name", json!(" ")),
+            ("/script/name", json!("x".repeat(65))),
+            ("/script/durationSeconds", json!(86401)),
+            ("/script/maxActions", json!(1001)),
+            ("/script/maxSpend", json!(2000000001_i64)),
+            ("/script/rules", json!([])),
+            ("/script/rules/0/priority", json!(-1001)),
+            ("/script/rules/0/cooldownSeconds", json!(86401)),
+            ("/script/rules/0/maxRuns", json!(0)),
+            ("/script/rules/0/conditions", json!([])),
+            ("/script/rules/0/steps", json!([])),
+            ("/settings", json!(null)),
+            ("/settings/map", json!("unknown_map")),
+            ("/settings/targets", json!([])),
+            ("/settings/radius", json!(21)),
+        ] {
+            let mut value = request();
+            *value.pointer_mut(path).unwrap() = invalid;
+            assert!(
+                validate_request("macro", &value).is_err(),
+                "accepted {value}"
+            );
+        }
+        for path in [
+            "",
+            "/script",
+            "/script/rules/0",
+            "/script/rules/0/conditions/0",
+            "/settings",
+        ] {
+            let mut value = request();
+            value
+                .pointer_mut(path)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert("unknown".into(), json!(true));
+            assert!(validate_request("macro", &value).is_err());
+            let object = value.pointer_mut(path).unwrap().as_object_mut().unwrap();
+            object.remove("unknown");
+            let key = object.keys().next().unwrap().clone();
+            object.remove(&key);
+            assert!(
+                validate_request("macro", &value).is_err(),
+                "missing {path}/{key}"
+            );
+        }
+        let mut value = request();
+        let rule = value["script"]["rules"][0].clone();
+        value["script"]["rules"] = json!([rule.clone(), rule.clone()]);
+        assert!(validate_request("macro", &value).is_err());
+        value["script"]["rules"] = json!(vec![rule; 33]);
+        assert!(validate_request("macro", &value).is_err());
+        for key in ["conditions", "steps"] {
+            let mut value = request();
+            let entry = value["script"]["rules"][0][key][0].clone();
+            value["script"]["rules"][0][key] = json!(vec![entry; 17]);
+            assert!(validate_request("macro", &value).is_err());
+        }
+    }
+
+    #[test]
+    fn macro_and_legacy_routine_share_new_numeric_and_actor_predicates() {
+        for (condition, valid) in [
+            (json!({"field":"level","operator":"gte","value":1}), true),
+            (
+                json!({"field":"jobLevel","operator":"lte","value":1000}),
+                true,
+            ),
+            (
+                json!({"field":"weightPercent","operator":"lt","value":65.5}),
+                true,
+            ),
+            (json!({"field":"level","operator":"eq","value":1.5}), false),
+            (json!({"field":"jobLevel","operator":"eq","value":0}), false),
+            (
+                json!({"field":"weightPercent","operator":"eq","value":100.1}),
+                false,
+            ),
+            (
+                json!({"field":"actorCasting","actor":{"scope":"target"},"operator":"eq","value":false}),
+                true,
+            ),
+            (
+                json!({"field":"actorHpPercent","actor":{"scope":"candidate"},"operator":"gte","value":0}),
+                false,
+            ),
+        ] {
+            let mut value = request();
+            value["script"]["rules"][0]["conditions"] = json!([condition]);
+            assert_eq!(validate_request("macro", &value).is_ok(), valid);
+            let mut routine = value["script"].clone();
+            let routine = routine.as_object_mut().unwrap();
+            routine.remove("version");
+            routine.remove("maxSpend");
+            let rule = routine["rules"][0].as_object_mut().unwrap();
+            rule.remove("steps");
+            rule.insert("action".into(), json!({"type":"useItem","itemId":501}));
+            assert_eq!(validate_request("routine", &json!(routine)).is_ok(), valid);
+        }
+    }
+
+    #[test]
+    fn script_byte_budget_excludes_settings_and_counts_utf8() {
+        let mut value = request();
+        let mut rule = value["script"]["rules"][0].clone();
+        rule["steps"] = json!(vec![
+            json!({"type":"travel","map":"x".repeat(64),"timeoutSeconds":86400});
+            16
+        ]);
+        value["script"]["rules"] = json!((0..32)
+            .map(|i| {
+                let mut next = rule.clone();
+                next["name"] = json!(format!("Rule {i}"));
+                next
+            })
+            .collect::<Vec<_>>());
+        // Fill only supported fields until one more condition crosses the cap.
+        let condition = json!({"field":"hpPercent","operator":"lt","value":65.5});
+        'fill: for i in 0..32 {
+            for _ in 1..16 {
+                value["script"]["rules"][i]["conditions"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(condition.clone());
+                if serde_json::to_vec(&value["script"]).unwrap().len() > MAX_REQUEST_BYTES {
+                    value["script"]["rules"][i]["conditions"]
+                        .as_array_mut()
+                        .unwrap()
+                        .pop();
+                    break 'fill;
+                }
+            }
+        }
+        assert!(serde_json::to_vec(&value).unwrap().len() > MAX_REQUEST_BYTES);
+        assert!(validate_request("macro", &value).is_ok());
+        value["script"]["name"] = json!("ก".repeat(64));
+        assert!(serde_json::to_vec(&value["script"]).unwrap().len() > MAX_REQUEST_BYTES);
+        assert!(validate_request("macro", &value).is_err());
+    }
+
+    #[test]
+    fn wrapper_and_settings_byte_budgets_are_bounded() {
+        let mut value = request();
+        value["settings"]["map"] = json!("x".repeat(MAX_REQUEST_BYTES));
+        assert!(validate_request("macro", &value).is_err());
+        value["settings"] = json!(null);
+        value["unknown"] = json!("x".repeat(2 * MAX_REQUEST_BYTES));
+        assert!(validate_request("macro", &value).is_err());
+    }
+
+    #[test]
+    fn macro_dispatch_serializes_data_in_the_fixed_controller_call() {
+        let mut value = request();
+        value["script"]["name"] = json!("\"</script>\\window.alert(1)");
+        let encoded = serde_json::to_string(&value).unwrap();
+        assert_eq!(
+            request_script("macro", &value).unwrap(),
+            format!("window.__RAYRAG__?.perform(\"macro\",{encoded})")
+        );
+        for mode in ["command", "workflow", "routine", "service"] {
+            assert!(validate_request(mode, &value).is_err());
+        }
+    }
 }
 
 #[cfg(test)]
