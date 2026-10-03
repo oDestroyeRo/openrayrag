@@ -636,7 +636,7 @@ test("native verification failure prevents any write", async () => {
   await assert.rejects(publishRelease(ctx), /architecture/);
   assert.equal(api.events.length, 0);
 });
-test("CI stamping synchronizes all five files and leaves dependency versions alone", async () => {
+for (const ending of ["\n", "\r\n"]) test(`CI stamping synchronizes all five files with ${ending.length===2?"CRLF":"LF"} and leaves dependency versions alone`, async () => {
   const root = await mkdtemp(join(tmpdir(), "rayrag-stamp-test-"));
   try {
     await mkdir(join(root, "src-tauri"));
@@ -663,7 +663,7 @@ test("CI stamping synchronizes all five files and leaves dependency versions alo
         'version = 4\n\n[[package]]\nname = "rayrag-companion"\nversion = "0.1.0"\n\n[[package]]\nname = "test"\nversion = "9.0.0"\n',
     };
     await Promise.all(
-      Object.entries(files).map(([p, b]) => writeFile(join(root, p), b)),
+      Object.entries(files).map(([p, b]) => writeFile(join(root, p), b.toString().replaceAll("\n", ending))),
     );
     await stampVersions(root, "0.2.7");
     await stampVersions(root, "0.2.7");
@@ -735,7 +735,8 @@ test("workflow pins actions, separates signing from PR checks and queues every p
     );
   assert.match(quality, /fail-fast: false/);
   assert.match(quality, /node scripts\/ci-platform\.mjs build/);
-  assert.match(quality, /node scripts\/native-smoke\.mjs/);
+  assert.match(quality, /--smoke/);
+  assert.match(await readFile(new URL("./ci-platform.mjs", import.meta.url), "utf8"), /nativeSmoke/);
   const gate = source.slice(
     source.indexOf("  verify:"),
     source.indexOf("  reconcile:"),

@@ -65,7 +65,7 @@ export async function stampVersions(root, version) {
       config.version === old,
     "Source versions are inconsistent.",
   );
-  const cargo = values[2].split("\n");
+  const cargo = values[2].replaceAll("\r\n", "\n").split("\n");
   let section = "",
     changed = 0;
   for (let i = 0; i < cargo.length; i++) {
@@ -82,6 +82,7 @@ export async function stampVersions(root, version) {
   requireValue(changed === 1, "Expected one Cargo package version.");
   let packages = 0;
   const cargoLock = values[3]
+    .replaceAll("\r\n", "\n")
     .split("[[package]]")
     .map((block) => {
       if (/^\nname = "rayrag-companion"\n/m.test(block)) {

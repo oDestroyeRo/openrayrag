@@ -6,6 +6,8 @@ import { join, resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assetNames, platformReceipt, validatePlatformBuild, sha256 } from './release-core.mjs';
 import { stampVersions } from './release.mjs';
+import { nativeSmoke } from './native-smoke.mjs';
+import { verifyAppImageExecutable } from './appimage-proof.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const platforms = {
@@ -54,6 +56,7 @@ async function matchingApplication(folder, binary) {
   const matches=[];
   for(const path of candidates)if(sha256(await readFile(path))===expected)matches.push(path);
   requireValue(matches.length===1,'Installer does not contain the exact built application.');
+  return matches[0];
 }
 export async function installerFiles(platform,bundle) {
   const installerDirectory=join(bundle,platform==='windows'?'nsis':platform==='linux'?'deb':'dmg');
@@ -62,7 +65,7 @@ export async function installerFiles(platform,bundle) {
   // Inspect installer files directly; AppDir staging trees contain library links.
   return files;
 }
-async function inspect(platform,bundle,binary,version,identifier) {
+async function inspect(platform,bundle,binary,version,identifier,smoke) {
   const files=await installerFiles(platform,bundle);
   const names=assetNames(version);
   const payload=new Map();
@@ -74,7 +77,8 @@ async function inspect(platform,bundle,binary,version,identifier) {
       const extract=join(temporary,'windows');
       const seven=join(process.env.ProgramFiles||'C:\\Program Files','7-Zip','7z.exe');
       run(seven,['x',installer,`-o${extract}`,'-y']);
-      await matchingApplication(extract,binary);
+      const packaged=await matchingApplication(extract,binary);
+      if(smoke)await nativeSmoke(packaged,join(root,'reports/smoke.json'));
       payload.set(names.windows,await readFile(installer));
     } else if(platform==='linux') {
       assertArchitecture(await readFile(binary),platforms.linux.target);
@@ -83,9 +87,11 @@ async function inspect(platform,bundle,binary,version,identifier) {
       requireValue(run('dpkg-deb',['--field',deb,'Version']).toString().trim()===version,'Debian package version differs.');
       const extract=join(temporary,'debian');
       run('dpkg-deb',['--extract',deb,extract]);
-      await matchingApplication(extract,binary);
+      const debBinary=await matchingApplication(extract,binary);
+      if(smoke)await nativeSmoke(debBinary,join(root,'reports/smoke-deb.json'));
       run(appimage,['--appimage-extract'],{cwd:temporary});
-      await matchingApplication(join(temporary,'squashfs-root'),binary);
+      await verifyAppImageExecutable(binary,join(bundle,'appimage','Rayrag Companion.AppDir/usr/bin/rayrag-companion'),join(temporary,'squashfs-root/usr/bin/rayrag-companion'));
+      if(smoke)await nativeSmoke(join(temporary,'squashfs-root/AppRun'),join(root,'reports/smoke.json'));
       payload.set(names.deb,await readFile(deb));payload.set(names.appimage,await readFile(appimage));
     } else {
       const app=join(bundle,'macos','Rayrag Companion.app');
@@ -101,6 +107,7 @@ async function inspect(platform,bundle,binary,version,identifier) {
       try {
         run('python',['-c','import importlib.util,sys,pathlib; s=importlib.util.spec_from_file_location("release_native",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.compare_apps(pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]))',join(root,'scripts/release-native.py'),app,join(mount,'Rayrag Companion.app')]);
       }finally {run('hdiutil',['detach',mount]);}
+      if(smoke)await nativeSmoke(executable,join(root,'reports/smoke.json'));
       payload.set(names.dmg,await readFile(dmg));
     }
     return payload;
@@ -124,9 +131,9 @@ export async function build(platform, mode) {
   const args=['build','--target',spec.target,'--bundles',spec.bundles,'--config',JSON.stringify(config),'--ci','--no-binary-patching'];
   if(smoke)args.push('--features','ci-smoke');
   args.push('--','--locked');
-  execFileSync(process.execPath,[join(root,'node_modules/@tauri-apps/cli/tauri.js'),...args],{cwd:root,stdio:'inherit'});
+  execFileSync(process.execPath,[join(root,'node_modules/@tauri-apps/cli/tauri.js'),...args],{cwd:root,stdio:'inherit',env:{...process.env,...(platform==='linux'?{NO_STRIP:'1'}:{})}});
   const release=join(root,'src-tauri/target',spec.target,'release');
-  const payload=await inspect(platform,join(release,'bundle'),join(release,`rayrag-companion${platform==='windows'?'.exe':''}`),version,smoke?'com.rayrag.companion.ci':'com.rayrag.companion');
+  const payload=await inspect(platform,join(release,'bundle'),join(release,`rayrag-companion${platform==='windows'?'.exe':''}`),version,smoke?'com.rayrag.companion.ci':'com.rayrag.companion',smoke);
   const folder=join(root,'platform-bundles',platform);
   await mkdir(folder,{recursive:true});requireValue((await readdir(folder)).length===0,'Refusing to mix package artifacts.');
   const identity={sourceSha,version}, workflow={runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT};

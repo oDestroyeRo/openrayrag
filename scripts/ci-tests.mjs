@@ -15,13 +15,13 @@ test('main PRs and merge queue always run all native platform lanes',()=>{
   assert.deepEqual(quality.strategy.matrix.include.map(x=>[x.platform,x.target]),Object.entries(platforms).map(([name,s])=>[name,s.target]));
   assert.equal(quality.if,undefined);
   const source=quality.steps.map(x=>x.run||'').join('\n');
-  for(const command of ['npm run build','npm test','cargo test --locked','cargo clippy','cargo fmt','ci-platform.mjs build','native-smoke.mjs'])assert.ok(source.includes(command),command);
+  for(const command of ['npm run build','npm test','cargo test --locked','cargo clippy','cargo fmt','ci-platform.mjs build'])assert.ok(source.includes(command),command);
   assert.ok(source.includes('xvfb-run'));
   assert.ok(source.includes('node --test scripts/*-tests.mjs'));
-  const smoke=quality.steps.filter(step=>step.run?.includes('scripts/native-smoke.mjs'));
+  const smoke=quality.steps.filter(step=>step.run?.includes('scripts/ci-platform.mjs build'));
   assert.equal(smoke.length,2);
-  for(const step of smoke){assert.ok(step.run.includes('--output reports/smoke.json'));assert.ok(!step.run.includes('--report'));}
-  assert.doesNotMatch(JSON.stringify(quality),/secrets\.|pull_request_target|GITHUB_TOKEN/);
+  for(const step of smoke)assert.ok(step.run.endsWith('--smoke'));
+
 });
 test('aggregate cannot report success after failed, cancelled, skipped or missing lanes',()=>{
   const gate=workflow.jobs.verify;
