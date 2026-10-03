@@ -11,7 +11,20 @@ export interface TravelSnapshot {
   destination: string; reason: string; policy: MapPolicy; purpose: 'travel' | 'service' | 'return' | 'field-entry' | 'party-follow'; remainingMaps: string[]; route: Position[]; leg: Position[];
 }
 export interface TravelTransition {
-  trip:number; phase:'remove'|'map'|'spawn'; fromMap:string; toMap:string; event:GameEvent;
+  trip:number; phase:'remove'|'clear'|'map'|'spawn'; fromMap:string; toMap:string; event:GameEvent;
+}
+export interface DatabaseTravelTransport {
+  supported: (map: string) => boolean;
+  /** Wait for server input cooldown before reserving or writing another request. */
+  ready?: () => boolean;
+  waitReason?: () => string;
+  /** Reserve an existing owner's finite command allowance before any write. */
+  reserve?: () => boolean;
+  send: (map: string) => void;
+}
+interface DatabaseTrip {
+  trip:number; fromMap:string; toMap:string; ownId:number; ownName:string; identity:string; connection:string;
+  sent:boolean; phase:'source'|'departed'|'map'; ready:boolean; contradictory:boolean;
 }
 interface MovementReceipt {
   map:string; ownId:number; ownName:string; identity:string|null; requestedEnd:Position; cells:Position[]; acceptedUntil:number|null;
@@ -20,12 +33,15 @@ interface MovementReceipt {
 export interface TravelPlanningContext {
   /** Connection, world and observed own-actor lifetime, independent of actor ID reuse. */
   identity: string | null;
+  /** Stable across map/actor replacement, changed on every transport reconnect. */
+  connection?: string;
   map: string;
   player: Entity | undefined;
 }
 export interface TravelPlanningOptions {
   context?: () => TravelPlanningContext;
   dispatchReady?: () => boolean;
+  databaseTravel?: DatabaseTravelTransport;
   /** The same verified retired walk may reconcile the transport's original endpoint owner. */
   retiredWalkAccepted?: (requested:Position,accepted:Position) => void;
   scheduler?: PlanningOptions['scheduler'];
@@ -51,6 +67,7 @@ export class TravelController {
   private retiredMovement:MovementReceipt|null=null;
   private executionIdentity: string | null = null;
   private preparedDeparture:TravelTransition|null=null;
+  private databaseTrip:DatabaseTrip|null=null;
   private installedStart: Position | null = null;
   private latest: { map: string; player: Entity | undefined } = { map: '', player: undefined };
   private policy:MapPolicy=DEFAULT_MAP_POLICY;
@@ -78,15 +95,23 @@ export class TravelController {
   get active(): boolean { return this.state === 'planning' || this.state === 'walking' || this.state === 'transition'; }
 
   get tripId():number {return this.trip;}
+  get teleportPending():boolean {return !!this.databaseTrip?.sent;}
+  get databasePreparing():boolean {return this.active&&!!this.databaseTrip&&!this.databaseTrip.sent;}
+  observeReady():void {
+    const trip=this.databaseTrip,context=this.planningOptions.context?.();
+    if(trip?.sent&&!trip.contradictory&&trip.phase==='map'&&context?.connection===trip.connection&&context.map===trip.toMap)
+      trip.ready=true;
+  }
   /** Cancellation cannot erase a walk already written to the transport. */
   movementSettled(map:string,player:Entity|undefined):boolean {
+    if(this.teleportPending)return false;
     const receipt=this.retiredMovement;
     if(receipt&&receipt.expectedMap===null&&receipt.acceptedUntil!==null&&this.now()>=receipt.acceptedUntil&&map===receipt.map&&player?.id===receipt.ownId
       &&player.name===receipt.ownName&&this.planningOptions.context?.().identity===receipt.identity&&distance(cell(player),receipt.cells.at(-1)!)===0)
       this.retiredMovement=null;
     return this.retiredMovement===null;
   }
-  connectionChanged():void {this.retiredMovement=null;this.lastMovement=null;}
+  connectionChanged():void {this.retiredMovement=null;this.lastMovement=null;this.databaseTrip=null;}
   private observeRetired(event:GameEvent):void {
     const receipt=this.retiredMovement;if(!receipt)return;
     if(event.type==='map') {receipt.awaitingSpawn=event.map===receipt.expectedMap;return;}
@@ -119,6 +144,15 @@ export class TravelController {
   prepareObservation(events:GameEvent[]):void {
     this.preparedDeparture=null;
     const event=events.length===1?events[0]:undefined,step=this.steps[0],receipt=this.lastMovement,context=this.planningOptions.context?.();
+    const trip=this.databaseTrip;
+    if(trip?.sent&&!trip.contradictory&&context?.connection===trip.connection&&event
+      &&(event.type==='remove'&&event.id===trip.ownId&&event.reason===0&&!event.dead&&trip.phase==='source'
+        ||event.type==='clear'&&trip.phase==='departed')
+      &&(trip.phase==='source'&&context.identity===trip.identity&&context.map===trip.fromMap
+        &&context.player?.id===trip.ownId&&context.player.name===trip.ownName&&context.player.kind===0&&!context.player.dead&&context.player.hp>0
+        ||trip.phase==='departed'&&event.type==='clear')) {
+      this.preparedDeparture={trip:trip.trip,phase:event.type,fromMap:trip.fromMap,toMap:trip.toMap,event};return;
+    }
     if(this.purpose!=='party-follow'||!this.active||this.state==='planning'||this.awaitingSpawn
       ||event?.type!=='remove'||event.reason!==0||event.dead||event.id!==this.playerId
       ||!step||!receipt||!context?.identity||context.identity!==this.executionIdentity||receipt.identity!==context.identity
@@ -135,6 +169,19 @@ export class TravelController {
     this.trip++;this.ownName=player.name;this.lastMovement=null;
     if (!Number.isInteger(stepSize) || stepSize < 1 || stepSize > 20) throw new Error('Invalid travel step size.');
     if(!mapAllowed(policy,destination))throw new Error('The destination map is forbidden by the map policy.');
+    const database=this.planningOptions.databaseTravel;
+    if(map!==destination&&purpose!=='party-follow'&&database?.supported(destination)) {
+      const context=this.planningOptions.context?.();
+      if(!context?.identity||context.connection===undefined||context.map!==map||context.player?.id!==player.id
+        ||context.player.name!==player.name||context.player.kind!==0||context.player.dead||context.player.hp<=0
+        ||distance(cell(context.player),cell(player))!==0)throw new Error('A current living own actor and connection are required for Database travel.');
+      this.policy=structuredClone(policy);this.purpose=purpose;this.destination=destination;this.map=map;this.playerId=player.id;
+      this.steps=[];this.route=[];this.leg=null;this.approachNav=null;this.approachTarget=null;this.awaitingSpawn=false;
+      this.installedStart=null;this.executionIdentity=context.identity;this.since=this.now();this.deadline=this.now()+60_000;
+      this.databaseTrip={trip:this.trip,fromMap:map,toMap:destination,ownId:player.id,ownName:player.name,
+        identity:context.identity,connection:context.connection,sent:false,phase:'source',ready:false,contradictory:false};
+      this.state='walking';this.reason=`Preparing Database teleport to ${destination}.`;return;
+    }
     const steps = policy.mode === 'weighted' ? null : routeBetweenMaps(map, cell(player), destination, avoidWalls,policy);
     if (policy.mode !== 'weighted' && !steps) throw new Error(`No verified route connects this position to the destination under the map policy.${!mapAllowed(policy,map)?' Current map is forbidden: departure only; reentry is prohibited.':''}`);
     this.policy=structuredClone(policy);this.purpose=purpose;
@@ -222,6 +269,7 @@ export class TravelController {
     const departure=this.preparedDeparture;this.preparedDeparture=null;
     for (const event of events) {
       this.observeRetired(event);
+      if(this.databaseTrip) {this.observeDatabase(event,departure,proofs);continue;}
       if (!this.active) continue;
       if (this.state === 'planning') {
         if (event.type === 'map' || event.type === 'enter' || event.type === 'clear'
@@ -288,6 +336,40 @@ export class TravelController {
     return proofs;
   }
 
+  private observeDatabase(event:GameEvent,departure:TravelTransition|null,proofs:TravelTransition[]):void {
+    const trip=this.databaseTrip!,context=this.planningOptions.context?.();
+    if(this.active&&this.now()>this.deadline)
+      this.cancel('Database teleport was not confirmed before its deadline. No retry will be sent.',true);
+    if(!trip.sent) {
+      if(event.type==='map'||event.type==='clear'||event.type==='enter'||event.type==='spawn'&&event.entity.id===trip.ownId
+        ||'id' in event&&event.id===trip.ownId&&['remove','death','walk','position'].includes(event.type))
+        this.cancel('Database travel source changed before dispatch.',true);
+      return;
+    }
+    if(trip.contradictory||context?.connection!==trip.connection)return;
+    const reject=(reason:string)=>{trip.contradictory=true;this.cancel(reason,true);};
+    if(event.type==='enter'||event.type==='death'&&event.id===trip.ownId) {reject('Database travel character or connection changed. Waiting for reconnect.');return;}
+    if(event.type==='remove'&&event.id===trip.ownId||event.type==='clear') {
+      if(!departure||departure.event!==event||departure.trip!==trip.trip) {reject('Database travel departure did not match the captured living character.');return;}
+      trip.phase='departed';proofs.push(departure);return;
+    }
+    if(event.type==='map') {
+      if(trip.phase!=='departed'||event.map!==trip.toMap) {reject('Database travel received an unexpected map transition. No retry or walking fallback will be sent.');return;}
+      trip.phase='map';proofs.push({trip:trip.trip,phase:'map',fromMap:trip.fromMap,toMap:trip.toMap,event});
+      if(this.active)this.reason=`Loading ${trip.toMap}; waiting for the fresh living character.`;
+      return;
+    }
+    if(event.type==='spawn'&&event.entity.id===trip.ownId) {
+      if(trip.phase!=='map'||!trip.ready||context.map!==trip.toMap||!context.identity||context.identity===trip.identity
+        ||context.player?.id!==trip.ownId||context.player.name!==trip.ownName
+        ||event.entity.name!==trip.ownName||event.entity.kind!==0||event.entryType!==1||event.entity.dead||event.entity.hp<=0) {
+        reject('Database travel arrival did not match the requested map and fresh living own character.');return;
+      }
+      proofs.push({trip:trip.trip,phase:'spawn',fromMap:trip.fromMap,toMap:trip.toMap,event});this.databaseTrip=null;
+      if(this.active){this.map=trip.toMap;this.state='complete';this.reason=`Database teleport to ${trip.toMap} confirmed.`;}
+    }
+  }
+
   private acceptNudge(walk: Walk): boolean {
     const leg = this.leg;
     const duration = walkDuration(walk);
@@ -316,6 +398,26 @@ export class TravelController {
     this.latest = { map, player };
     if (!this.active) return;
     const now = this.now();
+    const trip=this.databaseTrip;
+    if(trip) {
+      if(now>this.deadline){this.cancel(trip.sent?'Database teleport was not confirmed. Waiting for authoritative arrival or reconnect; no retry will be sent.':'Database travel preparation timed out before sending a request.',true);return;}
+      if(trip.sent)return;
+      const context=this.planningOptions.context?.();
+      if(!context||context.identity!==trip.identity||context.connection!==trip.connection||map!==trip.fromMap
+        ||player?.id!==trip.ownId||player.name!==trip.ownName||player.dead||player.hp<=0) {
+        this.cancel('Database travel source changed before dispatch.',true);return;
+      }
+      if(this.planningOptions.dispatchReady?.()===false){this.reason='Waiting for movement, resources and casts to settle before Database travel.';return;}
+      if(this.planningOptions.databaseTravel!.ready?.()===false){this.reason=this.planningOptions.databaseTravel!.waitReason?.()??'Waiting briefly for the server input cooldown before Database travel.';return;}
+      if(this.planningOptions.databaseTravel!.reserve?.()===false){this.cancel('Database travel command allowance exhausted before dispatch.',true);return;}
+      // Reserve uncertainty before writing: a throwing socket may already have accepted bytes.
+      trip.sent=true;this.state='transition';this.deadline=now+20_000;
+      this.reason=`Database teleport to ${trip.toMap} sent; waiting for the server.`;
+      try{this.planningOptions.databaseTravel!.send(trip.toMap);}catch{
+        this.cancel('Database teleport write is uncertain. No retry or walking fallback will be sent.',true);
+      }
+      return;
+    }
     if (this.approachNav && now - this.since > 300_000) { this.cancel('Final NPC approach reached its five-minute limit.', true); return; }
     if (now - this.since > 1_200_000) { this.cancel('Travel reached its twenty-minute limit.', true); return; }
     if (this.planning) {
@@ -362,7 +464,8 @@ export class TravelController {
     this.send({ type: 'walk', destination: cells.at(-1)! }); this.lastAction = now;
   }
   cancel(reason = 'Travel stopped by you.', failed = false): void {
-    const wasActive = this.active && this.state !== 'planning';
+    const wasActive = this.active && this.state !== 'planning'&&!this.databaseTrip;
+    if(this.databaseTrip&&!this.databaseTrip.sent)this.databaseTrip=null;
     if(this.purpose==='party-follow'&&this.lastMovement)this.retiredMovement=structuredClone(this.lastMovement);
     this.lastMovement=null;
     this.generation++; this.planning?.abort.abort(); this.planning = null; this.installedStart = null;

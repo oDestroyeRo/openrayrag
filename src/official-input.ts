@@ -3,7 +3,7 @@
 // Observe only the opcode of official binary sends; never retain, decode or log
 // authentication, chat text, item IDs or any other packet contents.
 const gameplayOpcodes = new Set([
-  7, 8, 9, 11, 14, 19, 21, 29, 33, 41, 45, 47, 48, 57, 58, 59, 62, 63,
+  7, 8, 9, 11, 14, 19, 21, 29, 33, 41, 45, 47, 48, 57, 58, 59, 62, 63, 64,
   76, 78, 79, 80, 81, 82, 86, 87, 88, 89, 90, 94, 97,
   99, 100, 101, 102, 104, 105, 106, 107, 109, 110, 111, 112,
 ]);

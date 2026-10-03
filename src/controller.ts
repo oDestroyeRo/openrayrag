@@ -28,7 +28,8 @@ import { NpcWorkflow, validateWorkflowSpec, worldActionBlockers, type WorkflowCo
 import { RoutineRuntime, validateRoutineSpec, type RoutineObservation, type RoutineSnapshot, type RoutineSpec } from './routines';
 import { MacroRuntime, validateMacroScript, type MacroIntent, type MacroSnapshot, type MacroStep } from './macros';
 import { planDisposition } from './disposition';
-import { TravelController, type TravelSnapshot } from './travel-controller';
+import { TravelController, type TravelSnapshot, type DatabaseTravelTransport } from './travel-controller';
+import { DATABASE_TELEPORT_COOLDOWN_MS, databaseTeleportWait } from './database-travel-protocol';
 import { inSchedule, actionConfirmationTimeout } from './automation';
 import { searchGrid, type WalkGrid } from './navigation';
 import type { InventoryItem } from './protocol-feature';
@@ -140,6 +141,7 @@ export class CompanionController {
   private cycleDeaths=0;
   private readyOwn: { identity: string; name: string; initialization: boolean } | null = null;
   private quietUntil = 0;
+  private databaseTeleportUntil = 0;
   private ownArrival: {id:number|null;entry:1|2;initialization:boolean}|null=null;
   private enteredConnection = false;
   private runKills = 0;
@@ -155,7 +157,8 @@ export class CompanionController {
     sendMemo: (slot: MemoSlot) => void = () => { throw new Error('Manual memo transport is unavailable.'); },
     sendSocket: (action: SocketAction) => void = () => { throw new Error('Manual socket transport is unavailable.'); },
     sendRefine: (packet: RefinePacket) => void = () => { throw new Error('Manual refine transport is unavailable.'); },
-    sendWarp:(wire:WarpWire)=>void=()=>{throw new Error('Warp Portal transport is unavailable.');},warpStore?:WarpGuardStore) {
+    sendWarp:(wire:WarpWire)=>void=()=>{throw new Error('Warp Portal transport is unavailable.');},warpStore?:WarpGuardStore,
+    private readonly databaseTravel?:DatabaseTravelTransport) {
     this.partyHeal=new PartyHealPolicy(now);
     this.engine = new BotEngine(action=>this.send(action), now, gridFor, entityId => {
       if (!this.world.party) return null;
@@ -171,8 +174,19 @@ export class CompanionController {
     this.travel = new TravelController(action=>this.send(action), now, gridFor, { context: () => {
       const identity = this.engine.actorActionIdentity();
       return { identity: identity ? JSON.stringify([this.connectionEpoch, this.world.generation, identity]) : null,
-        map: this.engine.map, player: this.engine.player };
-    }, dispatchReady:()=>this.engine.observedOwnCastSettled(),retiredWalkAccepted:(requested,accepted)=>{
+        connection:String(this.connectionEpoch),map: this.engine.map, player: this.engine.player };
+    }, databaseTravel:databaseTravel?{supported:databaseTravel.supported,
+      ready:()=>this.engine.connected&&this.engine.compatible&&this.now()-this.lastFrame<=15_000
+        &&this.now()>=Math.max(this.quietUntil,this.databaseTeleportUntil)&&databaseTravel.ready?.()!==false,
+      waitReason:()=>this.now()-this.lastFrame>15_000?'Waiting for a fresh server update before teleporting.'
+        :this.now()<this.databaseTeleportUntil
+        ?`Teleport available in ${Math.ceil((this.databaseTeleportUntil-this.now())/1_000)}s. Travel will continue automatically.`
+        :databaseTravel.waitReason?.()??'Waiting briefly for the server input cooldown before Database travel.',
+      reserve:()=>!this.sendingSupply||!this.supply.ownsField||this.supply.commandAllowed(),
+      send:map=>{this.quietUntil=Math.max(this.quietUntil,this.now()+2_000);
+        this.databaseTeleportUntil=Math.max(this.databaseTeleportUntil,this.now()+DATABASE_TELEPORT_COOLDOWN_MS);databaseTravel.send(map);}}:undefined,
+    dispatchReady:()=>this.engine.observedOwnCastSettled()&&(!databaseTravel||this.engine.idleForActions()
+      &&this.engine.featureActionsSettled&&this.movementSettled()&&!this.pending&&!this.featureReceipt&&!this.unresolvedWorld&&!this.workflowOutstanding),retiredWalkAccepted:(requested,accepted)=>{
       if(this.memoWalkPending?.x===requested.x&&this.memoWalkPending.y===requested.y){
         this.memoWalkPending=null;this.memoWalkEnd={...accepted};
       }
@@ -187,6 +201,7 @@ export class CompanionController {
     this.warp = new ManualWarp(sendWarp,now,warpStore);
   }
   private send(action:Action|WorldAction):void {
+    if(action.type!=='stop'&&this.travel?.teleportPending)throw new Error('Waiting for the sent Database teleport to settle or reconnect.');
     if(action.type!=='stop'&&this.sendingSupply&&this.supply?.ownsField&&!this.supply.commandAllowed())throw new Error('Supply command allowance exhausted.');
     if(action.type==='sit'&&this.deathCycle?.guard.phase==='recovery'){
       // Scheduler has captured identity/sequence; retain it before the transport
@@ -348,6 +363,7 @@ export class CompanionController {
     if(this.active)this.pause('Yielding to an official game action.',2_000);
   }
   officialLook():void {
+    this.quietUntil=Math.max(this.quietUntil,this.now()+2_000);
     this.manualInput();this.engine.castAvailability.cancel('Official Look input stopped automatic cast recovery.');
   }
   /** The bridge observes only official opcode 80, before forwarding it. */
@@ -589,8 +605,8 @@ export class CompanionController {
       map:this.engine.map,x,y,walkable:grid?x>=0&&y>=0&&x<grid.width&&y<grid.height&&grid.walkable({x,y}):null,
       canMemo:canMemoMap(this.engine.map),learnedWarp:this.engine.character.skillsKnown?this.engine.character.learned.get(55)??0:null};
   }
-  /** Captures only Warp protocol evidence; ordinary input takeover has its own hook. */
-  observeOfficialPacket(data:Uint8Array):void { const event=warpInitializationPacket(data);if(event)this.warp.initialization(event);else if(officialWarpSkill(data))this.warp.externalWarp(); }
+  /** Captures ordered initialization/Ready evidence; ordinary input takeover has its own hook. */
+  observeOfficialPacket(data:Uint8Array):void { const event=warpInitializationPacket(data);if(event){this.warp.initialization(event);if(event.type==='playerReady')this.travel.observeReady();}else if(officialWarpSkill(data))this.warp.externalWarp(); }
   private warpContext(policy:AutomationSettings=this.warpPolicy??automationSettings(this.engine.settings)):WarpContext {
     const base=this.memoContext(),c=this.engine.character,memo=this.memo.snapshot(base);
     const readiness=warpCastReadiness(c,this.engine.actorObservation([...CAST_PREREQUISITES,BLIND_CONDITION]));
@@ -767,6 +783,12 @@ export class CompanionController {
     if (connectionGeneration !== this.connectionEpoch) return;
     // Decode both owners before applying either so malformed packets cannot leak partial state.
     const events = decode(data); const worldEvents = decodeWorld(data) ?? [];
+    if(this.databaseTravel)for(const event of events){
+      const wait=databaseTeleportWait(event);
+      if(wait!==null)this.databaseTeleportUntil=Math.max(this.databaseTeleportUntil,this.now()+wait+1_000);
+    }
+    // Capture travel source evidence before a clear/map retires world identity.
+    this.travel.prepareObservation(events);
     for(const event of events){
       if(event.type==='inventory'||event.type==='inventoryDelta'){this.supplyInventoryRevision++;this.supplyInventoryFresh=true;}
       if(event.type==='currency'||event.type==='stats'&&event.zeny!==undefined){this.supplyCurrencyRevision++;this.supplyCurrencyFresh=true;}
@@ -800,7 +822,6 @@ export class CompanionController {
     }
     const movementReceipts=new Map(events.map(event=>[event,this.engine.manualMovementReceiptOwner(event)??this.engine.retreatMovementReceiptOwner(event)
       ??this.engine.fieldMovementReceiptOwner(event,this.fieldWalkOwner)]));
-    this.travel.prepareObservation(events);
     this.warp.observeDeath(events,this.warpContext());
     this.engine.receive(events);
     this.world.partyActors.sync(this.world.party,this.world.map,this.engine.observations,this.engine.playerId);
@@ -810,7 +831,13 @@ export class CompanionController {
       &&event.entity.id===this.ownArrival?.id&&event.entryType===this.ownArrival.entry&&!event.entity.dead&&event.entity.hp>0
       ||event.type==='resurrection'&&event.id===readyPlayer.id&&event.hp>0))
       {this.readyOwn={identity:JSON.stringify([this.connectionEpoch,readyIdentity]),name:readyPlayer.name,
-        initialization:!!this.ownArrival?.initialization&&events.some(event=>event.type==='spawn'&&event.entity.id===readyPlayer.id&&event.entryType===1)};this.ownArrival=null;}
+        initialization:!!this.ownArrival?.initialization&&events.some(event=>event.type==='spawn'&&event.entity.id===readyPlayer.id&&event.entryType===1)};this.ownArrival=null;
+        // The server freezes accumulated input debt while the actor is inactive
+        // during map loading. Start draining time from fresh own arrival.
+        if(this.databaseTravel){this.quietUntil=Math.max(this.quietUntil,this.now()+2_000);
+          // Fresh login also guards against a cooldown left by a previous client.
+          // Map arrival anchors the wait after inactive/loading time and covers manual teleports.
+          this.databaseTeleportUntil=Math.max(this.databaseTeleportUntil,this.now()+DATABASE_TELEPORT_COOLDOWN_MS);}}
     if(cycle&&readyPlayer?.name===cycle.guard.character&&readyPlayer.hp>0&&!readyPlayer.dead&&this.deathOwnReady()
       &&events.some(event=>event.type==='spawn'&&event.entity.id===cycle.ownId
         &&(cycle.refresh==='same'&&event.entryType===2||cycle.refresh==='cross'&&event.entryType===1)
@@ -898,11 +925,11 @@ export class CompanionController {
     this.supply.observe(this.supplyContext());
     this.service.observe(events, worldEvents, this.serviceContext());
     if(this.macro.active&&events.some(event=>event.type==='map'||event.type==='clear')){
-      const expected=!!this.macroOwner?.travelTripId&&transitions.some(transition=>transition.trip===this.macroOwner!.travelTripId&&transition.phase==='map')
-        ||this.supply.ownsField&&transitions.some(transition=>transition.trip===this.travel.tripId&&transition.phase==='map')
+      const expected=!!this.macroOwner?.travelTripId&&transitions.some(transition=>transition.trip===this.macroOwner!.travelTripId&&['map','clear'].includes(transition.phase))
+        ||this.supply.ownsField&&transitions.some(transition=>transition.trip===this.travel.tripId&&['map','clear'].includes(transition.phase))
         ||escaped||escapeRefresh
         ||!!cycle&&cycle.guard.phase==='revival'&&cycle.guard.uncertain
-        ||!!cycle&&transitions.some(transition=>transition.trip===this.travel.tripId&&transition.phase==='map');
+        ||!!cycle&&transitions.some(transition=>transition.trip===this.travel.tripId&&['map','clear'].includes(transition.phase));
       if(!expected)this.endMacro('Unexpected world transition interrupted the macro.',true);
     }
     if(this.supply.ownsField&&events.some(event=>event.type==='map'||event.type==='clear')&&!this.service.active&&!this.travel.active){
@@ -1140,6 +1167,12 @@ export class CompanionController {
   private wait(reason: string): void {
     this.waitingReason = reason; this.engine.reason = reason;
     if (this.engine.running || this.travel.active) this.pause(reason);
+  }
+  /** Keep the original unsent owner and deadline while freshness blocks writes. */
+  private waitForDatabaseState():void {
+    this.travel.tick(this.engine.map,this.engine.player);
+    const state=this.travel.snapshot();this.waitingReason=state.reason;
+    if(state.state==='failed'&&this.macroOwner?.travelTripId===this.travel.tripId)this.endMacro(state.reason,true);
   }
   private escapeContext(allowRetreatCancellation=false): EscapeContext {
     const blocker = (this.warp.blocked?'Waiting for Warp Portal action and resources to reconcile.':'') || (this.refine.blocked?'Waiting for the refine transaction to reconcile.':'') || (this.socket.busy?'Waiting for the exact socket receipt before escape.':'') || (this.memo.blocked?'Waiting for memo state to settle.':'') || (this.supply.uncertain ? 'Waiting for the exact supply transaction receipt before escape.' : '') || this.blockedReason || (this.featureReceipt ? 'Waiting for the previous resource action to settle.' : '')
@@ -1507,7 +1540,10 @@ export class CompanionController {
       if (stats?.weight === undefined || !stats.maxWeight) { this.wait('Waiting for a confirmed weight update.'); return; }
       if (stats.weight / stats.maxWeight * 100 >= policy.limits.weightPercent) { this.wait('Waiting for carried weight to fall below the configured limit.'); return; }
     }
-    if (now - this.lastFrame > 15_000) { this.wait('Waiting for a fresh server update.'); return; }
+    if (now - this.lastFrame > 15_000) {
+      if(this.travel.databasePreparing)this.waitingReason=this.travel.snapshot().reason;
+      else this.wait('Waiting for a fresh server update.');return;
+    }
     if (player.dead && (!policy.respawn.enabled || this.engine.deaths > policy.respawn.maxDeaths)) {
       this.wait(policy.respawn.enabled ? `Death limit reached. ${deathLimitGuidance(this.engine.deaths,policy.respawn.maxDeaths)}` : 'Waiting for revival.'); return;
     }
@@ -1552,6 +1588,8 @@ export class CompanionController {
     const now = this.now();
     // Macro duration and step deadlines cannot be renewed by another owner's wait.
     this.pollMacro();
+    // A sent transfer's finite deadline advances even while the own actor is absent.
+    if(this.travel.teleportPending)this.travel.tick(this.engine.map,this.engine.player);
     this.partyFollow.advanceDeadline();
     this.social.tick();
     this.memo.tick(this.memoContext());
@@ -1601,6 +1639,9 @@ export class CompanionController {
       }
       if (!this.heartbeatHealthy) { this.resumeRun(); return; }
       if (!this.engine.connected || !this.engine.compatible || now - this.lastFrame > 15_000) {
+        if(this.travel.databasePreparing&&this.engine.connected&&this.engine.compatible){
+          this.waitForDatabaseState();return;
+        }
         this.wait(!this.engine.connected ? 'Waiting for the game to reconnect.' : !this.engine.compatible
           ? 'Waiting for a verified game build and protocol.' : 'Waiting for a fresh server update.'); return;
       }
@@ -1635,6 +1676,9 @@ export class CompanionController {
     this.syncWorkflowOwner();
     if (!this.active) return;
     if (!this.engine.connected || !this.engine.compatible || now - Math.max(this.started, this.lastFrame) > 15_000) {
+      if(this.travel.databasePreparing&&this.engine.connected&&this.engine.compatible){
+        this.waitForDatabaseState();return;
+      }
       this.pause('Game state became unavailable.'); return;
     }
     if (this.service.active) {
