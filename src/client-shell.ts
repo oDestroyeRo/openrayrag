@@ -99,15 +99,15 @@ export function mountClientShell(root: HTMLElement): ClientShell {
           </section>
           <section id="client-bot-travel" class="panel settings feature-panel" data-section="travel" role="tabpanel" aria-labelledby="client-bot-tab-travel" hidden>
             <div class="panel-title"><h3 id="client-bot-travel-title" tabindex="-1">Travel</h3></div>
-            <div class="routing-field"><label for="random-walk">Find monsters <code>route_randomWalk</code></label><select id="random-walk"><option value="0">Off · approach visible targets only</option><option value="2">2 · Search the current map</option></select><p class="hint">Search connected walkable ground and avoid portal areas.</p></div>
-            <details class="routing-settings"><summary>OpenKore routing settings</summary>
+            <div class="routing-field"><label for="random-walk">Find monsters</label><select id="random-walk"><option value="0">Off · approach visible targets only</option><option value="2">Search the current map</option></select><p class="hint">Search connected walkable ground and avoid portal areas.</p></div>
+            <details class="routing-settings"><summary>Movement & approach limits</summary>
               <div class="routing-grid">
-                <label>Steps per walk <code>route_step</code><input id="route-step" type="number" min="1" max="20" value="10" /></label>
-                <label>Search route seconds <code>route_randomWalk_maxRouteTime</code><input id="route-time" type="number" min="1" max="600" value="75" /></label>
-                <label>Attack path cells <code>attackRouteMaxPathDistance</code><input id="attack-distance" type="number" min="1" max="200" value="20" /></label>
-                <label>Approach seconds <code>attackMaxRouteTime</code><input id="attack-time" type="number" min="1" max="60" value="4" /></label>
+                <label>Steps per walk<input id="route-step" type="number" min="1" max="20" value="10" /></label>
+                <label>Search route seconds<input id="route-time" type="number" min="1" max="600" value="75" /></label>
+                <label>Attack path cells<input id="attack-distance" type="number" min="1" max="200" value="20" /></label>
+                <label>Approach seconds<input id="attack-time" type="number" min="1" max="60" value="4" /></label>
               </div>
-              <label class="toggle-row">Avoid walls <code>route_avoidWalls</code><input id="avoid-walls" type="checkbox" checked /></label>
+              <label class="toggle-row">Avoid walls<input id="avoid-walls" type="checkbox" checked /></label>
               <p id="attack-range" class="hint">Normal attack: conservative 1 cell until equipment is verified.</p>
             </details>
           </section>

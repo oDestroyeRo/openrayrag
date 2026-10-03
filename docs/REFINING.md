@@ -34,7 +34,7 @@ An actual official-game refine submission (opcode 80) creates a separate admissi
 
 ## Contract and proof
 
-Authority: Rebuild `4099e2c000c3c550516760b9c1241595aac9aceb`. The shared generated socket/equipment catalog records source paths and SHA-256 provenance for weapon/equipment identity, refinability/rank, sequential success thresholds, refine handler, economic/item update code and RNG. OpenKore is behavior precedent only; its implementation is not copied.
+Authority: Rebuild `4099e2c000c3c550516760b9c1241595aac9aceb`. The shared generated socket/equipment catalog records source paths and SHA-256 provenance for weapon/equipment identity, refinability/rank, sequential success thresholds, refine handler, economic/item update code and RNG.
 
 - Outgoing opcode 80: target bag `i32`, ore **item** ID `i32`, catalyst **bag** ID `i32` fixed to zero.
 - Incoming NPC opcode 77 subtype 5 proves the refine prompt; generic NPC presence is insufficient.

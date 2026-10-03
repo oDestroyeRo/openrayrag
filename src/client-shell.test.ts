@@ -313,7 +313,9 @@ describe('client shell navigation', () => {
     expect(html).toContain('Saved credentials use a local file with user-only access. The app does not encrypt them.');
     expect(html).toContain('Passwords stay in memory unless you save locally');
     expect(html).toContain('id="password" type="password" maxlength="256" autocomplete="off" />');
-    expect(html).toContain('<option value="0">Off · approach visible targets only</option><option value="2">2 · Search the current map</option>');
+    expect(html).toContain('<option value="0">Off · approach visible targets only</option><option value="2">Search the current map</option>');
+    expect(html).toContain('<summary>Movement & approach limits</summary>');
+    expect(html).not.toContain('<code>route_');
     expect(html).toContain('id="radius" type="range" min="1" max="20" value="12"');
     expect(html).toContain('id="min-hp" type="range" min="20" max="95" value="45"');
     expect(html).toContain('Signed updates install automatically when every game and login action is stopped.');

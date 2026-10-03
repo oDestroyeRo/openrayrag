@@ -18,7 +18,7 @@ Unknown opener prerequisites wait up to 30 seconds, then skip that actor for 30 
 
 ## Verified policies and source
 
-Authority is Rebuild `4099e2c000c3c550516760b9c1241595aac9aceb`; the public pin does not prove every deployed-server detail. OpenKore `51de1ddfc4449ae5217f6886de702f87ca934030` `AI/Attack.pm:725–758,1061–1064` is only a behavior reference for ordered rules/dispatch attempts. No upstream architecture or implementation is copied.
+Authority is Rebuild `4099e2c000c3c550516760b9c1241595aac9aceb`; the public pin does not prove every deployed-server detail. Ordered rules and dispatch attempts use Companion's typed combat policy.
 
 Automatic actor policies cover Fire Bolt 11, Cold Bolt 12 and Lightning Bolt 16. `Simulation/Skills/SkillHandlerAttribute.cs`, `SkillHandler.cs:143–155` and Mage `TargetedSpellBase.cs` establish magic range 9, Blind cap 5, level-adjustable casts and a direct one-second after-cast delay. Paths reach a safe casting tile using rounded float32 Euclidean distance and directional projectile sight. Normal click-to-chase shortcuts are never used for casts. Movement legs settle before identity, eligibility, conditions, permission, range, LOS and effective SP are revalidated immediately before dispatch. Moving targets and range changes retain the original pursuit budget.
 
