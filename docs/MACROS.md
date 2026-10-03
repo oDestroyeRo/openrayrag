@@ -75,6 +75,8 @@ Self skill IDs accept 1–32,767; target skill IDs accept 1–255. Skill 55 (War
 
 `farm` projects the script's map/targets over the settings captured at **Start macro**, retaining their combat, recovery, map policy and limits. It follows verified fixed portals when necessary, then confirms that field automation is active on the requested map. That confirmation starts ongoing farming; it does not mean farming has finished, and the step timeout is not a farming duration. Conditions continue to select later sequences from fresh observations while the field runs. Party-leader follow cannot own a macro map, and a farm stage conflicting with the captured map permissions or field lock area is rejected.
 
+An empty selected-target draft uses the first farm step's targets for startup validation. A script with no farm step needs no monster selection and captures combat off when that empty draft would otherwise require targets. These projections leave the saved settings untouched; an explicitly configured combat-off or retaliation policy stays intact.
+
 Another sequence suspends retained field intent until all its steps confirm. Item/skill and NPC transaction sequences can then return to that field through the usual guarded field-resume path. A confirmed `travel` clears retained field intent; use a following `farm` step to activate a field at the destination. A new `farm` replaces the previous field intent. Changing stages does not start a new run or renew session, kill, pickup or death allowances.
 
 ### NPC service and spending contracts
