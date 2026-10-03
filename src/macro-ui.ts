@@ -147,7 +147,7 @@ export class MacroUi {
   }
   private edited(): void { this.draft.text = this.editor.value; this.savedState(); this.result.hidden = true; this.hooks.changed(); }
   private savedState(): void { this.saved.textContent = this.draft.dirty ? 'Unsaved changes · Save or copy your script before closing.' : 'Script ready · Start is always explicit; saving never starts automation.'; }
-  private error(error: unknown): void { const message = error instanceof Error ? error.message : 'Invalid macro.'; this.result.hidden = false; this.result.textContent = message; this.hooks.notify(message, true); }
+  private error(error: unknown): void { const message = (error instanceof Error ? error.message : typeof error === 'string' ? error : 'Invalid macro.').slice(0, 2000); this.result.hidden = false; this.result.textContent = message; this.hooks.notify(message, true); }
   private preview(): void {
     try {
       this.draft.text = this.editor.value; const script = this.draft.read();

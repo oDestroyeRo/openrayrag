@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MacroDraft, macroActive, macroExample, validMacroSnapshot } from './macro-ui';
+import { MacroDraft, MacroUi, macroActive, macroExample, validMacroSnapshot } from './macro-ui';
 import { dryRunMacro, MacroRuntime } from './macros';
 
 class Store {
@@ -8,6 +8,14 @@ class Store {
   setItem(key: string, value: string): void { this.data.set(key, value); }
 }
 describe('macro editor documents', () => {
+  it('preserves bounded native rejection messages for the user', () => {
+    const result={hidden:true,textContent:''};let notice='';
+    const view={result,hooks:{notify:(message:string)=>{notice=message;}}};
+    const show=(error:unknown)=>Reflect.apply(Reflect.get(MacroUi.prototype,'error'),view,[error]);
+    show('Wait for previous action receipts.');
+    expect(result).toEqual({hidden:false,textContent:'Wait for previous action receipts.'});expect(notice).toBe(result.textContent);
+    show('x'.repeat(2001));expect(notice.length).toBe(2000);
+  });
   it.each(['leveling', 'buy', 'store', 'item', 'skill'] as const)('provides a valid portable %s example', kind => {
     const value = macroExample(kind);
     expect(value.version).toBe(1); expect(value.rules.length).toBeGreaterThan(0);
