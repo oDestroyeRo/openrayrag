@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
     io::{Read, Write},
-    os::unix::fs::PermissionsExt,
     path::PathBuf,
 };
 const MAX_BYTES: u64 = 256_000;
@@ -98,21 +97,12 @@ pub(crate) fn save(app_data: PathBuf, d: &FormDocument) -> Result<(), String> {
     file::private_file(&dir, "current.json").map_err(|_| ERROR)?;
     file::remove_private_file(&dir, ".current.tmp").map_err(|_| ERROR)?;
     let result = (|| -> Result<(), String> {
-        let mut temp = file::open_at(
-            &dir,
-            ".current.tmp",
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
-            0o600,
-        )
-        .map_err(|_| ERROR)?;
-        temp.set_permissions(std::fs::Permissions::from_mode(0o600))
-            .map_err(|_| ERROR)?;
-        file::access_list::clear(&temp).map_err(|_| ERROR)?;
+        let mut temp = file::create_private_file(&dir, ".current.tmp").map_err(|_| ERROR)?;
         file::verify_private(&temp, false).map_err(|_| ERROR)?;
         temp.write_all(&bytes).map_err(|_| ERROR)?;
         temp.sync_all().map_err(|_| ERROR)?;
         file::rename_at(&dir, ".current.tmp", "current.json").map_err(|_| ERROR)?;
-        dir.sync_all().map_err(|_| ERROR)?;
+        file::sync_directory(&dir).map_err(|_| ERROR)?;
         let restored = read(&dir)?.ok_or(ERROR)?;
         if serde_json::to_vec(&restored).map_err(|_| ERROR)? != bytes {
             return Err(ERROR.into());
@@ -139,6 +129,30 @@ mod tests {
         save(p.clone(), &d).unwrap();
         assert!(save(p.clone(), &document(2)).is_err());
         assert_eq!(load(p).unwrap().unwrap().revision, 3);
+    }
+    #[test]
+    fn repeated_saves_confirm_profile_and_reject_conflicting_equal_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap();
+        let mut form = document(1);
+        form.selected_profile_id = Some("synthetic-profile".into());
+        save(path.clone(), &form).unwrap();
+        save(path.clone(), &form).unwrap();
+        form.selected_profile_id = Some("changed-profile".into());
+        assert!(save(path.clone(), &form).is_err());
+        assert_eq!(
+            load(path.clone())
+                .unwrap()
+                .unwrap()
+                .selected_profile_id
+                .as_deref(),
+            Some("synthetic-profile")
+        );
+        form.revision = 2;
+        save(path.clone(), &form).unwrap();
+        let restored = load(path).unwrap().unwrap();
+        assert_eq!(restored.revision, 2);
+        assert_eq!(restored.selected_profile_id, form.selected_profile_id);
     }
     #[test]
     fn document_excludes_credentials_and_intent() {

@@ -2,6 +2,7 @@
 //! This does not invoke the plugin's privileged macOS installer.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use minisign_verify::{PublicKey, Signature};
+#[cfg(target_os = "macos")]
 use std::{
     fs,
     io::{self, Cursor, Read},
@@ -9,7 +10,9 @@ use std::{
     process::Command,
 };
 pub(crate) const MAX_ARCHIVE: usize = 128 * 1024 * 1024;
+#[cfg(target_os = "macos")]
 const MAX_EXPANDED: u64 = 512 * 1024 * 1024;
+#[cfg(target_os = "macos")]
 const ERROR:&str="Automatic installation did not finish. Use the release download or the retained recovery bundle if needed.";
 pub(crate) fn verify(
     bytes: &[u8],
@@ -39,12 +42,14 @@ pub(crate) fn verify(
     };
     check().ok_or_else(|| "Update signature or signed version is invalid.".into())
 }
+#[cfg(target_os = "macos")]
 fn safe_path(p: &Path) -> bool {
     p.components().all(|c| matches!(c, Component::Normal(_)))
         && p.components()
             .next()
             .is_some_and(|c| c.as_os_str() == "Rayrag Companion.app")
 }
+#[cfg(target_os = "macos")]
 fn extract(bytes: &[u8], directory: &Path) -> io::Result<()> {
     // Check raw records before tar internally buffers GNU/PAX metadata. Such
     // metadata counts toward the same byte/entry limits as ordinary members.
@@ -92,9 +97,11 @@ fn extract(bytes: &[u8], directory: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+#[cfg(target_os = "macos")]
 fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "Invalid update bundle")
 }
+#[cfg(target_os = "macos")]
 fn launchable(bundle: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     let directories = [
@@ -110,6 +117,7 @@ fn launchable(bundle: &Path) -> bool {
     fs::symlink_metadata(bundle.join("Contents/MacOS/rayrag-companion"))
         .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o100 != 0)
 }
+#[cfg(target_os = "macos")]
 fn newer_than_installed(bundle: &Path, version: &str) -> bool {
     let Some(installed) = plist::Value::from_file(bundle.join("Contents/Info.plist"))
         .ok()
@@ -130,6 +138,7 @@ fn newer_than_installed(bundle: &Path, version: &str) -> bool {
     };
     bundle_matches(bundle, &installed) && candidate > current
 }
+#[cfg(target_os = "macos")]
 fn bundle_matches(bundle: &Path, version: &str) -> bool {
     let Ok(v) = plist::Value::from_file(bundle.join("Contents/Info.plist")) else {
         return false;
@@ -165,6 +174,7 @@ fn exchange(current: &Path, staged: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+#[cfg(target_os = "macos")]
 fn sync_tree(path: &Path) -> io::Result<()> {
     if fs::symlink_metadata(path)?.file_type().is_symlink() {
         return Err(invalid());
@@ -176,6 +186,7 @@ fn sync_tree(path: &Path) -> io::Result<()> {
     }
     fs::File::open(path)?.sync_all()
 }
+#[cfg(target_os = "macos")]
 fn replace(
     current: &Path,
     staged: &Path,
@@ -190,7 +201,7 @@ fn replace(
     }
     Ok(())
 }
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 fn lock_cache(cache: &Path) -> io::Result<crate::login::local_store::FileLock> {
     use std::os::unix::fs::OpenOptionsExt;
     let lock = fs::OpenOptions::new()
@@ -209,7 +220,7 @@ pub(crate) fn install(bytes: &[u8], version: &str) -> Result<(), String> {
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
         let _ = (bytes, version);
-        return Err("Automatic updates support Apple Silicon macOS only.".into());
+        Err("Use the release download to update this platform.".into())
     }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
@@ -329,7 +340,7 @@ mod tests {
         assert_eq!(fs::read(old.join("working")).unwrap(), b"new");
         assert_eq!(fs::read(new.join("working")).unwrap(), b"old");
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     #[test]
     fn private_transaction_lock_excludes_another_process_owner() {
         let t = tempfile::tempdir().unwrap();
@@ -338,7 +349,7 @@ mod tests {
         drop(first);
         assert!(lock_cache(t.path()).is_ok());
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     #[test]
     fn cache_lock_release_is_owned_by_the_acquiring_process() {
         use crate::login::local_store::InheritedLock;
@@ -367,6 +378,7 @@ mod tests {
         assert!(next_completion_releases);
     }
 
+    #[cfg(target_os = "macos")]
     fn archive(entries: &[(&str, u32, tar::EntryType)]) -> Vec<u8> {
         let mut tar = tar::Builder::new(Vec::new());
         for (path, mode, kind) in entries {
@@ -383,6 +395,7 @@ mod tests {
         gz.finish().unwrap()
     }
     #[test]
+    #[cfg(target_os = "macos")]
     fn archive_aliases_links_and_unsafe_modes_reject() {
         use tar::EntryType;
         for entries in [
@@ -409,6 +422,7 @@ mod tests {
         .is_ok());
     }
     #[test]
+    #[cfg(target_os = "macos")]
     fn advertised_version_must_match_both_bundle_version_fields() {
         let t = tempfile::tempdir().unwrap();
         fs::create_dir(t.path().join("Contents")).unwrap();
@@ -435,6 +449,7 @@ mod tests {
         assert!(newer_than_installed(t.path(), "0.2.10"));
     }
     #[test]
+    #[cfg(target_os = "macos")]
     fn bundle_requires_owner_executable_binary_and_searchable_directories() {
         use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir().unwrap();
@@ -469,12 +484,14 @@ mod tests {
         let sig = f["signature"].as_str().unwrap();
         let key = f["publicKey"].as_str().unwrap();
         verify(&b, sig, key, "0.2.27").unwrap();
+        assert!(verify(b"archive", "bad", "bad", "0.2.1").is_err());
         assert!(verify(&b, sig, key, "0.2.28").is_err());
         let mut altered = b;
         altered[0] ^= 1;
         assert!(verify(&altered, sig, key, "0.2.27").is_err());
     }
     #[test]
+    #[cfg(target_os = "macos")]
     fn paths_and_invalid_signatures_reject() {
         assert!(!safe_path(Path::new("../Rayrag Companion.app")));
         assert!(!safe_path(Path::new("Rayrag Companion.app/../../escape")));
