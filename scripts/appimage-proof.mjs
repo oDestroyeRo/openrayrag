@@ -283,7 +283,7 @@ function mappedHeader(elf, program, name) {
     `ELF loader header does not map ${name}.`);
   return `${program.type}:${program.flags}:${program.alignment}:${name}`;
 }
-function canonicalHeaders(elf) {
+function canonicalHeaders(elf, original = elf) {
   const result = [];
   for (const program of elf.programs.filter(program => program.type !== 1)) {
     if (program.type === 2 || program.type === 3) result.push(mappedHeader(elf, program, program.type === 2 ? '.dynamic' : '.interp'));
@@ -296,7 +296,21 @@ function canonicalHeaders(elf) {
         && program.physical - load.physical === BigInt(program.offset - load.offset));
       requireValue(load, 'ELF PHDR table is not mapped by a LOAD segment.');
       result.push(`${program.type}:${program.flags}:${program.alignment}:program-table`);
-    } else if (program.type === 4 || program.type === 0x6474e553) {
+    } else if (program.type === 0x6474e553) {
+      const section = elf.byName.get('.note.gnu.property');
+      if (section && program.offset === section.offset && program.address === section.address) {
+        result.push(mappedHeader(elf, program, section.name));
+      } else {
+        // Ubuntu 22.04 Patchelf 0.14 retains this exact header when it relocates
+        // the property section; its former bytes may overlap the enlarged PHDR
+        // table. Preserve the original raw header, not a claimed current mapping.
+        // Patchelf 0.18 also updates PT_GNU_PROPERTY in writeReplacedSections.
+        const prior = original.programs.find(header => header.type === program.type
+          && sameFields(header, program, Object.keys(program)));
+        requireValue(prior, 'ELF retained GNU_PROPERTY header differs.');
+        result.push(mappedHeader(original, prior, '.note.gnu.property'));
+      }
+    } else if (program.type === 4) {
       const notes = [...elf.byName.values()].filter(section => section.type === 7 && section.offset >= program.offset
         && section.offset + section.size <= program.offset + program.fileSize).sort((a, b) => a.offset - b.offset);
       requireValue(notes.length > 0 && program.fileSize === program.memorySize, 'ELF NOTE mapping is invalid.');
@@ -344,6 +358,8 @@ function compareProgramMappings(original, deployed) {
       && Number(roundUp(BigInt(left.offset + left.memorySize), 4096n)) === start
       && right.fileSize === right.memorySize && right.memorySize > left.memorySize,
     'ELF existing LOAD extent differs.');
+    requireValue(deployed.bytes.subarray(left.offset + left.fileSize, left.offset + left.memorySize)
+      .every(byte => byte === 0), 'ELF extended LOAD changes original zero-fill memory.');
     const extension = { ...right, offset: start, address: right.address + BigInt(start - right.offset),
       physical: right.physical + BigInt(start - right.offset), fileSize: right.offset + right.fileSize - start,
       memorySize: right.offset + right.memorySize - start };
@@ -364,7 +380,7 @@ function compareProgramMappings(original, deployed) {
       'ELF relocated metadata LOAD placement differs.');
     validateMetadataLoad(deployed, extra[0], moved);
   }
-  const leftHeaders = canonicalHeaders(original), rightHeaders = canonicalHeaders(deployed);
+  const leftHeaders = canonicalHeaders(original), rightHeaders = canonicalHeaders(deployed, original);
   requireValue(leftHeaders.length === rightHeaders.length && leftHeaders.every((header, index) => header === rightHeaders[index]),
     'ELF program loader headers differ.');
 }

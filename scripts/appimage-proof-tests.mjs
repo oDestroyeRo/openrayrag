@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { APPIMAGE_RPATH, compareElfIdentity, compareDynamicIdentity, verifyAppImageExecutable } from './appimage-proof.mjs';
 
-function fixture({ patched = false, reorder = false, extra = false, relocateInterp = false } = {}) {
+function fixture({ patched = false, reorder = false, extra = false, relocateInterp = false, property = false, extendMetadata = false } = {}) {
   const definitions = [
     { name: '.interp', type: 1, flags: 2n, offset: 0x300, data: Buffer.from('/lib64/ld-linux-x86-64.so.2\0') },
     { name: '.text', type: 1, flags: 6n, offset: 0x1000, data: Buffer.from([0x31, 0xc0, 0xc3]) },
@@ -19,12 +19,15 @@ function fixture({ patched = false, reorder = false, extra = false, relocateInte
     { name: '.dynsym', type: 11, flags: 2n, offset: 0x3c0, entrySize: 24n, link: '.dynstr', data: Buffer.alloc(72) },
     { name: '.rela.dyn', type: 4, flags: 2n, offset: 0x430, entrySize: 24n, link: '.dynsym', info: '.data', data: Buffer.alloc(24, 7) },
   ];
-  for (const section of definitions) { section.address = BigInt(section.offset); section.alignment = 1n; section.size ??= section.data.length; }
+  if (property) definitions.push({ name: '.note.gnu.property', type: 7, flags: 2n, offset: 0x480, alignment: 8n,
+    data: Buffer.from('040000002000000005000000474e5500020000c0040000000300000000000000028000c0040000000100000000000000', 'hex') });
+  if (extendMetadata) Object.assign(definitions.find(section => section.name === '.bss'), { offset: 0x30a0, size: 0x100 });
+  for (const section of definitions) { section.address = BigInt(section.offset); section.alignment ??= 1n; section.size ??= section.data.length; }
   const sectionOf = name => definitions.find(section => section.name === name);
   let metadataEnd = 0x4000;
-  if (patched) for (const name of ['.dynstr', '.dynamic', ...(relocateInterp ? ['.interp'] : [])]) {
+  if (patched) for (const name of ['.dynstr', '.dynamic', ...(relocateInterp ? ['.interp'] : []), ...(property ? ['.note.gnu.property'] : [])]) {
     const section = sectionOf(name);
-    section.offset = metadataEnd; section.address = BigInt(0x104000 + metadataEnd - 0x4000); section.alignment = 8n;
+    section.offset = metadataEnd; section.address = BigInt((extendMetadata ? 0x4000 : 0x104000) + metadataEnd - 0x4000); section.alignment = 8n;
     metadataEnd += Math.ceil(section.size / 8) * 8;
   }
   const entries = [
@@ -39,7 +42,7 @@ function fixture({ patched = false, reorder = false, extra = false, relocateInte
   if (reorder) definitions.reverse();
   if (extra) definitions.push({ name: '.injected', type: 1, flags: 6n, offset: 0x2100, address: 0x2100n, alignment: 1n, data: Buffer.from([0xc3]), size: 1 });
   const sections = [{ name: '', type: 0, flags: 0n, data: Buffer.alloc(0) }, ...definitions];
-  sections.push({ name: '.shstrtab', type: 3, flags: 0n, offset: 0x3100, alignment: 1n });
+  sections.push({ name: '.shstrtab', type: 3, flags: 0n, offset: extendMetadata ? 0x3400 : 0x3100, alignment: 1n });
   const nameOffsets = new Map();
   let strings = '';
   for (const section of sections) { nameOffsets.set(section.name, strings.length); strings += section.name + '\0'; }
@@ -50,7 +53,7 @@ function fixture({ patched = false, reorder = false, extra = false, relocateInte
   symbols.writeUInt16LE(indexOf('.text'), 30); symbols.writeBigUInt64LE(0x1000n, 32);
   symbols[52] = 3;
   symbols.writeUInt16LE(indexOf('.dynstr'), 54); symbols.writeBigUInt64LE(sectionOf('.dynstr').address, 56);
-  const phCount = patched ? 10 : 9, table = 0x3200;
+  const phCount = (patched && !extendMetadata ? 10 : 9) + (property ? 1 : 0), table = extendMetadata ? 0x3500 : 0x3200;
   const bytes = Buffer.alloc(patched ? metadataEnd + 1 : table + sections.length * 64);
   bytes.set([127, 69, 76, 70, 2, 1, 1]);
   bytes.writeUInt16LE(3, 16); bytes.writeUInt16LE(62, 18); bytes.writeUInt32LE(1, 20);
@@ -77,10 +80,13 @@ function fixture({ patched = false, reorder = false, extra = false, relocateInte
     [3, 4, sectionOf('.interp').offset, sectionOf('.interp').address, sectionOf('.interp').size, sectionOf('.interp').size, 1n],
     [1, 4, 0, 0n, 0x500, 0x500, 4096n], [1, 5, 0x1000, 0x1000n, 3, 3, 4096n],
     [1, 4, 0x2000, 0x2000n, sectionOf('.rodata').size, sectionOf('.rodata').size, 4096n],
-    [1, 6, 0x3000, 0x3000n, 0xa0, 0x101000, 4096n],
+    [1, 6, 0x3000, 0x3000n, patched && extendMetadata ? metadataEnd - 0x3000 : 0xa0,
+      extendMetadata ? (patched ? metadataEnd - 0x3000 : 0x1a0) : 0x101000, 4096n],
     [2, 6, sectionOf('.dynamic').offset, sectionOf('.dynamic').address, sectionOf('.dynamic').size, sectionOf('.dynamic').size, 8n],
     [4, 4, 0x340, 0x340n, 4, 4, 4n], [0x6474e551, 6, 0, 0n, 0, 0, 16n],
-    ...(patched ? [[1, 6, 0x4000, 0x104000n, metadataEnd - 0x4000, metadataEnd - 0x4000, 4096n]] : []),
+    ...(property ? [[0x6474e553, 4, patched && property === 'relocated' ? sectionOf('.note.gnu.property').offset : 0x480,
+      patched && property === 'relocated' ? sectionOf('.note.gnu.property').address : 0x480n, 48, 48, 8n]] : []),
+    ...(patched && !extendMetadata ? [[1, 6, 0x4000, 0x104000n, metadataEnd - 0x4000, metadataEnd - 0x4000, 4096n]] : []),
   ];
   const programHeaders = [];
   for (const [index, [type, flags, offset, address, fileSize, memorySize, alignment]] of programs.entries()) {
@@ -104,6 +110,26 @@ test('accepts only documented word alignment of relocated sections', () => {
   compareElfIdentity(original.bytes, deployed.bytes);
   deployed.bytes.writeBigUInt64LE(16n, deployed.headers.get('.interp') + 48);
   assert.throws(() => compareElfIdentity(original.bytes, deployed.bytes), /metadata differs/);
+});
+
+test('preserves property notes with exactly retained or correctly relocated GNU_PROPERTY headers', () => {
+  for (const property of ['retained', 'relocated']) {
+    const original = fixture({ property }), deployed = fixture({ patched: true, property });
+    compareElfIdentity(original.bytes, deployed.bytes);
+    const at = deployed.programHeaders.find(at => deployed.bytes.readUInt32LE(at) === 0x6474e553);
+    deployed.bytes.writeUInt32LE(5, at + 4);
+    assert.throws(() => compareElfIdentity(original.bytes, deployed.bytes), /GNU_PROPERTY|loader/);
+  }
+  const original = fixture({ property: 'retained' }), deployed = fixture({ patched: true, property: 'retained' });
+  deployed.bytes[deployed.offsets.get('.note.gnu.property')] ^= 1;
+  assert.throws(() => compareElfIdentity(original.bytes, deployed.bytes), /section contents differ/);
+});
+
+test('extending a RW LOAD preserves original zero-fill memory when it becomes file-backed', () => {
+  const original = fixture({ extendMetadata: true }), deployed = fixture({ patched: true, extendMetadata: true });
+  compareElfIdentity(original.bytes, deployed.bytes);
+  deployed.bytes[0x30a0] = 99;
+  assert.throws(() => compareElfIdentity(original.bytes, deployed.bytes), /zero-fill memory/);
 });
 
 function dynamicSlot(bytes, tag) {
