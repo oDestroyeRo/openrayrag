@@ -25,6 +25,11 @@ const VERSION_URL: &str =
 const MAX_FRAME: usize = 512 * 1024;
 const MAX_QUEUE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EVENTS: usize = 64;
+const MAX_BATCH_EVENTS: usize = 16;
+const CONTROL_EVENT_BYTES: usize = 256;
+// Applying one polled batch can send Ready for every map change before polling again.
+// Keep those acknowledgements and the terminal event writable while reads pause.
+const RESERVED_EVENTS: usize = MAX_BATCH_EVENTS + 1;
 pub(crate) fn runtime_url() -> tauri::Url {
     if cfg!(debug_assertions) {
         "http://127.0.0.1:1420/bot-runtime.html".parse().unwrap()
@@ -81,8 +86,12 @@ pub(crate) enum Event {
 impl Event {
     fn size(&self) -> usize {
         match self {
-            Self::EnterSent { bytes } | Self::Frame { bytes } => bytes.len(),
-            _ => 256,
+            // A polled frame can produce one ReadySent before another batch is drained.
+            // Charge at least that event's size so the reserve survives successive batches.
+            Self::EnterSent { bytes } | Self::Frame { bytes } => {
+                bytes.len().max(CONTROL_EVENT_BYTES)
+            }
+            _ => CONTROL_EVENT_BYTES,
         }
     }
 }
@@ -103,6 +112,21 @@ struct Connection {
     delivery_sequence: u64,
     outgoing: mpsc::Sender<Outgoing>,
     task: Option<JoinHandle<()>>,
+}
+impl Connection {
+    fn incoming_capacity(&self) -> bool {
+        self.queue.len() < MAX_EVENTS - RESERVED_EVENTS
+            && self.queue_bytes
+                <= MAX_QUEUE_BYTES - MAX_FRAME - RESERVED_EVENTS * CONTROL_EVENT_BYTES
+    }
+    fn push_event(&mut self, event: Event) -> Result<(), String> {
+        if self.queue.len() >= MAX_EVENTS || self.queue_bytes + event.size() > MAX_QUEUE_BYTES {
+            return Err("Incoming transport queue exceeded its limit.".into());
+        }
+        self.queue_bytes += event.size();
+        self.queue.push_back(event);
+        Ok(())
+    }
 }
 #[derive(Default)]
 struct State {
@@ -265,14 +289,19 @@ fn push(app: &tauri::AppHandle, epoch: u64, event: Option<Event>) -> Result<(), 
         .ok_or("Connection replaced.")?;
     mutate(&mut gate);
     if let Some(event) = event {
-        if current.queue.len() >= MAX_EVENTS || current.queue_bytes + event.size() > MAX_QUEUE_BYTES
-        {
-            return Err("Incoming transport queue exceeded its limit.".into());
-        }
-        current.queue_bytes += event.size();
-        current.queue.push_back(event);
+        current.push_event(event)?;
     }
     Ok(())
+}
+fn incoming_capacity(app: &tauri::AppHandle, epoch: u64) -> Result<bool, String> {
+    let shared = app.state::<SharedDirect>();
+    let state = shared.0.lock().map_err(|_| "Transport unavailable.")?;
+    let current = state
+        .current
+        .as_ref()
+        .filter(|c| c.epoch == epoch)
+        .ok_or("Connection replaced.")?;
+    Ok(current.incoming_capacity())
 }
 fn admit_handshake(app: &tauri::AppHandle, epoch: u64) -> Result<(), String> {
     let _permit = crate::maintenance::admit(app)?;
@@ -374,17 +403,18 @@ fn config() -> WebSocketConfig {
         .max_write_buffer_size(MAX_FRAME * 2)
 }
 // The same loop runs against a local synthetic socket in tests. Production endpoint is fixed above.
-struct TransportHooks<E, F, P, H> {
+struct TransportHooks<E, F, P, H, C> {
     event: E,
     finished: F,
     ping: P,
     handshake: H,
+    incoming_capacity: C,
 }
-async fn drive<S, E, F, P, H>(
+async fn drive<S, E, F, P, H, C>(
     mut socket: WebSocketStream<S>,
     profile: LoginProfile,
     mut outgoing: mpsc::Receiver<Outgoing>,
-    mut hooks: TransportHooks<E, F, P, H>,
+    mut hooks: TransportHooks<E, F, P, H, C>,
     ping_period: Duration,
 ) -> Result<(), String>
 where
@@ -393,6 +423,7 @@ where
     F: FnMut(),
     P: FnMut() -> bool,
     H: FnMut() -> Result<(), String>,
+    C: FnMut() -> Result<bool, String>,
 {
     (hooks.handshake)()?;
     let auth = socket
@@ -411,6 +442,7 @@ where
     let mut approved = false;
     let login_deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
+        let capacity = (hooks.incoming_capacity)()?;
         tokio::select! {
             _=pings.tick()=>{
                 if (hooks.ping)(){let answer=socket.send(Message::Binary(vec![4].into())).await;(hooks.finished)();
@@ -424,7 +456,7 @@ where
                 (hooks.finished)();let failed=answer.is_err();let _=request.result.send(answer);
                 if failed{return Err("Transport write failed. Pending action outcomes remain unresolved.".into());}
             }
-            frame=socket.next()=>{
+            frame=socket.next(),if capacity=>{
                 let Some(frame)=frame else {return Ok(())};
                 match frame.map_err(|_|"Connection stream failed.")? {
                     Message::Binary(bytes)=>{
@@ -443,6 +475,8 @@ where
                     _=>return Err("Unsupported transport frame.".into()),
                 }
             }
+            // Polling frees capacity without changing command/Ping admission or ownership.
+            _=tokio::time::sleep(Duration::from_millis(10)),if !capacity=>{},
             _=tokio::time::sleep_until(login_deadline),if !approved=>return Err("Sign-in timed out.".into()),
         }
     }
@@ -483,6 +517,7 @@ async fn run(
                 finished: || finish_write(&app, epoch),
                 ping: || admit_ping(&app, epoch),
                 handshake: || admit_handshake(&app, epoch),
+                incoming_capacity: || incoming_capacity(&app, epoch),
             },
             Duration::from_secs(5),
         )
@@ -631,7 +666,7 @@ pub(crate) fn direct_poll(
         return Err("Apply the previous transport batch first.".into());
     }
     let mut events = Vec::new();
-    for _ in 0..16 {
+    for _ in 0..MAX_BATCH_EVENTS {
         let Some(event) = current.queue.pop_front() else {
             break;
         };
@@ -888,7 +923,11 @@ mod tests {
         .unwrap();
         (client, server.await.unwrap())
     }
-    async fn next(socket: &mut WebSocketStream<tokio::net::TcpStream>) -> Vec<u8> {
+    async fn next<S>(socket: &mut S) -> Vec<u8>
+    where
+        S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+            + Unpin,
+    {
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 match socket.next().await.unwrap().unwrap() {
@@ -926,6 +965,7 @@ mod tests {
                 },
                 ping: move || permission.load(Ordering::SeqCst),
                 handshake: || Ok(()),
+                incoming_capacity: || Ok(true),
             },
             Duration::from_millis(40),
         ));
@@ -993,6 +1033,197 @@ mod tests {
         tcp: tokio::net::TcpStream,
         fail: Arc<AtomicBool>,
     }
+    async fn backpressured_burst(frame_size: usize, count: usize) {
+        let (client, mut server) = sockets().await;
+        let (outgoing, receiver) = mpsc::channel(16);
+        let queue = Arc::new(Mutex::new(connection(1)));
+        let events = queue.clone();
+        let capacity = queue.clone();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let writes = completed.clone();
+        let allow_ping = Arc::new(AtomicBool::new(false));
+        let permission = allow_ping.clone();
+        let task = tokio::spawn(drive(
+            client,
+            profile(),
+            receiver,
+            TransportHooks {
+                event: move |event: Option<Event>| {
+                    if let Some(event) = event {
+                        events.lock().unwrap().push_event(event)?;
+                    }
+                    Ok(())
+                },
+                finished: move || {
+                    writes.fetch_add(1, Ordering::SeqCst);
+                },
+                ping: move || permission.load(Ordering::SeqCst),
+                handshake: || Ok(()),
+                incoming_capacity: move || Ok(capacity.lock().unwrap().incoming_capacity()),
+            },
+            Duration::from_millis(20),
+        ));
+        next(&mut server).await;
+        server
+            .send(Message::Binary(approval().into()))
+            .await
+            .unwrap();
+        assert_eq!(next(&mut server).await, direct_wire::enter("Synthetic"));
+        let (mut server_write, mut server) = server.split();
+        let producer = tokio::spawn(async move {
+            for n in 0..count {
+                let mut frame = vec![0; frame_size];
+                frame[0] = 6;
+                frame[1] = n as u8;
+                server_write
+                    .send(Message::Binary(frame.into()))
+                    .await
+                    .unwrap();
+            }
+            server_write
+        });
+        // Deliberately delay the bundled runtime's first poll past a full burst.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while queue.lock().unwrap().incoming_capacity() {
+                assert!(!task.is_finished());
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(
+            !task.is_finished(),
+            "a delayed consumer must not close the transport"
+        );
+        assert!(queue.lock().unwrap().queue.len() < MAX_EVENTS);
+        assert!(!queue.lock().unwrap().incoming_capacity());
+
+        // A drained batch can request Ready for every processed map change.
+        for _ in 0..MAX_BATCH_EVENTS {
+            let (answer, result) = oneshot::channel();
+            outgoing
+                .send(Outgoing {
+                    bytes: vec![2],
+                    result: answer,
+                })
+                .await
+                .unwrap();
+            assert_eq!(next(&mut server).await, [2]);
+            assert_eq!(result.await.unwrap(), Ok(()));
+        }
+        let (answer, result) = oneshot::channel();
+        outgoing
+            .send(Outgoing {
+                bytes: vec![19],
+                result: answer,
+            })
+            .await
+            .unwrap();
+        assert_eq!(next(&mut server).await, [19]);
+        assert_eq!(result.await.unwrap(), Ok(()));
+        allow_ping.store(true, Ordering::SeqCst);
+        assert_eq!(next(&mut server).await, [4]);
+        allow_ping.store(false, Ordering::SeqCst);
+        assert!(completed.load(Ordering::SeqCst) >= 19);
+        assert!(!task.is_finished());
+
+        let mut frames = Vec::new();
+        let mut ready = 0;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while frames.len() < count {
+                {
+                    let mut c = queue.lock().unwrap();
+                    assert!(c.queue.len() <= MAX_EVENTS);
+                    assert!(c.queue_bytes <= MAX_QUEUE_BYTES);
+                    for _ in 0..MAX_BATCH_EVENTS {
+                        let Some(event) = c.queue.pop_front() else {
+                            break;
+                        };
+                        c.queue_bytes -= event.size();
+                        match event {
+                            Event::Frame { bytes } => frames.push(bytes[1]),
+                            Event::ReadySent => ready += 1,
+                            Event::Opened | Event::EnterSent { .. } => {}
+                            other => panic!("unexpected {other:?}"),
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(frames, (0..count).map(|n| n as u8).collect::<Vec<_>>());
+        assert_eq!(ready, MAX_BATCH_EVENTS);
+        assert!(!task.is_finished());
+        let _server_write = producer.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+    #[tokio::test]
+    async fn actual_socket_backpressures_spawn_burst_without_blocking_ready_stop_or_ping() {
+        backpressured_burst(2, MAX_EVENTS + 19).await;
+    }
+    #[tokio::test]
+    async fn actual_socket_backpressures_byte_burst_without_blocking_ready_stop_or_ping() {
+        backpressured_burst(MAX_FRAME, MAX_QUEUE_BYTES / MAX_FRAME + 3).await;
+    }
+    #[test]
+    fn incoming_capacity_reserves_worst_case_frame_batch_ready_and_terminal() {
+        for frame_size in [2, MAX_FRAME] {
+            let mut c = connection(1);
+            while c.incoming_capacity() {
+                c.push_event(Event::Frame {
+                    bytes: vec![6; frame_size],
+                })
+                .unwrap();
+            }
+            assert!(c.queue.len() < MAX_EVENTS);
+            for _ in 0..MAX_BATCH_EVENTS {
+                c.push_event(Event::ReadySent).unwrap();
+            }
+            c.push_event(Event::Closed {
+                reason: "Synthetic close.",
+            })
+            .unwrap();
+            assert!(c.queue.len() <= MAX_EVENTS);
+            assert!(c.queue_bytes <= MAX_QUEUE_BYTES);
+        }
+    }
+    #[test]
+    fn mixed_small_map_batches_can_reuse_ready_reserve_without_byte_overflow() {
+        let mut c = connection(1);
+        for size in [16; MAX_BATCH_EVENTS * 2].into_iter().chain([MAX_FRAME; 6]) {
+            assert!(c.incoming_capacity());
+            c.push_event(Event::Frame {
+                bytes: vec![18; size],
+            })
+            .unwrap();
+        }
+        let padding =
+            MAX_QUEUE_BYTES - MAX_FRAME - RESERVED_EVENTS * CONTROL_EVENT_BYTES - c.queue_bytes;
+        for size in [padding, MAX_FRAME] {
+            assert!(c.incoming_capacity());
+            c.push_event(Event::Frame {
+                bytes: vec![6; size],
+            })
+            .unwrap();
+        }
+        assert!(!c.incoming_capacity());
+        for _ in 0..2 {
+            // Each processed small map frame sends Ready before the next poll.
+            for _ in 0..MAX_BATCH_EVENTS {
+                let event = c.queue.pop_front().unwrap();
+                c.queue_bytes -= event.size();
+            }
+            for _ in 0..MAX_BATCH_EVENTS {
+                c.push_event(Event::ReadySent).unwrap();
+            }
+            assert!(c.queue.len() < MAX_EVENTS);
+            assert!(c.queue_bytes <= MAX_QUEUE_BYTES - CONTROL_EVENT_BYTES);
+        }
+    }
     impl tokio::io::AsyncRead for FailingIo {
         fn poll_read(
             mut self: std::pin::Pin<&mut Self>,
@@ -1039,6 +1270,7 @@ mod tests {
                 finished: || {},
                 ping: || false,
                 handshake: || Ok(()),
+                incoming_capacity: || Ok(true),
             },
             Duration::from_secs(5),
         ));
@@ -1078,6 +1310,7 @@ mod tests {
                 finished: || {},
                 ping: || false,
                 handshake: || Ok(()),
+                incoming_capacity: || Ok(true),
             },
             Duration::from_secs(5),
         ));
