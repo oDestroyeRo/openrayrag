@@ -97,7 +97,7 @@ async function fixture(saved: { username: string; characterSlot: number; autoLog
   ipc.invoke.mockImplementation(async (command: string,args?:{document?:{revision:number}}) => {
     if(command==='current_form')return savedForm;
     if(command==='save_current_form')return args?.document?.revision;
-    if(command==='update_status')return {version:'0.2.27',phase:'current',message:'Current'};
+    if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'current',message:'Current'};
     if (command === 'saved_login') { if (readFails) throw 'synthetic store failure'; return saved; }
     return undefined;
   });
@@ -134,7 +134,7 @@ it('waits for an in-flight save, reflushes a late edit, and deduplicates Close w
   const writing=new Promise<void>(resolve=>{release=resolve;});let first=true;
   ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
     if(command==='save_current_form'){if(first){first=false;await writing;}return args!.document.revision;}
-    if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+    if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
   });
   f.get('radius').value='17';await f.main.emit('input',f.get('radius'));await vi.advanceTimersByTimeAsync(300);
   await requestClose();await requestClose();
@@ -170,7 +170,7 @@ it('lets Close wait for updater preflight and stops it before reserving an insta
   const f=await fixture();let release:()=>void=()=>{};let first=true;
   const saving=new Promise<void>(resolve=>{release=resolve;});
   ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
-    if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+    if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
     if(command==='save_current_form'){if(first){first=false;await saving;}return args!.document.revision;}
   });
   await vi.advanceTimersByTimeAsync(15_000);await requestClose();
@@ -220,7 +220,7 @@ it('cancels Close after an invalid draft or failed save, unlocks editing, and pe
 describe('native local-login form and metadata', () => {
   it('starts session-only and discloses unencrypted local storage without accessing frontend persistence', async () => {
     const f = await fixture();
-    expect(f.root.markup).toContain('Save login on this Mac');
+    expect(f.root.markup).toContain('Save login on this computer');
     expect(f.root.markup).toContain('local file with user-only access');
     expect(f.root.markup).toContain('The app does not encrypt them.');
     expect(f.root.markup).not.toContain('Keychain');
@@ -293,7 +293,7 @@ describe('unsent account draft update fence',()=>{
     if(id.endsWith('-login'))input.checked=true;
     else input.value=id==='character-slot'?'1':'synthetic-unsent';
     ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
-      if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+      if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
       if(command==='save_current_form')return args!.document.revision;
       if(command==='update_reserve')return 'a'.repeat(32);
       if(command==='update_install')return true;
@@ -316,7 +316,7 @@ it('opens the manual release through a fixed native command without gameplay com
 it('defers the actual main updater while a refine preview or retained economic owner is unsettled',async()=>{
  const f=await fixture();ipc.featureSettled=false;
  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
-  if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+  if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
   if(command==='save_current_form')return args!.document.revision;
   if(command==='update_reserve')return 'b'.repeat(32);
   if(command==='update_install')return true;
@@ -328,7 +328,7 @@ it('defers the actual main updater while a refine preview or retained economic o
 it('defers the actual main updater for an unsaved macro and permits installation once the document is saved',async()=>{
  const f=await fixture();ipc.macroDirty=true;
  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
-  if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+  if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
   if(command==='save_current_form')return args!.document.revision;
   if(command==='update_reserve')return 'd'.repeat(32);
   if(command==='update_install')return true;
@@ -343,7 +343,7 @@ it('defers the actual main updater for an unsaved macro and permits installation
 it('keeps shell navigation usable through a deferred installation without unlocking actions',async()=>{
  const f=await fixture();let rejectInstall:((error:Error)=>void)|undefined;
  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
-  if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+  if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
   if(command==='save_current_form')return args!.document.revision;
   if(command==='update_reserve')return 'c'.repeat(32);
   if(command==='update_install')return new Promise((_resolve,reject)=>{rejectInstall=reject;});

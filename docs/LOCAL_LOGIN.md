@@ -1,8 +1,8 @@
 # Local saved login
 
-Sign-in is session-only by default. Selecting **Save login on this Mac** stores one account, password, character slot and app-open sign-in preference in the native Tauri application data directory, under `login/profile.json`. On macOS this is normally `~/Library/Application Support/com.rayrag.companion/login/profile.json`.
+Sign-in is session-only by default. Selecting **Save login on this computer** stores one account, password, character slot and app-open sign-in preference in the native Tauri application data directory, under `login/profile.json`. On macOS this is normally `~/Library/Application Support/com.rayrag.companion/login/profile.json`.
 
-The `login` directory uses permission 0700 and the file uses 0600: access is restricted to the current macOS user. The application does not encrypt credentials. Other software running as that user, administrators and backups may read the file. No colocated encryption key is used.
+On macOS/Linux the `login` directory uses permission 0700 and the file uses 0600, with extended access lists rejected. Windows requires local NTFS and uses a protected current-user-owner access list on the store, lock and profile. Rooted file operations reject reparse points and hard links. The application does not encrypt credentials. Other software running as that user, administrators and backups may read the file. No colocated encryption key is used.
 
 The app does not read, migrate, update or remove an earlier macOS Keychain entry. Save credentials once with the new local option if you want persistent sign-in. **Forget local saved login** removes the local profile, its app-open preference and a private leftover temporary write. It does not cancel an already claimed login or discard the current session's reconnect credentials. Stop cancels pending sign-in/retries; closing the game clears session memory.
 

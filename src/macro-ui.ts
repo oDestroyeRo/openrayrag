@@ -136,8 +136,8 @@ export class MacroUi {
     const limits = document.createElement('p'); limits.className = 'hint';
     limits.textContent = 'maxSpend is the whole script allowance. Each buy/store step reserves its declared cap, including NPC fees, without refunds. maxActions counts script steps. Changing map preserves this run’s limits. Saving does not start or resume a script.';
     const actions = document.createElement('div'); actions.className = 'actions macro-actions';
-    actions.append(this.button('Validate & preview', 'config', () => this.preview()), this.button('Save on this Mac', 'config', () => {
-      try { this.draft.text = this.editor.value; this.draft.save(); this.editor.value = this.draft.text; this.savedState(); hooks.changed(); hooks.notify('Macro saved on this Mac.'); }
+    actions.append(this.button('Validate & preview', 'config', () => this.preview()), this.button('Save on this computer', 'config', () => {
+      try { this.draft.text = this.editor.value; this.draft.save(); this.editor.value = this.draft.text; this.savedState(); hooks.changed(); hooks.notify('Macro saved on this computer.'); }
       catch (error) { this.error(error); }
     }));
     this.startButton.type = 'button'; this.startButton.className = 'primary compact'; this.startButton.textContent = 'Start macro'; this.startButton.dataset.manual = 'true';

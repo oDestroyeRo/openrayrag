@@ -232,6 +232,9 @@ async fn check(app: tauri::AppHandle) {
     }
 }
 pub(crate) fn schedule(app: &tauri::AppHandle) {
+    if crate::ci_smoke::active() {
+        return;
+    }
     if !AUTOMATIC_SUPPORTED {
         return;
     }
@@ -315,11 +318,7 @@ pub(crate) fn current_form(
     window: WebviewWindow,
 ) -> Result<Option<FormDocument>, String> {
     crate::require_window(&window, "main")?;
-    current_form::load(
-        app.path()
-            .app_data_dir()
-            .map_err(|_| "Settings storage unavailable.")?,
-    )
+    current_form::load(crate::app_data(&app).map_err(|_| "Settings storage unavailable.")?)
 }
 #[tauri::command]
 pub(crate) fn save_current_form(
@@ -330,9 +329,7 @@ pub(crate) fn save_current_form(
     crate::require_window(&window, "main")?;
     let mut gate = crate::maintenance::admit(&app)?;
     current_form::save(
-        app.path()
-            .app_data_dir()
-            .map_err(|_| "Settings storage unavailable.")?,
+        crate::app_data(&app).map_err(|_| "Settings storage unavailable.")?,
         &document,
     )?;
     gate.form_revision = Some(document.revision);
@@ -377,12 +374,9 @@ pub(crate) fn update_reserve(
     {
         return Err("Waiting for login to settle.".into());
     }
-    let loaded = current_form::load(
-        app.path()
-            .app_data_dir()
-            .map_err(|_| "Settings storage unavailable.")?,
-    )?
-    .ok_or("Save current settings before updating.")?;
+    let loaded =
+        current_form::load(crate::app_data(&app).map_err(|_| "Settings storage unavailable.")?)?
+            .ok_or("Save current settings before updating.")?;
     if serde_json::to_vec(&loaded).ok() != serde_json::to_vec(&document).ok() {
         return Err("Current settings changed before update settlement.".into());
     }

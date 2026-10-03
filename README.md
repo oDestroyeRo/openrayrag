@@ -1,23 +1,23 @@
 # Rayrag Companion
 
-A Tauri v2 macOS client for automatic sign-in, character selection, combat, looting and configurable game automation on [Ray Side Project SEA 01](https://websea01.rayrag.com/). It opens a bot console with a persistent character monitor, collision map, nearby actors, inventory actions and activity history. Choose **Bot only** for a native TLS WebSocket connection and a bundled controller runtime with no Unity client, or **With game client** to open the visible official game alongside the console. Companion uses its own TypeScript engine, interface and Rebuild protocol adapter.
+A Tauri v2 desktop client for automatic sign-in, character selection, combat, looting and configurable game automation on [Ray Side Project SEA 01](https://websea01.rayrag.com/). It opens a bot console with a persistent character monitor, collision map, nearby actors, inventory actions and activity history. Choose **Bot only** for a native TLS WebSocket connection and a bundled controller runtime with no Unity client, or **With game client** to open the visible official game alongside the console. Companion uses its own TypeScript engine, interface and Rebuild protocol adapter.
 
 ## Run
 
-Requires Node.js 22.12+ (tested on 24), Rust and Xcode command line tools. The application targets macOS 13+ and has been tested on Apple Silicon. See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+CI uses Node.js 26.10.0 and Rust 1.98.1. Native releases target Apple Silicon macOS 13+, Windows x64 and Linux x64. Install the platform-specific build dependencies in [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Windows/Linux use manual release installers; automatic updates remain available on Apple Silicon macOS. See [desktop CI](docs/DESKTOP_CI.md).
 
 ```sh
 npm ci
 npm run app:dev
 ```
 
-Build a local macOS application:
+Build a local application:
 
 ```sh
 npm run app:build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
-The output is `src-tauri/target/release/bundle/macos/Rayrag Companion.app`. It uses an [ad-hoc signature](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing) for local use and is not notarized. `npm run dev` previews the controller in a browser; native game control requires the Tauri app.
+Windows builds an NSIS installer; Linux builds Debian and AppImage packages. On macOS the output is `src-tauri/target/release/bundle/macos/Rayrag Companion.app`. It uses an [ad-hoc signature](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing) for local use and is not notarized. `npm run dev` previews the controller in a browser; native game control requires the Tauri app.
 
 The release profile leaves build dependencies unstripped to work around a macOS proc-macro loading failure in Homebrew Rust 1.98.1. Application optimization remains enabled.
 
@@ -38,7 +38,7 @@ Configured hours and limits still govern actions. Outside the allowed hours, the
 
 ## Configure automation
 
-Bot settings save automatically on this Mac. Closing the main window or choosing Quit waits for the latest valid settings and selected profile to be written to disk. Reopening restores the same setup, including configured map and target choices, without starting automation. If a save fails, Companion keeps the window open and displays a correction message so edits are not silently discarded.
+Bot settings save automatically on this computer. Closing the main window or choosing Quit waits for the latest valid settings and selected profile to be written to disk. Reopening restores the same setup, including configured map and target choices, without starting automation. If a save fails, Companion keeps the window open and displays a correction message so edits are not silently discarded.
 
 The six sections keep the common Start and Stop controls available:
 
@@ -61,7 +61,7 @@ Under **Workflows & social → Reusable NPC services**, choose a verified preset
 
 Condition routines use HP %, SP %, weight %, base/job level, zeny, elapsed time, map and inventory quantities. Rules have priority, cooldown, maximum runs and overall duration/action budgets. **Validate / dry run** explains matching rules without sending commands. An unknown observation never matches. Routines execute only the same validated actions available to the controller; they cannot execute code or send arbitrary packets.
 
-Under **Setup → Macros & limits → Macro scripts**, load an example or edit a version-1 JSON document, select **Validate & preview**, then explicitly **Start macro**. [Conditional macros](docs/MACROS.md) combine observed conditions with ordered farm, travel, buy, store, item-use and skill steps. A confirmed farm keeps field automation active while later level or inventory rules can select another sequence. Captured recovery/run/death limits still apply, and spending caps are reserved before NPC transactions. **Save on this Mac** restores only the script draft; Stop, reconnect or reopening never automatically resumes its execution. Scripts are bounded data, not executable code, and local checks do not establish live-game proof.
+Under **Setup → Macros & limits → Macro scripts**, load an example or edit a version-1 JSON document, select **Validate & preview**, then explicitly **Start macro**. [Conditional macros](docs/MACROS.md) combine observed conditions with ordered farm, travel, buy, store, item-use and skill steps. A confirmed farm keeps field automation active while later level or inventory rules can select another sequence. Captured recovery/run/death limits still apply, and spending caps are reserved before NPC transactions. **Save on this computer** restores only the script draft; Stop, reconnect or reopening never automatically resumes its execution. Scripts are bounded data, not executable code, and local checks do not establish live-game proof.
 
 Profiles contain validated settings, a map binding and optional character name. Up to 20 profiles are saved locally; applying one requires the matching map/character and never starts automation. Imports receive fresh IDs and cannot silently overwrite saved profiles. Credentials, login preferences and running state are excluded.
 
@@ -112,7 +112,7 @@ Your current settings and configured target choices restore before optional sign
 
 ## Accounts and compatibility
 
-Credentials are session-only by default. **Save login on this Mac** explicitly saves one native profile in the application data directory. The directory has user-only access (0700), and the file has user-only read/write access (0600). The app does not encrypt this file. **Sign in when app opens** restores the saved account and character slot at launch. **Forget local saved login** removes that profile and its launch preference. The local controller never retrieves the saved password or writes credentials into configuration, profile exports, browser storage or logs. Leave the game's own Remember Password option off. See [local login storage](docs/LOCAL_LOGIN.md).
+Credentials are session-only by default. **Save login on this computer** explicitly saves one native profile in the application data directory. Unix directories use 0700 and files use 0600. Windows uses a protected current-user-only access list on local NTFS. The app does not encrypt this file. **Sign in when app opens** restores the saved account and character slot at launch. **Forget local saved login** removes that profile and its launch preference. The local controller never retrieves the saved password or writes credentials into configuration, profile exports, browser storage or logs. Leave the game's own Remember Password option off. See [local login storage](docs/LOCAL_LOGIN.md).
 
 A successful sign-in through Companion retains the login profile in native memory for that game session, allowing reconnection without enabling local storage. A running field bot retries network loss with increasing delays and resumes the same character only after a new verified session is ready. A manually opened game without a Companion login has no session credentials to retry. The optional reconnect checkbox also permits reconnection while field combat is stopped; it does not create a run request.
 

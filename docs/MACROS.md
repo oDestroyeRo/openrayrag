@@ -228,7 +228,7 @@ The settings captured at **Start macro** continue to govern field hours, HP/SP r
 
 ## Saving and restart behavior
 
-**Save on this Mac** validates and saves one script draft locally. Loading an example, editing, saving and previewing never starts automation. Unsaved edits are marked; save or copy them before closing. If saved data is invalid, the UI reports the error and keeps that stored document until you explicitly save a valid replacement.
+**Save on this computer** validates and saves one script draft locally. Loading an example, editing, saving and previewing never starts automation. Unsaved edits are marked; save or copy them before closing. If saved data is invalid, the UI reports the error and keeps that stored document until you explicitly save a valid replacement.
 
 The draft contains script data only, with no credentials, active sequence, run intent, counters or resource receipts. It is separate from named settings profiles. Reopening/restoring the draft does not resume a macro or its farming, and reconnect does not automatically start it. Review current observations and explicitly select **Start macro** again. Installed updates also wait while a macro is active or its editor has unsaved changes.
 

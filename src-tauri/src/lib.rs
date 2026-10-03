@@ -34,6 +34,13 @@ fn map_dimensions(map: &str) -> Option<(u64, u64)> {
     Some((grid.get("width")?.as_u64()?, grid.get("height")?.as_u64()?))
 }
 
+fn app_data(app: &tauri::AppHandle) -> Result<std::path::PathBuf, tauri::Error> {
+    if let Some(directory) = ci_smoke::data_dir() {
+        return Ok(directory);
+    }
+    app.path().app_data_dir()
+}
+
 fn require_window(window: &WebviewWindow, label: &str) -> Result<(), String> {
     if window.label() != label {
         return Err("Command is not available in this window.".into());

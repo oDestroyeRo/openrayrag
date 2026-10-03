@@ -113,7 +113,7 @@ fn clear(path: PathBuf, mode: ConnectionMode, nonce: &str) -> Result<(), String>
     Ok(())
 }
 fn path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app.path().app_data_dir().map_err(|_| ERROR.into())
+    crate::app_data(app).map_err(|_| ERROR.into())
 }
 pub(crate) fn mark_admitted(
     app: &tauri::AppHandle,
