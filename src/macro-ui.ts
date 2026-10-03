@@ -6,13 +6,13 @@ const STORAGE_KEY = 'rayrag.companion.macro.v1';
 type LocalStore = Pick<Storage, 'getItem' | 'setItem'>;
 type Example = 'leveling' | 'buy' | 'store' | 'item' | 'skill';
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-export function macroActive(value: unknown): boolean { return ['running', 'waiting', 'monitoring'].includes(String(record(value).state)); }
+export function macroActive(value: unknown): boolean { const state=record(value).state;return typeof state==='string'&&['running', 'waiting', 'monitoring'].includes(state); }
 export function validMacroSnapshot(value: unknown): boolean {
   const state = record(value);
   const counts = ['generation', 'actionsIssued', 'actionsCompleted', 'sequencesIssued', 'sequencesCompleted', 'spendReserved'];
   const keys = ['state', 'reason', 'name', 'currentRule', 'stepIndex', 'pendingActionId', 'elapsedSeconds', 'fieldIntentActive', 'fieldSuspended', ...counts];
   return Object.keys(state).length === keys.length && Object.keys(state).every(key => keys.includes(key))
-    && ['idle', 'running', 'waiting', 'monitoring', 'completed', 'failed', 'cancelled'].includes(String(state.state))
+    && typeof state.state === 'string' && ['idle', 'running', 'waiting', 'monitoring', 'completed', 'failed', 'cancelled'].includes(state.state)
     && typeof state.reason === 'string' && state.reason.length <= 200 && typeof state.name === 'string' && state.name.length <= 80
     && (state.currentRule === null || typeof state.currentRule === 'string' && state.currentRule.length <= 80)
     && counts.every(key => Number.isSafeInteger(state[key]) && Number(state[key]) >= 0)

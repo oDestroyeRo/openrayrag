@@ -49,8 +49,9 @@ describe('macro editor documents', () => {
   it('accepts controller snapshots while bounding malformed macro telemetry', () => {
     const snapshot = new MacroRuntime().snapshot();
     expect(validMacroSnapshot(snapshot)).toBe(true);
-    for (const change of [{ state: 'unknown' }, { actionsIssued: NaN }, { stepIndex: 16 }, { pendingActionId: -1 }, { reason: 'x'.repeat(201) }, { credentials: 'unexpected' }]) {
+    for (const change of [{ state: 'unknown' }, { state: ['monitoring'] }, { state: { toString: () => 'monitoring' } }, { actionsIssued: NaN }, { stepIndex: 16 }, { pendingActionId: -1 }, { reason: 'x'.repeat(201) }, { credentials: 'unexpected' }]) {
       expect(validMacroSnapshot({ ...snapshot, ...change })).toBe(false);
     }
+    expect(macroActive({ state: ['monitoring'] })).toBe(false);
   });
 });
