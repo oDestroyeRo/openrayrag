@@ -1,4 +1,7 @@
+import { UI_ICONS } from './ui-icons';
+
 export type ClientPage = 'session' | 'bot' | 'manual' | 'settings';
+export type ConsoleInspector = 'nearby' | 'inventory';
 export type BotSection = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows';
 
 export interface ClientShell {
@@ -8,21 +11,12 @@ export interface ClientShell {
   readonly sessionDetails: HTMLElement;
   showPage(page: ClientPage): void;
   showBotSection(section: BotSection): void;
+  showInspector(inspector: ConsoleInspector): void;
   refreshManualIndex(): void;
 }
 
 const pages: readonly ClientPage[] = ['session', 'bot', 'manual', 'settings'];
 const botSections: readonly BotSection[] = ['combat', 'recovery', 'travel', 'inventory', 'workflows'];
-
-function icon(paths: string): string {
-  return `<svg class="client-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths}</svg>`;
-}
-
-const sessionIcon = icon('<path d="M3 12h4l3-8 4 16 3-8h4"/>');
-const botIcon = icon('<rect x="5" y="7" width="14" height="13" rx="3"/><path d="M12 3v4M2 11v5m20-5v5M9 16h6"/><path d="M9 11h.01M15 11h.01"/>');
-const toolsIcon = icon('<path d="m14 6 4 4M3 21l7-7m4-11a6 6 0 0 0-7 7l7 7a6 6 0 0 0 7-7l-4 4-7-7 4-4Z"/>');
-const settingsIcon = icon('<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>');
-const openIcon = icon('<path d="M14 3h7v7m0-7L10 14"/><path d="M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/>');
 
 /** Mount once before binding the existing controller callbacks and feature forms. */
 export function mountClientShell(root: HTMLElement): ClientShell {
@@ -30,72 +24,56 @@ export function mountClientShell(root: HTMLElement): ClientShell {
     <main class="client-shell">
       <a class="client-skip-link" href="#client-page-session-title">Skip to page content</a>
       <header class="client-toolbar">
-        <div class="client-toolbar-heading">
-          <div class="client-brand"><h1>rayrag</h1><span>Companion</span><small id="client-version">macOS · preview</small></div>
-          <div class="client-session-identity"><strong id="character">No character connected</strong><span id="status" class="pill">OFFLINE</span></div>
-          <p id="location">Connect an account to load your character.</p>
+        <div class="client-topbar">
+          <div class="client-brand"><h1>rayrag</h1><span>Companion</span></div>
+          <nav class="client-page-nav" role="tablist" aria-label="Companion pages">
+            <button id="client-tab-session" type="button" role="tab" data-client-page-nav="session" aria-controls="client-page-session" aria-selected="true">${UI_ICONS.activity}Run</button>
+            <button id="client-tab-bot" type="button" role="tab" data-client-page-nav="bot" aria-controls="client-page-bot" aria-selected="false" tabindex="-1">${UI_ICONS.adjustments}Setup</button>
+            <button id="client-tab-manual" type="button" role="tab" data-client-page-nav="manual" aria-controls="client-page-manual" aria-selected="false" tabindex="-1">${UI_ICONS.tool}Tools</button>
+            <button id="client-tab-settings" type="button" role="tab" data-client-page-nav="settings" aria-controls="client-page-settings" aria-selected="false" tabindex="-1">${UI_ICONS.settings}Settings</button>
+          </nav>
+          <button id="open" type="button" class="text-button client-account-link" data-client-navigation="account">${UI_ICONS.plug}<span id="client-account-label">Connect account</span></button>
         </div>
-        <div class="actions run-controls">
-          <button id="start" type="button" class="primary" disabled>${icon('<path d="m8 5 11 7-11 7V5Z"/>')}Start bot</button>
-          <button id="stop" type="button" class="client-stop" disabled>${icon('<rect x="6" y="6" width="12" height="12" rx="1"/>')}Stop</button>
-          <button id="disconnect" type="button" class="secondary" title="Closes the connection; cannot undo server actions" disabled>Disconnect</button>
-          <button id="open" type="button" class="secondary">Connect account ${openIcon}</button>
-        </div>
-        <div id="notice" class="notice" role="status" aria-live="polite">Connect an account and select a character. The bot starts only when you choose Start.</div>
-        <p id="config-help" class="hint" role="status" aria-live="polite"></p>
         <div class="console-character-bar" aria-label="Character monitor">
+          <div class="client-session-identity"><strong id="character">No character connected</strong><span class="console-level-label">Lv / Job <b id="console-levels">— / —</b></span><p id="location">Connect an account to load your character.</p></div>
           <div class="health"><div><span>HP</span><b id="hp-text">— / —</b></div><div class="health-track"><i id="hp-bar"></i></div></div>
           <div class="health"><div><span>SP</span><b id="sp-text">— / —</b></div><div class="health-track client-sp-track"><i id="sp-bar"></i></div></div>
-          <dl class="console-character-stats"><div><dt>Base / job level</dt><dd id="console-levels">— / —</dd></div><div><dt>Weight</dt><dd id="console-weight">— / —</dd></div><div><dt>Zeny</dt><dd id="console-zeny">—</dd></div><div><dt>Deaths / cap</dt><dd><span id="death-count">—</span> / <span id="death-cap">—</span></dd></div></dl>
-          <p id="console-experience" class="console-experience">Base EXP — · Job EXP —</p>
+          <dl class="console-character-stats"><div><dt>Weight</dt><dd id="console-weight">— / —</dd></div><div><dt>Base EXP</dt><dd id="console-base-experience">— <small>(+—)</small></dd></div><div><dt>Job EXP</dt><dd id="console-job-experience">— <small>(+—)</small></dd></div><div><dt>Zeny</dt><dd id="console-zeny">—</dd></div><div><dt>Deaths / cap</dt><dd><span id="death-count">—</span> / <span id="death-cap">—</span></dd></div></dl>
+          <p id="console-experience" class="client-visually-hidden">Base EXP — · Job EXP —</p>
+        </div>
+        <div class="client-run-heading">
+          <div class="client-run-copy"><span id="status" class="pill">OFFLINE</span><h2 id="client-run-title">Connect your character</h2><div id="notice" class="notice" role="status" aria-live="polite">Connect an account and select a character. The bot starts only when you choose Start.</div><p id="config-help" class="hint" role="status" aria-live="polite"></p></div>
+          <div class="actions run-controls"><button id="start" type="button" class="primary" disabled>${UI_ICONS.play}Start bot</button><button id="stop" type="button" class="client-stop" disabled>${UI_ICONS.stop}Stop bot</button></div>
         </div>
       </header>
 
-      <nav class="client-page-nav" role="tablist" aria-label="Companion pages">
-        <button id="client-tab-session" type="button" role="tab" data-client-page-nav="session" aria-controls="client-page-session" aria-selected="true">${sessionIcon}Console</button>
-        <button id="client-tab-bot" type="button" role="tab" data-client-page-nav="bot" aria-controls="client-page-bot" aria-selected="false" tabindex="-1">${botIcon}Bot</button>
-        <button id="client-tab-manual" type="button" role="tab" data-client-page-nav="manual" aria-controls="client-page-manual" aria-selected="false" tabindex="-1">${toolsIcon}Manual tools</button>
-        <button id="client-tab-settings" type="button" role="tab" data-client-page-nav="settings" aria-controls="client-page-settings" aria-selected="false" tabindex="-1">${settingsIcon}Settings</button>
-      </nav>
-
       <div class="client-pages">
         <section id="client-page-session" class="client-page" role="tabpanel" aria-labelledby="client-tab-session">
-          <div class="client-page-heading console-heading"><div><h2 id="client-page-session-title" tabindex="-1">Bot console</h2><p>Your field, inventory and action history in one workspace.</p></div><p id="console-lock" class="hint">Connect a verified character to use manual controls.</p></div>
+          <h2 id="client-page-session-title" class="client-visually-hidden" tabindex="-1">Bot console</h2>
           <div class="bot-console-grid">
-            <section class="panel activity console-map" aria-labelledby="client-field-title">
-              <div class="panel-title"><h3 id="client-field-title">Current field</h3><span id="map-label">WAITING</span></div>
-              <div class="radar-wrap"><canvas id="radar" width="400" height="400" aria-label="Collision map. Click verified walkable ground to walk once; keyboard coordinates are below."></canvas><div class="radar-label"><span class="legend-dot you"></span>You <span class="legend-dot mob"></span>Monster <span class="legend-dot drop"></span>Loot</div></div>
-              <p id="navigation-info" class="navigation-info">Enter a supported map to inspect walkability.</p>
-              <div class="map-legend"><span class="terrain-key"></span>Blocked <span class="walkable-key"></span>Walkable <span class="portal-key"></span>Portal exclusion <span class="route-key"></span>Route</div>
-              <form id="console-walk-form" class="console-walk"><label for="console-walk-x">X<input id="console-walk-x" type="number" min="0" max="511" step="1" value="0" required /></label><label for="console-walk-y">Y<input id="console-walk-y" type="number" min="0" max="511" step="1" value="0" required /></label><button id="console-walk" type="submit" class="secondary" disabled>Walk once</button></form>
-              <p id="console-action" class="hint" role="status" aria-live="polite">Stop the bot before a manual action. Clicks never change your bot settings.</p>
-              <p id="console-target-result" class="hint">No bounded command observed.</p>
-            </section>
-            <section class="panel console-nearby" aria-labelledby="console-nearby-title">
-              <div class="panel-title"><h3 id="console-nearby-title">Nearby</h3><span id="nearby">0</span></div>
-              <h4>Monsters</h4><div id="monster-list" class="monster-list">No monsters in sight.</div>
-              <h4>Ground items</h4><div id="console-drops" class="console-list">No drops observed.</div>
-              <button id="console-loot-settings" type="button" class="text-button">Configure bot pickup</button>
-              <p class="hint">Pickups use the bot's loot policy and confirmed receipts.</p>
-            </section>
-            <section class="panel console-inventory" aria-labelledby="console-inventory-title">
-              <div class="panel-title"><h3 id="console-inventory-title">Inventory</h3><span id="console-stock-count">Not observed</span></div>
-              <label for="console-item">Observed item<select id="console-item" disabled><option value="">Choose an item</option></select></label>
-              <p id="console-item-info" class="hint">Inventory appears after a verified character connects.</p>
-              <button id="console-use-item" type="button" class="secondary" disabled>Use one item</button>
-              <button id="console-item-tools" type="button" class="text-button">Skills, equipment & targeted items</button>
-              <p id="console-item-result" class="hint" role="status" aria-live="polite">No item request sent.</p>
-              <p id="console-latest-action" class="hint">No controller action receipt observed.</p>
-              <div class="console-run-metrics"><div><strong id="attacks">0</strong><span>Engaged</span></div><div><strong id="kills">0</strong><span>Defeated</span></div><div><strong id="looted">0</strong><span>Pickups confirmed</span></div></div>
-              <p id="session-details" class="session-details">Session time and task state appear after connection.</p>
-            </section>
+            <div class="console-primary">
+              <div class="console-setup-summary"><span class="console-setup-copy">${UI_ICONS.settings}<span id="console-setup-summary">Review your bot setup</span></span><button id="console-edit-setup" type="button" class="text-button" data-client-navigation="setup">${UI_ICONS.pencil}Edit setup</button></div>
+              <section class="panel console-activity" aria-labelledby="client-activity-title"><div class="panel-title"><h3 id="client-activity-title">Activity</h3><span id="target-label">No active target</span></div><div class="console-log-heading" aria-hidden="true"><span>Time</span><span>Event</span></div><ol id="log" class="log"><li class="empty">No activity observed yet.</li></ol><div class="console-run-metrics"><div><strong id="attacks">0</strong><span>Engaged</span></div><div><strong id="kills">0</strong><span>Defeated</span></div><div><strong id="looted">0</strong><span>Pickups confirmed</span></div></div><p id="session-details" class="session-details">Session time and task state appear after connection.</p></section>
+              <details class="console-connection"><summary>Connection & session</summary><div class="console-connection-copy"><span id="client-version">macOS · preview</span><button id="disconnect" type="button" class="secondary" title="Closes the connection; cannot undo server actions" disabled>Disconnect</button></div><div id="client-session-details" class="client-session-details"></div></details>
+            </div>
+            <div class="console-secondary">
+              <section class="panel activity console-map" aria-labelledby="client-field-title">
+                <div class="panel-title"><h3 id="client-field-title">Live map</h3><span id="map-label">WAITING</span></div>
+                <div class="console-map-layout"><div class="radar-wrap"><canvas id="radar" width="400" height="400" aria-label="Collision map. Click verified walkable ground to walk once; keyboard coordinates are below."></canvas></div><div class="console-map-keys"><div class="radar-label"><span><i class="legend-dot you"></i>You</span><span><i class="legend-dot mob"></i>Monster</span><span><i class="legend-dot drop"></i>Loot</span></div><div class="map-legend"><span><i class="walkable-key"></i>Walkable</span><span><i class="terrain-key"></i>Blocked</span><span><i class="portal-key"></i>Portal exclusion</span><span><i class="route-key"></i>Route</span></div></div></div>
+                <p id="console-lock" class="hint">Connect a verified character to use manual controls.</p>
+                <details class="console-manual-map"><summary>Map details & coordinates</summary><p id="navigation-info" class="navigation-info">Enter a supported map to inspect walkability.</p><form id="console-walk-form" class="console-walk"><label for="console-walk-x">X<input id="console-walk-x" type="number" min="0" max="511" step="1" value="0" required /></label><label for="console-walk-y">Y<input id="console-walk-y" type="number" min="0" max="511" step="1" value="0" required /></label><button id="console-walk" type="submit" class="secondary" disabled>Walk once</button></form></details><p id="console-action" class="hint" role="status" aria-live="polite">Stop the bot before a manual action. Clicks never change your bot settings.</p><p id="console-target-result" class="hint">No bounded command observed.</p>
+              </section>
+              <section class="panel console-inspector" aria-label="Field inspector">
+                <nav class="console-inspector-tabs" role="tablist" aria-label="Field inspector"><button id="console-tab-nearby" type="button" role="tab" data-client-inspector-nav="nearby" aria-controls="console-panel-nearby" aria-selected="true">Nearby <span id="nearby">0</span></button><button id="console-tab-inventory" type="button" role="tab" data-client-inspector-nav="inventory" aria-controls="console-panel-inventory" aria-selected="false" tabindex="-1">Inventory</button></nav>
+                <section id="console-panel-nearby" class="console-nearby" role="tabpanel" aria-labelledby="console-tab-nearby"><h3 id="console-nearby-title" class="client-visually-hidden" tabindex="-1">Nearby monsters</h3><div id="monster-list" class="monster-list">No monsters in sight.</div><details class="console-ground-items"><summary>Ground items</summary><div id="console-drops" class="console-list">No drops observed.</div><button id="console-loot-settings" type="button" class="text-button" data-client-navigation="loot">Configure bot pickup</button><p class="hint">Pickups use the bot's loot policy and confirmed receipts.</p></details></section>
+                <section id="console-panel-inventory" class="console-inventory" role="tabpanel" aria-labelledby="console-tab-inventory" hidden><div class="panel-title"><h3 id="console-inventory-title" class="client-visually-hidden" tabindex="-1">Inventory</h3><span id="console-stock-count">Not observed</span></div><label for="console-item">Observed item<select id="console-item" disabled><option value="">Choose an item</option></select></label><p id="console-item-info" class="hint">Inventory appears after a verified character connects.</p><button id="console-use-item" type="button" class="secondary" disabled>Use one item</button><button id="console-item-tools" type="button" class="text-button" data-client-navigation="tools">Skills, equipment & targeted items</button><p id="console-item-result" class="hint" role="status" aria-live="polite">No item request sent.</p><p id="console-latest-action" class="hint">No controller action receipt observed.</p></section>
+              </section>
+            </div>
           </div>
-          <section class="panel console-activity" aria-labelledby="client-activity-title"><div class="panel-title"><h3 id="client-activity-title">Activity</h3><span id="target-label">No active target</span></div><ol id="log" class="log"><li class="empty">Session activity will appear here.</li></ol></section>
-          <div id="client-session-details" class="client-session-details"></div>
         </section>
 
         <section id="client-page-bot" class="client-page" role="tabpanel" aria-labelledby="client-tab-bot" hidden>
-          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Bot</h2><p>Set up combat, recovery and field routines before starting.</p></div>
+          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Setup</h2><p>Set up combat, recovery and field routines before starting.</p></div>
           <nav class="client-bot-nav" role="tablist" aria-label="Bot sections">
             <button id="client-bot-tab-combat" type="button" role="tab" data-client-bot-nav="combat" aria-controls="client-bot-combat" aria-selected="true">Combat</button>
             <button id="client-bot-tab-recovery" type="button" role="tab" data-client-bot-nav="recovery" aria-controls="client-bot-recovery" aria-selected="false" tabindex="-1">Recovery</button>
@@ -138,7 +116,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
         </section>
 
         <section id="client-page-manual" class="client-page" role="tabpanel" aria-labelledby="client-tab-manual" hidden>
-          <div class="client-page-heading"><h2 id="client-page-manual-title" tabindex="-1">Manual tools</h2><p>Choose a tool group, review its inputs, then send an action.</p></div>
+          <div class="client-page-heading"><h2 id="client-page-manual-title" tabindex="-1">Tools</h2><p>Choose a tool group, review its inputs, then send an action.</p></div>
           <section id="client-manual-tools" class="panel feature-panel">
             <p class="hint">Tool groups stay mounted while you navigate. Availability follows the current session and automation state.</p>
             <nav id="client-manual-index" class="client-manual-index" aria-label="Tool groups" hidden></nav>
@@ -191,6 +169,9 @@ export function mountClientShell(root: HTMLElement): ClientShell {
   const skipLink = required<HTMLAnchorElement>('.client-skip-link');
   const manualTools = required<HTMLElement>('#client-manual-tools');
   const manualIndex = required<HTMLElement>('#client-manual-index');
+  const inspectors: readonly ConsoleInspector[] = ['nearby', 'inventory'];
+  const inspectorPanels = Object.fromEntries(inspectors.map(key => [key, required<HTMLElement>(`#console-panel-${key}`)])) as Record<ConsoleInspector, HTMLElement>;
+  const inspectorButtons = Object.fromEntries(inspectors.map(key => [key, required<HTMLButtonElement>(`#console-tab-${key}`)])) as Record<ConsoleInspector, HTMLButtonElement>;
 
   function syncToolbarOffset(): void {
     main.style.setProperty('--client-toolbar-offset', `${Math.ceil(toolbar.getBoundingClientRect().height) + 16}px`);
@@ -231,6 +212,17 @@ export function mountClientShell(root: HTMLElement): ClientShell {
     if (focus && !pagePanels.bot.hidden) focusContent(required<HTMLElement>(`#client-bot-${section}-title`));
   }
 
+  function selectInspector(inspector: ConsoleInspector, focus: boolean): void {
+    for (const key of inspectors) {
+      const selected = key === inspector;
+      inspectorPanels[key].hidden = !selected;
+      inspectorButtons[key].setAttribute('aria-selected', String(selected));
+      inspectorButtons[key].tabIndex = selected ? 0 : -1;
+      inspectorButtons[key].classList.toggle('selected', selected);
+    }
+    if (focus) focusContent(required<HTMLElement>(`#console-${inspector}-title`));
+  }
+
   function bindTabs<Key extends string>(keys: readonly Key[], buttons: Record<Key, HTMLButtonElement>, select: (key: Key, focus: boolean) => void): void {
     for (const key of keys) {
       const button = buttons[key];
@@ -252,6 +244,9 @@ export function mountClientShell(root: HTMLElement): ClientShell {
 
   bindTabs(pages, pageButtons, selectPage);
   bindTabs(botSections, sectionButtons, selectBotSection);
+  bindTabs(inspectors, inspectorButtons, selectInspector);
+  required<HTMLButtonElement>('#console-edit-setup').addEventListener('click', () => selectPage('bot', true));
+  selectInspector('nearby', false);
   selectPage('session', false);
   selectBotSection('combat', false);
 
@@ -260,6 +255,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
     sessionDetails: required<HTMLElement>('#client-session-details'),
     showPage: page => selectPage(page, true),
     showBotSection: section => selectBotSection(section, true),
+    showInspector: inspector => selectInspector(inspector, true),
     refreshManualIndex() {
       manualIndex.replaceChildren();
       for (const group of manualTools.querySelectorAll<HTMLElement>('details.manual-group, section.manual-refine, section.warp-panel, details.warp-panel')) {

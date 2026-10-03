@@ -4,6 +4,24 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Run dashboard
+
+Checked on 2026-10-03 for the selected Product Design option 2:
+
+| Proof | Result |
+| --- | --- |
+| Final frontend/bridge build and TypeScript typecheck | Passed |
+| Final full Vitest suite | 3,242 passed across 108 files |
+| Native suite and Clippy | 108 passed; one optional public probe ignored; Clippy passed |
+| Focused UI suites | 69 passed before the final pending-combat freshness regression; final full suite includes the correction |
+| Browser presentation and interactions | Default 1100 by 880 and minimum 820 by 750; keyboard tabs, retained drafts, Stop/manual locks, stale observations, death cap, unresolved Warp/refine, and updater busy/finally navigation passed with blocked native/network backends |
+| Local ARM64 package and strict ad-hoc signature | Passed; app not launched or installed |
+| Independent source and visual review | No blocking findings after the documented corrections |
+
+[Design QA](../design-qa.md) records the selected visual, captures, intentional data differences and live-proof limits. The UI changes retain existing bot policies and native transport. No live account or game action was attempted for this redesign.
+
+### Clientless connection
+
 Checked on 2026-10-03 for the clientless connection change:
 
 | Proof | Result |

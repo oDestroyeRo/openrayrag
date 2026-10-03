@@ -35,7 +35,7 @@ vi.mock('./feature-ui', async () => {
 // No browser, app data, real account or persistent frontend store is involved.
 class Element {
   value = ''; checked = false; disabled = false; hidden = false; textContent = ''; placeholder = '';
-  id = ''; className = ''; dataset:Record<string,string>={}; style = { width: '', setProperty() {} }; width = 400; height = 400;
+  id = ''; className = ''; title = ''; dataset:Record<string,string>={}; style = { width: '', setProperty() {} }; width = 400; height = 400;
   attributes = new Map<string,string>(); children: Element[] = []; parentElement:Element|null=null;
   ownerDocument = { createElement: (tag:string) => new Element(this.elements,tag) };
   get tagName():string{return this.tag.toUpperCase();}
@@ -48,7 +48,8 @@ class Element {
     for (const match of html.matchAll(/<(\w+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)) {
       const node = new Element(this.elements,match[1]!); node.id = match[3]!;
       node.className=/\bclass="([^"]*)"/.exec(match[2]!)?.[1]??'';
-      for(const key of ['page','bot']){const value=new RegExp(`data-client-${key}-nav="([^"]*)"`).exec(match[2]!)?.[1];if(value)node.dataset[key==='page'?'clientPageNav':'clientBotNav']=value;}
+      const pureNav=/data-client-navigation="([^"]*)"/.exec(match[2]!)?.[1];if(pureNav)node.dataset.clientNavigation=pureNav;
+      for(const key of ['page','bot','inspector','navigation']){const value=new RegExp(`data-client-${key}-nav="([^"]*)"`).exec(match[2]!)?.[1];if(value)node.dataset[key==='page'?'clientPageNav':key==='bot'?'clientBotNav':key==='inspector'?'clientInspectorNav':'clientNavigation']=value;}
       node.checked = /\bchecked\b/.test(match[2]!); node.disabled = /\bdisabled\b/.test(match[2]!); node.hidden = /\bhidden\b/.test(match[2]!);
       node.value = /\bvalue="([^"]*)"/.exec(match[2]!)?.[1] ?? (node.id==='connection-mode'?'botOnly':match[1] === 'select' ? '0' : '');
       this.elements.set(node.id, node);
@@ -63,7 +64,7 @@ class Element {
     return selector.startsWith('#')?this.elements.get(selector.slice(1))??null:null;
   }
   querySelectorAll(selector:string):Element[] {
-    if(selector.includes('button[data-client-page-nav]'))return [...this.elements.values()].filter(node=>node.dataset.clientPageNav||node.dataset.clientBotNav).concat(this.elements.get('client-manual-index')?.children??[]);
+    if(selector.includes('button[data-client-page-nav]'))return [...this.elements.values()].filter(node=>node.dataset.clientPageNav||node.dataset.clientBotNav||node.dataset.clientInspectorNav||node.dataset.clientNavigation).concat(this.elements.get('client-manual-index')?.children??[]);
     if(selector.startsWith('details.manual-group'))return this.children.filter(node=>node.tag==='details'&&node.className.includes('manual-group'));
     if(selector==='input,select,button,textarea')return [...new Set(this.elements.values())].filter(node=>['input','select','button','textarea'].includes(node.tag)).concat(this.elements.get('client-manual-index')?.children??[]);
     return [];
@@ -224,10 +225,16 @@ it('keeps shell navigation usable through a deferred installation without unlock
  expect(f.calls('update_install')).toHaveLength(1);
  const tabs=['session','bot','manual','settings'].map(page=>f.get(`client-tab-${page}`));
  const botTabs=['combat','recovery','travel','inventory','workflows'].map(section=>f.get(`client-bot-tab-${section}`));
- expect([...tabs,...botTabs,...f.index()].every(button=>!button.disabled)).toBe(true);
- expect(f.get('start').disabled).toBe(true);expect(f.get('open').disabled).toBe(true);expect(f.get('synthetic-manual-action').disabled).toBe(true);
+ const consoleNavigation=['console-tab-nearby','console-tab-inventory','console-edit-setup','console-loot-settings','console-item-tools','open'].map(id=>f.get(id));
+ expect([...tabs,...botTabs,...consoleNavigation,...f.index()].every(button=>!button.disabled)).toBe(true);
+ expect(f.get('start').disabled).toBe(true);expect(f.get('open').disabled).toBe(false);expect(f.get('synthetic-manual-action').disabled).toBe(true);
  expect(f.get('console-walk').disabled).toBe(true);expect(f.get('console-use-item').disabled).toBe(true);expect(f.get('disconnect').disabled).toBe(true);
  const saves=f.calls('save_current_form').length;
+ f.get('console-item').value='501';f.get('console-walk-x').value='123';
+ await f.get('console-tab-inventory').emit('click');expect(f.get('console-panel-inventory').hidden).toBe(false);
+ await f.get('console-tab-nearby').emit('click');await f.get('console-edit-setup').emit('click');expect(f.get('client-page-bot').hidden).toBe(false);
+ await f.get('open').emit('click');expect(f.get('client-page-settings').hidden).toBe(false);
+ expect(f.get('console-item').value).toBe('501');expect(f.get('console-walk-x').value).toBe('123');
  await f.get('client-tab-settings').emit('click');expect(f.get('client-page-settings').hidden).toBe(false);
  await f.index()[0]!.emit('click');expect(f.get('client-page-manual').hidden).toBe(false);
  expect(f.calls('control_bot')).toEqual([]);expect(f.calls('save_current_form')).toHaveLength(saves);
@@ -247,6 +254,7 @@ it('renders the fresh held owner before toolbar status and binds observed sessio
  const saves=f.calls('save_current_form').length;
  publish({payload:status});
  expect(f.get('status').textContent).toBe('WAITING');expect(f.get('notice').textContent).toBe(status.refine.reason);
+ expect(f.get('client-run-title').textContent).toBe('Waiting to continue');
  expect(f.get('sp-text').textContent).toBe('75 / 200');expect(f.get('sp-bar').style.width).toBe('37.5%');expect(f.get('death-count').textContent).toBe('2');
  await f.get('client-tab-settings').emit('click');expect(f.get('notice').textContent).toBe(status.refine.reason);
  expect(f.calls('save_current_form')).toHaveLength(saves);expect(f.calls('control_bot')).toEqual([]);
@@ -275,6 +283,7 @@ it('requires settled, fresh stopped state for explicit Disconnect and clears tel
  const closed=ipc.listen.mock.calls.find(call=>call[0]==='game-closed')![1];closed({payload:undefined});
  for(let i=0;i<20;i++)await Promise.resolve();
  expect(f.get('connection-mode').disabled).toBe(false);expect(f.get('character').textContent).toBe('No character connected');expect(f.get('hp-text').textContent).toBe('— / —');expect(f.get('console-weight').textContent).toBe('— / —');expect(f.get('signin').disabled).toBe(false);expect(f.calls('login_game')).toEqual([]);
+ expect(f.get('character').title).toBe('No character connected');expect(f.get('location').title).toBe('Connect an account to load your character.');
 });
 
 it('refreshes console locks for stale status and unsettled owners',async()=>{
@@ -284,6 +293,7 @@ it('refreshes console locks for stale status and unsettled owners',async()=>{
   character:{...base.character,inventoryKnown:true,inventory:[{itemId:501,bagId:501,type:1,count:3}]},mapInfo:{code:'',name:'',source:'observed',monsters:[]}};
  publish({payload:status});f.get('console-item').value='501';await f.get('console-item').emit('change');expect(f.get('console-use-item').disabled).toBe(false);
  await vi.advanceTimersByTimeAsync(8000);expect(f.get('console-use-item').disabled).toBe(true);expect(f.get('disconnect').disabled).toBe(true);
+ expect(f.get('client-run-title').textContent).toBe('Waiting for fresh game status');expect(f.get('start').disabled).toBe(true);
  publish({payload:status});expect(f.get('console-use-item').disabled).toBe(false);
  ipc.featureSettled=false;publish({payload:status});expect(f.get('console-use-item').disabled).toBe(true);
  ipc.featureSettled=true;publish({payload:status});expect(f.get('console-use-item').disabled).toBe(false);
