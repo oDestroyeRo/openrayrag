@@ -38,6 +38,8 @@ Configured hours and limits still govern actions. Outside the allowed hours, the
 
 ## Configure automation
 
+Bot settings save automatically on this Mac. Closing the main window or choosing Quit waits for the latest valid settings and selected profile to be written to disk. Reopening restores the same setup, including configured map and target choices, without starting automation. If a save fails, Companion keeps the window open and displays a correction message so edits are not silently discarded.
+
 The six sections keep the common Start and Stop controls available:
 
 | Section | Controls |

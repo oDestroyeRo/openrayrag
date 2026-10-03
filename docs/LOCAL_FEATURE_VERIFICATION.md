@@ -4,6 +4,10 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Automatic settings retention
+
+Issue [#110](https://github.com/oDestroyeRo/openrayrag/issues/110) records close/reopen and delivery evidence. Main-window regressions cover closing before the edit debounce, queued saves and late edits, duplicate requests, startup restoration and repaired storage, invalid input and failed-write retry, retained settings/profile/map/targets on reopening, and update admission. Native tests cover pre-registration shutdown, token and revision acknowledgment, Close-to-Quit promotion, cancellation/retry, and updater restart bypass. Packaged Close, Quit and reopen checks are recorded separately in the issue; fixture tests alone do not establish macOS window lifecycle behavior.
+
 ### Manual game action continuity
 
 Issue [#108](https://github.com/oDestroyeRo/openrayrag/issues/108) records the final automated and live evidence. Regression tests exercise new pickup decisions during repeated panel input, official movement and Stop, same-character map refreshes, safe unsent travel/service continuation, late asynchronous route results, external refining and NPC admission. They retain original run/macro/trip deadlines and allowances, explicit Companion Stop and sent resource/teleport uncertainty. Packaged QA also exposed a native sign-in deadlock: a worker held admission while waiting for a UI-thread URL query, and a heartbeat on that thread waited for admission. The four connection/window commands now execute synchronously on the UI thread, preserving admission through navigation. Native tests, Clippy and formatting were rerun after this correction. With-game-client and Bot-only live checks remain separate proof surfaces; an automated fixture does not prove WebKit scheduling, deployed gameplay or every manual transaction.

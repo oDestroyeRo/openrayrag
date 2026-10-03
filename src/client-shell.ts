@@ -73,7 +73,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
         </section>
 
         <section id="client-page-bot" class="client-page" role="tabpanel" aria-labelledby="client-tab-bot" hidden>
-          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Setup</h2><p>Set up combat, recovery and field routines before starting.</p></div>
+          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Setup</h2><p>Changes save automatically on this Mac and restore when you reopen the app.</p></div>
           <nav class="client-bot-nav" role="tablist" aria-label="Bot sections">
             <button id="client-bot-tab-combat" type="button" role="tab" data-client-bot-nav="combat" aria-controls="client-bot-combat" aria-selected="true">Combat</button>
             <button id="client-bot-tab-recovery" type="button" role="tab" data-client-bot-nav="recovery" aria-controls="client-bot-recovery" aria-selected="false" tabindex="-1">Recovery</button>

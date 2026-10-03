@@ -2601,6 +2601,8 @@ dependencies = [
  "futures-util",
  "libc",
  "minisign-verify",
+ "objc2",
+ "objc2-app-kit",
  "plist",
  "reqwest",
  "rustls",

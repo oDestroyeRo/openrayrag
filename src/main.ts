@@ -1,4 +1,5 @@
 import { CurrentForm } from './current-form';
+import { SettingsClose, type CloseRequest } from './settings-close';
 import { BotConsole } from './bot-console';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -26,6 +27,10 @@ const openButton = element<HTMLButtonElement>('open');
 const startButton = element<HTMLButtonElement>('start');
 const stopButton = element<HTMLButtonElement>('stop');
 const native = isTauri();
+let closeRegistered=!native;
+let closeBusy=false;
+let closeStatus:string|null=null;
+root.inert=native;
 interface SavedLogin { username: string; characterSlot: number; autoLogin: boolean; mode?:'botOnly'|'gameClient' }
 let savedLogin: SavedLogin | null = null;
 let loginBusy = false;
@@ -35,6 +40,8 @@ let accountBaseline:string|null=null;
 function accountFields():string{return JSON.stringify(['username','character-slot','connection-mode'].map(id=>element<HTMLInputElement>(id).value).concat(['remember-login','auto-login'].map(id=>String(element<HTMLInputElement>(id).checked))));}
 function accountDraft():boolean{return !!element<HTMLInputElement>('password').value||accountBaseline!==null&&accountFields()!==accountBaseline;}
 let updateBusy=false;
+let updateSettled:Promise<void>=Promise.resolve();
+let updateFinished:()=>void=()=>{};
 let updatePolling=false;
 let saveTimer:ReturnType<typeof setTimeout>|undefined;
 let gameOpen = false;
@@ -81,7 +88,7 @@ function holdAtRunLimit(): void {
   void task.finally(() => { if (pendingLimitStop === task) pendingLimitStop = null; });
 }
 function resumeFieldRun(s: GameStatus): void {
-  if (!native || busy || stopping || loginBusy || pendingResume) return;
+  if (!native || closeBusy || busy || stopping || loginBusy || pendingResume) return;
   holdAtRunLimit();
   const request = fieldRun.resumeFor(s);
   if (!request) return;
@@ -107,8 +114,8 @@ const form = new SettingsForm(shell.main, features, {
     mapInfo: latest?.mapInfo ?? { code: '', name: '', source: 'observed', monsters: [] },
     level: latest?.player?.level ?? null,
     runActive: runActive(),
-    controlsLocked: updateBusy || busy || stopping || loginBusy || runActive(),
-    targetsLocked: updateBusy || busy || stopping || loginBusy || !native || Date.now() - receivedAt >= 7000
+    controlsLocked: !closeRegistered || closeBusy || updateBusy || busy || stopping || loginBusy || runActive(),
+    targetsLocked: !closeRegistered || closeBusy || updateBusy || busy || stopping || loginBusy || !native || Date.now() - receivedAt >= 7000
       || !latest?.connected || !latest.compatible || !latest.player || runActive(),
     retainedTargets: fieldRun.requested ? fieldRun.targetIds : undefined,
   }),
@@ -116,33 +123,46 @@ const form = new SettingsForm(shell.main, features, {
 });
 const currentForm = new CurrentForm(() => form.snapshot(),
   document=>invoke<number>('save_current_form',{document}));
+let formRestored:()=>void=()=>{};
+const restoreSettled=new Promise<void>(resolve=>{formRestored=resolve;});
+const settingsClose=new SettingsClose({
+  settled:async()=>{await restoreSettled;await updateSettled;if(!currentForm.initialized)currentForm.restore(await invoke('current_form'),document=>form.restore(document));},
+  flush:()=>currentForm.flush(),
+  unchanged:document=>JSON.stringify(form.snapshot())===JSON.stringify({settings:document.settings,selectedProfileId:document.selectedProfileId}),
+  complete:(token,revision)=>invoke('settings_close_complete',{token,revision}),
+  cancel:token=>invoke('settings_close_cancel',{token}),
+  lock:locked=>{closeBusy=locked;root.inert=locked||!closeRegistered;if(locked&&saveTimer){clearTimeout(saveTimer);saveTimer=undefined;}updateButtons();},
+  status:status=>{closeStatus=status;element('update-status').textContent=status;message(status,status.startsWith('Close cancelled'));},
+});
 function formChanged():void {
   currentForm.touch();
-  if(!native||!currentForm.initialized||updateBusy)return;
+  if(!closeBusy)closeStatus=null;
+  if(!native||!currentForm.initialized||closeBusy||updateBusy)return;
   if(saveTimer)clearTimeout(saveTimer);
   saveTimer=setTimeout(()=>{void currentForm.flush().catch(()=>{element('update-status').textContent='Updates are waiting for valid, saved current settings.';});},300);
 }
 function mainSettledForUpdate():boolean {
-  return accountReady&&currentForm.initialized&&!accountDraft()&&!updateBusy&&!busy&&!stopping&&!loginBusy&&!heartbeatPending&&!pendingLogin&&!pendingResume&&!pendingService&&!pendingManual&&!pendingLimitStop
+  return closeRegistered&&!closeBusy&&accountReady&&currentForm.initialized&&!accountDraft()&&!updateBusy&&!busy&&!stopping&&!loginBusy&&!heartbeatPending&&!pendingLogin&&!pendingResume&&!pendingService&&!pendingManual&&!pendingLimitStop
     &&!limitStopPending&&!features.hasUnsavedMacro()&&features.settledForMaintenance()&&!runActive()&&!fieldRun.requested&&!reconnect.waitingUntil;
 }
 async function pollUpdate():Promise<void>{
-  if(!native||updatePolling||updateBusy)return;updatePolling=true;
+  if(!native||!closeRegistered||closeBusy||closeStatus||updatePolling||updateBusy)return;updatePolling=true;
   try{
     const state=await invoke<{version:string;phase:string;message:string;availableVersion:string|null}>('update_status');
-    element('client-version').textContent=`macOS · v${state.version}`;element('update-status').textContent=state.message;
+    element('client-version').textContent=`macOS · v${state.version}`;if(closeBusy||closeStatus)return;element('update-status').textContent=state.message;
     if(state.phase==='waiting'&&accountDraft()){element('update-status').textContent='Update waits for your account draft. Sign in or clear the draft first.';return;}
     if(state.phase!=='waiting'||!mainSettledForUpdate())return;
-    updateBusy=true;updateButtons();if(saveTimer){clearTimeout(saveTimer);saveTimer=undefined;}
+    updateBusy=true;updateSettled=new Promise(resolve=>{updateFinished=resolve;});updateButtons();if(saveTimer){clearTimeout(saveTimer);saveTimer=undefined;}
     let nonce:string|null=null;
     try{
-      const document=await currentForm.flush();nonce=await invoke<string>('update_reserve',{document});
+      const document=await currentForm.flush();if(closeBusy)return;
+      nonce=await invoke<string>('update_reserve',{document});if(closeBusy)return;
       for(let attempt=0;attempt<20;attempt++){
         if(await invoke<boolean>('update_install',{nonce}))break;
         await new Promise(resolve=>setTimeout(resolve,100));
       }
-    }catch{element('update-status').textContent='Update deferred. Waiting for valid saved settings and settled game actions. Use the release download if needed.';}
-    finally{if(nonce)await invoke('update_release',{nonce}).catch(()=>{});updateBusy=false;updateButtons();}
+    }catch{if(!closeStatus)element('update-status').textContent='Update deferred. Waiting for valid saved settings and settled game actions. Use the release download if needed.';}
+    finally{if(nonce)await invoke('update_release',{nonce}).catch(()=>{});updateBusy=false;updateFinished();updateButtons();}
   }catch{element('update-status').textContent='Update check unavailable. It will retry automatically.';}
   finally{updatePolling=false;}
 }
@@ -192,6 +212,7 @@ async function featureRequest(action: string, request: unknown): Promise<unknown
 }
 
 function message(text: string, error = false): void {
+  if(closeStatus){text=closeStatus;error=closeStatus.startsWith('Close cancelled');}
   element('notice').textContent = text;
   element('notice').classList.toggle('error', error);
 }
@@ -208,7 +229,7 @@ function updateButtons(): void {
   startButton.hidden = dashboard.state === 'RUNNING';
   try { element('death-cap').textContent = clientDeathCap(form.snapshot().settings.automation?.respawn); }
   catch { element('death-cap').textContent = '—'; }
-  if(updateBusy){botConsole.lock(true,'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.lock(true,true,true);return;}
+  if(!closeRegistered||closeBusy||updateBusy){botConsole.lock(true,closeBusy?'Saving current settings before closing.':!closeRegistered?'Preparing saved settings.':'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.lock(true,true,true);return;}
   form.refresh();
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
   let checked:Settings|null = null;
@@ -388,6 +409,12 @@ function render(s: GameStatus): void {
 if (!native) message('Browser preview · Launch the macOS app with npm run app:dev to connect.');
 if (native) {
   void (async () => {
+  try {
+    await listen<CloseRequest>('settings-close-request',event=>{void settingsClose.request(event.payload);});
+    const pending=await invoke<CloseRequest|null>('settings_close_ready');
+    closeRegistered=true;root.inert=closeBusy;updateButtons();
+    if(pending)void settingsClose.request(pending);
+  }catch{element('update-status').textContent='Settings could not be initialized. Reopen the app to edit them safely.';return;}
   await listen<unknown>('game-status', event => { if (validStatus(event.payload)) render(event.payload); });
   await listen('game-closed', () => {
     features.clearSocial();
@@ -409,6 +436,7 @@ if (native) {
     try{currentForm.restore(await invoke('current_form'), document => form.restore(document));}
     catch{currentForm.initialized=false;element('update-status').textContent='Current settings could not be restored. Automatic updates are waiting.';}
     if(currentForm.initialized)await currentForm.flush().catch(()=>{element('update-status').textContent='Updates are waiting for valid, saved current settings.';});
+    formRestored();
     const profile = await invoke<SavedLogin | null>('saved_login');
     accountReady = true;
     showSavedLogin(profile);
@@ -418,7 +446,7 @@ if (native) {
       element<HTMLInputElement>('remember-login').checked = true;
       element<HTMLInputElement>('auto-login').checked = profile.autoLogin;
       element<HTMLSelectElement>('connection-mode').value = profile.mode ?? 'gameClient';
-      accountBaseline=accountFields();if (profile.autoLogin) await signIn();
+      accountBaseline=accountFields();if (profile.autoLogin&&!closeBusy) await signIn();
     }
   } catch {
     element<HTMLButtonElement>('forget-login').hidden = false;
@@ -427,7 +455,7 @@ if (native) {
   finally { accountReady = true;accountBaseline??=accountFields(); }
   await invoke('update_initialized').catch(()=>{});void pollUpdate();setInterval(()=>{void pollUpdate();},15_000);
   updateButtons();
-  })();
+  })().catch(()=>{formRestored();element('update-status').textContent='Settings initialization failed. Check the settings or local storage before closing.';});
   setInterval(() => {
     holdAtRunLimit();
     if (loginBusy && Date.now() - loginStartedAt > 120_000) {
@@ -435,7 +463,7 @@ if (native) {
       message('Sign-in is taking too long. Waiting before reconnecting again.', true);
     }
     updateButtons();
-    const retry = !updateBusy && gameOpen && !busy && !stopping && !loginBusy && !(latest?.connected && latest.player)
+    const retry = !closeBusy && !updateBusy && gameOpen && !busy && !stopping && !loginBusy && !(latest?.connected && latest.player)
       && !fieldRun.limitReason ? reconnect.takeDue(Date.now()) : null;
     if (retry !== null) {
       const generation = ++loginGeneration;

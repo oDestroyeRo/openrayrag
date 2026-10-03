@@ -9,6 +9,7 @@ mod direct_wire;
 mod login;
 mod maintenance;
 mod mode_guard;
+mod settings_close;
 mod update_install;
 mod updater;
 
@@ -379,7 +380,16 @@ pub fn run() {
         .manage(updater::SharedUpdate::default())
         .manage(login::SharedLogin::default())
         .manage(direct::SharedDirect::default())
+        .manage(settings_close::SharedClose::default())
+        .setup(|app| {
+            #[cfg(target_os = "macos")]
+            settings_close::install_macos_quit(app.handle())?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            settings_close::settings_close_ready,
+            settings_close::settings_close_cancel,
+            settings_close::settings_close_complete,
             updater::update_status,
             updater::current_form,
             updater::save_current_form,
@@ -411,6 +421,11 @@ pub fn run() {
             login::take_pending_login
         ])
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    settings_close::close_requested(window.app_handle(), api);
+                }
+            }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 if window.label() == "main" {
                     direct::cancel(window.app_handle());
@@ -442,6 +457,11 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("Could not launch Rayrag Companion");
+        .build(tauri::generate_context!())
+        .expect("Could not launch Rayrag Companion")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                settings_close::exit_requested(app, code, &api);
+            }
+        });
 }
