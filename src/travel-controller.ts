@@ -15,6 +15,9 @@ export interface TravelTransition {
 }
 export interface DatabaseTravelTransport {
   supported: (map: string) => boolean;
+  /** Wait for server input cooldown before reserving or writing another request. */
+  ready?: () => boolean;
+  waitReason?: () => string;
   /** Reserve an existing owner's finite command allowance before any write. */
   reserve?: () => boolean;
   send: (map: string) => void;
@@ -93,6 +96,7 @@ export class TravelController {
 
   get tripId():number {return this.trip;}
   get teleportPending():boolean {return !!this.databaseTrip?.sent;}
+  get databasePreparing():boolean {return this.active&&!!this.databaseTrip&&!this.databaseTrip.sent;}
   observeReady():void {
     const trip=this.databaseTrip,context=this.planningOptions.context?.();
     if(trip?.sent&&!trip.contradictory&&trip.phase==='map'&&context?.connection===trip.connection&&context.map===trip.toMap)
@@ -173,7 +177,7 @@ export class TravelController {
         ||distance(cell(context.player),cell(player))!==0)throw new Error('A current living own actor and connection are required for Database travel.');
       this.policy=structuredClone(policy);this.purpose=purpose;this.destination=destination;this.map=map;this.playerId=player.id;
       this.steps=[];this.route=[];this.leg=null;this.approachNav=null;this.approachTarget=null;this.awaitingSpawn=false;
-      this.installedStart=null;this.executionIdentity=context.identity;this.since=this.now();this.deadline=this.now()+20_000;
+      this.installedStart=null;this.executionIdentity=context.identity;this.since=this.now();this.deadline=this.now()+60_000;
       this.databaseTrip={trip:this.trip,fromMap:map,toMap:destination,ownId:player.id,ownName:player.name,
         identity:context.identity,connection:context.connection,sent:false,phase:'source',ready:false,contradictory:false};
       this.state='walking';this.reason=`Preparing Database teleport to ${destination}.`;return;
@@ -396,7 +400,7 @@ export class TravelController {
     const now = this.now();
     const trip=this.databaseTrip;
     if(trip) {
-      if(now>this.deadline){this.cancel('Database teleport was not confirmed. Waiting for authoritative arrival or reconnect; no retry will be sent.',true);return;}
+      if(now>this.deadline){this.cancel(trip.sent?'Database teleport was not confirmed. Waiting for authoritative arrival or reconnect; no retry will be sent.':'Database travel preparation timed out before sending a request.',true);return;}
       if(trip.sent)return;
       const context=this.planningOptions.context?.();
       if(!context||context.identity!==trip.identity||context.connection!==trip.connection||map!==trip.fromMap
@@ -404,6 +408,7 @@ export class TravelController {
         this.cancel('Database travel source changed before dispatch.',true);return;
       }
       if(this.planningOptions.dispatchReady?.()===false){this.reason='Waiting for movement, resources and casts to settle before Database travel.';return;}
+      if(this.planningOptions.databaseTravel!.ready?.()===false){this.reason=this.planningOptions.databaseTravel!.waitReason?.()??'Waiting briefly for the server input cooldown before Database travel.';return;}
       if(this.planningOptions.databaseTravel!.reserve?.()===false){this.cancel('Database travel command allowance exhausted before dispatch.',true);return;}
       // Reserve uncertainty before writing: a throwing socket may already have accepted bytes.
       trip.sent=true;this.state='transition';this.deadline=now+20_000;

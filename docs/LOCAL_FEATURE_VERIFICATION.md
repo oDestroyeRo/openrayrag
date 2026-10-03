@@ -6,9 +6,21 @@ Verification separates automated local behavior, the native socket loop against 
 
 ### Server Database travel
 
-Checked locally on 2026-10-04 for issue #105. Shared production encoders send the pinned map-only opcode-64 request in both connection modes. Targeted protocol/controller tests cover requested-map arrival, ordered Ready, fresh own actor identity, wrong/foreign/dead arrivals, retained Stop/timeout/write uncertainty, finite supply command reservation, macro travel/farm/service paths, configured destinations and death return. Local NPC approaches and same-map movement remain collision checked; party-leader rendezvous retains verified portals.
+Checked on 2026-10-04 for issue #105, using the final local native v0.2.51 QA package. Shared production encoders send the pinned map-only opcode-64 request in both connection modes. Targeted protocol/controller tests cover requested-map arrival, ordered Ready, fresh own actor identity, wrong/foreign/dead arrivals, retained Stop/timeout/write uncertainty, finite supply command reservation, macro travel/farm/service paths, configured destinations and death return. Local NPC approaches and same-map movement remain collision checked; party-leader rendezvous retains verified portals.
 
-The implementation lane has not run deployed-game travel. These fixture checks do not establish live server acceptance, successful cross-map farming or release/installed-app availability. Those require separate verification after handoff.
+| Proof | Result |
+| --- | --- |
+| Full Vitest suite | 3,435 passed across 111 files |
+| Native tests, Clippy and Rust formatting | 120 passed; one optional anonymous public probe ignored; Clippy and formatting passed |
+| Build/typecheck, release helpers and diff | Passed; 38 Node and six Python release tests passed |
+| Final local ARM64 package | Built, strict ad-hoc signature verified, launched in both modes |
+| With game client | `prt_fild05` → `prt_fild08` → `prt_fild05` → `prt_fild08`; 3/3 macro steps confirmed, 120-second macro duration completed, farming continued until explicit Stop at 124 seconds; nine defeats, 14 confirmed pickups, zero deaths |
+| Bot only | `prt_fild08` → `prt_fild05` → `prt_fild08`; 2/2 macro steps confirmed, 90-second macro duration completed, farming continued until explicit Stop at 109 seconds; eight defeats, 16 confirmed pickups, zero deaths |
+| Independent review | Clear; 354 tests passed across six focused suites |
+
+Real-server testing exposed a Database-specific 30-second teleport cooldown: the official client refused a second request 18 seconds after the first and reported 12 seconds remaining. This deployed rule is absent from the pinned public server handler. The shared controller now displays a countdown and waits after fresh own arrival, including login and manual map changes. Its separate short input guard also drains after arrival. The final consecutive transfers occurred more than 30 seconds apart and were confirmed by requested-map, ordered Ready and fresh own-entry evidence. Quiet-map regressions retain the original unsent trip while requiring fresh data before dispatch, and expire preparation after 60 seconds without spending a command. Macro duration and step deadlines remain finite and unchanged.
+
+The live scripts used low-level selected targets, own-drop pickup, no economic actions and zero spending allowance. They did not exercise every map, cross-map death recovery, NPC buying/storage or party rendezvous; those affected paths have local tests. Stop, explicit disconnect and restoration of the original connection preference followed QA. Saved settings values and saved login fields were preserved; only the settings persistence revision advanced. The test macro edits were not saved. Published-release and installed-app availability are separate from these local package results.
 
 ### Conditional macro scripts
 

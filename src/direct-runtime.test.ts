@@ -73,7 +73,7 @@ describe('clientless shared-controller runtime',()=>{
   expect(f.runtime.snapshot().macro).toMatchObject({state:'cancelled',actionsCompleted:0});expect(f.writes()).toHaveLength(stopped);
  });
  it.each(['ordered','missing','early'])('Database macro travel requires ordered native Ready flush evidence: %s',async ready=>{
-  const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();
+  const f=fixture();await f.ready();f.step(30000);await f.frame(new BitWriter().u8(FEATURE_OP.sp).i32(200).i32(200).finish());await f.runtime.cycle();
   f.runtime.perform('macro',{settings:{...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000]},script:{version:1,name:'Database trip',durationSeconds:60,maxActions:1,maxSpend:0,
     rules:[{name:'Travel',priority:0,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:1}],steps:[{type:'travel',map:'prt_fild05',timeoutSeconds:30}]}]}});
   await f.runtime.cycle();await flush();expect(f.writes().filter(bytes=>bytes[0]===64)).toHaveLength(1);

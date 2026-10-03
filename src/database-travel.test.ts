@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BitReader, BitWriter } from './binary';
-import { databaseTravelCommand, supportsDatabaseTravel } from './database-travel-protocol';
+import { DATABASE_TELEPORT_COOLDOWN_MS, databaseTeleportWait, databaseTravelCommand, supportsDatabaseTravel } from './database-travel-protocol';
 import { TravelController, type TravelPlanningContext } from './travel-controller';
 import { wireController } from './controller-wire';
 import { OP, type Entity, type GameEvent } from './protocol';
@@ -29,11 +29,11 @@ function resources(hp=100,count=5):Uint8Array {
   w.i32(0).u8(0);for(let i=0;i<10;i++)w.i32(0);return w.i32(-1).finish();
 }
 function travelFixture(sendFailure=false,reserve=()=>true) {
-  let now=100_000,ready=true;
+  let now=100_000,ready=true,inputReady=true;
   let context:TravelPlanningContext={identity:'source lifetime',connection:'connection 1',map:'prt_fild08',player:own};
   const actions:Action[]=[],send=vi.fn(()=>{if(sendFailure)throw Error('Synthetic write failure');});
   const travel=new TravelController(action=>actions.push(action),()=>now,undefined,
-    {context:()=>context,dispatchReady:()=>ready,databaseTravel:{supported:supportsDatabaseTravel,send,reserve}});
+    {context:()=>context,dispatchReady:()=>ready,databaseTravel:{supported:supportsDatabaseTravel,send,reserve,ready:()=>inputReady}});
   const observe=(event:GameEvent)=>{
     travel.prepareObservation([event]);
     if(event.type==='remove'&&event.id===own.id||event.type==='clear')context={...context,identity:null,player:undefined};
@@ -46,10 +46,20 @@ function travelFixture(sendFailure=false,reserve=()=>true) {
   const map=()=>observe({type:'map',map:'prontera'});
   const arrive=()=>{departure();map();travel.observeReady();return observe({type:'spawn',entity:own,entryType:1});};
   return{travel,send,actions,observe,start,departure,map,arrive,setReady:(value:boolean)=>{ready=value;},
+    setInputReady:(value:boolean)=>{inputReady=value;},
     advance:(ms:number)=>{now+=ms;},context:()=>context,setContext:(value:TravelPlanningContext)=>{context=value;}};
 }
 
 describe('Database travel wire contract',()=>{
+  it('accepts only bounded, exact server teleport cooldown messages',()=>{
+    const text='You need to wait 12 more seconds before you can teleport again.';
+    expect(databaseTeleportWait({type:'featureError',message:text})).toBe(12_000);
+    for(const channel of [0,3] as const)expect(databaseTeleportWait({type:'chat',actorId:-1,name:'Server',channel,text})).toBe(12_000);
+    expect(databaseTeleportWait({type:'chat',actorId:9,name:'Server',channel:0,text})).toBeNull();
+    expect(databaseTeleportWait({type:'chat',actorId:-1,name:'Server',channel:2,text})).toBeNull();
+    for(const message of [text+' ',text.replace('12','0'),text.replace('12','61'),text.replace('12','999'),text.replace('12','-1')])
+      expect(databaseTeleportWait({type:'featureError',message})).toBeNull();
+  });
   it('matches the deployed Database map request, default server coordinates and no force flag',()=>{
     const bytes=databaseTravelCommand('alde_dun01');
     expect([...bytes]).toEqual([64,10,0,97,108,100,101,95,100,117,110,48,49,25,252,25,252,0]);
@@ -120,8 +130,21 @@ describe('Database trip evidence and retained uncertainty',()=>{
     expect(reserve).toHaveBeenCalledTimes(1);expect(f.travel.snapshot().state).toBe('failed');
     expect(f.travel.teleportPending).toBe(false);expect(f.send).not.toHaveBeenCalled();
   });
+  it('does not reserve or write until server input cooldown clears',()=>{
+    const reserve=vi.fn(()=>true),f=travelFixture(false,reserve);f.setInputReady(false);f.start();
+    f.advance(2_000);f.travel.tick('prt_fild08',own);
+    expect(f.send).not.toHaveBeenCalled();expect(reserve).not.toHaveBeenCalled();expect(f.travel.teleportPending).toBe(false);
+    f.setInputReady(true);f.travel.tick('prt_fild08',own);f.travel.tick('prt_fild08',own);
+    expect(reserve).toHaveBeenCalledTimes(1);expect(f.send).toHaveBeenCalledExactlyOnceWith('prontera');
+  });
+  it('expires unsent preparation without reserving a command or retaining sent uncertainty',()=>{
+    const reserve=vi.fn(()=>true),f=travelFixture(false,reserve);f.setInputReady(false);f.start();
+    f.advance(60_001);f.travel.tick('prt_fild08',own);
+    expect(f.travel.snapshot()).toMatchObject({state:'failed',reason:'Database travel preparation timed out before sending a request.'});
+    expect(f.travel.teleportPending).toBe(false);expect(reserve).not.toHaveBeenCalled();expect(f.send).not.toHaveBeenCalled();
+  });
   it('preserves denied-map policy and same-map verified walking instead of teleporting',()=>{
-    const f=travelFixture();expect(()=>f.travel.start('prt_fild08',own,'prontera',10,true,{...DEFAULT_MAP_POLICY,deny:['prontera']})).toThrow('forbidden');
+    const f=travelFixture();f.setInputReady(false);expect(()=>f.travel.start('prt_fild08',own,'prontera',10,true,{...DEFAULT_MAP_POLICY,deny:['prontera']})).toThrow('forbidden');
     const grid=searchGrid('prt_fild08')!,target=[{x:own.x-1,y:own.y},{x:own.x+1,y:own.y},{x:own.x,y:own.y-1},{x:own.x,y:own.y+1}].find(p=>grid.walkable(p))!;
     f.travel.startApproach('prt_fild08',own,target);f.travel.tick('prt_fild08',own);
     expect(f.actions[0]?.type).toBe('walk');expect(f.send).not.toHaveBeenCalled();
@@ -134,13 +157,16 @@ describe('Database trip evidence and retained uncertainty',()=>{
   });
 });
 
-function controllerFixture(map='prt_fild08',player=own) {
+function controllerFixture(map='prt_fild08',player=own,initialWait=DATABASE_TELEPORT_COOLDOWN_MS) {
   let now=100_000;const packets:Uint8Array[]=[];
   const c=wireController(packet=>packets.push(packet),undefined,()=>now),receive=(packet:BitWriter|Uint8Array)=>c.receive(packet instanceof BitWriter?packet.finish():packet);
   c.connect(true);receive(new BitWriter().u8(OP.enter).i32(player.id).string(map));c.observeOfficialPacket(new Uint8Array([2]));receive(spawn(player));
   c.engine.receive([{type:'inventory',items:[{bagId:501,itemId:501,type:1,count:5}],equipment:Array(10).fill(0),ammoId:-1},
     {type:'skills',learned:[{skillId:1,level:9}],granted:[]},{type:'stats',level:15,jobLevel:15,hp:player.hp,maxHp:100,sp:100,maxSp:100,zeny:10_000,weight:5,maxWeight:1000}]);
-  const step=(ms=100)=>{now+=ms;c.tick();},advance=(ms:number)=>{for(let elapsed=0;elapsed<ms;elapsed+=100)step(Math.min(100,ms-elapsed));};
+  const fresh=()=>receive(new BitWriter().u8(FEATURE_OP.sp).i32(100).i32(100));
+  now+=initialWait;fresh();
+  const step=(ms=100,traffic=true)=>{now+=ms;if(traffic)fresh();c.tick();},
+    advance=(ms:number,traffic=true)=>{for(let elapsed=0;elapsed<ms;elapsed+=100)step(Math.min(100,ms-elapsed),traffic);};
   const transition=(map:string,position={x:100,y:100},clear=false)=>{
     receive(new BitWriter().u8(OP.remove).i32(player.id).u8(0));if(clear)receive(new BitWriter().u8(OP.clear));
     receive(new BitWriter().u8(OP.map).string(map));c.observeOfficialPacket(new Uint8Array([2]));receive(spawn({...own,...position}));
@@ -148,10 +174,62 @@ function controllerFixture(map='prt_fild08',player=own) {
   const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation:structuredClone(DEFAULT_AUTOMATION)};
   const macro=(steps:MacroStep[])=>c.perform('macro',{settings,script:{version:1,name:'Database travel',durationSeconds:120,maxActions:10,maxSpend:1000,
     rules:[{name:'Route',priority:0,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:1}],steps}]}});
-  return{c,receive,step,advance,transition,packets,settings,macro,teleports:()=>packets.filter(p=>p[0]===64)};
+  return{c,receive,fresh,step,advance,transition,packets,settings,macro,teleports:()=>packets.filter(p=>p[0]===64)};
 }
 
 describe('production shared-controller Database travel',()=>{
+  it.each(['travel','farm','store'] as const)('retains the same unsent %s owner on a quiet map and sends only after fresh evidence',type=>{
+    const f=controllerFixture('prt_fild08',own,0);
+    const step:MacroStep=type==='store'?{type:'store',serviceId:'kafra-south-storage',itemId:501,quantity:1,keep:1,maxSpend:100,timeoutSeconds:90}
+      :type==='farm'?{type:'farm',map:'prt_fild05',targets:[4000],timeoutSeconds:90}:{type:'travel',map:'prt_fild05',timeoutSeconds:90};
+    f.macro([step]);f.advance(500);const trip=f.c.travel.tripId;expect(f.c.travel.databasePreparing).toBe(true);
+    f.advance(44_500,false);
+    expect(f.teleports()).toHaveLength(0);expect(f.c.travel.tripId).toBe(trip);expect(f.c.travel.databasePreparing).toBe(true);
+    expect(f.c.macro.active).toBe(true);expect(f.c.travel.snapshot().reason).toContain('fresh server update');
+    f.fresh();f.step();expect(f.teleports()).toHaveLength(1);expect(f.c.travel.tripId).toBe(trip);
+  });
+  it('preserves a short script deadline instead of extending it to cover cooldown',()=>{
+    const f=controllerFixture('prt_fild08',own,0);f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:20}]);f.advance(20_100);
+    expect(f.c.macro.snapshot().state).toBe('failed');expect(f.teleports()).toHaveLength(0);expect(f.c.travel.teleportPending).toBe(false);
+  });
+  it('ends a silent-map preparation at its original sixty-second deadline',()=>{
+    const f=controllerFixture('prt_fild08',own,0);f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:90}]);f.advance(100);
+    f.advance(60_200,false);
+    expect(f.c.macro.snapshot()).toMatchObject({state:'failed',reason:'Database travel preparation timed out before sending a request.'});
+    expect(f.c.travel.active).toBe(false);
+    expect(f.teleports()).toHaveLength(0);expect(f.c.travel.teleportPending).toBe(false);
+  });
+  it('waits through the fresh-login teleport guard without consuming a command and preserves it across Stop',()=>{
+    const f=controllerFixture('prt_fild08',own,0);
+    f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:60}]);f.advance(15_000);
+    expect(f.teleports()).toHaveLength(0);expect(f.c.travel.snapshot().reason).toContain('15s');
+    f.c.stop();f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:60}]);f.advance(14_900);
+    expect(f.teleports()).toHaveLength(0);f.step();expect(f.teleports()).toHaveLength(1);
+  });
+  it('extends the wait from a server warning but ignores player impersonation',()=>{
+    const f=controllerFixture();
+    const message='You need to wait 12 more seconds before you can teleport again.';
+    f.receive(new BitWriter().u8(44).i32(9).string(message).string('Server').u8(0));
+    f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:60}]);f.step();expect(f.teleports()).toHaveLength(1);
+    const g=controllerFixture();g.receive(new BitWriter().u8(FEATURE_OP.featureError).string(message));
+    g.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:60}]);g.advance(12_900);expect(g.teleports()).toHaveLength(0);
+    g.step();expect(g.teleports()).toHaveLength(1);
+  });
+  it('paces Stop and consecutive macro transfers from fresh arrival even after slow map loading',()=>{
+    const f=controllerFixture();f.c.start(f.settings);f.c.stop();
+    expect(f.packets.some(packet=>packet[0]===OP.stop)).toBe(true);
+    f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:60},{type:'farm',map:'prt_fild08',targets:[4000],timeoutSeconds:60}]);
+    f.advance(1_900);expect(f.teleports()).toHaveLength(0);f.step();expect(f.teleports()).toHaveLength(1);
+    // Loading outlasts send-time quiet time; server debt drains only after Ready.
+    f.advance(5_000);f.transition('prt_fild05');f.advance(29_900);
+    expect(f.teleports()).toHaveLength(1);expect(f.c.macro.snapshot().actionsCompleted).toBe(1);
+    f.step();expect(f.teleports()).toHaveLength(2);f.transition('prt_fild08',{x:own.x,y:own.y});f.advance(500);
+    expect(f.c.snapshot()).toMatchObject({map:'prt_fild08',running:true,macro:{state:'monitoring',actionsCompleted:2}});
+  });
+  it('paces the official Look packet before Database travel',()=>{
+    const f=controllerFixture();f.c.officialLook();f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:30}]);
+    f.advance(1_900);expect(f.teleports()).toHaveLength(0);f.step();expect(f.teleports()).toHaveLength(1);
+  });
   it('completes explicit macro travel then activates farming on the requested map without renewing run counters',()=>{
     const f=controllerFixture();f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:30},{type:'farm',map:'prt_fild05',targets:[4000],timeoutSeconds:30}]);
     f.c.engine.deaths=1;f.c.engine.kills=5;f.c.engine.looted=4;f.step();
@@ -184,6 +262,7 @@ describe('production shared-controller Database travel',()=>{
     f.settings.automation.respawn={enabled:true,maxDeaths:2};f.settings.automation.travel.returnToLockMap=true;
     f.c.start(f.settings);f.advance(2200);expect(f.packets.some(p=>p[0]===FEATURE_OP.respawn)).toBe(true);
     f.receive(new BitWriter().u8(OP.clear));f.receive(spawn(own,2));f.step();f.step();
+    f.advance(30_000);
     expect(f.teleports()).toHaveLength(1);f.transition('prt_fild08',{x:own.x,y:own.y});f.step();
     expect(f.c.engine.running).toBe(true);expect(f.c.snapshot().deathRecoveryGuard).toBeUndefined();
   });
@@ -194,7 +273,7 @@ describe('production shared-controller Database travel',()=>{
     f.c.start(f.settings);expect(f.c.supply.ownsField).toBe(true);
     // A prior owner's command reservation consumes this same finite allowance.
     if(exhausted)expect(f.c.supply.commandAllowed()).toBe(true);
-    f.advance(500);
+    f.advance(2_100);
     expect(f.c.supply.snapshot().actions).toBe(1);expect(f.teleports()).toHaveLength(exhausted?0:1);
     expect(f.c.travel.teleportPending).toBe(!exhausted);
     if(exhausted)expect(f.c.supply.snapshot().reason).toMatch(/allowance/);
