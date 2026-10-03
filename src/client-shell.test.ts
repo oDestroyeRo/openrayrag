@@ -82,6 +82,12 @@ function fixture() {
   const manualTools = register('#client-manual-tools'); pagePanels.manual.append(manualTools);
   manualTools.append(register('#client-manual-index', 'nav'));
   pagePanels.session.append(register('#client-session-details', 'div'));
+  pagePanels.session.append(register('#console-edit-setup', 'button'));
+  for (const key of ['nearby', 'inventory']) {
+    const panel = register(`#console-panel-${key}`); pagePanels.session.append(panel);
+    panel.append(register(`#console-${key}-title`, 'h3'));
+    pagePanels.session.append(register(`#console-tab-${key}`, 'button'));
+  }
   main.append(register('.client-skip-link', 'a'));
   const shell = mountClientShell(root as unknown as HTMLElement);
   const get = (selector: string) => root.selectors.get(selector)!;
@@ -119,6 +125,24 @@ it('retains the actual Warp UI pending and staged preview across shell pages wit
 });
 
 describe('client shell navigation', () => {
+  it('retains inventory and coordinate drafts and locks through inspector tabs and pure Edit setup', () => {
+    const f = fixture(), inventory = f.get('#console-panel-inventory');
+    const item = f.document.createElement('select'); item.value = '501'; item.disabled = true;
+    const coordinate = f.document.createElement('input'); coordinate.value = '123'; coordinate.disabled = true;
+    inventory.append(item); f.pagePanels.session.append(coordinate);
+    const changed = vi.fn(), command = vi.fn(); item.addEventListener('change', changed); coordinate.addEventListener('input', changed);
+    inventory.append(f.document.createElement('button')); inventory.children.at(-1)!.addEventListener('click', command);
+    f.get('#console-tab-inventory').emit('click');
+    expect(inventory.hidden).toBe(false); expect(f.get('#console-panel-nearby').hidden).toBe(true);
+    expect(f.document.activeElement).toBe(f.get('#console-inventory-title'));
+    f.get('#console-tab-inventory').emit('keydown', 'ArrowRight');
+    expect(f.get('#console-panel-nearby').hidden).toBe(false); expect(f.document.activeElement).toBe(f.get('#console-tab-nearby'));
+    f.get('#console-edit-setup').emit('click'); expect(f.pagePanels.bot.hidden).toBe(false);
+    f.shell.showPage('session'); f.shell.showInspector('inventory');
+    expect(inventory.children).toContain(item); expect(item.value).toBe('501'); expect(item.disabled).toBe(true);
+    expect(coordinate.value).toBe('123'); expect(coordinate.disabled).toBe(true);
+    expect(changed).not.toHaveBeenCalled(); expect(command).not.toHaveBeenCalled();
+  });
   it('retains mounted nodes, edited values and locks across all pages and Bot sections', () => {
     const f = fixture(), fields = sections.map(section => {
       const input = f.document.createElement('input'); input.value = `edited ${section}`; input.checked = true; input.disabled = true;
@@ -155,7 +179,7 @@ describe('client shell navigation', () => {
     }
     // Source placement is checked here; real browser placement is a separate proof.
     const toolbar = f.root.innerHTML.split('<header class="client-toolbar">')[1]!.split('</header>')[0]!;
-    for (const id of ['start', 'stop', 'open', 'disconnect', 'notice', 'status', 'character', 'location', 'config-help', 'hp-text', 'sp-text', 'console-levels', 'console-weight', 'console-zeny', 'console-experience', 'death-count', 'death-cap']) expect(toolbar).toContain(`id="${id}"`);
+    for (const id of ['start', 'stop', 'open', 'notice', 'status', 'character', 'location', 'config-help', 'hp-text', 'sp-text', 'console-levels', 'console-weight', 'console-zeny', 'console-experience', 'death-count', 'death-cap']) expect(toolbar).toContain(`id="${id}"`);
     expect(f.root.innerHTML).toContain('Bot console'); expect(f.root.innerHTML).toContain('Connect account');
     expect(f.root.innerHTML).not.toContain('Open game');
   });

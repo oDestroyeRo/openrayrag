@@ -11,6 +11,7 @@ import { normalAttackProfile } from './combat';
 import { canStartField } from './field-controls';
 import { mountClientShell } from './client-shell';
 import { clientStatus, clientSp, clientDeaths, clientDeathCap } from './client-status';
+import { clientDashboard } from './client-dashboard';
 import './client-shell.css';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
@@ -186,13 +187,20 @@ function message(text: string, error = false): void {
   element('notice').classList.toggle('error', error);
 }
 function updateButtons(): void {
-  const navigation = new Set(shell.main.querySelectorAll<HTMLButtonElement>('button[data-client-page-nav], button[data-client-bot-nav], #client-manual-index > button'));
+  const navigation = new Set(shell.main.querySelectorAll<HTMLButtonElement>('button[data-client-page-nav], button[data-client-bot-nav], button[data-client-inspector-nav], button[data-client-navigation], #client-manual-index > button'));
   for (const button of navigation) button.disabled = false;
+  let dashboardSettings: Settings | null = null;
+  try { dashboardSettings = form.snapshot().settings; } catch { /* Keep invalid drafts editable on Setup. */ }
+  const fresh = Date.now() - receivedAt < 7000;
+  const dashboard = clientDashboard(latest, { fieldRequested: fieldRun.requested, held: features.active(), limitReason: fieldRun.limitReason, loginBusy, fresh }, dashboardSettings, latest?.mapInfo);
+  element('client-run-title').textContent = dashboard.headline;
+  element('console-setup-summary').textContent = dashboard.setup;
+  element('client-account-label').textContent = latest?.connected && latest.compatible && latest.player ? 'Account' : 'Connect account';
+  startButton.hidden = dashboard.state === 'RUNNING';
   try { element('death-cap').textContent = clientDeathCap(form.snapshot().settings.automation?.respawn); }
   catch { element('death-cap').textContent = '—'; }
   if(updateBusy){botConsole.lock(true,'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.lock(true,true,true);return;}
   form.refresh();
-  const fresh = Date.now() - receivedAt < 7000;
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
   let checked:Settings|null = null;
   try { checked=validateSettings(form.runSettings()); configHelp.textContent=''; }
@@ -200,9 +208,9 @@ function updateButtons(): void {
   startButton.disabled = !canStartField({native,fresh,busy,stopping,loginBusy,runActive:runActive(),connected:latest?.connected===true,compatible:latest?.compatible===true,
     map:latest?.map??'',player:latest?.player??null,settings:checked});
   stopButton.disabled = stopping || !gameOpen && !fieldRun.requested && !loginBusy;
-  openButton.disabled = !accountReady || busy || stopping || loginBusy;
+  openButton.disabled = false;
   element<HTMLButtonElement>('disconnect').disabled = !disconnectReady();
-  botConsole.lock(busy || stopping || loginBusy || !ready || runActive() || !features.settledForMaintenance(), !native ? 'Browser preview · native connection required.' : busy || stopping || loginBusy ? 'Wait for the current request to finish.' : !ready ? 'Connect a fresh verified character to use manual controls.' : runActive() || !features.settledForMaintenance() ? 'Stop the bot and wait for current actions to settle before manual control.' : '');
+  botConsole.lock(busy || stopping || loginBusy || !ready || runActive() || !features.settledForMaintenance(), !native ? 'Browser preview · native connection required.' : busy || stopping || loginBusy ? 'Wait for the current request to finish.' : !ready ? 'Connect a fresh verified character to use manual controls.' : runActive() || !features.settledForMaintenance() ? 'Stop the bot; wait for pending actions before manual control.' : '');
   element<HTMLButtonElement>('signin').disabled = !native || !accountReady || busy || stopping || loginBusy || !!(latest?.connected && latest.player);
   element<HTMLButtonElement>('forget-login').disabled = busy || stopping || loginBusy;
   for (const id of ['username', 'password', 'character-slot', 'remember-login']) {
@@ -342,7 +350,9 @@ function render(s: GameStatus): void {
   element('status').classList.toggle('active', state === 'RUNNING');
   element('status').dataset.state = state;
   element('character').textContent = s.player?.name ?? 'No character connected';
+  element('character').title = s.player?.name ?? 'No character connected';
   element('location').textContent = s.player ? `Level ${s.player.level} · ${s.map} · ${s.player.x}, ${s.player.y}` : 'Connect an account to load your character.';
+  element('location').title = element('location').textContent ?? '';
   const attack = normalAttackProfile(s.character);
   const rawRange = attack.sourceRange !== null && attack.sourceRange !== attack.range ? ` · source range ${attack.sourceRange}` : '';
   element('attack-range').textContent = `Normal attack: ${attack.range} cells · ${attack.source}${rawRange}. ${attack.limitation} Projectile sight is checked; skill range and kiting are separate.`;
@@ -360,7 +370,7 @@ function render(s: GameStatus): void {
   const list = element('log'); list.replaceChildren();
   for (const entry of s.log.slice(0,50)) {
     const li = document.createElement('li'); const time = document.createElement('time'); const text = document.createElement('span');
-    time.textContent = new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    time.textContent = new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     text.textContent = entry.text; li.append(time, text); list.append(li);
   }
   if (!list.childElementCount) { const empty=document.createElement('li'); empty.className='empty'; empty.textContent='No activity observed yet.'; list.append(empty); }
@@ -379,6 +389,7 @@ if (native) {
     form.refresh();
     element('status').textContent = 'OFFLINE'; element('status').classList.remove('active'); element('status').dataset.state = 'OFFLINE';
     element('character').textContent='No character connected'; element('location').textContent='Connect an account to load your character.';
+    element('character').title='No character connected'; element('location').title='Connect an account to load your character.';
     element('hp-text').textContent='— / —'; element('hp-bar').style.width='0%'; element('sp-text').textContent='— / —'; element('sp-bar').style.width='0%'; element('death-count').textContent='—';
     for (const id of ['attacks','kills','looted','nearby']) element(id).textContent='0'; element('map-label').textContent='WAITING'; element('target-label').textContent='No active target';
     const empty=document.createElement('li'); empty.className='empty'; empty.textContent='Session activity will appear after connection.'; element('log').replaceChildren(empty);

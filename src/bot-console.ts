@@ -73,6 +73,7 @@ export class BotConsole {
     this.get('console-loot-settings').addEventListener('click', () => this.hooks.lootSettings());
     this.get('console-item-tools').addEventListener('click', () => this.hooks.manualTools());
     this.get('open').addEventListener('click', () => this.hooks.account());
+    this.get('console-action').hidden = true;
     this.render(null);
   }
   private get<T extends HTMLElement>(id: string): T {
@@ -86,6 +87,7 @@ export class BotConsole {
     const { request, context } = manualTargetView(this.status as unknown as Record<string, unknown>, this.hooks.settings(), command);
     const route = previewManualTarget(request, context);
     this.get('console-action').textContent = `${command.type === 'walk' ? 'Walk' : 'Attack'} requested · ${Math.max(0, route.length - 1)} route cells · waiting for controller observations.`;
+    this.get('console-action').hidden = false;
     await this.hooks.command(request as unknown as Record<string, unknown>);
   }
   private operation(action: () => Promise<void>): void {
@@ -94,6 +96,7 @@ export class BotConsole {
     void Promise.resolve().then(action).catch(error => {
       const reason = error instanceof Error ? error.message : typeof error === 'string' ? error : 'Manual action is unavailable.';
       this.get('console-action').textContent = reason; this.hooks.notify(reason, true);
+      this.get('console-action').hidden = false;
     }).finally(() => { this.pending = false; this.refreshLocks(); });
   }
   lock(locked: boolean, reason: string): void { this.locked = locked; this.lockReason = reason; this.refreshLocks(); }
@@ -126,6 +129,8 @@ export class BotConsole {
     this.get('console-weight').textContent = `${observed(stats?.weight)} / ${observed(stats?.maxWeight)}`;
     this.get('console-zeny').textContent = observed(stats?.zeny);
     this.get('console-experience').textContent = `Base EXP ${observed(experience?.baseTotal)} (+${observed(experience?.baseGained)}) · Job EXP ${observed(experience?.jobTotal)} (+${observed(experience?.jobGained)})`;
+    this.get('console-base-experience').textContent = `${observed(experience?.baseTotal)} (+${observed(experience?.baseGained)})`;
+    this.get('console-job-experience').textContent = `${observed(experience?.jobTotal)} (+${observed(experience?.jobGained)})`;
     const character = status?.character, signature = JSON.stringify([this.world(), character?.inventoryKnown, character?.inventory.map(item => [item.itemId, item.count])]);
     if (signature !== this.inventorySignature) {
       this.inventorySignature = signature;
@@ -170,6 +175,7 @@ export class BotConsole {
     const manual = status?.manualTarget;
     this.get('console-target-result').textContent = manual && manual.sequence > 0
       ? `Latest bounded command #${manual.sequence}: ${manual.state} · ${manual.reason}${manual.settling ? ' · awaiting movement/Stop reconciliation' : ''}` : 'No bounded command observed.';
+    this.get('console-target-result').hidden = !manual || manual.sequence <= 0;
     const request = this.itemRequest, result = status?.actionResult;
     if (request && request.world !== this.world()) { this.get('console-item-result').textContent = 'Connection changed. The previous item outcome is not confirmed here.'; this.itemRequest = null; }
     this.get('console-latest-action').textContent = result && result.sequence > 0
