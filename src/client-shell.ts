@@ -153,6 +153,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
               <div class="signin-fields">
                 <label for="username">Username<input id="username" type="text" maxlength="64" autocomplete="off" spellcheck="false" required /></label>
                 <label for="password">Password<input id="password" type="password" maxlength="256" autocomplete="off" /></label>
+                <label for="connection-mode">Connection<select id="connection-mode"><option value="botOnly">Bot only · no game client</option><option value="gameClient">With game client</option></select></label>
                 <label for="character-slot">Character<select id="character-slot"><option value="0">Slot 1</option><option value="1">Slot 2</option><option value="2">Slot 3</option></select></label>
               </div>
               <div class="signin-options">
@@ -161,6 +162,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
                 <label><input id="auto-reconnect" type="checkbox" disabled /> Reconnect after connection loss · this session</label>
                 <button id="forget-login" type="button" class="text-button" hidden>Forget local saved login</button>
               </div>
+              <p class="hint">Bot only uses the companion map and controls. With game client opens the official game window. Disconnect before switching modes.</p>
               <p class="hint">Saved credentials use a local file with user-only access. The app does not encrypt them.</p>
               <p id="reconnect-help" class="hint">A running bot reconnects with this session login and resumes when your character is ready.</p>
               <div class="signin-actions"><p id="login-help" class="hint">Select an existing slot. Sign-in enters the field with combat stopped.</p><button id="signin" type="submit" class="primary">Sign in & enter</button></div>

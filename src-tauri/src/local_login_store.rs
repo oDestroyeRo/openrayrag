@@ -431,6 +431,7 @@ mod tests {
     }
     fn profile() -> LoginProfile {
         LoginProfile {
+            mode: super::super::ConnectionMode::GameClient,
             username: "synthetic-account".into(),
             password: "synthetic-only-password".into(),
             character_slot: 2,

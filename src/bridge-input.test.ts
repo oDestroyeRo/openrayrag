@@ -40,7 +40,7 @@ function spawn(e:Entity,entryType=0):Uint8Array {
 }
 type Page={WebSocket:typeof NativeSocket;buildUrl:string;__RAYRAG__?:{control:(action:'start'|'heartbeat',settings?:Settings)=>void;maintenance:(nonce:string,reserve:boolean|'commit')=>void;perform:(action:string,request:unknown)=>void}};
 async function fixture(ready=true,ownId=0){
-  const invoke=vi.fn(async(name:string)=>name==='update_ack'||name==='update_lease_alive'?true:undefined);
+  const invoke=vi.fn(async(name:string):Promise<unknown>=>name==='warp_guard_mark'?'11111111-1111-4111-8111-111111111111':name==='update_ack'||name==='update_lease_alive'?true:undefined);
   const page:Page & Pick<Window,'addEventListener'> & {__TAURI_INTERNALS__:{invoke:typeof invoke}}={WebSocket:NativeSocket,buildUrl:VERIFIED_BUILD,addEventListener:()=>{},__TAURI_INTERNALS__:{invoke}},listeners=new Map<string,EventListener>();
   vi.stubGlobal('window',page);vi.stubGlobal('location',{origin:new URL(GAME_URL).origin,pathname:'/'});
   vi.stubGlobal('localStorage',{getItem:()=>null,setItem:()=>{},removeItem:()=>{}});
@@ -384,7 +384,7 @@ it('keeps panel input and non-economic official commands free of the refine hold
 it('marks official Warp uncertainty before forwarding and retains it through Stop and maintenance settlement',async()=>{
  const f=await fixture(),frame=warpCommand({stage:'ground',level:4,x:101,y:100});
  vi.spyOn(NativeSocket.prototype,'send').mockImplementation(function(this:NativeSocket,data){expect(f.c.warp.blocked).toBe(true);this.writes.push(data);});
- f.socket.send(frame);expect(f.socket.writes).toEqual([frame]);f.c.stop();await f.step(5000);expect(f.c.warp.blocked).toBe(true);
+ f.socket.send(frame);expect(f.socket.writes).toEqual([]);for(let i=0;i<15;i++)await Promise.resolve();expect(f.socket.writes).toEqual([frame]);f.c.stop();await f.step(5000);expect(f.c.warp.blocked).toBe(true);
  f.page.__RAYRAG__!.maintenance('a'.repeat(32),true);for(let i=0;i<15;i++)await Promise.resolve();expect(f.invoke.mock.calls.some(c=>c[0]==='update_ack')).toBe(false);
 });
 it('serializes Warp Ready evidence after inbound full resources and memo without reviving old intent',async()=>{
@@ -547,5 +547,20 @@ describe('certified fresh initialization with coexisting Warp and official refin
    expect(next.writes.map(data=>(data as Uint8Array)[0])).toEqual([3,2]);
    f.page.__RAYRAG__!.maintenance(nonce,false);
   }
+ });
+});
+
+describe('native persistence admission for official Warp only',()=>{
+ it.each(['success','failure','replacement','maintenance'])('delayed guard admission %s sends at most once on the captured socket',async outcome=>{
+  const f=await fixture();let resolve!:(value:string)=>void,reject!:(error:Error)=>void;
+  f.invoke.mockImplementation(name=>name==='warp_guard_mark'?new Promise<string>((yes,no)=>{resolve=yes;reject=no;}):Promise.resolve(undefined));
+  const packet=warpCommand({stage:'ground',level:4,x:101,y:100});f.socket.send(packet);
+  expect(f.socket.writes).toEqual([]);expect(f.c.warp.blocked).toBe(true);
+  if(outcome==='replacement'){const next=new f.page.WebSocket(SOCKET_URL);next.dispatchEvent(new Event('open'));}
+  if(outcome==='maintenance'){f.page.__RAYRAG__!.maintenance('c'.repeat(32),true);await Promise.resolve();expect(f.invoke.mock.calls.some(([name])=>name==='update_ack')).toBe(false);}
+  if(outcome==='failure')reject(new Error('synthetic persistence failure'));else resolve('11111111-1111-4111-8111-111111111111');
+  for(let i=0;i<20;i++)await Promise.resolve();
+  expect(f.socket.writes).toHaveLength(outcome==='success'||outcome==='maintenance'?1:0);
+  if(outcome==='success'||outcome==='maintenance')expect([...new Uint8Array(f.socket.writes[0] as ArrayBuffer)]).toEqual([...packet]);
  });
 });

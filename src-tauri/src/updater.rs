@@ -353,15 +353,20 @@ pub(crate) fn update_ack(
     identity: GameIdentity,
     revision: u64,
 ) -> Result<bool, String> {
-    crate::require_window(&window, "game")?;
+    crate::require_game_runtime(&window)?;
     if nonce.len() != 32 {
         return Ok(false);
     }
-    Ok(app
-        .state::<SharedGate>()
-        .lock()
-        .map_err(|_| "Update state unavailable.")?
-        .acknowledge(&nonce, identity, revision))
+    let shared = app.state::<SharedGate>();
+    let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
+    if crate::direct::window_mode(&window)? == crate::login::ConnectionMode::BotOnly
+        && !app
+            .state::<crate::direct::SharedDirect>()
+            .settled_for(&identity)
+    {
+        return Ok(false);
+    }
+    Ok(gate.acknowledge(&nonce, identity, revision))
 }
 #[tauri::command]
 pub(crate) fn update_release(
@@ -566,7 +571,7 @@ pub(crate) fn update_lease_alive(
     window: WebviewWindow,
     nonce: String,
 ) -> Result<bool, String> {
-    crate::require_window(&window, "game")?;
+    crate::require_game_runtime(&window)?;
     let shared = app.state::<SharedGate>();
     let mut g = shared.lock().map_err(|_| "Update state unavailable.")?;
     g.expire();
@@ -580,7 +585,7 @@ pub(crate) fn update_invalidate(
     nonce: String,
     kind: String,
 ) -> Result<(), String> {
-    crate::require_window(&window, "game")?;
+    crate::require_game_runtime(&window)?;
     if !matches!(kind.as_str(), "frame" | "socket" | "page") {
         return Err("Invalid lease mutation.".into());
     }
@@ -599,10 +604,15 @@ pub(crate) fn update_final_ack(
     identity: GameIdentity,
     revision: u64,
 ) -> Result<bool, String> {
-    crate::require_window(&window, "game")?;
-    Ok(app
-        .state::<SharedGate>()
-        .lock()
-        .map_err(|_| "Update state unavailable.")?
-        .final_ack(&nonce, &identity, revision))
+    crate::require_game_runtime(&window)?;
+    let shared = app.state::<SharedGate>();
+    let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
+    if crate::direct::window_mode(&window)? == crate::login::ConnectionMode::BotOnly
+        && !app
+            .state::<crate::direct::SharedDirect>()
+            .settled_for(&identity)
+    {
+        return Ok(false);
+    }
+    Ok(gate.final_ack(&nonce, &identity, revision))
 }

@@ -1,0 +1,22 @@
+{
+  "identifier": "bot-runtime",
+  "description": "The bundled bot execution context uses one fixed native transport and reports bounded telemetry. It cannot retrieve credentials or load the official client.",
+  "windows": [
+    "game"
+  ],
+  "local": true,
+  "permissions": [
+    "allow-direct-connect",
+    "allow-direct-poll",
+    "allow-direct-observed",
+    "allow-direct-send",
+    "allow-bridge-status",
+    "allow-update-ack",
+    "allow-update-lease-alive",
+    "allow-update-invalidate",
+    "allow-update-final-ack",
+    "allow-warp-guard-mark",
+    "allow-warp-guard-clear",
+    "allow-warp-guard-initialize"
+  ]
+}

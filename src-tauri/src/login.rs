@@ -5,20 +5,30 @@ use tauri::{Manager, WebviewWindow};
 
 #[path = "local_login_store.rs"]
 pub(crate) mod local_store;
-const VERIFIED_BUILD: &str = "Build_2569-09-01-01-55";
+pub(crate) const VERIFIED_BUILD: &str = "Build_2569-09-01-01-55";
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ConnectionMode {
+    BotOnly,
+    #[default]
+    GameClient,
+}
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct LoginProfile {
-    username: String,
-    password: String,
-    character_slot: u8,
+    pub(crate) username: String,
+    pub(crate) password: String,
+    pub(crate) character_slot: u8,
+    #[serde(default)]
+    pub(crate) mode: ConnectionMode,
     #[serde(default)]
     auto_login: bool,
 }
 
 impl LoginProfile {
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if self.username.trim().is_empty()
             || self.username.chars().count() > 64
             || self.username.chars().any(char::is_control)
@@ -36,6 +46,7 @@ impl LoginProfile {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SavedLogin {
+    mode: ConnectionMode,
     username: String,
     character_slot: u8,
     auto_login: bool,
@@ -67,11 +78,26 @@ pub(crate) struct LoginState {
 
 #[derive(Serialize)]
 pub(crate) struct PendingLoginResult {
-    profile: Option<LoginProfile>,
+    pub(crate) profile: Option<LoginProfile>,
     cancelled: bool,
 }
 
 impl LoginState {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+    pub(crate) fn claim_generation(
+        &mut self,
+        generation: u64,
+        session: String,
+    ) -> Result<LoginProfile, String> {
+        if generation != self.generation || self.cancelled {
+            return Err("Login request replaced or cancelled.".into());
+        }
+        self.claim(session)
+            .profile
+            .ok_or_else(|| "No explicit login is queued.".into())
+    }
     pub(crate) fn maintenance_busy(&self) -> bool {
         self.pending.is_some() || self.candidate.is_some()
     }
@@ -185,7 +211,7 @@ impl LoginState {
         Ok(self.session_profile.clone())
     }
 
-    fn claim(&mut self, session_id: String) -> PendingLoginResult {
+    pub(crate) fn claim(&mut self, session_id: String) -> PendingLoginResult {
         let queued = self.candidate.is_some();
         let profile = self
             .pending
@@ -231,6 +257,7 @@ pub(crate) async fn saved_login(window: WebviewWindow) -> Result<Option<SavedLog
     Ok(login_store(window.app_handle())?
         .load()?
         .map(|profile| SavedLogin {
+            mode: profile.mode,
             username: profile.username,
             character_slot: profile.character_slot,
             auto_login: profile.auto_login,
@@ -246,6 +273,8 @@ pub(crate) async fn forget_login(window: WebviewWindow) -> Result<(), String> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct LoginRequest {
+    #[serde(default)]
+    mode: Option<ConnectionMode>,
     // Null credentials mean reuse the local profile. Its password never returns
     // to the controller webview.
     credentials: Option<LoginProfile>,
@@ -266,6 +295,9 @@ fn resolve_profile(
         None => load()?.ok_or("Enter your account or save a login first.")?,
     };
     profile.character_slot = request.character_slot;
+    if let Some(mode) = request.mode {
+        profile.mode = mode;
+    }
     profile.auto_login = request.auto_login;
     profile.validate()?;
     Ok(profile)
@@ -281,6 +313,13 @@ pub(crate) async fn login_game(
     let mut _permit = crate::maintenance::admit(&app)?;
     let remember = request.remember;
     let profile = resolve_profile(request, || login_store(&app)?.load())?;
+    if let Some(game) = app.get_webview_window("game") {
+        if super::direct::window_mode(&game)? != profile.mode {
+            return Err("Disconnect before changing the connection mode.".into());
+        }
+    }
+    let mode = profile.mode;
+    super::mode_guard::check_app(&app, mode)?;
     let state = app.state::<SharedLogin>();
     {
         let mut state = state.lock().map_err(|_| "Login state is unavailable.")?;
@@ -294,6 +333,7 @@ pub(crate) async fn login_game(
             previous.username != profile.username
                 || previous.password != profile.password
                 || previous.character_slot != profile.character_slot
+                || previous.mode != profile.mode
         }) {
             state.session_profile = None;
             state.profile_session = None;
@@ -304,19 +344,28 @@ pub(crate) async fn login_game(
     }
     _permit.ever_game = true;
     _permit.authorize_navigation();
-    let result = reopen_game(&app);
+    let result = reopen_game(&app, mode, &mut _permit);
     if result.is_err() {
         _permit.cancel_navigation();
     }
     result
 }
 
-fn reopen_game(app: &tauri::AppHandle) -> Result<(), String> {
+fn reopen_game(
+    app: &tauri::AppHandle,
+    mode: ConnectionMode,
+    gate: &mut crate::maintenance::Gate,
+) -> Result<(), String> {
+    super::mode_guard::check_app(app, mode)?;
+    if app.get_webview_window("game").is_some() {
+        super::mode_guard::prepare(app, mode)?;
+    }
+    super::direct::cancel_admitted(app, gate);
     let result = if let Some(game) = app.get_webview_window("game") {
-        game.navigate(super::GAME_URL.parse().unwrap())
+        game.navigate(super::direct::url_for(mode))
             .map_err(|_| "Could not reopen the game.".to_string())
     } else {
-        super::open_game_window(app)
+        super::open_game_window(app, mode)
     };
     if result.is_err() {
         if let Ok(mut state) = app.state::<SharedLogin>().lock() {
@@ -339,13 +388,14 @@ pub(crate) async fn reconnect_game(
         .get_webview_window("game")
         .ok_or("Open the game and sign in before reconnecting.")?;
     let state = app.state::<SharedLogin>();
-    let generation = {
+    let (generation, mode) = {
         let mut state = state.lock().map_err(|_| "Login state is unavailable.")?;
         let profile = state
             .reconnect_profile()?
             .ok_or("Sign in through Companion to enable session reconnect.")?;
         profile.validate()?;
-        state.queue(profile)
+        let mode = profile.mode;
+        (state.queue(profile), mode)
     };
     {
         let state = state.lock().map_err(|_| "Login state is unavailable.")?;
@@ -355,8 +405,13 @@ pub(crate) async fn reconnect_game(
     }
     _permit.ever_game = true;
     _permit.authorize_navigation();
+    if super::direct::window_mode(&game)? != mode {
+        return Err("Disconnect before changing the connection mode.".into());
+    }
+    super::mode_guard::prepare(&app, mode)?;
+    super::direct::cancel_admitted(&app, &mut _permit);
     let result = game
-        .navigate(super::GAME_URL.parse().unwrap())
+        .navigate(super::direct::url_for(mode))
         .map_err(|_| "Could not reopen the game.".to_string());
     if result.is_err() {
         _permit.cancel_navigation();
@@ -420,6 +475,7 @@ mod tests {
 
     fn profile() -> LoginProfile {
         LoginProfile {
+            mode: ConnectionMode::GameClient,
             username: "test-account".into(),
             password: "synthetic-test-password".into(),
             character_slot: 0,
@@ -427,6 +483,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn legacy_saved_profiles_default_to_official_and_explicit_mode_overrides_reuse() {
+        let profile: LoginProfile = serde_json::from_str(
+            r#"{"username":"synthetic","password":"synthetic-only","characterSlot":0}"#,
+        )
+        .unwrap();
+        assert_eq!(profile.mode, ConnectionMode::GameClient);
+        let request:LoginRequest=serde_json::from_str(r#"{"credentials":null,"characterSlot":1,"remember":true,"autoLogin":true,"mode":"botOnly"}"#).unwrap();
+        let selected = resolve_profile(request, || Ok(Some(profile))).unwrap();
+        assert_eq!(selected.mode, ConnectionMode::BotOnly);
+        assert_eq!(selected.character_slot, 1);
+    }
     #[test]
     fn validates_login_input_and_does_not_serialize_password_in_saved_info() {
         let mut value = profile();
@@ -437,6 +505,7 @@ mod tests {
         value.password.clear();
         assert!(value.validate().is_err());
         let info = SavedLogin {
+            mode: ConnectionMode::GameClient,
             username: "test-account".into(),
             character_slot: 1,
             auto_login: true,
@@ -448,6 +517,7 @@ mod tests {
     #[test]
     fn session_only_new_credentials_do_not_access_persistence() {
         let request = LoginRequest {
+            mode: None,
             credentials: Some(profile()),
             character_slot: 2,
             remember: false,
@@ -460,6 +530,7 @@ mod tests {
         assert_eq!(resolved.character_slot, 2);
         assert!(!resolved.auto_login);
         let request = LoginRequest {
+            mode: None,
             credentials: Some(profile()),
             character_slot: 0,
             remember: false,
@@ -475,6 +546,7 @@ mod tests {
     fn saved_reuse_keeps_password_native_and_overrides_requested_slot_and_preference() {
         let saved = profile();
         let request = LoginRequest {
+            mode: None,
             credentials: None,
             character_slot: 1,
             remember: false,
@@ -486,6 +558,7 @@ mod tests {
         assert_eq!(resolved.character_slot, 1);
         assert!(!resolved.auto_login);
         let request = LoginRequest {
+            mode: None,
             credentials: None,
             character_slot: 0,
             remember: true,
@@ -495,6 +568,7 @@ mod tests {
         assert_eq!(resolved.character_slot, 0);
         assert!(resolved.auto_login);
         let request = LoginRequest {
+            mode: None,
             credentials: None,
             character_slot: 0,
             remember: false,

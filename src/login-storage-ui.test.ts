@@ -50,7 +50,7 @@ class Element {
       node.className=/\bclass="([^"]*)"/.exec(match[2]!)?.[1]??'';
       for(const key of ['page','bot']){const value=new RegExp(`data-client-${key}-nav="([^"]*)"`).exec(match[2]!)?.[1];if(value)node.dataset[key==='page'?'clientPageNav':'clientBotNav']=value;}
       node.checked = /\bchecked\b/.test(match[2]!); node.disabled = /\bdisabled\b/.test(match[2]!); node.hidden = /\bhidden\b/.test(match[2]!);
-      node.value = /\bvalue="([^"]*)"/.exec(match[2]!)?.[1] ?? (match[1] === 'select' ? '0' : '');
+      node.value = /\bvalue="([^"]*)"/.exec(match[2]!)?.[1] ?? (node.id==='connection-mode'?'botOnly':match[1] === 'select' ? '0' : '');
       this.elements.set(node.id, node);
     }
   }
@@ -82,7 +82,7 @@ class Element {
     for (let i = 0; i < 12; i++) await Promise.resolve();
   }
 }
-async function fixture(saved: { username: string; characterSlot: number; autoLogin: boolean } | null = null, readFails = false, savedForm:unknown=null) {
+async function fixture(saved: { username: string; characterSlot: number; autoLogin: boolean;mode?:'botOnly'|'gameClient' } | null = null, readFails = false, savedForm:unknown=null) {
   const elements = new Map<string, Element>(), root = new Element(elements), main = new Element(elements,'main');
   elements.set('main',main);elements.set('.client-toolbar',new Element(elements,'header'));elements.set('.client-skip-link',new Element(elements,'a'));
   vi.useFakeTimers(); vi.stubGlobal('document', {
@@ -118,7 +118,7 @@ describe('native local-login form and metadata', () => {
     await f.get('signin-form').emit('submit');
     expect(f.calls('login_game')).toEqual([['login_game', { request: {
       credentials: { username: 'synthetic-user', password: 'synthetic-only-password', characterSlot: 2 },
-      characterSlot: 2, remember: false, autoLogin: false,
+      characterSlot: 2, remember: false, autoLogin: false, mode:'botOnly',
     } }]]);
     expect(f.get('password').value).toBe(''); expect(f.get('saved-account').textContent).toBe('Session only');
   });
@@ -134,11 +134,11 @@ describe('native local-login form and metadata', () => {
     expect(f.get('username').value).toBe('synthetic-user'); expect(f.get('character-slot').value).toBe('2');
     expect(f.get('password').value).toBe(''); expect(f.calls('login_game')).toHaveLength(0);
     f.get('character-slot').value = '1'; await f.get('signin-form').emit('submit');
-    expect(f.calls('login_game')).toEqual([['login_game', { request: { credentials: null, characterSlot: 1, remember: true, autoLogin: false } }]]);
+    expect(f.calls('login_game')).toEqual([['login_game', { request: { credentials: null, characterSlot: 1, remember: true, autoLogin: false, mode:'gameClient' } }]]);
   });
   it('auto-login uses native reuse and the saved slot without returning a password to the form', async () => {
     const f = await fixture({ username: 'synthetic-user', characterSlot: 2, autoLogin: true });
-    expect(f.calls('login_game')).toEqual([['login_game', { request: { credentials: null, characterSlot: 2, remember: true, autoLogin: true } }]]);
+    expect(f.calls('login_game')).toEqual([['login_game', { request: { credentials: null, characterSlot: 2, remember: true, autoLogin: true, mode:'gameClient' } }]]);
     expect(f.get('password').value).toBe('');
   });
   it('Forget deletes the local profile and clears launch preference, including after unreadable metadata', async () => {
@@ -174,7 +174,7 @@ it('recovers continuous saves when an edit during delayed restore is invalid the
 });
 
 describe('unsent account draft update fence',()=>{
-  it.each(['password','username','character-slot','remember-login','auto-login'])('defers installation for %s, then permits it after restoring the baseline',async(id)=>{
+  it.each(['password','username','character-slot','connection-mode','remember-login','auto-login'])('defers installation for %s, then permits it after restoring the baseline',async(id)=>{
     const f=await fixture();
     const input=f.get(id),beforeValue=input.value,beforeChecked=input.checked;
     if(id.endsWith('-login'))input.checked=true;
@@ -266,7 +266,7 @@ it('requires settled, fresh stopped state for explicit Disconnect and clears tel
  const status={...base,sessionId:'synthetic-session',login:{phase:'idle',message:''},reconnectAvailable:false,connected:true,compatible:true,
   player:{id:0,classId:4,kind:0,name:'Synthetic',level:30,hp:100,maxHp:100,x:1,y:1,dead:false,statuses:[]},
   character:{...base.character,stats:{sp:75,maxSp:200}},mapInfo:{code:'',name:'',source:'observed',monsters:[]}};
- publish({payload:{...status,runRequested:true}});expect(f.get('disconnect').disabled).toBe(true);await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([]);
+ publish({payload:{...status,runRequested:true}});expect(f.get('connection-mode').disabled).toBe(true);expect(f.get('disconnect').disabled).toBe(true);await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([]);
  publish({payload:{...status,refine:{blocked:true,reason:'Pending receipt'}}});expect(f.get('disconnect').disabled).toBe(true);await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([]);
  publish({payload:status});ipc.featureSettled=false;await vi.advanceTimersByTimeAsync(1000);expect(f.get('disconnect').disabled).toBe(true);
  ipc.featureSettled=true;publish({payload:status});expect(f.get('disconnect').disabled).toBe(false);
@@ -274,7 +274,7 @@ it('requires settled, fresh stopped state for explicit Disconnect and clears tel
  await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([['close_game']]);expect(f.get('disconnect').disabled).toBe(true);expect(f.get('console-walk').disabled).toBe(true);finish();
  const closed=ipc.listen.mock.calls.find(call=>call[0]==='game-closed')![1];closed({payload:undefined});
  for(let i=0;i<20;i++)await Promise.resolve();
- expect(f.get('character').textContent).toBe('No character connected');expect(f.get('hp-text').textContent).toBe('— / —');expect(f.get('console-weight').textContent).toBe('— / —');expect(f.get('signin').disabled).toBe(false);expect(f.calls('login_game')).toEqual([]);
+ expect(f.get('connection-mode').disabled).toBe(false);expect(f.get('character').textContent).toBe('No character connected');expect(f.get('hp-text').textContent).toBe('— / —');expect(f.get('console-weight').textContent).toBe('— / —');expect(f.get('signin').disabled).toBe(false);expect(f.calls('login_game')).toEqual([]);
 });
 
 it('refreshes console locks for stale status and unsettled owners',async()=>{
@@ -287,4 +287,16 @@ it('refreshes console locks for stale status and unsettled owners',async()=>{
  publish({payload:status});expect(f.get('console-use-item').disabled).toBe(false);
  ipc.featureSettled=false;publish({payload:status});expect(f.get('console-use-item').disabled).toBe(true);
  ipc.featureSettled=true;publish({payload:status});expect(f.get('console-use-item').disabled).toBe(false);
+});
+
+it('restores explicit Bot only mode before automatic native saved-profile reuse',async()=>{
+ const f=await fixture({username:'synthetic-user',characterSlot:1,autoLogin:true,mode:'botOnly'});
+ expect(f.get('connection-mode').value).toBe('botOnly');expect(f.calls('login_game')).toEqual([['login_game',{request:{credentials:null,characterSlot:1,remember:true,autoLogin:true,mode:'botOnly'}}]]);
+ expect(f.get('connection-mode').disabled).toBe(true);expect(f.get('password').value).toBe('');
+});
+it('a mode draft emits no login or settings save and legacy saved profiles retain game client mode',async()=>{
+ const f=await fixture({username:'synthetic-user',characterSlot:0,autoLogin:false});expect(f.get('connection-mode').value).toBe('gameClient');
+ const before=f.calls('save_current_form').length;f.get('connection-mode').value='botOnly';await f.get('connection-mode').emit('change');
+ expect(f.calls('login_game')).toEqual([]);expect(f.calls('save_current_form')).toHaveLength(before);
+ await f.get('signin-form').emit('submit');expect(f.calls('login_game')[0]?.[1]).toMatchObject({request:{mode:'botOnly'}});expect(f.get('connection-mode').disabled).toBe(true);
 });

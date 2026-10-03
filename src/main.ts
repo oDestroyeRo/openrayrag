@@ -25,13 +25,13 @@ const openButton = element<HTMLButtonElement>('open');
 const startButton = element<HTMLButtonElement>('start');
 const stopButton = element<HTMLButtonElement>('stop');
 const native = isTauri();
-interface SavedLogin { username: string; characterSlot: number; autoLogin: boolean }
+interface SavedLogin { username: string; characterSlot: number; autoLogin: boolean; mode?:'botOnly'|'gameClient' }
 let savedLogin: SavedLogin | null = null;
 let loginBusy = false;
 let loginStartedAt = 0;
 let accountReady = !native;
 let accountBaseline:string|null=null;
-function accountFields():string{return JSON.stringify(['username','character-slot'].map(id=>element<HTMLInputElement>(id).value).concat(['remember-login','auto-login'].map(id=>String(element<HTMLInputElement>(id).checked))));}
+function accountFields():string{return JSON.stringify(['username','character-slot','connection-mode'].map(id=>element<HTMLInputElement>(id).value).concat(['remember-login','auto-login'].map(id=>String(element<HTMLInputElement>(id).checked))));}
 function accountDraft():boolean{return !!element<HTMLInputElement>('password').value||accountBaseline!==null&&accountFields()!==accountBaseline;}
 let updateBusy=false;
 let updatePolling=false;
@@ -208,6 +208,7 @@ function updateButtons(): void {
   for (const id of ['username', 'password', 'character-slot', 'remember-login']) {
     element<HTMLInputElement>(id).disabled = !accountReady || busy || stopping || loginBusy;
   }
+  element<HTMLSelectElement>('connection-mode').disabled = !accountReady || gameOpen || busy || stopping || loginBusy;
   element<HTMLInputElement>('auto-login').disabled = busy || stopping || loginBusy || !element<HTMLInputElement>('remember-login').checked;
   element<HTMLInputElement>('auto-reconnect').disabled = busy || stopping || loginBusy || !sessionLoginAvailable;
   features.lock(busy || stopping || loginBusy || runActive(),busy || stopping || loginBusy || !ready || runActive(),busy || stopping || loginBusy || !ready || features.serviceBlocked(),busy || stopping || loginBusy || !ready || fieldRun.requested);
@@ -231,20 +232,21 @@ async function signIn(): Promise<void> {
   const characterSlot = Number(element<HTMLSelectElement>('character-slot').value);
   const remember = element<HTMLInputElement>('remember-login').checked;
   const autoLogin = element<HTMLInputElement>('auto-login').checked;
+  const mode = element<HTMLSelectElement>('connection-mode').value as 'botOnly'|'gameClient';
   const reuse = savedLogin?.username === username && !password.value;
   previousSession = latest?.sessionId;
   loginBusy = true; loginStartedAt = Date.now(); updateButtons();
   try {
     const task = invoke('login_game', { request: {
       credentials: reuse ? null : { username, password: password.value, characterSlot },
-      characterSlot, remember, autoLogin,
+      characterSlot, remember, autoLogin, mode,
     } });
     pendingLogin = task;
     await task;
     if (generation !== loginGeneration) return;
     gameOpen = true;accountBaseline=accountFields();
-    if (remember) showSavedLogin({ username, characterSlot, autoLogin });
-    message('Loading the game for automatic sign-in…');
+    if (remember) showSavedLogin({ username, characterSlot, autoLogin, mode });
+    message(mode==='botOnly'?'Opening bot connection for sign-in…':'Loading the game client for sign-in…');
   } catch (error) {
     if (generation !== loginGeneration) return;
     previousSession = undefined;
@@ -394,6 +396,7 @@ if (native) {
       element<HTMLSelectElement>('character-slot').value = String(profile.characterSlot);
       element<HTMLInputElement>('remember-login').checked = true;
       element<HTMLInputElement>('auto-login').checked = profile.autoLogin;
+      element<HTMLSelectElement>('connection-mode').value = profile.mode ?? 'gameClient';
       accountBaseline=accountFields();if (profile.autoLogin) await signIn();
     }
   } catch {

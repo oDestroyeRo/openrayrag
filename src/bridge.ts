@@ -1,16 +1,11 @@
 import type { DeathRecoveryGuard } from './death-recovery';
 import { MaintenanceLease } from './maintenance';
-import { socketCommand } from './socket-protocol';
 import { couldOwnOfficialGameplay, isOfficialGameplayCommand, isOfficialLookCommand, isOfficialRefineCommand } from './official-input';
-import { refineCommand } from './refine-protocol';
 import { type Settings } from './engine';
-import { command, walkCommand, lookCommand, decode, OP, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
-import { featureCommand, validateExpandedAction } from './protocol-feature';
-import { worldCommand, validateWorldAction } from './world-protocol';
-import { socialCommand } from './social-protocol';
-import { memoCommand } from './memo-protocol';
-import { warpCommand, officialWarpSkill, warpInitializationPacket } from './warp-protocol';
-import { CompanionController, type CompanionSnapshot } from './controller';
+import { decode, OP, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
+import { officialWarpSkill, warpInitializationPacket } from './warp-protocol';
+import type { CompanionSnapshot } from './controller';
+import { wireController } from './controller-wire';
 import { LoginController, loginDriver, loginReady, type LoginProfile, type LoginStatus, type UnityClient } from './login';
 import { currentMapInfo, loadMapCatalog, type MapCatalog } from './map-data';
 import type { SupplyResumeGuard } from './supply-trip';
@@ -60,51 +55,36 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   let unityClient: UnityClient | undefined;
   let catalog: MapCatalog | null = null;
   let catalogLoading = true;
-  const controller = new CompanionController(action => {
+  const guardHeldAtStart=localStorage.getItem('rayrag.warp.uncertain.v1')!==null;
+  let guardResetAllowed=false;
+  let guardNonce:string|null=null;
+  const guardWrites=new Set<Promise<unknown>>();
+  const guardReady=page.__TAURI_INTERNALS__?page.__TAURI_INTERNALS__.invoke('warp_guard_initialize',{legacyHeld:guardHeldAtStart}).then(value=>{
+    if(typeof value==='string'){guardNonce=value;localStorage.setItem('rayrag.warp.uncertain.v1','held');if(!controller.warp.blocked){controller.warp.externalWarp();controller.warp.connectionChanged(engine.connected);}}
+  }).catch(()=>{controller.engine.reason='Connection recovery guard unavailable.';}):Promise.resolve();
+  guardWrites.add(guardReady);void guardReady.finally(()=>guardWrites.delete(guardReady));
+  const controller = wireController(packet => {
     maintenance.assertDispatch();
     if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
-    const packet = action.type === 'look'?lookCommand(action):action.type === 'walk' ? walkCommand(action.destination)
-      : action.type === 'attack' || action.type === 'pickup' || action.type === 'stop'
-        ? command(action.type, 'id' in action ? action.id : undefined)
-        : (() => {
-          try { return featureCommand(validateExpandedAction(action)); }
-          catch { return worldCommand(validateWorldAction(action)); }
-        })();
     NativeSocket.prototype.send.call(active, Uint8Array.from(packet));
-  }, Date.now, undefined, action => {
-    maintenance.assertDispatch();
-    if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
-    NativeSocket.prototype.send.call(active, socialCommand(action));
-  }, slot => {
-    maintenance.assertDispatch();
-    if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
-    NativeSocket.prototype.send.call(active, memoCommand(slot));
-  }, action => {
-    maintenance.assertDispatch();
-    if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
-    NativeSocket.prototype.send.call(active, socketCommand(action));
-  }, packet => {
-    maintenance.assertDispatch();
-    if (active?.readyState !== NativeSocket.OPEN) throw new Error('Game connection is closed.');
-    NativeSocket.prototype.send.call(active, Uint8Array.from(refineCommand(packet)));
-  }, wire => {
-    maintenance.assertDispatch();
-    if(active?.readyState!==NativeSocket.OPEN)throw new Error('Game connection is closed.');
-    NativeSocket.prototype.send.call(active,warpCommand(wire));
   }, {
     // A bounded uncertainty marker only. Never persist commands, cells or memo data.
     read:()=>localStorage.getItem('rayrag.warp.uncertain.v1')!==null,
-    write:held=>{if(held)localStorage.setItem('rayrag.warp.uncertain.v1','held');else localStorage.removeItem('rayrag.warp.uncertain.v1');},
+    write:held=>{
+      if(!held&&(guardHeldAtStart||guardNonce!==null)&&!guardResetAllowed)throw new Error('Authoritative first-entry certificate is incomplete.');
+      if(held)localStorage.setItem('rayrag.warp.uncertain.v1','held');else localStorage.removeItem('rayrag.warp.uncertain.v1');
+      if(!held&&guardNonce&&connectionId){const task=Promise.resolve(publish()).then(()=>page.__TAURI_INTERNALS__?.invoke('warp_guard_clear',{permit:guardNonce,identity:{sessionId,connectionId}}));guardWrites.add(task);void task.catch(()=>{}).finally(()=>guardWrites.delete(task));}
+    },
   });
   const engine = controller.engine;
   const publish = () => {
     if (!page.__TAURI_INTERNALS__ || publishing) return;
     publishing = true;
-    page.__TAURI_INTERNALS__.invoke('bridge_status', { status: {
+    return page.__TAURI_INTERNALS__.invoke('bridge_status', { status: {
       ...controller.snapshot(), sessionId, connectionId, maintenanceWaiting:officialUncertain, login: login?.status ?? loginStatus,
       mapInfo: currentMapInfo(engine.map, engine.entities.values(), catalog, catalogLoading),
     } })
-      .catch(() => { if (controller.active) controller.heartbeat(false); })
+      .then(()=>{}).catch(() => { if (controller.active) controller.heartbeat(false); })
       .finally(() => { publishing = false; });
   };
   // Fixed, public, same-origin assets. Failures fall back to live observations;
@@ -166,12 +146,27 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   };
 
   window.WebSocket = class extends NativeSocket {
-    private observedQueue=Promise.resolve();
+    private observedQueue=guardReady;
+    private readyObserved=false;
+    private runtimeGeneration=-1;
     private observationRevision=0;
     send(data: string | Blob | BufferSource): void {
       // Suppress every payload on the owned socket during final settlement,
       // before even inspecting opcodes. No replay/queue and no body logging.
       if(this.gameSocket&&maintenance.blocked)return;
+      const warpBytes=data instanceof ArrayBuffer?new Uint8Array(data):ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,data.byteLength):null;
+      if(this.gameSocket&&active===this&&this.readyState===NativeSocket.OPEN&&page.buildUrl===VERIFIED_BUILD&&warpBytes&&officialWarpSkill(warpBytes)&&page.__TAURI_INTERNALS__){
+        const copy=warpBytes.slice(),generation=controller.connectionGeneration;
+        officialRevision++;officialUncertain=true;
+        if(officialOwners.size<32||officialOwners.has(this))officialOwners.add(this);else officialOwnerOverflow=true;
+        mutation();if(engine.actorActionIdentity(undefined,true)&&isOfficialGameplayCommand(copy))controller.manualCommand();controller.observeOfficialPacket(copy);
+        const task=page.__TAURI_INTERNALS__.invoke('warp_guard_mark',{}).then(value=>{
+          if(typeof value!=='string')throw new Error('Warp recovery guard unavailable.');
+          if(active!==this||generation!==controller.connectionGeneration||this.readyState!==NativeSocket.OPEN||maintenance.blocked)return;
+          NativeSocket.prototype.send.call(this,copy);
+        }).catch(()=>{if(active===this){controller.engine.reason='Warp was not sent because its recovery guard could not be saved.';publish();}});
+        guardWrites.add(task);void task.finally(()=>guardWrites.delete(task));return;
+      }
       if(this.gameSocket&&(this.gameplayReady||isOfficialRefineCommand(data))&&this.readyState===NativeSocket.OPEN&&page.buildUrl===VERIFIED_BUILD&&couldOwnOfficialGameplay(data)) {
         officialRevision++;officialUncertain=true;
         if(officialOwners.size<32||officialOwners.has(this))officialOwners.add(this);else officialOwnerOverflow=true;
@@ -188,7 +183,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
         // obsolete/opaque transport still fences updater availability above.
         try { controller.manualCommand(); publish(); } catch { /* Never prevent or replay the official send. */ }
       }
-      if (active===this && this.readyState===NativeSocket.OPEN && engine.connected && engine.compatible && page.buildUrl===VERIFIED_BUILD) {
+      if (active===this && this.readyState===NativeSocket.OPEN && page.buildUrl===VERIFIED_BUILD) {
         const bytes=data instanceof ArrayBuffer?new Uint8Array(data):ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,data.byteLength):null;
         if(bytes && ((bytes[0]===2&&bytes.length===1)||(bytes[0]===3&&bytes.length<=106)||(bytes[0]===29&&bytes.length<=8))){
           const copy=bytes.slice();
@@ -196,9 +191,8 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
           // inbound resource/memo evidence before accepting the Ready transcript.
           if(officialWarpSkill(copy)){try{controller.observeOfficialPacket(copy);}catch{}}
           else if(warpInitializationPacket(copy)){
-            const epoch=controller.connectionGeneration;
             this.observationRevision++;
-            this.observedQueue=this.observedQueue.then(()=>{if(active===this&&epoch===controller.connectionGeneration)controller.observeOfficialPacket(copy);});
+            this.observedQueue=this.observedQueue.then(()=>{if(active===this&&this.runtimeGeneration===controller.connectionGeneration){controller.observeOfficialPacket(copy);if(copy[0]===2)this.readyObserved=true;}});
             receiveQueue=this.observedQueue;
           }
         }
@@ -218,7 +212,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
       controller.pause('Opening game session.');
       active = this;
       let failed = false;
-      let initialEnter=false;let fullResources=false;let enterCount=0;let reconciliationEligible=false;let reconciliationRevision:number|null=null;let readyOwn:string|null=null;
+      let initialEnter=false;let memoObserved=false;let firstOwnSeen=false;let fullResources=false;let enterCount=0;let reconciliationEligible=false;let reconciliationRevision:number|null=null;let readyOwn:string|null=null;
       let refineResources:string|null=null;let resetResources:string|null=null;let firstResources=false;let refineBaselineConsumed=false;
       let opcode = -1;
       let connectionGeneration = -1;
@@ -252,7 +246,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
       this.addEventListener('open', () => {
         if (active !== this) return;
         controller.connect(page.buildUrl === VERIFIED_BUILD);
-        connectionGeneration = controller.connectionGeneration; publish();
+        connectionGeneration=controller.connectionGeneration;this.runtimeGeneration=connectionGeneration;publish();
       });
       this.addEventListener('message', event => {
         if (active !== this || failed) return;
@@ -268,12 +262,15 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
           // are read while an explicitly requested sign-in is active.
           login?.receive(data);
           mutation();
+          const incoming=decode(data),firstOwn=incoming.find(e=>e.type==='spawn'&&e.entity.kind===0&&e.entity.id===engine.playerId);
+          if(firstOwn?.type==='spawn'&&!firstOwnSeen){firstOwnSeen=true;if(initialEnter&&fullResources&&memoObserved&&this.readyObserved&&firstOwn.entryType===1&&resetResources!==null&&resetResources===controller.officialInitializationResourceRevision())guardResetAllowed=true;}
           controller.receive(data, connectionGeneration);
           if(engine.actorActionIdentity(undefined,true)){this.gameplayReady=true;this.gameplayCharacter=engine.player?.name??null;}
-          if(data[0]===OP.enter){enterCount++;initialEnter=enterCount===1;fullResources=false;readyOwn=null;refineResources=null;resetResources=null;firstResources=false;refineBaselineConsumed=false;reconciliationEligible=initialEnter&&officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0;reconciliationRevision=reconciliationEligible?officialRevision:null;}
+          if(data[0]===OP.enter){enterCount++;initialEnter=enterCount===1;memoObserved=false;firstOwnSeen=false;this.readyObserved=false;guardResetAllowed=false;fullResources=false;readyOwn=null;refineResources=null;resetResources=null;firstResources=false;refineBaselineConsumed=false;reconciliationEligible=initialEnter&&officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0;reconciliationRevision=reconciliationEligible?officialRevision:null;}
           if(data[0]===OP.clear||data[0]===OP.map){reconciliationEligible=false;readyOwn=null;}
           if(initialEnter&&data[0]===56&&!firstResources){firstResources=true;const events=decode(data);fullResources=events.some(e=>e.type==='inventory')&&events.some(e=>e.type==='skills')&&events.some(e=>e.type==='stats');
-            if(fullResources&&reconciliationEligible){refineResources=controller.officialRefineResourceRevision();resetResources=controller.officialInitializationResourceRevision();}}
+            if(fullResources){refineResources=controller.officialRefineResourceRevision();resetResources=controller.officialInitializationResourceRevision();}}
+          if(initialEnter&&incoming.some(e=>e.type==='memoSlots'))memoObserved=true;
           if(initialEnter&&data[0]===OP.spawn){const own=decode(data).find(e=>e.type==='spawn'&&e.entity.kind===0&&e.entity.id===engine.playerId);
             if(own?.type==='spawn'){const identity=engine.actorActionIdentity(undefined,true);readyOwn=fullResources&&own.entryType===1&&identity?JSON.stringify(identity):null;}}
           reconcileInitialization(revision);
@@ -317,13 +314,13 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
     maintenance(nonce,reserve) {
       if(reserve==='commit'){
         void receiveQueue.then(async()=>{
-          if(maintenanceNonce!==nonce||leaseRevision===null||!maintenance.matches(nonce,leaseRevision)||!controller.settledForMaintenance()||!connectionId)return;
+          if(maintenanceNonce!==nonce||leaseRevision===null||!maintenance.matches(nonce,leaseRevision)||guardWrites.size>0||!controller.settledForMaintenance()||!connectionId)return;
           await page.__TAURI_INTERNALS__?.invoke('update_final_ack',{nonce,identity:{sessionId,connectionId},revision:leaseRevision}).catch(()=>{});
         });return;
       }
       if(!reserve){maintenance.release(nonce);if(maintenanceNonce===nonce)maintenanceNonce=null;return;}
       const settled=()=>active?.readyState===NativeSocket.OPEN&&page.buildUrl===VERIFIED_BUILD&&!officialUncertain
-        &&controller.settledForMaintenance()&&!['signingIn','selecting','entering'].includes((login?.status??loginStatus).phase);
+        &&guardWrites.size===0&&controller.settledForMaintenance()&&!['signingIn','selecting','entering'].includes((login?.status??loginStatus).phase);
       const revision=maintenance.reserve(nonce,settled());if(revision===null)return;
       maintenanceNonce=nonce;leaseRevision=revision;
       void receiveQueue.then(async()=>{

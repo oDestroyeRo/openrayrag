@@ -4,8 +4,11 @@ use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 mod automation;
 mod control;
 mod current_form;
+mod direct;
+mod direct_wire;
 mod login;
 mod maintenance;
+mod mode_guard;
 mod update_install;
 mod updater;
 
@@ -46,7 +49,7 @@ async fn open_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), S
     if app.get_webview_window("game").is_none() {
         permit.authorize_navigation();
     }
-    let result = open_game_window(&app);
+    let result = open_game_window(&app, login::ConnectionMode::GameClient);
     if result.is_err() {
         permit.cancel_navigation();
     }
@@ -56,7 +59,8 @@ async fn open_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), S
 #[tauri::command]
 async fn close_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
     require_window(&window, "main")?;
-    let _permit = maintenance::admit(&app)?;
+    let mut _permit = maintenance::admit(&app)?;
+    direct::cancel_admitted(&app, &mut _permit);
     if let Some(game) = app.get_webview_window("game") {
         game.destroy()
             .map_err(|_| "Could not disconnect the game.".to_string())?;
@@ -64,21 +68,34 @@ async fn close_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), 
     Ok(())
 }
 
-fn open_game_window(app: &tauri::AppHandle) -> Result<(), String> {
-    if app.get_webview_window("game").is_some() {
+fn open_game_window(app: &tauri::AppHandle, mode: login::ConnectionMode) -> Result<(), String> {
+    mode_guard::check_app(app, mode)?;
+    if let Some(game) = app.get_webview_window("game") {
+        if direct::window_mode(&game)? != mode {
+            return Err("Disconnect before changing the connection mode.".into());
+        }
         return Ok(());
     }
-    WebviewWindowBuilder::new(app, "game", WebviewUrl::External(GAME_URL.parse().unwrap()))
+    mode_guard::prepare(app, mode)?;
+    let url = match mode {
+        login::ConnectionMode::BotOnly => WebviewUrl::App("bot-runtime.html".into()),
+        login::ConnectionMode::GameClient => WebviewUrl::External(GAME_URL.parse().unwrap()),
+    };
+    WebviewWindowBuilder::new(app, "game", url)
         .title("Rayrag · Connection")
-        .visible(false)
+        .visible(mode == login::ConnectionMode::GameClient)
         .inner_size(1360.0, 880.0)
         .min_inner_size(1000.0, 720.0)
         .incognito(true)
-        .initialization_script(BRIDGE)
+        .initialization_script(if mode == login::ConnectionMode::GameClient {
+            BRIDGE
+        } else {
+            ""
+        })
         .on_navigation({
             let app = app.clone();
             move |url| {
-                if url.as_str() != GAME_URL {
+                if *url != direct::url_for(mode) {
                     return false;
                 }
                 let shared = app.state::<maintenance::SharedGate>();
@@ -120,7 +137,7 @@ fn control_bot(
     death_recovery_guard: Option<automation::DeathRecoveryGuard>,
 ) -> Result<(), String> {
     require_window(&window, "main")?;
-    let _permit = maintenance::admit(&app)?;
+    let mut _permit = maintenance::admit(&app)?;
     if let Some(guard) = &death_recovery_guard {
         if action != "start" {
             return Err("Death recovery state is only accepted by start.".into());
@@ -185,8 +202,22 @@ fn control_bot(
         return Err("Use start to apply automation settings.".into());
     }
     if action == "stop" {
+        let mut in_world = false;
         if let Ok(mut state) = app.state::<login::SharedLogin>().lock() {
+            in_world = state.in_world;
             state.cancel();
+        }
+        if !in_world {
+            if let Some(game) = app.get_webview_window("game") {
+                if direct::window_mode(&game)? == login::ConnectionMode::BotOnly
+                    && !app.state::<direct::SharedDirect>().entered_world()
+                {
+                    direct::cancel_admitted(&app, &mut _permit);
+                    game.destroy()
+                        .map_err(|_| "Could not cancel the connection.")?;
+                    return Ok(());
+                }
+            }
         }
     }
     if action == "start" {
@@ -232,6 +263,9 @@ fn control_bot(
             "window.__RAYRAG__?.control({action_json},{settings_json},{escape_json},{supply_json},{recovery_json})"
         )
     };
+    if action == "warp" {
+        mode_guard::mark_admitted(&app, direct::window_mode(&game)?)?;
+    }
     game.eval(script)
         .map_err(|_| "Could not reach the game controller.".into())
 }
@@ -242,13 +276,21 @@ fn bridge_status(
     window: WebviewWindow,
     mut status: serde_json::Value,
 ) -> Result<(), String> {
-    require_window(&window, "game")?;
+    require_game_runtime(&window)?;
     // Status is display data only. Never evaluate it or interpret it as a command.
     let encoded = serde_json::to_string(&status).map_err(|_| "Invalid status.")?;
     if encoded.len() > MAX_STATUS_BYTES || !status.is_object() {
         return Err("Status exceeds its limit.".into());
     }
     if let Ok(mut gate) = app.state::<maintenance::SharedGate>().lock() {
+        if direct::window_mode(&window)? == login::ConnectionMode::BotOnly
+            && !app.state::<direct::SharedDirect>().status_matches(&status)
+        {
+            return Err("Stale bot runtime status.".into());
+        }
+        if direct::window_mode(&window)? == login::ConnectionMode::BotOnly {
+            app.state::<direct::SharedDirect>().observe_world(&status);
+        }
         let identity = if status.get("connected").and_then(|v| v.as_bool()) == Some(true)
             && status.get("compatible").and_then(|v| v.as_bool()) == Some(true)
             && status.get("player").is_some_and(|v| v.is_object())
@@ -270,6 +312,7 @@ fn bridge_status(
             }
             gate.game_generation += 1;
         }
+        mode_guard::bind_owner(&app, gate.game_generation, &identity);
         gate.identity = identity;
         gate.observed = Some(std::time::Instant::now());
     }
@@ -316,12 +359,21 @@ fn bridge_status(
         .map_err(|_| "Controller is unavailable.".into())
 }
 
+fn require_game_runtime(window: &WebviewWindow) -> Result<(), String> {
+    require_window(window, "game")?;
+    direct::window_mode(window)?;
+    Ok(())
+}
+
 pub fn run() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(maintenance::SharedGate::default())
+        .manage(mode_guard::SharedGuard::default())
         .manage(updater::SharedUpdate::default())
         .manage(login::SharedLogin::default())
+        .manage(direct::SharedDirect::default())
         .invoke_handler(tauri::generate_handler![
             updater::update_status,
             updater::current_form,
@@ -339,6 +391,13 @@ pub fn run() {
             close_game,
             control_bot,
             bridge_status,
+            direct::direct_connect,
+            direct::direct_poll,
+            direct::direct_observed,
+            mode_guard::warp_guard_mark,
+            mode_guard::warp_guard_initialize,
+            mode_guard::warp_guard_clear,
+            direct::direct_send,
             login::login_game,
             login::reconnect_game,
             login::saved_login,
@@ -349,10 +408,12 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 if window.label() == "main" {
+                    direct::cancel(window.app_handle());
                     if let Some(game) = window.app_handle().get_webview_window("game") {
                         let _ = game.destroy();
                     }
                 } else if window.label() == "game" {
+                    direct::cancel(window.app_handle());
                     if let Ok(mut gate) = window
                         .app_handle()
                         .state::<maintenance::SharedGate>()
