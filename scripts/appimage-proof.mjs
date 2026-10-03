@@ -7,6 +7,12 @@ export const APPIMAGE_RPATH = '$ORIGIN/../lib';
 const MAX_BYTES = 512 * 1024 * 1024;
 const ALLOC = 2n, NOBITS = 8, SYMTAB = 2, DYNSYM = 11;
 const metadata = new Map([['.dynamic', 6], ['.dynstr', 3]]);
+const pointerSections = new Map([
+  [4n, ['.hash']], [5n, ['.dynstr']], [6n, ['.dynsym']], [7n, ['.rela.dyn']],
+  [17n, ['.rel.dyn', '.rel.got']], [23n, ['.rela.plt', '.rel.plt']],
+  [0x6ffffef5n, ['.gnu.hash']], [0x6ffffff0n, ['.gnu.version']],
+  [0x6ffffffen, ['.gnu.version_r']],
+]);
 const requireValue = (ok, message) => { if (!ok) throw new Error(message); };
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
@@ -32,13 +38,37 @@ function parseElf(bytes) {
   const table = boundedInteger(bytes.readBigUInt64LE(40), 'section table offset');
   const count = bytes.readUInt16LE(60), namesIndex = bytes.readUInt16LE(62);
   // Extended section numbering is unnecessary for the bounded application proof.
-  requireValue(count > 1 && count < 0xff00 && namesIndex > 0 && namesIndex < count
+  requireValue(count > 1 && count <= 8192 && namesIndex > 0 && namesIndex < count
     && bytes.readUInt16LE(58) === 64, 'Unsupported ELF section table.');
   range(bytes, table, count * 64, 'section table');
   const phCount = bytes.readUInt16LE(56);
-  requireValue(phCount > 0 && phCount < 0xffff && bytes.readUInt16LE(54) === 56,
+  requireValue(phCount > 0 && phCount <= 256 && bytes.readUInt16LE(54) === 56,
     'Unsupported ELF program table.');
-  range(bytes, boundedInteger(bytes.readBigUInt64LE(32), 'program table offset'), phCount * 56, 'program table');
+  const phOffset = boundedInteger(bytes.readBigUInt64LE(32), 'program table offset');
+  range(bytes, phOffset, phCount * 56, 'program table');
+  const programs = [];
+  for (let index = 0; index < phCount; index++) {
+    const at = phOffset + index * 56;
+    const program = {
+      type: bytes.readUInt32LE(at), flags: bytes.readUInt32LE(at + 4),
+      offset: boundedInteger(bytes.readBigUInt64LE(at + 8), 'segment offset'),
+      address: bytes.readBigUInt64LE(at + 16), physical: bytes.readBigUInt64LE(at + 24),
+      fileSize: boundedInteger(bytes.readBigUInt64LE(at + 32), 'segment file size'),
+      memorySize: boundedInteger(bytes.readBigUInt64LE(at + 40), 'segment memory size'),
+      alignment: bytes.readBigUInt64LE(at + 48),
+    };
+    range(bytes, program.offset, program.fileSize, 'segment contents');
+    requireValue(program.address + BigInt(program.memorySize) < (1n << 64n),
+      'ELF segment address overflows.');
+    requireValue(program.alignment === 0n || (program.alignment & (program.alignment - 1n)) === 0n,
+      'ELF segment alignment is invalid.');
+    if (program.type === 1) requireValue(program.fileSize <= program.memorySize
+      && (program.alignment <= 1n || program.address % program.alignment === BigInt(program.offset) % program.alignment),
+    'ELF LOAD mapping is invalid.');
+    programs.push(program);
+  }
+  requireValue(programs.some(program => program.type === 1 && program.flags & 1),
+    'ELF requires an executable LOAD segment.');
   const sections = [];
   for (let index = 0; index < count; index++) {
     const at = table + index * 64;
@@ -89,7 +119,7 @@ function parseElf(bytes) {
       `ELF requires a real nonempty ${name} section.`);
   }
   for (const name of metadata.keys()) requireValue(byName.get(name)?.flags & ALLOC, `ELF requires allocated ${name}.`);
-  return { bytes, sections, byName };
+  return { bytes, sections, byName, programs, phOffset, phSize: phCount * 56, table };
 }
 
 function linkedName(elf, index) {
@@ -143,6 +173,202 @@ function symbolName(elf, symbols, at) {
   return strings.contents.subarray(at, end).toString('hex');
 }
 
+function dynamicEntries(elf) {
+  const bytes = elf.byName.get('.dynamic').contents, entries = [];
+  let terminated = false;
+  for (let at = 0; at < bytes.length; at += 16) {
+    const tag = bytes.readBigInt64LE(at), value = bytes.readBigUInt64LE(at + 8);
+    if (tag === 0n) terminated = true;
+    if (terminated) requireValue(tag === 0n && value === 0n, 'ELF dynamic NULL padding is invalid.');
+    else entries.push({ tag, value });
+  }
+  requireValue(terminated, 'ELF dynamic entries are unterminated.');
+  return entries;
+}
+function dynamicString(elf, value) {
+  const strings = elf.byName.get('.dynstr').contents;
+  const at = boundedInteger(value, 'dynamic string offset');
+  requireValue(at < strings.length, 'ELF dynamic string offset is out of bounds.');
+  const end = strings.indexOf(0, at);
+  requireValue(end >= 0, 'ELF dynamic string is unterminated.');
+  return { at, end, bytes: strings.subarray(at, end) };
+}
+function dynamicPointer(elf, tag, value) {
+  for (const name of pointerSections.get(tag)) {
+    const section = elf.byName.get(name);
+    if (section && value >= section.address && value < section.address + BigInt(section.size))
+      return `${name}:${value - section.address}`;
+  }
+  throw new Error(`ELF dynamic pointer ${tag} does not map its named section.`);
+}
+function compareLinkerMetadata(original, deployed) {
+  const before = dynamicEntries(original), after = dynamicEntries(deployed);
+  const isPath = entry => entry.tag === 15n || entry.tag === 29n;
+  const oldPaths = before.filter(isPath), newPaths = after.filter(isPath);
+  requireValue(oldPaths.length <= 2 && new Set(oldPaths.map(entry => entry.tag)).size === oldPaths.length
+    && newPaths.length === Math.max(1, oldPaths.length), 'ELF RPATH entry inventory differs.');
+  if (oldPaths.length === 0) requireValue(after[0].tag === 29n, 'ELF must prepend the Linuxdeploy RUNPATH entry.');
+  else for (let index = 0; index < before.length; index++) if (isPath(before[index])) {
+    const next = after[index];
+    requireValue(next && (next.tag === before[index].tag
+      || (before[index].tag === 15n && oldPaths.length === 1 && next.tag === 29n)), 'ELF RPATH entry ordering differs.');
+  }
+  const expectedString = Buffer.from(APPIMAGE_RPATH);
+  for (const entry of newPaths) requireValue(dynamicString(deployed, entry.value).bytes.equals(expectedString),
+    'ELF RPATH differs from the pinned Linuxdeploy path.');
+  const left = before.filter(entry => !isPath(entry)), right = after.filter(entry => !isPath(entry));
+  requireValue(left.length === right.length, 'ELF dynamic entry inventory differs.');
+  for (let index = 0; index < left.length; index++) {
+    const a = left[index], b = right[index];
+    requireValue(a.tag === b.tag, 'ELF dynamic entry ordering differs.');
+    if (pointerSections.has(a.tag)) requireValue(dynamicPointer(original, a.tag, a.value)
+      === dynamicPointer(deployed, b.tag, b.value), `ELF dynamic pointer ${a.tag} differs.`);
+    else if (a.tag === 10n) requireValue(a.value === BigInt(original.byName.get('.dynstr').size)
+      && b.value === BigInt(deployed.byName.get('.dynstr').size), 'ELF dynamic string size differs.');
+    else requireValue(a.value === b.value, `ELF dynamic tag ${a.tag} value differs.`);
+  }
+  requireValue(deployed.byName.get('.dynamic').size === original.byName.get('.dynamic').size
+    + (oldPaths.length === 0 ? 16 : 0), 'ELF dynamic NULL padding size differs.');
+  const a = original.byName.get('.dynstr').contents, b = deployed.byName.get('.dynstr').contents;
+  requireValue(b.length === a.length || b.length === a.length + expectedString.length + 1,
+    'ELF dynamic string inventory differs.');
+  const oldRanges = oldPaths.map(entry => dynamicString(original, entry.value));
+  const newRanges = newPaths.map(entry => dynamicString(deployed, entry.value));
+  requireValue(newRanges.every(span => b.length > a.length ? span.at === a.length
+    : oldRanges.some(old => old.at === span.at && span.end <= old.end)), 'ELF RPATH string placement differs.');
+  for (let index = 0; index < b.length; index++) {
+    if (newRanges.some(span => index >= span.at && index <= span.end)) continue;
+    const oldPathByte = oldRanges.some(span => index >= span.at && index < span.end);
+    requireValue(index < a.length && (b[index] === a[index] || (oldPathByte && b[index] === 88)),
+      'ELF non-RPATH dynamic strings differ.');
+  }
+}
+
+const relocatableNames = new Set(['.dynamic', '.dynstr', '.interp', ...[...pointerSections.values()].flat()]);
+const relocatable = section => relocatableNames.has(section.name) || section.type === 7;
+const roundUp = (value, alignment) => (value + alignment - 1n) / alignment * alignment;
+const sameFields = (a, b, fields) => fields.every(field => a[field] === b[field]);
+function mappedBy(section, program) {
+  return section.address >= program.address
+    && section.address + BigInt(section.size) <= program.address + BigInt(program.memorySize)
+    && (section.type === NOBITS || (BigInt(section.offset) - BigInt(program.offset) === section.address - program.address
+      && section.offset + section.size <= program.offset + program.fileSize));
+}
+function sectionLoads(elf, section) {
+  // Thread-local NOBITS storage is instantiated by PT_TLS, not in the process
+  // LOAD image. The TLS header itself must remain identical below.
+  const segmentType = section.type === NOBITS && (section.flags & 1024n) ? 7 : 1;
+  const mapped = elf.programs.filter(program => program.type === segmentType && mappedBy(section, program));
+  requireValue(mapped.length > 0, `ELF ${section.name} is not mapped by a LOAD segment.`);
+  return mapped;
+}
+function validateMetadataLoad(elf, program, moved) {
+  requireValue(program.flags === 6 && program.fileSize === program.memorySize && program.physical === program.address,
+    'ELF relocated metadata LOAD permissions or mapping differ.');
+  const sections = moved.filter(section => mappedBy(section, program)).sort((a, b) => a.offset - b.offset);
+  requireValue(sections.length > 0, 'ELF new LOAD contains no relocated metadata.');
+  let cursor = program.offset;
+  for (const section of sections) {
+    requireValue(section.offset === cursor && relocatable(section), 'ELF new LOAD contains unexpected mapped data.');
+    cursor += Number(roundUp(BigInt(section.size), 8n));
+    requireValue(elf.bytes.subarray(section.offset + section.size, cursor).every(byte => byte === 0),
+      'ELF metadata LOAD padding differs.');
+  }
+  requireValue(cursor === program.offset + program.fileSize, 'ELF metadata LOAD extent differs.');
+}
+function mappedHeader(elf, program, name) {
+  const section = elf.byName.get(name);
+  requireValue(section && program.offset === section.offset && program.address === section.address
+    && program.physical === section.address && program.fileSize === section.size && program.memorySize === section.size,
+    `ELF loader header does not map ${name}.`);
+  return `${program.type}:${program.flags}:${program.alignment}:${name}`;
+}
+function canonicalHeaders(elf) {
+  const result = [];
+  for (const program of elf.programs.filter(program => program.type !== 1)) {
+    if (program.type === 2 || program.type === 3) result.push(mappedHeader(elf, program, program.type === 2 ? '.dynamic' : '.interp'));
+    else if (program.type === 6) {
+      requireValue(program.offset === elf.phOffset && program.fileSize === elf.phSize && program.memorySize === elf.phSize,
+        'ELF PHDR table mapping differs.');
+      const load = elf.programs.find(load => load.type === 1 && program.offset >= load.offset
+        && program.offset + program.fileSize <= load.offset + load.fileSize
+        && program.address - load.address === BigInt(program.offset - load.offset)
+        && program.physical - load.physical === BigInt(program.offset - load.offset));
+      requireValue(load, 'ELF PHDR table is not mapped by a LOAD segment.');
+      result.push(`${program.type}:${program.flags}:${program.alignment}:program-table`);
+    } else if (program.type === 4 || program.type === 0x6474e553) {
+      const notes = [...elf.byName.values()].filter(section => section.type === 7 && section.offset >= program.offset
+        && section.offset + section.size <= program.offset + program.fileSize).sort((a, b) => a.offset - b.offset);
+      requireValue(notes.length > 0 && program.fileSize === program.memorySize, 'ELF NOTE mapping is invalid.');
+      let cursor = program.offset;
+      for (const section of notes) {
+        requireValue(section.offset === Number(roundUp(BigInt(cursor), section.alignment || 1n))
+          && section.address - program.address === BigInt(section.offset - program.offset)
+          && section.address - program.physical === BigInt(section.offset - program.offset), 'ELF NOTE mapping differs.');
+        result.push(`${program.type}:${program.flags}:${program.alignment}:${section.name}`);
+        cursor = section.offset + section.size;
+      }
+      requireValue(cursor === program.offset + program.fileSize, 'ELF NOTE extent differs.');
+    } else result.push(Object.values(program).map(String).join(':'));
+  }
+  return result.sort();
+}
+function compareProgramMappings(original, deployed) {
+  const before = original.programs.filter(program => program.type === 1);
+  const after = deployed.programs.filter(program => program.type === 1);
+  for (const loads of [before, after]) requireValue(loads.every((program, index) => index === 0 || program.address > loads[index - 1].address),
+    'ELF LOAD ordering differs.');
+  requireValue(new Set(before.map(program => program.address)).size === before.length
+    && new Set(after.map(program => program.address)).size === after.length, 'ELF LOAD addresses are duplicated.');
+  const moved = [];
+  for (const section of [...deployed.byName.values()].filter(section => section.flags & ALLOC)) {
+    const old = original.byName.get(section.name);
+    const leftLoads = sectionLoads(original, old), rightLoads = sectionLoads(deployed, section);
+    if (section.address !== old.address) {
+      requireValue(relocatable(section), `ELF ${section.name} executable/data address differs.`);
+      moved.push(section);
+    } else requireValue(leftLoads.map(program => program.flags).sort().join(',')
+      === rightLoads.map(program => program.flags).sort().join(','), `ELF ${section.name} LOAD permissions differ.`);
+  }
+  const extra = after.filter(program => !before.some(old => old.address === program.address));
+  requireValue(extra.length <= 1, 'ELF new LOAD inventory differs.');
+  for (const left of before) {
+    const right = after.find(program => program.address === left.address);
+    requireValue(right && sameFields(left, right, ['flags', 'offset', 'address', 'physical', 'alignment']),
+      'ELF existing LOAD permissions or mapping differ.');
+    if (sameFields(left, right, ['fileSize', 'memorySize'])) continue;
+    // Patchelf may extend its final RW LOAD rather than add another one.
+    // https://github.com/NixOS/patchelf/blob/0.18.0/src/patchelf.cc#L802-L827
+    const start = Number(roundUp(BigInt(original.bytes.length), 4096n));
+    requireValue(left === before.at(-1) && extra.length === 0 && left.flags === 6
+      && Number(roundUp(BigInt(left.offset + left.memorySize), 4096n)) === start
+      && right.fileSize === right.memorySize && right.memorySize > left.memorySize,
+    'ELF existing LOAD extent differs.');
+    const extension = { ...right, offset: start, address: right.address + BigInt(start - right.offset),
+      physical: right.physical + BigInt(start - right.offset), fileSize: right.offset + right.fileSize - start,
+      memorySize: right.offset + right.memorySize - start };
+    validateMetadataLoad(deployed, extension, moved);
+  }
+  if (extra.length) {
+    // ET_DYN RPATH growth appends only replaced linker sections in one RW/NX
+    // LOAD. Existing executable/data mappings remain byte-for-byte equivalent.
+    // https://github.com/NixOS/patchelf/blob/0.18.0/src/patchelf.cc#L729-L827
+    requireValue(original.bytes.readUInt16LE(16) === 3, 'Unsupported executable metadata LOAD relocation.');
+    const alignment = original.programs.reduce((value, program) => program.alignment > value ? program.alignment : value, 4096n);
+    const endAddress = original.programs.reduce((value, program) => {
+      const end = program.address + BigInt(program.memorySize); return end > value ? end : value;
+    }, 0n);
+    const offset = roundUp(BigInt(original.bytes.length), 4096n);
+    const address = roundUp(endAddress, alignment) > offset ? roundUp(endAddress, alignment) : offset;
+    requireValue(extra[0].offset === Number(offset) && extra[0].address === address && extra[0].alignment === alignment,
+      'ELF relocated metadata LOAD placement differs.');
+    validateMetadataLoad(deployed, extra[0], moved);
+  }
+  const leftHeaders = canonicalHeaders(original), rightHeaders = canonicalHeaders(deployed);
+  requireValue(leftHeaders.length === rightHeaders.length && leftHeaders.every((header, index) => header === rightHeaders[index]),
+    'ELF program loader headers differ.');
+}
+
 export function compareElfIdentity(originalBytes, deployedBytes) {
   const original = parseElf(originalBytes), deployed = parseElf(deployedBytes);
   requireValue(original.bytes.subarray(0, 32).equals(deployed.bytes.subarray(0, 32))
@@ -164,6 +390,8 @@ export function compareElfIdentity(originalBytes, deployedBytes) {
     if (left.type === SYMTAB || left.type === DYNSYM) compareSymbols(original, deployed, left, right);
     else if (left.type !== NOBITS) requireValue(left.contents.equals(right.contents), `ELF ${left.name} section contents differ.`);
   }
+  compareLinkerMetadata(original, deployed);
+  compareProgramMappings(original, deployed);
   return before.map(section => section.name).sort();
 }
 

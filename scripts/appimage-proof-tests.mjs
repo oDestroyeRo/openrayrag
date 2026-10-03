@@ -1,56 +1,62 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, writeFile, copyFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, copyFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { APPIMAGE_RPATH, compareElfIdentity, compareDynamicIdentity, verifyAppImageExecutable } from './appimage-proof.mjs';
 
-function fixture({ patched = false, reorder = false, extra = false } = {}) {
+function fixture({ patched = false, reorder = false, extra = false, relocateInterp = false } = {}) {
   const definitions = [
-    { name: '.interp', type: 1, flags: 2n, data: Buffer.from('/lib64/ld-linux-x86-64.so.2\0') },
-    { name: '.text', type: 1, flags: 6n, data: Buffer.from([0x31, 0xc0, 0xc3]) },
-    { name: '.rodata', type: 1, flags: 2n, data: Buffer.from('stable application data\0') },
-    { name: '.data', type: 1, flags: 3n, data: Buffer.from([3, 2, 1, 0]) },
-    { name: '.bss', type: 8, flags: 3n, size: 1024 * 1024 },
-    { name: '.note.gnu.build-id', type: 7, flags: 2n, data: Buffer.from([4, 3, 2, 1]) },
-    { name: '.dynstr', type: 3, flags: 2n, data: Buffer.from(`\0symbol\0libc.so.6\0${patched ? APPIMAGE_RPATH + '\0' : ''}`) },
-    { name: '.dynamic', type: 6, flags: 3n, entrySize: 16n, link: '.dynstr', data: Buffer.alloc(patched ? 48 : 32, patched ? 1 : 0) },
-    { name: '.dynsym', type: 11, flags: 2n, entrySize: 24n, link: '.dynstr', data: Buffer.alloc(72) },
-    { name: '.rela.dyn', type: 4, flags: 2n, entrySize: 24n, link: '.dynsym', info: '.data', data: Buffer.alloc(24, 7) },
+    { name: '.interp', type: 1, flags: 2n, offset: 0x300, data: Buffer.from('/lib64/ld-linux-x86-64.so.2\0') },
+    { name: '.text', type: 1, flags: 6n, offset: 0x1000, data: Buffer.from([0x31, 0xc0, 0xc3]) },
+    { name: '.rodata', type: 1, flags: 2n, offset: 0x2000, data: Buffer.from('stable application data\0') },
+    { name: '.data', type: 1, flags: 3n, offset: 0x3000, data: Buffer.from([3, 2, 1, 0]) },
+    { name: '.bss', type: 8, flags: 3n, offset: 0x4000, size: 1024 * 1024 },
+    { name: '.note.gnu.build-id', type: 7, flags: 2n, offset: 0x340, data: Buffer.from([4, 3, 2, 1]) },
+    { name: '.dynstr', type: 3, flags: 2n, offset: 0x380, data: Buffer.from(`\0symbol\0libc.so.6\0${patched ? APPIMAGE_RPATH + '\0' : ''}`) },
+    { name: '.dynamic', type: 6, flags: 3n, offset: 0x3010, entrySize: 16n, link: '.dynstr', data: Buffer.alloc(patched ? 160 : 144) },
+    { name: '.dynsym', type: 11, flags: 2n, offset: 0x3c0, entrySize: 24n, link: '.dynstr', data: Buffer.alloc(72) },
+    { name: '.rela.dyn', type: 4, flags: 2n, offset: 0x430, entrySize: 24n, link: '.dynsym', info: '.data', data: Buffer.alloc(24, 7) },
   ];
-  for (const [index, section] of definitions.entries()) section.address = BigInt(0x1000 + index * 0x100);
-  if (patched) definitions.find(section => section.name === '.note.gnu.build-id').address += 0x2000n;
+  for (const section of definitions) { section.address = BigInt(section.offset); section.alignment = 1n; section.size ??= section.data.length; }
+  const sectionOf = name => definitions.find(section => section.name === name);
+  let metadataEnd = 0x4000;
+  if (patched) for (const name of ['.dynstr', '.dynamic', ...(relocateInterp ? ['.interp'] : [])]) {
+    const section = sectionOf(name);
+    section.offset = metadataEnd; section.address = BigInt(0x104000 + metadataEnd - 0x4000); section.alignment = 8n;
+    metadataEnd += Math.ceil(section.size / 8) * 8;
+  }
+  const entries = [
+    ...(patched ? [[29n, 18n]] : []), [1n, 8n], [5n, sectionOf('.dynstr').address],
+    [10n, BigInt(sectionOf('.dynstr').size)], [6n, sectionOf('.dynsym').address],
+    [7n, sectionOf('.rela.dyn').address], [12n, 0x1000n], [13n, 0x1001n], [30n, 8n], [0n, 0n],
+  ];
+  for (const [index, [tag, value]] of entries.entries()) {
+    sectionOf('.dynamic').data.writeBigInt64LE(tag, index * 16);
+    sectionOf('.dynamic').data.writeBigUInt64LE(value, index * 16 + 8);
+  }
   if (reorder) definitions.reverse();
-  if (extra) definitions.push({ name: '.injected', type: 1, flags: 6n, address: 0x5000n, data: Buffer.from([0xc3]) });
+  if (extra) definitions.push({ name: '.injected', type: 1, flags: 6n, offset: 0x2100, address: 0x2100n, alignment: 1n, data: Buffer.from([0xc3]), size: 1 });
   const sections = [{ name: '', type: 0, flags: 0n, data: Buffer.alloc(0) }, ...definitions];
-  sections.push({ name: '.shstrtab', type: 3, flags: 0n });
+  sections.push({ name: '.shstrtab', type: 3, flags: 0n, offset: 0x3100, alignment: 1n });
   const nameOffsets = new Map();
   let strings = '';
   for (const section of sections) { nameOffsets.set(section.name, strings.length); strings += section.name + '\0'; }
-  sections.at(-1).data = Buffer.from(strings);
+  sections.at(-1).data = Buffer.from(strings); sections.at(-1).size = strings.length;
   const indexOf = name => name ? sections.findIndex(section => section.name === name) : 0;
-  const symbols = sections.find(section => section.name === '.dynsym').data;
-  symbols.writeUInt32LE(1, 24); // Ordinary function defined in .text.
-  symbols[28] = 0x12;
-  symbols.writeUInt16LE(indexOf('.text'), 30);
-  symbols.writeBigUInt64LE(0x1100n, 32);
-  symbols[52] = 3; // STT_SECTION whose section moves during metadata rewriting.
-  symbols.writeUInt16LE(indexOf('.note.gnu.build-id'), 54);
-  symbols.writeBigUInt64LE(sections[indexOf('.note.gnu.build-id')].address, 56);
-  let offset = 128;
-  for (const section of sections.slice(1)) {
-    section.offset = offset;
-    section.size ??= section.data.length;
-    if (section.type !== 8) offset += section.size;
-  }
-  const table = Math.ceil(offset / 8) * 8;
-  const bytes = Buffer.alloc(table + sections.length * 64);
+  const symbols = sectionOf('.dynsym').data;
+  symbols.writeUInt32LE(1, 24); symbols[28] = 0x12;
+  symbols.writeUInt16LE(indexOf('.text'), 30); symbols.writeBigUInt64LE(0x1000n, 32);
+  symbols[52] = 3;
+  symbols.writeUInt16LE(indexOf('.dynstr'), 54); symbols.writeBigUInt64LE(sectionOf('.dynstr').address, 56);
+  const phCount = patched ? 10 : 9, table = 0x3200;
+  const bytes = Buffer.alloc(patched ? metadataEnd + 1 : table + sections.length * 64);
   bytes.set([127, 69, 76, 70, 2, 1, 1]);
   bytes.writeUInt16LE(3, 16); bytes.writeUInt16LE(62, 18); bytes.writeUInt32LE(1, 20);
-  bytes.writeBigUInt64LE(0x1100n, 24); bytes.writeBigUInt64LE(64n, 32);
+  bytes.writeBigUInt64LE(0x1000n, 24); bytes.writeBigUInt64LE(64n, 32);
   bytes.writeBigUInt64LE(BigInt(table), 40); bytes.writeUInt16LE(64, 52);
-  bytes.writeUInt16LE(56, 54); bytes.writeUInt16LE(1, 56); bytes.writeUInt16LE(64, 58);
+  bytes.writeUInt16LE(56, 54); bytes.writeUInt16LE(phCount, 56); bytes.writeUInt16LE(64, 58);
   bytes.writeUInt16LE(sections.length, 60); bytes.writeUInt16LE(sections.length - 1, 62);
   const headers = new Map(), offsets = new Map();
   for (const [index, section] of sections.entries()) {
@@ -63,32 +69,93 @@ function fixture({ patched = false, reorder = false, extra = false } = {}) {
     bytes.writeBigUInt64LE(BigInt(section.size ?? 0), at + 32);
     bytes.writeUInt32LE(indexOf(section.link), at + 40);
     bytes.writeUInt32LE(typeof section.info === 'string' ? indexOf(section.info) : (section.info ?? 0), at + 44);
-    bytes.writeBigUInt64LE(1n, at + 48); bytes.writeBigUInt64LE(section.entrySize ?? 0n, at + 56);
+    bytes.writeBigUInt64LE(section.alignment ?? 0n, at + 48); bytes.writeBigUInt64LE(section.entrySize ?? 0n, at + 56);
     if (section.type !== 8 && section.offset) section.data.copy(bytes, section.offset);
   }
-  return { bytes, headers, offsets, table };
+  const programs = [
+    [6, 4, 64, 64n, phCount * 56, phCount * 56, 8n],
+    [3, 4, sectionOf('.interp').offset, sectionOf('.interp').address, sectionOf('.interp').size, sectionOf('.interp').size, 1n],
+    [1, 4, 0, 0n, 0x500, 0x500, 4096n], [1, 5, 0x1000, 0x1000n, 3, 3, 4096n],
+    [1, 4, 0x2000, 0x2000n, sectionOf('.rodata').size, sectionOf('.rodata').size, 4096n],
+    [1, 6, 0x3000, 0x3000n, 0xa0, 0x101000, 4096n],
+    [2, 6, sectionOf('.dynamic').offset, sectionOf('.dynamic').address, sectionOf('.dynamic').size, sectionOf('.dynamic').size, 8n],
+    [4, 4, 0x340, 0x340n, 4, 4, 4n], [0x6474e551, 6, 0, 0n, 0, 0, 16n],
+    ...(patched ? [[1, 6, 0x4000, 0x104000n, metadataEnd - 0x4000, metadataEnd - 0x4000, 4096n]] : []),
+  ];
+  const programHeaders = [];
+  for (const [index, [type, flags, offset, address, fileSize, memorySize, alignment]] of programs.entries()) {
+    const at = 64 + index * 56; programHeaders.push(at);
+    bytes.writeUInt32LE(type, at); bytes.writeUInt32LE(flags, at + 4);
+    bytes.writeBigUInt64LE(BigInt(offset), at + 8); bytes.writeBigUInt64LE(address, at + 16); bytes.writeBigUInt64LE(address, at + 24);
+    bytes.writeBigUInt64LE(BigInt(fileSize), at + 32); bytes.writeBigUInt64LE(BigInt(memorySize), at + 40); bytes.writeBigUInt64LE(alignment, at + 48);
+  }
+  return { bytes, headers, offsets, table, programHeaders };
 }
 
 test('accepts metadata growth, section reordering and only documented symbol remapping', () => {
   const original = fixture(), deployed = fixture({ patched: true, reorder: true });
   const sections = compareElfIdentity(original.bytes, deployed.bytes);
   assert.ok(sections.includes('.text')); assert.ok(sections.includes('.bss'));
-  assert.ok(original.bytes.length < 4096, 'NOBITS remains a logical size rather than file contents');
+  assert.ok(original.bytes.length < 32 * 1024, 'NOBITS remains a logical size rather than file contents');
 });
 
 test('accepts only documented word alignment of relocated sections', () => {
-  const original = fixture(), deployed = fixture({ patched: true });
-  const at = deployed.headers.get('.interp');
-  deployed.bytes.writeBigUInt64LE(0x9000n, at + 16);
-  deployed.bytes.writeBigUInt64LE(8n, at + 48);
-  const size = Number(original.bytes.readBigUInt64LE(original.headers.get('.interp') + 32));
-  const contents = Buffer.from(original.bytes.subarray(original.offsets.get('.interp'), original.offsets.get('.interp') + size));
-  // Move into a new bounded range to avoid overwriting existing sections.
-  const moved = Buffer.concat([deployed.bytes, contents]);
-  moved.writeBigUInt64LE(BigInt(deployed.bytes.length), at + 24);
-  compareElfIdentity(original.bytes, moved);
-  moved.writeBigUInt64LE(16n, at + 48);
-  assert.throws(() => compareElfIdentity(original.bytes, moved), /metadata differs/);
+  const original = fixture(), deployed = fixture({ patched: true, relocateInterp: true });
+  compareElfIdentity(original.bytes, deployed.bytes);
+  deployed.bytes.writeBigUInt64LE(16n, deployed.headers.get('.interp') + 48);
+  assert.throws(() => compareElfIdentity(original.bytes, deployed.bytes), /metadata differs/);
+});
+
+function dynamicSlot(bytes, tag) {
+  const table = Number(bytes.readBigUInt64LE(40)), count = bytes.readUInt16LE(60);
+  for (let index = 0; index < count; index++) {
+    const at = table + index * bytes.readUInt16LE(58);
+    if (bytes.readUInt32LE(at + 4) !== 6) continue;
+    const offset = Number(bytes.readBigUInt64LE(at + 24)), size = Number(bytes.readBigUInt64LE(at + 32));
+    for (let entry = offset; entry < offset + size; entry += 16)
+      if (bytes.readBigInt64LE(entry) === tag) return entry;
+  }
+  throw new Error(`Fixture has no dynamic tag ${tag}.`);
+}
+function executableLoad(bytes) {
+  const offset = Number(bytes.readBigUInt64LE(32));
+  for (let index = 0; index < bytes.readUInt16LE(56); index++) {
+    const at = offset + index * bytes.readUInt16LE(54);
+    if (bytes.readUInt32LE(at) === 1 && bytes.readUInt32LE(at + 4) & 1) return at;
+  }
+  throw new Error('Fixture has no executable LOAD.');
+}
+
+test('rejects altered DT_INIT, DT_FINI, DT_FLAGS, pointer offsets and dynamic ordering', () => {
+  const original = fixture();
+  for (const tag of [12n, 13n, 30n, 5n]) {
+    const deployed = fixture({ patched: true });
+    deployed.bytes.writeBigUInt64LE(0xdeadbeefn, dynamicSlot(deployed.bytes, tag) + 8);
+    assert.throws(() => compareElfIdentity(original.bytes, deployed.bytes), /dynamic.*(differ|map)/);
+  }
+  const deployed = fixture({ patched: true });
+  const init = dynamicSlot(deployed.bytes, 12n), fini = dynamicSlot(deployed.bytes, 13n);
+  const initBytes = Buffer.from(deployed.bytes.subarray(init, init + 16));
+  deployed.bytes.copy(deployed.bytes, init, fini, fini + 16); initBytes.copy(deployed.bytes, fini);
+  assert.throws(() => compareElfIdentity(original.bytes, deployed.bytes), /dynamic entry ordering/);
+  const padding = fixture({ patched: true });
+  padding.bytes.writeBigUInt64LE(1n, dynamicSlot(padding.bytes, 0n) + 8);
+  assert.throws(() => compareElfIdentity(original.bytes, padding.bytes), /NULL padding/);
+});
+
+test('rejects altered executable LOAD permissions, mappings, extent and loader flags', () => {
+  const original = fixture();
+  for (const mutation of ['writable', 'not-executable', 'address', 'extent', 'alignment', 'stack', 'metadata-executable']) {
+    const deployed = fixture({ patched: true }), at = executableLoad(deployed.bytes);
+    if (mutation === 'writable') deployed.bytes.writeUInt32LE(7, at + 4);
+    if (mutation === 'not-executable') deployed.bytes.writeUInt32LE(4, at + 4);
+    if (mutation === 'address') { deployed.bytes.writeBigUInt64LE(0x5000n, at + 16); deployed.bytes.writeBigUInt64LE(0x5000n, at + 24); }
+    if (mutation === 'extent') { deployed.bytes.writeBigUInt64LE(4n, at + 32); deployed.bytes.writeBigUInt64LE(4n, at + 40); }
+    if (mutation === 'alignment') deployed.bytes.writeBigUInt64LE(8192n, at + 48);
+    if (mutation === 'stack') deployed.bytes.writeUInt32LE(7, deployed.programHeaders[8] + 4);
+    if (mutation === 'metadata-executable') deployed.bytes.writeUInt32LE(7, deployed.programHeaders[9] + 4);
+    assert.throws(() => compareElfIdentity(original.bytes, deployed.bytes), /LOAD|loader/);
+  }
 });
 
 test('rejects code, data, build ID, relocations and ordinary symbol changes', () => {
@@ -195,11 +262,11 @@ test('native Linux compiler + patchelf RPATH rewrite preserves executable identi
   skip: process.platform !== 'linux' || process.arch !== 'x64',
 }, async () => {
   const folder = await mkdtemp(join(tmpdir(), 'rayrag-appimage-native-'));
+  const source = join(folder, 'fixture.c'), original = join(folder, 'original');
+  const staged = join(folder, 'staged'), extracted = join(folder, 'extracted');
   try {
-    const source = join(folder, 'fixture.c'), original = join(folder, 'original');
-    const staged = join(folder, 'staged'), extracted = join(folder, 'extracted');
     await writeFile(source, '#include <stdio.h>\nstatic const char message[] = "AppImage native identity fixture";\nint main(void) { puts(message); return 0; }\n');
-    execFileSync('cc', [source, '-o', original, '-Wl,--build-id'], { timeout: 30_000 });
+    execFileSync('cc', [source, '-o', original, '-Wl,--build-id', '-Wl,-z,now'], { timeout: 30_000 });
     await copyFile(original, staged);
     execFileSync('patchelf', ['--set-rpath', APPIMAGE_RPATH, staged], { timeout: 30_000 });
     await copyFile(staged, extracted);
@@ -208,9 +275,35 @@ test('native Linux compiler + patchelf RPATH rewrite preserves executable identi
     assert.notEqual(result.originalSha256, result.extractedSha256);
     assert.equal(result.rpath, APPIMAGE_RPATH);
     assert.match(execFileSync(extracted, [], { encoding: 'utf8', timeout: 30_000 }), /native identity fixture/);
-    const mutated = await readFile(extracted);
+    const pristine = await readFile(staged);
+    for (const mutation of ['writable-load', 12n, 13n, 30n]) {
+      const bytes = Buffer.from(pristine);
+      if (mutation === 'writable-load') {
+        const at = executableLoad(bytes);
+        bytes.writeUInt32LE(bytes.readUInt32LE(at + 4) | 2, at + 4);
+      } else bytes.writeBigUInt64LE(0xdeadbeefn, dynamicSlot(bytes, mutation) + 8);
+      // Matching staged/extracted hashes must not conceal a loader mutation.
+      await writeFile(staged, bytes); await writeFile(extracted, bytes);
+      await assert.rejects(verifyAppImageExecutable(original, staged, extracted), /LOAD|dynamic/);
+    }
+    await writeFile(staged, pristine);
+    const mutated = Buffer.from(pristine);
     mutated[Number(mutated.readBigUInt64LE(40))] ^= 1;
     await writeFile(extracted, mutated);
     await assert.rejects(verifyAppImageExecutable(original, staged, extracted), /post-Linuxdeploy AppDir/);
+  } catch (error) {
+    if (process.env.CI === 'true') {
+      try {
+        await mkdir('reports', { recursive: true });
+        const reports = [];
+        for (const [name, path] of [['original', original], ['staged', staged]]) {
+          reports.push(`${name}\n${execFileSync('readelf', ['-lW', '-SW', '-dW', path], { encoding: 'utf8', timeout: 30_000, maxBuffer: 128 * 1024 })}`);
+          const bytes = await readFile(path);
+          if (bytes.length < 32 * 1024) await writeFile(join('reports', `appimage-fixture-${name}.elf`), bytes);
+        }
+        await writeFile(join('reports', 'appimage-fixture-elf.txt'), reports.join('\n'));
+      } catch { /* Diagnostics must preserve the original test failure. */ }
+    }
+    throw error;
   } finally { await rm(folder, { recursive: true, force: true }); }
 });
