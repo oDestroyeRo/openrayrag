@@ -1065,6 +1065,30 @@ describe('macro controller supervision',()=>{
     expect(f.controller.macro.snapshot().pendingActionId).not.toBeNull();owns=false;f.step();
     expect(f.sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:501}]);
   });
+  it.each(['accepted','unacknowledged','locked','foreign'] as const)('keeps a reactive item behind %s shortened field movement until authoritative settlement',receipt=>{
+    const random=vi.spyOn(Math,'random').mockReturnValue(.7);
+    try {
+      const f=fixture(),reactive:MacroScript['rules'][number]={name:'Walking response',priority:100,cooldownSeconds:0,maxRuns:1,
+        conditions:[{field:'elapsedSeconds',operator:'gte',value:5}],steps:[{type:'useItem',itemId:501,timeoutSeconds:10}]};
+      macro(f,script([farm],[reactive]),{...settings,route_randomWalk:2});f.step();
+      const requested=f.sent.find(action=>action.type==='walk');expect(requested?.type).toBe('walk');
+      const cells=f.controller.engine.snapshot().navigation!.leg.slice(0,2);
+      expect(cells).toHaveLength(2);expect(cells.at(-1)).not.toEqual(requested?.type==='walk'?requested.destination:null);
+      const offsets=[[0,-1],[-1,-1],[-1,0],[-1,1],[0,1],[1,1],[1,0],[1,-1]];
+      const direction=offsets.findIndex(([x,y])=>cells[1]!.x-cells[0]!.x===x&&cells[1]!.y-cells[0]!.y===y);
+      if(receipt!=='unacknowledged')f.packet(new BitWriter().u8(OP.walk).i32(receipt==='foreign'?2:1).position(cells[0]!)
+        .f32(cells[0]!.x).f32(cells[0]!.y).f32(.1).f32(6).u8(2).u8(direction<<4).u8(receipt==='locked'?1:0));
+      f.advance(5500);expect(f.sent.filter(action=>action.type==='useItem')).toEqual([]);
+      if(receipt==='accepted'){
+        f.advance(1500);expect(f.sent.filter(action=>action.type==='stop')).toHaveLength(1);
+        expect(f.sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:501}]);
+        expect(f.controller.macro.snapshot()).toMatchObject({state:'waiting',actionsCompleted:1});
+      }else {
+        f.advance(11000);expect(f.sent.filter(action=>action.type==='useItem')).toEqual([]);
+        expect(f.controller.macro.snapshot()).toMatchObject({state:'failed',actionsCompleted:1});
+      }
+    }finally {random.mockRestore();}
+  });
   it('waits for an existing field item before one Stop and the reactive child',()=>{
     const f=fixture(),automation=policy();automation.items=[{itemId:501,resource:'hp',belowPercent:90,minStock:0,cooldownSeconds:1}];
     const reactive:MacroScript['rules'][number]={name:'Level response',priority:100,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:8}],steps:[{type:'useItem',itemId:501,timeoutSeconds:20}]};

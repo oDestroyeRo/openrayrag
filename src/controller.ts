@@ -109,6 +109,7 @@ export class CompanionController {
   private memoWalkPending: {x:number;y:number} | null = null;
   private memoWalkEnd: {x:number;y:number} | null = null;
   private memoMovementUnknown = false;
+  private fieldWalkOwner:ActionIdentity|null=null;
   readonly refine: ManualRefine;
   private refineNpcGeneration=0; private refineNpcIdentity:string|null=null; private refinePromptToken:string|null=null;
   private refineActivityRevision=0; private refineInitialization:{key:string;identity:string|null}|null=null;
@@ -194,7 +195,10 @@ export class CompanionController {
       this.deathCycle.guard.uncertain=true;
       this.deathCycleConnection=this.connectionEpoch;
     }
-    if(action.type==='walk'){this.memoWalkPending={...action.destination};this.memoWalkEnd=null;this.memoMovementUnknown=true;}
+    if(action.type==='walk'){
+      this.memoWalkPending={...action.destination};this.memoWalkEnd=null;this.memoMovementUnknown=true;
+      this.fieldWalkOwner=this.engine.running&&!this.engine.retreatOwned&&!this.engine.manualTargetOwned&&!this.travel.active?this.engine.actorActionIdentity():null;
+    }
     if(action.type!=='respawn')this.quietUntil=Math.max(this.quietUntil,this.now()+2_000);
     this.transport(action);
   }
@@ -219,7 +223,7 @@ export class CompanionController {
     }
     this.partyHeal.wait(reason);return false;
   }
-  private resetMemoMovement():void {this.memoWalkPending=null;this.memoWalkEnd=null;this.memoMovementUnknown=false;}
+  private resetMemoMovement():void {this.memoWalkPending=null;this.memoWalkEnd=null;this.memoMovementUnknown=false;this.fieldWalkOwner=null;}
   private movementSettled():boolean {
     const p=this.engine.player;
     return this.travel.movementSettled(this.engine.map,p)&&(!this.memoMovementUnknown||this.memoWalkPending===null&&!!this.memoWalkEnd&&p?.x===this.memoWalkEnd.x&&p?.y===this.memoWalkEnd.y);
@@ -794,7 +798,8 @@ export class CompanionController {
         this.world.reset(event.type === 'map' ? event.map : this.engine.map, true);
       }
     }
-    const manualMovementReceipts=new Map(events.map(event=>[event,this.engine.manualMovementReceiptOwner(event)??this.engine.retreatMovementReceiptOwner(event)]));
+    const movementReceipts=new Map(events.map(event=>[event,this.engine.manualMovementReceiptOwner(event)??this.engine.retreatMovementReceiptOwner(event)
+      ??this.engine.fieldMovementReceiptOwner(event,this.fieldWalkOwner)]));
     this.travel.prepareObservation(events);
     this.warp.observeDeath(events,this.warpContext());
     this.engine.receive(events);
@@ -823,15 +828,15 @@ export class CompanionController {
       this.memoIdentity=identity;
     }
     for(const event of events){
-      const manualOwner=manualMovementReceipts.get(event);
-      const ownedManualReceipt=!!manualOwner&&!!memoActor&&manualOwner.world===memoActor.world
-        &&manualOwner.id===memoActor.selfId&&manualOwner.incarnation===memoActor.selfIncarnation;
+      const movementOwner=movementReceipts.get(event);
+      const ownedMovementReceipt=!!movementOwner&&!!memoActor&&movementOwner.world===memoActor.world
+        &&movementOwner.id===memoActor.selfId&&movementOwner.incarnation===memoActor.selfIncarnation;
       if(event.type==='walk'&&event.id===memoPlayer?.id){
         this.memoMovementUnknown=true;const end=event.walk.cells.at(-1);
-        if(!event.walk.locked&&end&&(ownedManualReceipt||!this.memoWalkPending||end.x===this.memoWalkPending.x&&end.y===this.memoWalkPending.y)){
+        if(!event.walk.locked&&end&&(ownedMovementReceipt||!this.memoWalkPending||end.x===this.memoWalkPending.x&&end.y===this.memoWalkPending.y)){
           this.memoWalkPending=null;this.memoWalkEnd={...end};
         }else this.memoWalkEnd=null;
-      }else if(event.type==='stop'&&ownedManualReceipt){
+      }else if(event.type==='stop'&&ownedMovementReceipt){
         this.resetMemoMovement();
       }else if(!this.memoWalkPending&&((event.type==='spawn'&&event.entity.id===memoPlayer?.id)
         ||((event.type==='position'||event.type==='hit'||event.type==='resurrection')&&event.id===memoPlayer?.id)

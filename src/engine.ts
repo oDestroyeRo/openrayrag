@@ -1358,6 +1358,15 @@ export class BotEngine {
     this.send({type:'walk',destination});this.lastAction=now;this.reason=task.reason;
   }
   get manualTargetActive():boolean {return this.manualTask!==null;}
+  /** A shortened field walk is authoritative only for its captured own lifetime and verified ground. */
+  fieldMovementReceiptOwner(event:GameEvent,captured:ActionIdentity|null):EngagementIdentity|null {
+    if(!captured||!sameActionIdentity(captured,this.actorActionIdentity()))return null;
+    const owner={world:captured.world,id:captured.selfId,incarnation:captured.selfIncarnation};
+    if(event.type==='stop'&&event.id===owner.id)return owner;
+    if(event.type==='walk'&&event.id===owner.id&&!event.walk.locked&&event.walk.cells.length>0&&event.walk.cells.length<=21
+      &&walkDuration(event.walk)<=15000&&this.navigation()?.validRoute(event.walk.cells))return owner;
+    return null;
+  }
   /** Movement readback can settle only the captured manual owner's lifetime. */
   manualMovementReceiptOwner(event:GameEvent):EngagementIdentity|null {
     const owner=this.manualTask?.request.owner??this.manualReceiptOwner;
