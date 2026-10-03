@@ -94,10 +94,26 @@ describe('routine validation', () => {
         cooldownSeconds: 86_400, maxRuns: 1_000, conditions: Array.from({ length: 16 }, () => ({ ...hp })) })) }), isAction).rules).toHaveLength(32);
     expect(() => new RoutineRuntime(isAction, Date.now, { maxSteps: ROUTINE_LIMITS.maxSteps + 1 })).toThrow();
     expect(() => new RoutineRuntime(isAction, Date.now, { actionTimeoutSeconds: 0 })).toThrow();
+    expect(() => new RoutineRuntime(isAction, Date.now, { actionTimeoutSeconds: 121 })).toThrow();
+    expect(() => new RoutineRuntime(isAction, Date.now, { actionTimeoutSeconds: 121, actionTimeoutLimitSeconds: 86_400 })).not.toThrow();
+    expect(() => new RoutineRuntime(isAction, Date.now, { actionTimeoutLimitSeconds: 86_401 })).toThrow();
   });
 });
 
 describe('routine preview', () => {
+  it('validates and evaluates level, job level, and weight without inventing unknown observations', () => {
+    const conditions: RoutineCondition[] = [{ field: 'level', operator: 'gte', value: 10 },
+      { field: 'jobLevel', operator: 'eq', value: 1 }, { field: 'weightPercent', operator: 'eq', value: 0 }];
+    const routine = spec({ rules: [rule({ conditions })] });
+    expect(dryRunRoutine(routine, {}, isAction).rules[0]!.conditions.every(condition => condition.state === 'unavailable')).toBe(true);
+    expect(dryRunRoutine(routine, { level: 10, jobLevel: 1, weightPercent: 0 }, isAction).rule).toBe('Heal');
+    expect(dryRunRoutine(routine, { level: 0, jobLevel: 0, weightPercent: -1 }, isAction).rules[0]!.conditions.every(condition => condition.state === 'unavailable')).toBe(true);
+    for (const condition of [{ field: 'level', operator: 'eq', value: 0 }, { field: 'level', operator: 'eq', value: 1.5 },
+      { field: 'jobLevel', operator: 'eq', value: 1_001 }, { field: 'weightPercent', operator: 'eq', value: 101 }]) {
+      expect(() => validateRoutineSpec(spec({ rules: [rule({ conditions: [condition as RoutineCondition] })] }), isAction)).toThrow();
+    }
+  });
+
   it('does not match missing HP/SP/map/zeny/item observations, including map inequality and count zero', () => {
     const conditions: RoutineCondition[] = [hp, { field: 'spPercent', operator: 'eq', value: 0 },
       { field: 'map', operator: 'ne', value: 'prontera' }, { field: 'zeny', operator: 'eq', value: 0 },
