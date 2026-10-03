@@ -34,6 +34,7 @@ type FeatureUiMounts = Pick<ClientShell, 'sections' | 'manualTools' | 'sessionDe
 type Section = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows' | 'profiles';
 interface Hooks {
   settings(): Settings; apply(settings: Settings): void; map(): string; character(): string;
+  macroSettings?(): Settings;
   command(action: Record<string, unknown>): Promise<unknown>;
   workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; macro?(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>; social(spec: unknown): Promise<unknown>; memo(spec: unknown): Promise<unknown>; socketPreview?(spec:unknown):Promise<unknown>; socket?(spec:unknown):Promise<unknown>; warp?(spec:unknown):Promise<unknown>;warpPreview?(spec:unknown):Promise<unknown>;warpCancel?():Promise<unknown>;
   refinePreview?(spec: unknown): Promise<unknown>; refine?(spec: unknown): Promise<unknown>; refineAdvance?(promptToken: string): Promise<unknown>;
@@ -489,7 +490,7 @@ export class FeatureUi {
   }
   private detail(title: string): HTMLDetailsElement { const details = document.createElement('details'); details.className = 'manual-group'; const summary = document.createElement('summary'); summary.textContent = title; details.append(summary); this.mounts.manualTools.append(details); return details; }
   private workflows(): void {
-    this.macroUi = new MacroUi({ settings: () => this.hooks.settings(), start: request => this.hooks.macro?.(request) ?? Promise.reject(new Error('Macro transport unavailable.')),
+    this.macroUi = new MacroUi({ settings: () => this.hooks.macroSettings?.()??this.hooks.settings(), start: request => this.hooks.macro?.(request) ?? Promise.reject(new Error('Macro transport unavailable.')),
       stop: () => this.hooks.stop?.(), changed: () => this.hooks.changed(), notify: (message, error) => this.hooks.notify(message, error) });
     const heading=this.panel('workflows').querySelector('.panel-title');
     if(heading)heading.after(this.macroUi.root);else this.panel('workflows').append(this.macroUi.root);

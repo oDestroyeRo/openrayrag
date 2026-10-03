@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { MacroDraft, MacroUi, macroActive, macroExample, validMacroSnapshot } from './macro-ui';
+import { MacroDraft, MacroUi, macroActive, macroExample, macroBaseSettings, validMacroSnapshot } from './macro-ui';
 import { dryRunMacro, MacroRuntime } from './macros';
+import { DEFAULT_SETTINGS, DEFAULT_AUTOMATION } from './settings';
 
 class Store {
   data = new Map<string, string>();
@@ -8,6 +9,19 @@ class Store {
   setItem(key: string, value: string): void { this.data.set(key, value); }
 }
 describe('macro editor documents', () => {
+  it('starts farm scripts from an empty target draft without changing retained preferences',()=>{
+    const settings={...structuredClone(DEFAULT_SETTINGS),map:'prt_fild08',targets:[],automation:structuredClone(DEFAULT_AUTOMATION)};
+    const projected=macroBaseSettings(settings,macroExample('leveling'));
+    expect(projected.targets).toEqual([4000,4012,4002]);expect(settings.targets).toEqual([]);
+    expect(projected.automation).toEqual(settings.automation);
+  });
+  it('admits a standalone item script without targets and preserves explicit combat-off policy',()=>{
+    const settings={...structuredClone(DEFAULT_SETTINGS),map:'prt_fild08',targets:[],automation:structuredClone(DEFAULT_AUTOMATION)};
+    expect(macroBaseSettings(settings,macroExample('item')).automation?.combat.mode).toBe('off');
+    settings.automation.combat.mode='off';
+    expect(macroBaseSettings(settings,macroExample('leveling')).automation?.combat.mode).toBe('off');
+    expect(settings.targets).toEqual([]);
+  });
   it('preserves bounded native rejection messages for the user', () => {
     const result={hidden:true,textContent:''};let notice='';
     const view={result,hooks:{notify:(message:string)=>{notice=message;}}};

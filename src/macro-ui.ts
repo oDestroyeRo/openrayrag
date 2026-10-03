@@ -1,12 +1,23 @@
 import { dryRunMacro, macroInventoryItemIds, validateMacroScript, type MacroScript } from './macros';
 import type { RoutineObservation } from './routines';
-import type { Settings } from './settings';
+import { automationSettings, validateSettings, type Settings } from './settings';
 
 const STORAGE_KEY = 'rayrag.companion.macro.v1';
 type LocalStore = Pick<Storage, 'getItem' | 'setItem'>;
 type Example = 'leveling' | 'buy' | 'store' | 'item' | 'skill';
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 export function macroActive(value: unknown): boolean { const state=record(value).state;return typeof state==='string'&&['running', 'waiting', 'monitoring'].includes(state); }
+/** Script targets can supply an empty field draft; non-field scripts need no combat selection. */
+export function macroBaseSettings(value: Settings, script: MacroScript): Settings {
+  const settings=structuredClone(value);
+  const policy=structuredClone(automationSettings(settings));
+  if(!settings.targets.length&&['selected','both'].includes(policy.combat.mode)) {
+    const field=script.rules.flatMap(rule=>rule.steps).find(step=>step.type==='farm');
+    if(field?.type==='farm')settings.targets=[...field.targets];
+    else {policy.combat={...policy.combat,mode:'off'};settings.automation=policy;}
+  }
+  return validateSettings(settings);
+}
 export function validMacroSnapshot(value: unknown): boolean {
   const state = record(value);
   const counts = ['generation', 'actionsIssued', 'actionsCompleted', 'sequencesIssued', 'sequencesCompleted', 'spendReserved'];
@@ -162,7 +173,7 @@ export class MacroUi {
   private async start(): Promise<void> {
     if (this.busy || this.locked || this.startButton.disabled) return;
     try {
-      this.draft.text = this.editor.value; const script = this.draft.read(); const settings = structuredClone(this.hooks.settings());
+      this.draft.text = this.editor.value; const script = this.draft.read(); const settings = macroBaseSettings(this.hooks.settings(),script);
       this.busy = true; this.startButton.disabled = true; await this.hooks.start({ script, settings });
     } catch (error) { this.error(error); }
     finally { this.busy = false; this.startButton.disabled = this.locked; }
