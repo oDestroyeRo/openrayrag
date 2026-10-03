@@ -491,7 +491,8 @@ export class FeatureUi {
   private workflows(): void {
     this.macroUi = new MacroUi({ settings: () => this.hooks.settings(), start: request => this.hooks.macro?.(request) ?? Promise.reject(new Error('Macro transport unavailable.')),
       stop: () => this.hooks.stop?.(), changed: () => this.hooks.changed(), notify: (message, error) => this.hooks.notify(message, error) });
-    this.panel('workflows').append(this.macroUi.root);
+    const heading=this.panel('workflows').querySelector('.panel-title');
+    if(heading)heading.after(this.macroUi.root);else this.panel('workflows').append(this.macroUi.root);
     const npc = this.detail('NPC dialogue'); const npcGrid = document.createElement('div'); npcGrid.className = 'form-grid'; npc.append(npcGrid);
     const npcId = this.input(npcGrid,'npc-id','Visible NPC ID','number','',0); const option = this.input(npcGrid,'npc-option','Option index','number','0',0,31);
     const npcChoiceLabel=document.createElement('label');npcChoiceLabel.className='form-field';npcChoiceLabel.textContent='NPCs in view';const npcChoice=document.createElement('select');npcChoice.id='visible-npcs';const emptyNpc=document.createElement('option');emptyNpc.value='';emptyNpc.textContent='Choose a visible NPC';npcChoice.append(emptyNpc);npcChoiceLabel.append(npcChoice);npcGrid.append(npcChoiceLabel);npcChoice.addEventListener('change',()=>{if(npcChoice.value)npcId.value=npcChoice.value;});
