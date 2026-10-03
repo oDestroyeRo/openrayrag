@@ -4,6 +4,10 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Manual game action continuity
+
+Issue [#108](https://github.com/oDestroyeRo/openrayrag/issues/108) records the final automated and live evidence. Regression tests exercise new pickup decisions during repeated panel input, official movement and Stop, same-character map refreshes, safe unsent travel/service continuation, late asynchronous route results, external refining and NPC admission. They retain original run/macro/trip deadlines and allowances, explicit Companion Stop and sent resource/teleport uncertainty. Packaged QA also exposed a native sign-in deadlock: a worker held admission while waiting for a UI-thread URL query, and a heartbeat on that thread waited for admission. The four connection/window commands now execute synchronously on the UI thread, preserving admission through navigation. Native tests, Clippy and formatting were rerun after this correction. With-game-client and Bot-only live checks remain separate proof surfaces; an automated fixture does not prove WebKit scheduling, deployed gameplay or every manual transaction.
+
 ### Server Database travel
 
 Checked on 2026-10-04 for issue #105, using the final local native v0.2.51 QA package. Shared production encoders send the pinned map-only opcode-64 request in both connection modes. Targeted protocol/controller tests cover requested-map arrival, ordered Ready, fresh own actor identity, wrong/foreign/dead arrivals, retained Stop/timeout/write uncertainty, finite supply command reservation, macro travel/farm/service paths, configured destinations and death return. Local NPC approaches and same-map movement remain collision checked; party-leader rendezvous retains verified portals.
@@ -114,7 +118,7 @@ The full `npm run check` command runs build/typechecking, all Vitest suites, nat
 | Reconnect and continuous run intent | `reconnect`, `controller`, Rust login identity/retry tests: backoff, replacement generations, retained intent, Stop and uncertainty fences. |
 | Resting, escape, death and respawn return | Recovery, death/respawn controller, escape and observed threats: authoritative living arrival, return map, recovery hysteresis and exhausted death allowances. |
 | Hours, run limits and Stop | Settings, automation, controller, respawn and manual target tests: finite budgets, waiting policies and late replies after cancellation. |
-| Official game panels and input | Bridge input/official input tests: inventory/skill-panel interactions, takeover grace, existing official sends and action ownership. |
+| Official game panels and input | Bridge input/official input tests: continued run/macro decisions during repeated input, official movement reconciliation, existing official sends and action ownership. |
 | Manual map walking and attacks | Manual target/controller/UI and bot-console tests: map coordinates, reachable paths, stale targets, cancellation and no implicit field-run intent. |
 | Items, equipment, skills and allocation | Protocol feature, character state, automation, loadout, attack strategy/engine, skill execution and Rust control validation. Resource observations remain distinct from command receipts. |
 | Cast waits and ranged retreat | Cast availability/controller, own-cast admission, retreat/engine and bridge input: supported availability observations, finite probes and retained item/SP debts. |

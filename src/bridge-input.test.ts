@@ -71,6 +71,46 @@ it('dispatches a macro child through the game page API using the shared manual e
 beforeEach(()=>{vi.useFakeTimers();vi.setSystemTime(100_000);});
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks();captured.controller=null;captured.senders=[];});
 
+it('continues a macro through real trusted panel listeners and official sends, then loots without restarting',async()=>{
+  const f=await fixture(),settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000]};
+  f.page.__RAYRAG__!.perform('macro',{settings,script:{version:1,name:'Continue field',durationSeconds:30,maxActions:1,maxSpend:0,
+    rules:[{name:'Farm',priority:0,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:1}],
+      steps:[{type:'farm',map:'prt_fild08',targets:[4000],timeoutSeconds:20}]}]}});
+  const before=f.c.macro.snapshot(),commandFrame=featureCommand({type:'useItem',itemId:501});
+  f.socket.send(commandFrame);expect(f.socket.writes.filter(frame=>frame===commandFrame)).toHaveLength(1);
+  for(let i=0;i<6;i++){f.input(i%2?'pointerdown':'keydown');await f.step(100);}
+  await f.packet(new BitWriter().u8(OP.remove).i32(2).u8(3).finish());
+  await f.packet(new BitWriter().u8(OP.drop).i32(9).f32(101).f32(100).i32(909).i16(1).bool(true).finish());
+  for(let i=0;i<5;i++){f.input();await f.step(100);}
+  const opcodes=f.socket.writes.map(frame=>new Uint8Array(frame as ArrayBufferLike)[0]);
+  expect(opcodes.filter(opcode=>opcode===OP.stop)).toEqual([]);expect(opcodes.filter(opcode=>opcode===OP.pickup)).toHaveLength(1);
+  expect(f.c.snapshot()).toMatchObject({runRequested:true,running:true,kills:1,
+    macro:{state:'monitoring',actionsIssued:before.actionsIssued,actionsCompleted:before.actionsCompleted}});
+  await f.packet(new BitWriter().u8(OP.pickup).i32(0).i32(9).finish());expect(f.c.engine.looted).toBe(1);
+  f.c.stop();const stopped=f.socket.writes.length;f.input();await f.step(500);
+  expect(f.c.runRequested).toBe(false);expect(f.socket.writes).toHaveLength(stopped);
+});
+it('does not let an official refine send permanently starve an already requested macro',async()=>{
+  const f=await fixture(),settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000]};
+  f.page.__RAYRAG__!.perform('macro',{settings,script:{version:1,name:'Continue field',durationSeconds:30,maxActions:1,maxSpend:0,
+    rules:[{name:'Farm',priority:0,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:1}],
+      steps:[{type:'farm',map:'prt_fild08',targets:[4000],timeoutSeconds:20}]}]}});
+  await f.step(100);await f.packet(new BitWriter().u8(77).u8(0).i32(3).bool(true).finish());
+  const frame=Uint8Array.from(refineCommand({targetBagId:700,oreItemId:1010,catalystBagId:0}));f.socket.send(frame);
+  expect(f.socket.writes.filter(value=>value===frame)).toHaveLength(1);expect(f.c.refine.blocked).toBe(true);
+  expect(f.c.refine.companionReceiptPending).toBe(false);expect(f.c.settledForMaintenance()).toBe(false);
+  await f.packet(new BitWriter().u8(OP.remove).i32(2).u8(3).finish());
+  await f.packet(new BitWriter().u8(OP.drop).i32(9).f32(101).f32(100).i32(909).i16(1).bool(true).finish());
+  await f.step(500);expect(f.c.snapshot()).toMatchObject({runRequested:true,running:true,
+    macro:{state:'monitoring',actionsIssued:1,actionsCompleted:1}});
+  expect(f.socket.writes.some(value=>new Uint8Array(value as ArrayBufferLike)[0]===OP.pickup)).toBe(false);
+  await f.packet(new BitWriter().u8(77).u8(3).finish());await f.step(100);
+  expect(f.socket.writes.some(value=>new Uint8Array(value as ArrayBufferLike)[0]===OP.pickup)).toBe(true);
+  expect(f.socket.writes.some(value=>new Uint8Array(value as ArrayBufferLike)[0]===OP.stop)).toBe(false);
+  f.c.stop();expect(f.c.refine.blocked).toBe(true);expect(f.c.settledForMaintenance()).toBe(false);
+  expect(()=>f.c.start(settings)).toThrow('refine');
+});
+
 function skillResources(warp=false,full=true):Uint8Array {
   const f=new BitWriter().u8(FEATURE_OP.stats);
   for(const value of [15,15,10000,1,1,1,1,1,1,0,0,0])f.i32(value);

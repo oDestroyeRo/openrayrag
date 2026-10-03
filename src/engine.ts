@@ -99,6 +99,8 @@ export class BotEngine {
   private foreignTargets = new Set<number>();
   private readonly partyEngagements = new PartyEngagements();
   private serverTargetId:number|null=null;
+  private officialMovementUntil=0;
+  private officialMotion=false;
   private readonly combatConditions=new Map<number,{rule:string;conditions:PredicateTrace[]}>();
   private respawnRefreshPending = false;
   private respawnArrival:{id:number;name:string;entry:1|2}|null=null;
@@ -207,7 +209,16 @@ export class BotEngine {
     this.resetWorld(); this.reason = 'Game disconnected. Sign in again, then press Start.'; this.note(this.reason);
   }
   fail(reason: string): void { this.stop(reason); this.compatible = false; }
-  stop(reason = 'Stopped by you.'): void {
+  /** Official commands do not retire the requested run or its resource owners. */
+  officialGameplay():void {this.officialMovementUntil=this.now()+4_000;}
+  /** Availability evidence only; never a resource or target result receipt. */
+  officialMovementReceiptOwner(event:GameEvent):EngagementIdentity|null {
+    if(this.now()>=this.officialMovementUntil||!['walk','stop','position'].includes(event.type)
+      ||!('id' in event)||event.id!==this.playerId)return null;
+    const p=this.player;
+    return p?.kind===0&&!p.dead&&p.hp>0&&this.actorActionIdentity()?this.manualActorIdentity(p.id):null;
+  }
+  stop(reason = 'Stopped by you.', sendStop=true): void {
     if(this.retreatTask)this.cancelRetreat(reason,false);
     const wasManual=!!this.manualTask||!!this.manualAttackFence||this.manualWalkFence;
     if(wasManual)this.finishManual('cancelled',reason,false);
@@ -217,7 +228,7 @@ export class BotEngine {
     this.loadout.cancel();this.strategies.cancel();this.strategyWait=null;
     const pendingSkill = this.automation.pendingAction?.type === 'skill';
     this.combatConditions.clear();this.running = false; this.runIntent = false; this.automation.reset(); this.stoppedAt = this.now(); this.pending = null; this.route = null; this.leg = null; this.reason = reason;
-    if ((wasRunning || pendingSkill || (wasManual || reserveStop) && this.manualReceiptAdmitted()) && this.connected) {
+    if (sendStop && (wasRunning || pendingSkill || (wasManual || reserveStop) && this.manualReceiptAdmitted()) && this.connected) {
       try { this.send({ type: 'stop' }); }
       catch { this.connected = false; this.compatible = false; this.reason = 'Connection lost while stopping.'; }
     }
@@ -326,6 +337,7 @@ export class BotEngine {
     this.castAvailability.castChanged(this.observedOwnCast);
   }
   private resetWorld(preserveCharacter=false): void {
+    this.officialMovementUntil=0;this.officialMotion=false;
     if(this.retreatTask)this.cancelRetreat('Retreat canceled after a world change.',false);
     this.retreatLedger.clear();if(!preserveCharacter){this.retreatTask=null;this.retreatStatus={...IDLE_RETREAT};}
     if(this.manualTask)this.finishManual('failed','Manual command ended after a world change.',false);
@@ -373,7 +385,7 @@ export class BotEngine {
     this.skillKills.delete(id); this.skillTargets.delete(id); this.foreignTargets.delete(id); this.partyEngagements.remove(id); this.aggressors.delete(id); this.actors.delete(id);
     if(id===this.playerId){this.clearLootEvidence();this.skillKills.clear();this.skillTargets.clear();}
     if (id === this.playerId && dead && entity) { const alreadyDead=entity.dead;entity.dead=true;entity.hp=0;if(!alreadyDead)this.onDeath(); }
-    else { this.entities.delete(id);if(id===this.playerId)this.stop('Character left the field.'); }
+    else { this.entities.delete(id);if(id===this.playerId)this.stop('Character left the field.',false); }
   }
   private apply(e: GameEvent | FeatureEvent): void {
     this.observations.apply(e,undefined,this.player?.id??null);
@@ -430,7 +442,7 @@ export class BotEngine {
         const respawning=this.automation.pendingAction?.type==='respawn';
         const resume=respawning||(!this.running&&this.runIntent);
         if(respawning){this.running=false;this.reason='Waiting for the respawned character.';}
-        else this.stop('Map changed. Press Start when ready.');
+        else this.stop('Waiting for the character on the new map.',false);
         this.runIntent = resume; const id = this.playerId;
         this.resetWorld(true); this.playerId = id; this.map = e.map; this.respawnRefreshPending=respawning; break;
       }
@@ -442,7 +454,7 @@ export class BotEngine {
         if (respawning) {
           // Same-map respawn emits clear then an alive self spawn, without a map packet.
           this.running = false; this.runIntent = true; this.reason = 'Waiting for the respawned character.';
-        } else { this.stop('World refreshed. Press Start when ready.'); this.runIntent = resume; }
+        } else { this.stop('Waiting for the refreshed character.',false); this.runIntent = resume; }
         const id = this.playerId; const map = this.map;
         this.resetWorld(true); this.playerId = id; this.map = map; this.respawnRefreshPending = respawning; break;
       }
@@ -485,6 +497,11 @@ export class BotEngine {
         break;
       case 'tracking': break; // Minimap markers do not correct world movement.
       case 'stop':
+        if(e.id===this.playerId)this.officialMotion=false;
+        if(e.id===this.playerId&&this.now()<this.officialMovementUntil){
+          this.route=null;this.leg=null;this.implicitWalk=null;
+          if(this.pending?.type==='attack')this.pending=null;
+        }
         if(e.id===this.playerId&&this.retreatTask&&this.retreatOwnCurrent()){
           this.retreatTask.walkPending=false;
           if(this.retreatTask.phase==='walking')this.cancelRetreat('Retreat walking was interrupted by the server.',false);
@@ -502,6 +519,17 @@ export class BotEngine {
         Object.assign(entity, walkPosition(e.walk, 0));
         this.motions.delete(e.id);
         if (!e.walk.locked && e.walk.cells.length > 1) this.motions.set(e.id, { walk: e.walk, at: this.now() });
+        if(e.id===this.playerId&&this.running&&this.now()<this.officialMovementUntil){
+          // A current-own StartWalk is authoritative physical state. It may be
+          // longer than a bot leg or cross a portal; never issue Stop merely
+          // because the official client chose a different route. New bot paths
+          // still require verified collision data after this motion settles.
+          this.officialMotion=!e.walk.locked&&e.walk.cells.length>1;
+          if(this.retreatTask)this.cancelRetreat('Official movement superseded the retreat route.',false);
+          this.route=null;this.leg=null;this.implicitWalk=null;
+          if(this.pending?.type==='attack')this.pending=null;
+          break;
+        }
         if(retreatReceipt&&this.retreatTask){
           const task=this.retreatTask;task.walkPending=false;
           if(this.leg){
@@ -541,7 +569,8 @@ export class BotEngine {
         break;
       }
       case 'position': {
-        if(e.id===this.playerId&&this.retreatTask)this.cancelRetreat('Retreat position was corrected.');
+        if(e.id===this.playerId)this.officialMotion=false;
+        if(e.id===this.playerId&&this.retreatTask)this.cancelRetreat('Retreat position was corrected.',this.now()>=this.officialMovementUntil);
         if(this.manualTask&&e.id===this.playerId)this.finishManual('failed','Character position was corrected; preview the command again.');
         this.motions.delete(e.id); this.interrupted(e.id);
         const entity = this.entities.get(e.id) ?? this.actors.get(e.id); if (entity) Object.assign(entity, e.position);
@@ -667,7 +696,7 @@ export class BotEngine {
     if (now - this.lastTick > 5000) { this.stop('Mac slept or the game paused. Press Start to resume.'); return; }
     this.lastTick = now;
     const p = this.player;
-    if (!p || !this.connected || !this.compatible) { this.stop('Game state is unavailable.'); return; }
+    if (!p || !this.connected || !this.compatible) { this.stop('Game state is unavailable.',false); return; }
     if (now - Math.max(this.lastFrame, this.runStarted) > 15000) { this.stop('No recent server updates.'); return; }
     const a = automationSettings(this.settings);
     if (!inSchedule(a,now)) { this.stop('Daily schedule ended. Press Start during the next allowed period.'); return; }
@@ -687,6 +716,8 @@ export class BotEngine {
     }
     if (p.maxHp <= 0 || p.hp / p.maxHp * 100 <= this.settings.minHpPercent) { this.stop('HP reached the stop limit. Recover manually.'); return; }
     if (a.limits.weightPercent) { const stats=this.character.stats; if(stats?.weight===undefined||!stats.maxWeight) { this.stop('Weight is unavailable for the configured weight limit.');return; } if(stats.weight/stats.maxWeight*100>=a.limits.weightPercent) { this.stop('Configured weight limit reached.');return; } }
+    if(this.officialMotion&&this.ownMotion()){this.expirePending(now);this.reason='Waiting for the observed game movement to finish.';return;}
+    this.officialMotion=false;
     const nav = this.navigation();
     if(!this.running)return;
     if (!nav || !nav.safe(p)) { this.stop('Character left verified walkable ground or entered a portal exclusion.'); return; }

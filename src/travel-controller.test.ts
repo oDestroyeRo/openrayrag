@@ -109,6 +109,28 @@ it('stops after an unexpected map or a premature transition during an unrelated 
   expect(early.controller.snapshot().reason).toContain('before the planned portal');
 });
 
+it('routes a retained final approach back to its captured map after official cross-map travel',()=>{
+  let now=100_000,context={identity:'old-own',map:'prt_fild08',player:player({x:170,y:370})};const actions:Action[]=[];
+  const travel=new TravelController(a=>actions.push(a),()=>now,()=>({width:400,height:400,walkable:()=>true}),
+    {context:()=>context,continueRequested:()=>true});
+  travel.startApproach(context.map,context.player,{x:169,y:370});const trip=travel.tripId;
+  now+=25_000;context={...context,identity:'',map:'prontera'};travel.observe([{type:'map',map:'prontera'}]);travel.tick(context.map,undefined);
+  expect(travel.active).toBe(true);context={identity:'new-own',map:'prontera',player:player({x:145,y:28})};
+  travel.observe([{type:'spawn',entity:context.player,entryType:1}]);travel.tick(context.map,context.player);
+  expect(travel.tripId).toBe(trip);expect(travel.snapshot().remainingMaps).toContain('prt_fild08');
+  const walk=actions.find(a=>a.type==='walk');expect(walk?.type==='walk'&&walk.destination.y).toBeLessThan(100);
+  expect(actions.filter(a=>a.type==='stop')).toEqual([]);
+  now=400_001;travel.tick(context.map,context.player);expect(travel.snapshot()).toMatchObject({state:'failed',reason:'Final NPC approach reached its five-minute limit.'});
+});
+it('keeps unhinted accepted travel paths subject to collision validation even during a requested run',()=>{
+  let context={identity:'own',map:'prt_fild08',player:player({x:170,y:370})};const actions:Action[]=[];
+  const travel=new TravelController(a=>actions.push(a),()=>100_000,undefined,{context:()=>context,continueRequested:()=>true});
+  travel.start(context.map,context.player,'prontera',10,false);travel.tick(context.map,context.player);
+  const cells=Array.from({length:25},(_,i)=>({x:170+i,y:370}));
+  travel.observe([{type:'walk',id:context.player.id,walk:{origin:cells[0]!,cells,secondsPerCell:.1,firstSeconds:.1,locked:false}}]);
+  expect(travel.snapshot().state).toBe('failed');expect(actions.at(-1)).toEqual({type:'stop'});
+});
+
 it('rejects unavailable maps and a blocked start without changing external state', () => {
   const { controller,actions } = fixture();
   expect(() => controller.start('prt_fild08',player({ x: 169,y: 193 }),'payon_p',10,false)).toThrow('No verified route');

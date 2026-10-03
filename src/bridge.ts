@@ -1,6 +1,6 @@
 import type { DeathRecoveryGuard } from './death-recovery';
 import { MaintenanceLease } from './maintenance';
-import { couldOwnOfficialGameplay, isOfficialGameplayCommand, isOfficialLookCommand, isOfficialRefineCommand } from './official-input';
+import { couldOwnOfficialGameplay, isOfficialGameplayCommand, isOfficialLookCommand, isOfficialMovementCommand, isOfficialRefineCommand } from './official-input';
 import { type Settings } from './engine';
 import { decode, OP, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
 import { officialWarpSkill, warpInitializationPacket } from './warp-protocol';
@@ -159,7 +159,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
         const copy=warpBytes.slice(),generation=controller.connectionGeneration;
         officialRevision++;officialUncertain=true;
         if(officialOwners.size<32||officialOwners.has(this))officialOwners.add(this);else officialOwnerOverflow=true;
-        mutation();if(engine.actorActionIdentity(undefined,true)&&isOfficialGameplayCommand(copy))controller.manualCommand();controller.observeOfficialPacket(copy);
+        mutation();if(engine.actorActionIdentity(undefined,true)&&isOfficialGameplayCommand(copy))controller.manualCommand(isOfficialMovementCommand(copy));controller.observeOfficialPacket(copy);
         const task=page.__TAURI_INTERNALS__.invoke('warp_guard_mark',{}).then(value=>{
           if(typeof value!=='string')throw new Error('Warp recovery guard unavailable.');
           if(active!==this||generation!==controller.connectionGeneration||this.readyState!==NativeSocket.OPEN||maintenance.blocked)return;
@@ -179,9 +179,9 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
       }
       if (active === this && this.readyState === NativeSocket.OPEN && engine.connected && engine.compatible && page.buildUrl === VERIFIED_BUILD
         && engine.actorActionIdentity(undefined,true) && isOfficialGameplayCommand(data)) {
-        // Only a current official action takes over the field controller. An
+        // Current official actions reconcile a requested run. An
         // obsolete/opaque transport still fences updater availability above.
-        try { controller.manualCommand(); publish(); } catch { /* Never prevent or replay the official send. */ }
+        try { controller.manualCommand(isOfficialMovementCommand(data)); publish(); } catch { /* Never prevent or replay the official send. */ }
       }
       if (active===this && this.readyState===NativeSocket.OPEN && page.buildUrl===VERIFIED_BUILD) {
         const bytes=data instanceof ArrayBuffer?new Uint8Array(data):ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,data.byteLength):null;

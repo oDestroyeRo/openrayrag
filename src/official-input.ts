@@ -20,6 +20,12 @@ export function isOfficialLookCommand(data:unknown):boolean {
     :ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,Math.min(1,data.byteLength)):null;
   return bytes!==null&&bytes.length===1&&bytes[0]===13;
 }
+/** Movement, attack, skill and Stop can supersede a physical route. */
+export function isOfficialMovementCommand(data:unknown):boolean {
+  const bytes=data instanceof ArrayBuffer?new Uint8Array(data,0,Math.min(1,data.byteLength))
+    :ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,Math.min(1,data.byteLength)):null;
+  return bytes!==null&&bytes.length===1&&[7,11,19,29].includes(bytes[0]!);
+}
 
 // Maintenance conservatively owns opaque/unsupported sends from an already
 // verified-ready game transport, without reading any body or awaiting a Blob.

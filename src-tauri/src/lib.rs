@@ -40,7 +40,9 @@ fn require_window(window: &WebviewWindow, label: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn open_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
+// Keep admitted window operations on the UI thread: URL/build operations may
+// synchronously dispatch there, while other UI commands need the same gate.
+fn open_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
     require_window(&window, "main")?;
     let mut permit = maintenance::admit(&app)?;
     permit.ever_game = true;
@@ -57,7 +59,7 @@ async fn open_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), S
 }
 
 #[tauri::command]
-async fn close_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
+fn close_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
     require_window(&window, "main")?;
     let mut _permit = maintenance::admit(&app)?;
     direct::cancel_admitted(&app, &mut _permit);

@@ -48,10 +48,11 @@ describe('normal ranged retreat controller ownership',()=>{
     expect(f.sent.map(a=>a.type)).toEqual(['attack','stop']);
     return {...f,automation};
   }
-  it('panel input advances deadlines without new decisions; an official manual command cancels',()=>{
-    const f=retreat();f.controller.manualInput();f.packet(new BitWriter().u8(FEATURE_OP.changeTarget).i32(0));f.advance(1900);expect(f.sent.map(a=>a.type)).toEqual(['attack','stop']);
-    f.advance(200);expect(f.sent.at(-1)?.type).toBe('walk');f.controller.manualCommand();
-    expect(f.controller.engine.snapshot().retreat).toMatchObject({state:'skipped',settling:true});expect(f.controller.runRequested).toBe(true);f.advance(5000);expect(f.sent.filter(a=>a.type==='walk')).toHaveLength(1);
+  it('continues retreat through panel and official input without another Stop or renewed walk allowance',()=>{
+    const f=retreat();f.controller.manualInput();f.packet(new BitWriter().u8(FEATURE_OP.changeTarget).i32(0));f.advance(1900);
+    expect(f.sent.map(a=>a.type)).toEqual(['attack','stop','walk']);f.controller.manualCommand();
+    expect(f.controller.engine.snapshot().retreat.state).toBe('walking');expect(f.controller.runRequested).toBe(true);
+    expect(f.sent.filter(a=>a.type==='stop')).toHaveLength(1);f.advance(5000);expect(f.sent.filter(a=>a.type==='walk')).toHaveLength(1);
     expect(()=>f.controller.start({...settings,automation:f.automation})).toThrow();expect(f.controller.engine.settledForMaintenance()).toBe(false);
   });
   it('emergency escape cancels retreat, then waits for target clear before one resource request',()=>{
@@ -319,6 +320,46 @@ describe('retreat ownership with stationary availability',()=>{
 });
 
 describe('official game panel input', () => {
+  it('continues new pickup decisions while repeated client panel input is still arriving',()=>{
+    const f=setup();f.controller.start(settings);f.step();
+    f.controller.manualInput();
+    f.receive({type:'death',id:2},{type:'drop',drop:{id:9,itemId:909,count:1,isNew:true,x:101,y:100}});
+    for(let i=0;i<5;i++){f.controller.manualInput();f.step(100);}
+    expect(f.sent.filter(a=>a.type==='pickup')).toEqual([{type:'pickup',id:9}]);
+    expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);
+    expect(f.controller.snapshot()).toMatchObject({runRequested:true,running:true});
+  });
+  it('observes a long official walk across a portal exclusion without Stop, then resumes on safe ground',()=>{
+    const f=setup({...grid,portals:[{x:110,y:100,halfWidth:1,halfHeight:1}]});
+    f.controller.start(settings);f.step();f.controller.engine.kills=5;f.controller.engine.looted=4;f.controller.manualCommand(true);
+    const w=new BitWriter().u8(OP.walk).i32(1).position(player).f32(100).f32(100).f32(.1).f32(.1).u8(25);
+    for(let i=0;i<12;i++)w.u8(0x66);f.packet(w.u8(0));
+    for(let i=0;i<15;i++){f.controller.manualInput();f.step(100);}
+    expect(f.controller.engine.player!.x).toBe(115);expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);
+    expect(f.controller.snapshot()).toMatchObject({runRequested:true,running:true,kills:5,looted:4});
+    f.advance(1100);expect(f.controller.engine.player!.x).toBe(124);
+    expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);expect(f.controller.engine.running).toBe(true);
+    f.controller.stop();const count=f.sent.length;f.controller.manualCommand();f.advance(500);expect(f.sent).toHaveLength(count);
+    expect(f.controller.runRequested).toBe(false);
+  });
+  it('keeps a bounded official movement response sequence after an older bot walk acknowledgment',()=>{
+    const f=setup({width:200,height:200,walkable:p=>p.x!==104||p.y<98});
+    f.receive({type:'spawn',entity:{...monster,x:108}});f.controller.start(settings);f.step();f.controller.manualCommand(true);
+    f.packet(new BitWriter().u8(OP.walk).i32(1).position(player).f32(100).f32(100).f32(.1).f32(.1).u8(2).u8(0x10).u8(0));
+    const w=new BitWriter().u8(OP.walk).i32(1).position(player).f32(100).f32(100).f32(.1).f32(.1).u8(25);
+    for(let i=0;i<12;i++)w.u8(0x66);f.packet(w.u8(0));f.advance(2600);
+    expect(f.controller.engine.player!.x).toBe(124);expect(f.controller.engine.running).toBe(true);
+    expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);
+  });
+  it('retains the run through ordered own departure and map arrival without sending Stop to the missing actor',()=>{
+    const f=setup();f.controller.start(settings);f.step();
+    f.controller.engine.kills=5;f.controller.manualCommand();
+    f.packet(new BitWriter().u8(OP.remove).i32(1).u8(0).f32(-1));f.step();
+    expect(f.controller.runRequested).toBe(true);expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);
+    f.packet(new BitWriter().u8(OP.map).string('prontera'));f.packet(ownPacket(player,1));f.advance(5200);
+    expect(f.controller.snapshot()).toMatchObject({runRequested:true,running:true,kills:5});
+    expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);
+  });
   it('keeps an opener receipt and target strategy through panel input, then attacks after exact skill motion', () => {
     const f=setup(),automation=policy();
     automation.attackStrategies=[{id:'open',speciesIds:[4000],skillId:11,level:1,behavior:'opener',maxAttempts:1,maxUses:1,cooldownSeconds:1}];
@@ -388,27 +429,27 @@ describe('official game panel input', () => {
     expect(f.controller.snapshot()).toMatchObject({kills:1,looted:1,runRequested:true,running:true});
     expect(f.sent.filter(a=>a.type==='pickup')).toHaveLength(1);expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);
   });
-  it('settles an accepted explicit route leg during panel input without another walk before the grace period ends',()=>{
+  it('settles an accepted explicit route leg and continues immediately despite panel input',()=>{
     const f=setup({width:200,height:200,walkable:p=>p.x!==104||p.y<98});
     f.receive({type:'spawn',entity:{...monster,x:108}});f.controller.start(settings);f.step();
     expect(f.sent).toEqual([{type:'walk',destination:{x:99,y:99}}]);f.controller.manualInput();
     f.packet(new BitWriter().u8(OP.walk).i32(1).position(player).f32(100).f32(100).f32(1).f32(1).u8(2).u8(0x10).u8(0));
-    f.advance(1900);expect(f.controller.engine.player).toMatchObject({x:99,y:99});expect(f.sent).toHaveLength(1);
+    f.advance(900);expect(f.sent).toHaveLength(1);f.advance(1000);expect(f.controller.engine.player).toMatchObject({x:99,y:99});
     f.step(100);expect(f.sent.length).toBeGreaterThan(1);expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);expect(f.controller.engine.running).toBe(true);
   });
-  it('does not replenish the requested finite time budget while repeated panel input suppresses decisions',()=>{
+  it('does not replenish the requested finite time budget during repeated panel input',()=>{
     const f=setup(),automation=policy();automation.limits.minutes=1;f.controller.start({...settings,automation});f.step();
     for(let i=0;i<61;i++){f.controller.manualInput();f.advance(1000);f.packet(new BitWriter().u8(OP.heal).i32(1).i32(0).i32(100).i32(100));}
     expect(f.controller.engine.running).toBe(false);expect(f.controller.runRequested).toBe(true);expect(f.controller.snapshot().reason).toContain('session limit');
-    expect(f.sent.filter(a=>a.type==='attack')).toHaveLength(1);
+    const attacks=f.sent.filter(a=>a.type==='attack').length;f.advance(1000);expect(f.sent.filter(a=>a.type==='attack')).toHaveLength(attacks);
   });
-  it('retains destructive takeover and sent uncertainty for actual official gameplay',()=>{
+  it('keeps a sent skill receipt and field run across actual official gameplay without another spend',()=>{
     const f=setup(),automation=policy();automation.skills=[{skillId:11,level:1,target:'enemy',hpBelowPercent:100,spAbovePercent:0,cooldownSeconds:10}];
     f.receive({type:'spawn',entity:{...player,statuses:[],sp:200,maxSp:200}},
       {type:'inventory',items:[],equipment:[],ammoId:-1},{type:'skills',learned:[{skillId:11,level:1}]});
     f.controller.start({...settings,automation});f.step();f.controller.manualCommand();
-    expect(f.sent.filter(a=>a.type==='stop')).toHaveLength(1);expect(f.controller.engine.running).toBe(false);
-    expect(f.controller.snapshot().reason).toContain('Waiting for a confirmed result');f.advance(2000);
+    expect(f.sent.filter(a=>a.type==='stop')).toHaveLength(0);expect(f.controller.engine.running).toBe(true);
+    expect(f.controller.engine.actionResult.status).toBe('pending');f.advance(2000);
     expect(f.sent.filter(a=>a.type==='skill')).toHaveLength(1);expect(f.controller.runRequested).toBe(true);
   });
 });
@@ -1001,6 +1042,41 @@ describe('macro controller supervision',()=>{
   function fixture(){const f=setup();f.controller.engine.receive([{type:'remove',id:2,dead:false},{type:'inventory',items:[{bagId:501,itemId:501,type:1,count:5}],equipment:Array(10).fill(0),ammoId:-1},
     {type:'stats',level:7,jobLevel:3,hp:100,maxHp:100,sp:100,maxSp:100,zeny:1000,weight:50,maxWeight:1000}]);return f;}
   const macro=(f:ReturnType<typeof fixture>,value=script(),input=settings)=>f.controller.perform('macro',{script:value,settings:input});
+  it('keeps the same macro and run allowances when official gameplay input arrives',()=>{
+    const f=fixture();macro(f);f.controller.engine.kills=5;f.controller.engine.looted=4;
+    const before=f.controller.macro.snapshot();f.controller.manualCommand();f.step();
+    expect(f.controller.snapshot()).toMatchObject({runRequested:true,running:true,kills:5,looted:4,
+      macro:{state:'monitoring',actionsIssued:before.actionsIssued,actionsCompleted:before.actionsCompleted}});
+    expect(f.sent.filter(a=>a.type==='stop')).toEqual([]);
+  });
+  it('keeps the original macro deadline through official input and a same-character field refresh',()=>{
+    const f=fixture(),value={...script(),durationSeconds:5};macro(f,value);
+    f.controller.engine.deaths=1;f.controller.engine.kills=7;f.controller.engine.looted=4;
+    f.advance(1500);f.controller.manualCommand();f.packet(new BitWriter().u8(OP.clear));f.packet(ownPacket({...player},2));
+    for(let i=0;i<20;i++){f.controller.manualInput();f.step(100);}
+    expect(f.controller.snapshot()).toMatchObject({runRequested:true,running:true,deaths:1,kills:7,looted:4,
+      macro:{state:'monitoring',actionsIssued:1,actionsCompleted:1}});
+    f.advance(1500);expect(f.controller.snapshot()).toMatchObject({runRequested:false,running:false,macro:{state:'completed'}});
+    expect(f.controller.snapshot().macro.reason).toBe('Macro duration reached.');
+  });
+  it('does not let a foreign own replacement resume retained macro field intent',()=>{
+    const f=fixture();macro(f);f.controller.manualCommand();f.packet(new BitWriter().u8(OP.clear));
+    f.packet(ownPacket({...player,name:'Other character'},2));
+    expect(f.controller.snapshot()).toMatchObject({runRequested:false,running:false,macro:{state:'failed'}});
+  });
+  it('keeps a physical macro trip through official Stop before replacement movement without replaying a leg',()=>{
+    let now=100_000;const sent:Array<Action|ControllerAction>=[],c=new CompanionController(a=>sent.push(a),()=>now);
+    const own={...player,x:170,y:370},packet=(w:BitWriter)=>c.receive(w.finish());
+    c.connect(true);packet(new BitWriter().u8(OP.enter).i32(1).string('prt_fild08'));packet(ownPacket(own,1));
+    c.perform('macro',{settings,script:script([{type:'travel',map:'prontera',timeoutSeconds:30}])});
+    expect(sent.filter(a=>a.type==='walk')).toHaveLength(1);const trip=c.travel.tripId;c.manualCommand(true);
+    packet(new BitWriter().u8(OP.stop).i32(1));
+    packet(new BitWriter().u8(OP.walk).i32(1).position(own).f32(own.x).f32(own.y).f32(.1).f32(.1).u8(2).u8(0x20).u8(0));
+    for(let i=0;i<10;i++){now+=100;c.tick();}
+    expect(c.travel.tripId).toBe(trip);expect(c.macro.snapshot()).toMatchObject({state:'waiting',actionsIssued:1,actionsCompleted:0});
+    expect(sent.filter(a=>a.type==='stop')).toEqual([]);expect(sent.filter(a=>a.type==='walk').length).toBeGreaterThan(1);
+    c.stop();const count=sent.length;now+=1000;c.tick();expect(sent).toHaveLength(count);expect(c.macro.snapshot().state).toBe('cancelled');
+  });
   it('requires exact request fields, ready idle ownership and compatible map policy',()=>{
     const f=fixture();expect(()=>f.controller.perform('macro',{script:script(),settings,raw:true})).toThrow('exactly');
     const automation=policy();automation.follow={...automation.follow,mode:'partyLeader'};
@@ -1145,9 +1221,10 @@ describe('macro controller supervision',()=>{
     expect(()=>macro(f)).toThrow('previous action receipts');expect(f.controller.macro.snapshot().state).toBe('idle');
     expect(f.sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:501}]);
   });
-  it.each(['map','clear'] as const)('fails active macro on unexpected %s and never restores it on reconnect',kind=>{
+  it.each(['map','clear'] as const)('retains a macro field through official %s, but reconnect retires it',kind=>{
     const f=fixture();macro(f);f.packet(kind==='map'?new BitWriter().u8(OP.map).string('prontera'):new BitWriter().u8(OP.clear));
-    expect(f.controller.macro.snapshot().state).toBe('failed');expect(f.controller.runRequested).toBe(false);expect(f.controller.engine.running).toBe(false);
+    expect(f.controller.macro.snapshot().state).toBe('monitoring');expect(f.controller.runRequested).toBe(true);expect(f.controller.engine.running).toBe(false);
+    f.packet(ownPacket({...player},kind==='map'?1:2));f.step();expect(f.controller.macro.snapshot().actionsCompleted).toBe(1);
     f.controller.connect(true);f.receive({type:'enter',id:1,map:'prt_fild08'},{type:'spawn',entity:{...player}});f.step();expect(f.controller.active).toBe(false);
   });
 

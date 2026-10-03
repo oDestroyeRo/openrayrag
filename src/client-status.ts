@@ -10,7 +10,11 @@ interface StatusContext {
 
 function heldReason(status: Record<string, unknown>): string {
   const refine = record(status.refine), warp = record(status.warp);
-  if (refine.blocked === true && text(refine.reason)) return text(refine.reason);
+  if (refine.blocked === true && text(refine.reason)) {
+    // The controller separates requested field arbitration from an external
+    // official refine hold. Its actual run reason still represents owned holds.
+    return status.runRequested===true&&text(status.reason)?text(status.reason):text(refine.reason);
+  }
   if (warp.blocked === true) {
     const reason = text(warp.reason);
     return reason && !/^Stopped(?: by you)?\.?$/i.test(reason.trim()) ? reason

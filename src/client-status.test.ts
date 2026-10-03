@@ -13,6 +13,14 @@ describe('current owner presentation', () => {
     expect(pending).toEqual(before);
     expect(clientStatus(ready, context)).toEqual({ state: 'READY', reason: ready.reason });
   });
+  it('presents the actual requested-run reason while retaining the idle official refine warning',()=>{
+    const refine={blocked:true,reason:'Official refine resources remain unknown.'};
+    expect(clientStatus({...ready,runRequested:true,running:true,reason:'Attacking Poring.',refine},context))
+      .toEqual({state:'RUNNING',reason:'Attacking Poring.'});
+    expect(clientStatus({...ready,refine},{...context,held:true}))
+      .toEqual({state:'WAITING',reason:refine.reason});
+    expect(clientStatus({...ready,runRequested:true,reason:refine.reason,refine},context).reason).toBe(refine.reason);
+  });
   it('projects an optional held Warp owner and explains a bare Stop without releasing it', () => {
     const stopped = { ...ready, warp: { blocked: true, reason: 'Stopped by you.' } };
     const view = clientStatus(stopped, context);
