@@ -1,0 +1,19 @@
+{
+  "identifier": "ci-smoke",
+  "description": "Offline packaged CI checks only; production configurations exclude this capability.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-close",
+    "allow-ci-smoke-report",
+    "allow-current-form",
+    "allow-save-current-form",
+    "allow-settings-close-ready",
+    "allow-settings-close-cancel",
+    "allow-settings-close-complete",
+    "allow-saved-login",
+    "allow-update-initialized",
+    "allow-update-status"
+  ]
+}

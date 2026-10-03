@@ -2,6 +2,7 @@ use automation::Settings;
 use std::sync::OnceLock;
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 mod automation;
+mod ci_smoke;
 mod control;
 mod current_form;
 mod direct;
@@ -382,11 +383,14 @@ pub fn run() {
         .manage(direct::SharedDirect::default())
         .manage(settings_close::SharedClose::default())
         .setup(|app| {
+            ci_smoke::install(app.handle())?;
             #[cfg(target_os = "macos")]
             settings_close::install_macos_quit(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            #[cfg(feature = "ci-smoke")]
+            ci_smoke::ci_smoke_report,
             settings_close::settings_close_ready,
             settings_close::settings_close_cancel,
             settings_close::settings_close_complete,
@@ -420,6 +424,11 @@ pub fn run() {
             login::cancel_pending_login,
             login::take_pending_login
         ])
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                ci_smoke::page_loaded(webview.app_handle(), webview.label());
+            }
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
@@ -427,6 +436,7 @@ pub fn run() {
                 }
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                ci_smoke::destroyed(window.app_handle(), window.label());
                 if window.label() == "main" {
                     direct::cancel(window.app_handle());
                     if let Some(game) = window.app_handle().get_webview_window("game") {
