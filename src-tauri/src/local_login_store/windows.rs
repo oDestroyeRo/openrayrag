@@ -15,8 +15,9 @@ use windows_sys::{
     Wdk::{
         Foundation::OBJECT_ATTRIBUTES,
         Storage::FileSystem::{
-            NtCreateFile, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
-            FILE_OPEN_IF, FILE_OPEN_REPARSE_POINT, FILE_RENAME_POSIX_SEMANTICS,
+            FileRenameInformationEx, NtCreateFile, NtSetInformationFile, FILE_CREATE,
+            FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
+            FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS,
             FILE_RENAME_REPLACE_IF_EXISTS, FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_THROUGH,
         },
     },
@@ -525,21 +526,37 @@ pub(crate) fn rename_at(directory: &File, from: &str, to: &str) -> io::Result<()
     )?;
     verify_private(&file, false)?;
     let to = child_name(to)?;
-    let size = offset_of!(FILE_RENAME_INFO, FileName) + to.len() * 2;
+    let size = offset_of!(FILE_RENAME_INFORMATION, FileName) + to.len() * 2;
     let mut buffer = vec![0usize; size.div_ceil(size_of::<usize>())];
-    let rename = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    let rename = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
     // SAFETY: aligned variable-length structure with sufficient trailing name.
     unsafe {
         (*rename).Anonymous.Flags = FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS;
         (*rename).RootDirectory = handle(directory);
         (*rename).FileNameLength = (to.len() * 2) as u32;
         std::ptr::copy_nonoverlapping(to.as_ptr(), (*rename).FileName.as_mut_ptr(), to.len());
-        checked(SetFileInformationByHandle(
+        let mut status = IO_STATUS_BLOCK::default();
+        // Use the native rename API with its native structure: RootDirectory
+        // is a retained directory handle, and FileName is one relative basename.
+        // This preserves the same anchoring as NtCreateFile rather than passing
+        // a relative native name through the Win32 path conversion adapter.
+        let result = NtSetInformationFile(
             handle(&file),
-            FileRenameInfoEx,
+            &mut status,
             rename.cast(),
             size as u32,
-        ))?;
+            FileRenameInformationEx,
+        );
+        if result < 0 {
+            #[cfg(test)]
+            eprintln!(
+                "storage stage=native_rename ntstatus={result:#x} os_error={}",
+                RtlNtStatusToDosError(result)
+            );
+            return Err(io::Error::from_raw_os_error(
+                RtlNtStatusToDosError(result) as i32
+            ));
+        }
     }
     // The renamed inode was opened FILE_WRITE_THROUGH. Check and flush the
     // exact replacement before reporting durable save success.
@@ -568,6 +585,60 @@ mod tests {
     use windows_sys::Win32::Security::Authorization::{
         ConvertStringSecurityDescriptorToSecurityDescriptorW, SetSecurityInfo,
     };
+    // Keep numeric native errors in this synthetic test: public commands must
+    // continue returning generic messages without paths or stored payloads.
+    fn stage<T>(name: &str, result: io::Result<T>) -> T {
+        result.unwrap_or_else(|error| {
+            panic!(
+                "storage stage={name} os_error={:?} kind={:?}",
+                error.raw_os_error(),
+                error.kind()
+            )
+        })
+    }
+    #[test]
+    fn native_atomic_transaction_confirms_each_save_stage_and_retains_open_reader() {
+        let root = tempfile::tempdir().unwrap();
+        let store = LocalLoginStore::settings(root.path().canonicalize().unwrap());
+        let directory = stage("open_directory", store.open_directory(true)).unwrap();
+        for bytes in [
+            b"first synthetic value".as_slice(),
+            b"next synthetic value".as_slice(),
+        ] {
+            stage(
+                "destination_check",
+                private_file(&directory, "current.json"),
+            );
+            stage(
+                "temporary_cleanup",
+                remove_private_file(&directory, ".current.tmp"),
+            );
+            let mut temporary = stage(
+                "create_private_file",
+                create_private_file(&directory, ".current.tmp"),
+            );
+            stage("write", temporary.write_all(bytes));
+            stage("file_sync", temporary.sync_all());
+            let previous = stage("previous_reader", private_file(&directory, "current.json"));
+            stage(
+                "rename",
+                rename_at(&directory, ".current.tmp", "current.json"),
+            );
+            stage("transaction_fence", sync_directory(&directory));
+            let file = stage("readback_open", private_file(&directory, "current.json")).unwrap();
+            let mut restored = Vec::new();
+            stage("readback", file.take(MAX_BYTES).read_to_end(&mut restored));
+            assert_eq!(restored, bytes);
+            if let Some(previous) = previous {
+                let mut retained = Vec::new();
+                stage(
+                    "retained_reader",
+                    previous.take(MAX_BYTES).read_to_end(&mut retained),
+                );
+                assert_eq!(retained, b"first synthetic value");
+            }
+        }
+    }
     #[test]
     fn operation_lock_child() {
         let Some(path) = std::env::var_os("RAYRAG_STORAGE_LOCK_TEST_PATH") else {
