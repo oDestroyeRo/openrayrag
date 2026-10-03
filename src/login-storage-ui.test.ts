@@ -107,6 +107,116 @@ async function fixture(saved: { username: string; characterSlot: number; autoLog
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+const closeToken='11111111-1111-4111-8111-111111111111';
+async function requestClose(token=closeToken):Promise<void> {
+  const listener=ipc.listen.mock.calls.find(call=>call[0]==='settings-close-request');
+  expect(listener).toBeDefined();
+  listener![1]({payload:{token}});
+  for(let i=0;i<50;i++)await Promise.resolve();
+}
+it('saves an immediate settings edit before acknowledging native Close, then restores it on reopen',async()=>{
+  const f=await fixture();
+  f.get('radius').value='17';await f.main.emit('input',f.get('radius'));
+  expect(f.calls('save_current_form')).toHaveLength(1);
+  await requestClose();
+  const saved=(f.calls('save_current_form').at(-1)![1] as {document:unknown}).document;
+  expect(saved).toMatchObject({settings:{radius:17}});
+  expect(f.calls('settings_close_complete')).toEqual([['settings_close_complete',{token:closeToken,revision:2}]]);
+  await requestClose();expect(f.calls('settings_close_complete')).toHaveLength(1);
+  const commandOrder=ipc.invoke.mock.calls.map(c=>c[0]);
+  expect(commandOrder.indexOf('settings_close_complete')).toBeGreaterThan(commandOrder.lastIndexOf('save_current_form'));
+  const reopened=await fixture(null,false,saved);
+  expect(reopened.get('radius').value).toBe('17');expect(reopened.calls('control_bot')).toEqual([]);
+});
+
+it('waits for an in-flight save, reflushes a late edit, and deduplicates Close while fencing the updater',async()=>{
+  const f=await fixture();let release:()=>void=()=>{};
+  const writing=new Promise<void>(resolve=>{release=resolve;});let first=true;
+  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
+    if(command==='save_current_form'){if(first){first=false;await writing;}return args!.document.revision;}
+    if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+  });
+  f.get('radius').value='17';await f.main.emit('input',f.get('radius'));await vi.advanceTimersByTimeAsync(300);
+  await requestClose();await requestClose();
+  expect(f.root).toHaveProperty('inert',true);expect(f.get('radius').disabled).toBe(true);
+  expect(f.calls('settings_close_complete')).toEqual([]);
+  // An edit already dispatched at the locking boundary must still be retained.
+  f.get('radius').value='18';await f.main.emit('input',f.get('radius'));
+  await vi.advanceTimersByTimeAsync(15_000);expect(f.calls('update_reserve')).toEqual([]);
+  release();for(let i=0;i<80;i++)await Promise.resolve();
+  expect(f.calls('save_current_form').at(-1)![1]).toMatchObject({document:{settings:{radius:18}}});
+  expect(f.calls('settings_close_complete')).toEqual([['settings_close_complete',{token:closeToken,revision:3}]]);
+  expect(f.root).toHaveProperty('inert',true);
+});
+
+it('registers before startup restoration and keeps its settings, profile and targets through Close/reopen',async()=>{
+  const {DEFAULT_SETTINGS}=await import('./settings');let release:(value:unknown)=>void=()=>{};
+  const saved={version:1,revision:12,selectedProfileId:'profile_one',settings:{...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],radius:17,minHpPercent:60,loot:false,route_randomWalk:2,route_step:7,route_avoidWalls:false,route_randomWalk_maxRouteTime:120,attackRouteMaxPathDistance:25,attackMaxRouteTime:5}};
+  const f=await fixture(null,false,new Promise(resolve=>{release=resolve;}));
+  expect(ipc.invoke.mock.calls.findIndex(c=>c[0]==='settings_close_ready')).toBeLessThan(ipc.invoke.mock.calls.findIndex(c=>c[0]==='current_form'));
+  await requestClose();expect(f.calls('save_current_form')).toEqual([]);expect(f.calls('settings_close_complete')).toEqual([]);
+  release(saved);for(let i=0;i<80;i++)await Promise.resolve();
+  const document=(f.calls('save_current_form').at(-1)![1] as {document:unknown}).document;
+  expect(document).toMatchObject({selectedProfileId:saved.selectedProfileId,settings:saved.settings});
+  expect(f.calls('settings_close_complete')).toHaveLength(1);
+  const reopened=await fixture(null,false,document);
+  for(const [id,value] of Object.entries({'radius':'17','min-hp':'60','random-walk':'2','route-step':'7','route-time':'120','attack-distance':'25','attack-time':'5'}))expect(reopened.get(id).value).toBe(value);
+  expect(reopened.get('loot').checked).toBe(false);expect(reopened.get('avoid-walls').checked).toBe(false);
+  expect(reopened.calls('save_current_form')[0]![1]).toMatchObject({document:{selectedProfileId:saved.selectedProfileId,settings:saved.settings}});
+  expect(reopened.calls('control_bot')).toEqual([]);
+});
+
+it('lets Close wait for updater preflight and stops it before reserving an install lease',async()=>{
+  const f=await fixture();let release:()=>void=()=>{};let first=true;
+  const saving=new Promise<void>(resolve=>{release=resolve;});
+  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
+    if(command==='update_status')return {version:'0.2.27',phase:'waiting',message:'Update ready'};
+    if(command==='save_current_form'){if(first){first=false;await saving;}return args!.document.revision;}
+  });
+  await vi.advanceTimersByTimeAsync(15_000);await requestClose();
+  expect(f.calls('settings_close_complete')).toEqual([]);
+  release();for(let i=0;i<80;i++)await Promise.resolve();
+  expect(f.calls('update_reserve')).toEqual([]);expect(f.calls('update_install')).toEqual([]);
+  expect(f.calls('settings_close_cancel')).toEqual([]);expect(f.calls('settings_close_complete')).toHaveLength(1);
+});
+
+it('retries failed startup restoration on Close after storage recovers while retaining subsequent edits',async()=>{
+  const {DEFAULT_SETTINGS}=await import('./settings');let fail:(reason:unknown)=>void=()=>{};
+  const f=await fixture(null,false,new Promise((_resolve,reject)=>{fail=reject;}));
+  fail(new Error('Synthetic read failure'));for(let i=0;i<40;i++)await Promise.resolve();
+  expect(f.calls('save_current_form')).toEqual([]);
+  f.get('radius').value='18';await f.main.emit('input',f.get('radius'));
+  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
+    if(command==='current_form')return {version:1,revision:12,selectedProfileId:null,settings:{...DEFAULT_SETTINGS,radius:13}};
+    if(command==='save_current_form')return args!.document.revision;
+  });
+  await requestClose();
+  expect(f.get('radius').value).toBe('18');expect(f.calls('current_form')).toHaveLength(2);
+  expect(f.calls('save_current_form').at(-1)![1]).toMatchObject({document:{settings:{radius:18}}});
+  expect(f.calls('settings_close_complete')).toEqual([['settings_close_complete',{token:closeToken,revision:13}]]);
+});
+
+it('cancels Close after an invalid draft or failed save, unlocks editing, and permits a corrected retry',async()=>{
+  const f=await fixture();f.get('radius').value='99';await f.main.emit('input',f.get('radius'));
+  await requestClose();expect(f.calls('save_current_form')).toHaveLength(1);
+  expect(f.calls('settings_close_complete')).toEqual([]);expect(f.calls('settings_close_cancel')).toHaveLength(1);
+  expect(f.root).toHaveProperty('inert',false);expect(f.get('radius').disabled).toBe(false);
+  expect(f.get('update-status').textContent).toContain('Close cancelled');
+  expect(f.get('notice').textContent).toContain('Close cancelled');
+  const publish=ipc.listen.mock.calls.find(call=>call[0]==='game-status')![1];
+  publish({payload:new BotEngine(()=>{}).snapshot()});
+  expect(f.get('notice').textContent).toContain('Close cancelled');
+  f.get('radius').value='18';await f.main.emit('input',f.get('radius'));
+  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
+    if(command==='save_current_form')throw new Error('Synthetic write failure');
+    return args?.document?.revision;
+  });
+  await requestClose();expect(f.calls('settings_close_complete')).toEqual([]);expect(f.calls('settings_close_cancel')).toHaveLength(2);
+  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>command==='save_current_form'?args!.document.revision:undefined);
+  const retryToken='22222222-2222-4222-8222-222222222222';await requestClose(retryToken);
+  expect(f.calls('settings_close_complete')).toEqual([['settings_close_complete',{token:retryToken,revision:2}]]);
+});
+
 describe('native local-login form and metadata', () => {
   it('starts session-only and discloses unencrypted local storage without accessing frontend persistence', async () => {
     const f = await fixture();
