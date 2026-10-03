@@ -26,6 +26,8 @@ import { decodeWorld, validateWorldAction, type WorldAction, type WorldEvent } f
 import { WorldState, type WorldSnapshot } from './world-state';
 import { NpcWorkflow, validateWorkflowSpec, worldActionBlockers, type WorkflowContext, type WorkflowSnapshot, type WorkflowStep, createVendingReceipt, confirmVendingReceipt, type VendingReceipt } from './workflows';
 import { RoutineRuntime, validateRoutineSpec, type RoutineObservation, type RoutineSnapshot, type RoutineSpec } from './routines';
+import { MacroRuntime, validateMacroScript, type MacroIntent, type MacroSnapshot, type MacroStep } from './macros';
+import { planDisposition } from './disposition';
 import { TravelController, type TravelSnapshot } from './travel-controller';
 import { inSchedule, actionConfirmationTimeout } from './automation';
 import { searchGrid, type WalkGrid } from './navigation';
@@ -36,15 +38,15 @@ import { SupplyTripRuntime, validateSupplyResumeGuard, type SupplyContext, type 
 import { nextSupplyAction, type SupplyPhaseEvidence } from './supply-plan';
 import { createSupplyReceipt, observeSupplyReceipt, confirmSupplyReceipt, type SupplyReceipt } from './supply-receipt';
 import { dispositionStockFloors, publishedDispositionMetadata } from './disposition-ui';
-import { serviceByContractId,resolveServiceNpc } from './npc-services';
-import type { WorkflowReceipt } from './workflows';
+import { BUILTIN_SERVICES, serviceByContractId,resolveServiceNpc, type NpcServiceDefinition } from './npc-services';
+import { confirmWorkflowReceipt, type WorkflowReceipt } from './workflows';
 import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type EscapeSnapshot, type EscapeResumeGuard } from './escape';
 
 
 export type ControllerAction = ExpandedAction | WorldAction;
 export interface CompanionSnapshot extends Snapshot {
   runRequested: boolean; state: 'running' | 'waiting' | 'idle';
-  world: WorldSnapshot; workflow: WorkflowSnapshot; routine: RoutineSnapshot; travel: TravelSnapshot; service: ServiceSnapshot;
+  world: WorldSnapshot; workflow: WorkflowSnapshot; routine: RoutineSnapshot; macro: MacroSnapshot; travel: TravelSnapshot; service: ServiceSnapshot;
   partyFollow:PartyFollowSnapshot; escape: EscapeSnapshot; supply: SupplySnapshot; supplyGuard?: SupplyResumeGuard; deathRecoveryGuard?: DeathRecoveryGuard;
   social: SocialSnapshot;
   memo: MemoSnapshot;
@@ -65,7 +67,14 @@ interface Pending {
   engineSequence?: number; workflow?: boolean; sent?: boolean;
   generation: number; worldGeneration: number; map: string; npcId: number | null;
   receipt?: VendingReceipt; serviceReceipt?: ServiceReceipt;
+  macro?: { id: number; generation: number };
+  workflowReceipt?: WorkflowReceipt; workflowAcknowledged?: boolean;
   cart?: { source: InventoryItem; inventory: number; cart: number; acknowledged: boolean };
+}
+interface MacroOwner {
+  intent: MacroIntent; phase: 'settling' | 'farm' | 'travel' | 'service' | 'workflow' | 'closing' | 'closeReceipt' | 'action';
+  stopped: boolean; travelTripId?: number; service?: NpcServiceDefinition; serviceFee?: number;
+  target?: ActionIdentity;
 }
 
 /** One owner for field automation, trips, NPC workflows and explicit manual actions. */
@@ -76,6 +85,10 @@ export class CompanionController {
   readonly world = new WorldState();
   readonly workflow: NpcWorkflow;
   readonly routine: RoutineRuntime<ControllerAction>;
+  readonly macro: MacroRuntime;
+  private macroBase: Settings | null = null;
+  private macroOwner: MacroOwner | null = null;
+  private macroPredicates: ActorPredicate[] = [];
   readonly travel: TravelController;
   readonly escape: EmergencyEscape;
   readonly service: NpcServiceRuntime;
@@ -131,7 +144,7 @@ export class CompanionController {
   private runKills = 0;
   private runPickups = 0;
   private characterName: string | null = null;
-  private featureReceipt: { sequence:number; identity:ActionIdentity|null; action: ExpandedAction; count: number; stats: number; skills: number; attributes: number[] | null; level: number } | null = null;
+  private featureReceipt: { sequence:number; identity:ActionIdentity|null; action: ExpandedAction; count: number; stats: number; skills: number; attributes: number[] | null; level: number; macroOwned?:boolean } | null = null;
   private unresolvedWorld: Pending | null = null;
   private workflowOutstanding: Pending | null = null;
 
@@ -153,6 +166,7 @@ export class CompanionController {
     this.engine.setPartySupport(()=>this.partyHealTick(),()=>this.partyHeal.busy);
     this.workflow = new NpcWorkflow(now);
     this.routine = new RoutineRuntime(validControllerAction, now, { actionTimeoutSeconds: actionConfirmationTimeout({ type: 'skill' }) / 1000 });
+    this.macro = new MacroRuntime(now);
     this.travel = new TravelController(action=>this.send(action), now, gridFor, { context: () => {
       const identity = this.engine.actorActionIdentity();
       return { identity: identity ? JSON.stringify([this.connectionEpoch, this.world.generation, identity]) : null,
@@ -214,10 +228,11 @@ export class CompanionController {
   get connectionGeneration(): number { return this.connectionEpoch; }
   private get executing(): boolean {
     return this.warp.busy || this.refine.blocked || this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || this.engine.manualTargetActive || this.partyFollow.ownsTravel || this.returning || this.service.active || this.travel.active || this.escape.inFlight || this.workflow.snapshot().running || !!this.pending
-      || ['running','waiting'].includes(this.routine.snapshot().state);
+      || this.macro.active || ['running','waiting'].includes(this.routine.snapshot().state);
   }
   get active(): boolean { return this.runRequested || this.executing; }
   connect(compatible: boolean): void {
+    this.endMacro('Macro interrupted by reconnect.',true);
     this.partyHeal.cancel('The game transport changed.');
     this.ownArrival=null;this.readyOwn=null;this.enteredConnection=false;
     this.socketInitialization=null;
@@ -234,6 +249,7 @@ export class CompanionController {
     this.waitingReason = this.engine.reason; this.retryAt = 0;
   }
   disconnect(): void {
+    this.endMacro('Macro interrupted by disconnect.',true);
     this.ownArrival=null;this.readyOwn=null;
     this.socketInitialization=null;
     this.warp.connectionChanged(false);
@@ -248,10 +264,10 @@ export class CompanionController {
     try { this.pause('Waiting for the game to reconnect.'); }
     finally { this.travel.connectionChanged();this.partyFollow.resetEvidence('Disconnected. Stop and Start for a new party follow attempt.');this.world.reset(); this.engine.disconnect(); this.waitingReason = 'Waiting for the game to reconnect.'; }
   }
-  fail(reason: string): void { try { this.pause(reason); } finally { this.engine.fail(reason); } }
+  fail(reason: string): void { this.endMacro(reason,true); try { this.pause(reason); } finally { this.engine.fail(reason); } }
   /** Every uncertain sent world request keeps its receipt until it is drained. */
   private retireWorld(pending: Pending | null = this.pending): void {
-    const owner = pending && pending.engineSequence === undefined && (!pending.workflow || pending.sent)
+    const owner = pending?.macro&&pending.workflow ? this.workflowOutstanding : pending && pending.engineSequence === undefined && (!pending.workflow || pending.sent)
       ? pending : this.workflowOutstanding;
     if (!owner) return;
     this.unresolvedWorld = { ...owner };
@@ -285,6 +301,7 @@ export class CompanionController {
 
   }
   stop(reason = 'Stopped by you.'): void {
+    this.endMacro(reason);
     this.engine.castAvailability.stop(reason);
     this.supply.stop(reason);this.supplyIntent=null;
     this.partyHeal.cancel(reason);
@@ -320,6 +337,7 @@ export class CompanionController {
     }
   }
   manualCommand():void {
+    this.endMacro('Macro interrupted by an official game action.');
     this.engine.castAvailability.cancel('Official game input stopped automatic cast recovery.');
     this.quietUntil=Math.max(this.quietUntil,this.now()+2_000);
     this.manualInput();
@@ -374,7 +392,8 @@ export class CompanionController {
       this.featureReceipt = { sequence:result.sequence,identity:this.engine.pendingActionIdentity,action, count: action.type === 'useItem' ? this.engine.character.count(action.itemId) : 0,
         stats: this.engine.character.statsRevision, skills: this.engine.character.skillsRevision,
         attributes: this.engine.character.stats?.attributes?.slice() ?? null,
-        level: action.type === 'allocateSkill' ? this.engine.character.learned.get(action.skillId) ?? 0 : 0 };
+        level: action.type === 'allocateSkill' ? this.engine.character.learned.get(action.skillId) ?? 0 : 0,
+        ...(this.macro.active||this.macroBase?{macroOwned:true}:{}) };
     }
     const key = `${result.sequence}:${result.status}`;
     if (key === this.seenActionKey) return;
@@ -390,7 +409,7 @@ export class CompanionController {
   }
   private reconcileFeature(events: ReturnType<typeof decode>): void {
     const receipt = this.featureReceipt;
-    if (!this.blockedReason || !receipt || !sameActionIdentity(receipt.identity,this.engine.actionIdentity(receipt.action))) return;
+    if ((!this.blockedReason&&!receipt?.macroOwned) || !receipt || !sameActionIdentity(receipt.identity,this.engine.actionIdentity(receipt.action))) return;
     const action = receipt.action; const state = this.engine.character;
     const execution=action.type==='skill'?events.find(event=>matchesSkillExecution(action,event,this.engine.player?.id??null)):undefined;
     const confirmed = action.type === 'useItem' ? state.inventoryKnown && state.count(action.itemId) < receipt.count
@@ -400,7 +419,7 @@ export class CompanionController {
       : action.type === 'skill' && execution!==undefined;
     if (!confirmed) return;
     if(execution?.type==='skillResult')this.engine.settleConfirmedSkill(execution);
-    const policy = automationSettings(this.requestedSettings!);
+    const policy = automationSettings(this.requestedSettings??this.engine.settings);
     const seconds = action.type === 'useItem' ? policy.items.find(rule => rule.itemId === action.itemId)?.cooldownSeconds ?? 1
       : action.type === 'skill' ? policy.skills.find(rule => rule.skillId === action.skillId)?.cooldownSeconds ?? 1 : 0;
     this.blockedReason = ''; this.featureReceipt = null; this.retryAt = this.now() + seconds * 1000;
@@ -416,7 +435,7 @@ export class CompanionController {
     const e=this.engine;
     const stationary=this.movementSettled();
     return !this.refine.maintenanceBlocked&&stationary&&e.connected&&e.compatible&&!!e.actorActionIdentity(undefined,true)
-      &&!this.runRequested&&!this.returning&&!this.pending&&!this.featureReceipt&&!this.workflowOutstanding&&!this.unresolvedWorld
+      &&!this.macro.active&&!this.runRequested&&!this.returning&&!this.pending&&!this.featureReceipt&&!this.workflowOutstanding&&!this.unresolvedWorld
       &&!this.travel.active&&!this.service.active&&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)
       &&!this.supply.ownsField&&!this.supply.uncertain&&!this.escape.busy&&this.warp.settledForMaintenance()&&!this.memo.blocked&&!this.socket.busy&&!this.social.busy
       &&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture&&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil
@@ -442,6 +461,12 @@ export class CompanionController {
       throw new Error('Stop the current automation or manual action before requesting a new run.');
     if(!this.travel.movementSettled(this.engine.map,this.engine.player))throw new Error('Waiting for canceled rendezvous movement to settle before Start.');
     if(this.partyHeal.busy)throw new Error('Waiting for the previous party Heal execution receipt.');
+    this.beginRun(settings, escapeGuard, supplyGuard, recoveryGuard);
+    this.tick();
+  }
+  /** Explicit run initialization happens once; stage projections only resume it. */
+  private beginRun(settings: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard): void {
+    const context=this.supplyContext();
     this.partyHeal.newRun();
     this.supply.configure(settings,context,supplyGuard);
     this.engine.acknowledgeLoadoutOverride();
@@ -459,7 +484,6 @@ export class CompanionController {
     this.partyFollow.start(settings,this.partyFollowContext());
     if (escapeGuard) this.escape.restoreOnReconnect(settings, escapeGuard, this.escapeContext());
     this.engine.castAvailability.allowRun();
-    this.tick();
   }
 
   context(): WorkflowContext {
@@ -569,7 +593,22 @@ export class CompanionController {
       cost:readiness.state==='ready'?readiness.profile.spCost:null,resourcesReady:c.inventoryKnown&&c.equipment.length===10&&c.spRevision>0,
       groundAllowed:target=>castSettled&&readiness.state==='ready'&&this.engine.manualWarpGroundAllowed(target,readiness.profile.range,policy)};
   }
-  perform(mode: 'command' | 'workflow' | 'routine' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance' | 'warp' | 'warpPreview' | 'warpCancel', input: unknown): void {
+  perform(mode: 'command' | 'workflow' | 'routine' | 'macro' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance' | 'warp' | 'warpPreview' | 'warpCancel', input: unknown): void {
+    if(mode==='macro') {
+      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==2
+        ||!Object.hasOwn(input,'script')||!Object.hasOwn(input,'settings'))throw new Error('Macro request requires exactly script and settings.');
+      const request=input as {script:unknown;settings:Settings};
+      const script=validateMacroScript(request.script),settings=validateSettings(request.settings);
+      this.requireIdle();
+      if(this.engine.player!.dead||this.engine.player!.hp<=0||!this.engine.actorActionIdentity())throw new Error('A current living own actor is required for a macro.');
+      if(this.featureReceipt||this.workflowOutstanding||this.blockedReason||this.partyHeal.awaitingSpReadback)throw new Error('Wait for all previous action receipts before a macro.');
+      if(this.world.npc.id!==null||this.world.npc.mode!=='idle'||this.world.vending)throw new Error('Finish the current NPC interaction before a macro.');
+      if(automationSettings(settings).follow.mode==='partyLeader')throw new Error('Party leader follow cannot own a macro map.');
+      for(const rule of script.rules)for(const step of rule.steps)if(step.type==='farm')this.macroFieldSettings(step,settings);
+      this.beginRun(settings);this.macroBase=structuredClone(settings);
+      this.macroPredicates=script.rules.flatMap(rule=>rule.conditions.filter((condition):condition is ActorPredicate=>condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent'));
+      this.macro.start(script);this.tick();return;
+    }
     if(mode==='refinePreview'||mode==='refine') { const context=this.refineContext();this.refine.tick(context);this.requireIdle();
       if(mode==='refinePreview')this.refine.preview(input,context);else this.refine.dispatch(input,context);return; }
     if(mode==='refineAdvance') { const token=validateRefineAdvance(input);this.requireIdle();const context=this.refineContext();
@@ -615,7 +654,7 @@ export class CompanionController {
       if(!this.travel.movementSettled(this.engine.map,this.engine.player))throw new Error('Wait for canceled rendezvous movement to settle.');
       if(this.partyHeal.busy)throw new Error('Waiting for the previous party Heal execution receipt before running a service.');
       if(!this.engine.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
-      if (this.warp.blocked || this.refine.blocked || this.partyFollow.ownsTravel || this.socket.busy || this.memo.blocked || this.social.busy || this.engine.retreatOwned || this.engine.manualTargetOwned || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
+      if (this.macro.active || this.warp.blocked || this.refine.blocked || this.partyFollow.ownsTravel || this.socket.busy || this.memo.blocked || this.social.busy || this.engine.retreatOwned || this.engine.manualTargetOwned || this.service.active || this.escape.busy || this.travel.active || this.pending || this.workflow.snapshot().running
         || ['running','waiting'].includes(this.routine.snapshot().state) || this.unresolvedWorld || this.now() < this.fencedUntil
         || this.engine.pendingFeatureAction || this.featureReceipt || this.supply.uncertain)
         throw new Error('Wait for the current transaction or unresolved escape/action before running a service.');
@@ -649,7 +688,7 @@ export class CompanionController {
     return target===0?identity:identity??this.engine.actorActionIdentity();
   }
   private worldOwnerCurrent(owner:Pending):boolean {return !owner.actorIdentity||sameActionIdentity(owner.actorIdentity,this.engine.actorActionIdentity(owner.actorIdentity.targetId));}
-  private dispatch(input: ControllerAction, routineId: number | null, refineAdvance=false): void {
+  private dispatch(input: ControllerAction, routineId: number | null, refineAdvance=false, macro?: Pending['macro']): void {
     if(this.partyFollow.ownsTravel)throw new Error('Party rendezvous owns commands. Stop it before a manual action.');
     if(!this.travel.movementSettled(this.engine.map,this.engine.player))throw new Error('Wait for canceled rendezvous movement to settle.');
     if(!this.engine.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
@@ -658,8 +697,11 @@ export class CompanionController {
     const binding = { generation: this.generation, worldGeneration: this.world.generation,
       map: this.engine.map, npcId: this.world.npc.id };
     if (expanded(input)) {
-      this.engine.manualAction(input);
-      this.pending = { action: input, since: this.now(), routineId, ...binding, engineSequence: this.engine.actionResult.sequence };
+      this.engine.manualAction(input, macro ? (sequence,actorIdentity)=>{
+        this.pending = { action: input, actorIdentity, since: this.now(), routineId, ...binding, engineSequence: sequence, macro };
+        this.captureActionFailure();
+      } : undefined);
+      if(!macro)this.pending = { action: input, since: this.now(), routineId, ...binding, engineSequence: this.engine.actionResult.sequence };
       return;
     }
     const action = validateWorldAction(input); const context = this.context();
@@ -705,6 +747,10 @@ export class CompanionController {
     if (success) this.workflowDeadline = 0;
     if (!success && pending?.workflow) this.workflow.cancel(reason);
     if (pending?.routineId !== null && pending?.routineId !== undefined) this.routine.acknowledge(success, pending.routineId);
+    if(pending?.macro){
+      if(success&&pending.workflow&&this.macroOwner?.phase==='workflow'&&this.macroOwner.intent.id===pending.macro.id)this.macroOwner.phase='closing';
+      else this.acknowledgeMacro(pending.macro,success,reason);
+    }
     this.engine.reason = reason; this.engine.note(reason);
   }
   receive(data: Uint8Array, connectionGeneration = this.connectionEpoch): void {
@@ -728,7 +774,7 @@ export class CompanionController {
     }
     this.lastFrame = this.now();
     for (const event of events) {
-      if (event.type === 'enter') { this.clearRefineContext(); this.resetMemoMovement(); this.memo.invalidate('Memo character changed. Wait for full state.'); this.memoIdentity=null; this.social.reset('Social character changed.'); this.pause('Preparing the reconnected character.'); this.world.reset(event.map); }
+      if (event.type === 'enter') { this.endMacro('Macro character or connection changed.',true); this.clearRefineContext(); this.resetMemoMovement(); this.memo.invalidate('Memo character changed. Wait for full state.'); this.memoIdentity=null; this.social.reset('Social character changed.'); this.pause('Preparing the reconnected character.'); this.world.reset(event.map); }
       else if (event.type === 'map' || event.type === 'clear') {
         this.clearRefineContext();this.refine.cancel('World changed during refining.');
         this.resetMemoMovement();
@@ -809,7 +855,9 @@ export class CompanionController {
     }
     this.socialIdentity=socialActor&&socialPlayer?{actor:socialActor,name:socialPlayer.name}:null;
     for (const event of events) if (event.type === 'chat' || event.type === 'emote') this.social.observe(event, this.socialContext());
+    const escapeRefreshOwned=this.escape.sent&&['sent','refreshing'].includes(this.escape.snapshot().state);
     const escaped = this.escape.observe(events, this.escapeContext());
+    const escapeRefresh=escapeRefreshOwned&&this.escape.snapshot().state==='refreshing';
     if (escaped && this.runRequested && automationSettings(this.requestedSettings!).travel.returnToLockMap
       && this.engine.map !== this.requestedSettings!.map) {
       this.returning = true;
@@ -838,6 +886,14 @@ export class CompanionController {
     if(this.supplyReceipt)observeSupplyReceipt(this.supplyReceipt,worldEvents,this.supplyContext());
     this.supply.observe(this.supplyContext());
     this.service.observe(events, worldEvents, this.serviceContext());
+    if(this.macro.active&&events.some(event=>event.type==='map'||event.type==='clear')){
+      const expected=!!this.macroOwner?.travelTripId&&transitions.some(transition=>transition.trip===this.macroOwner!.travelTripId&&transition.phase==='map')
+        ||this.supply.ownsField&&transitions.some(transition=>transition.trip===this.travel.tripId&&transition.phase==='map')
+        ||escaped||escapeRefresh
+        ||!!cycle&&cycle.guard.phase==='revival'&&cycle.guard.uncertain
+        ||!!cycle&&transitions.some(transition=>transition.trip===this.travel.tripId&&transition.phase==='map');
+      if(!expected)this.endMacro('Unexpected world transition interrupted the macro.',true);
+    }
     if(this.supply.ownsField&&events.some(event=>event.type==='map'||event.type==='clear')&&!this.service.active&&!this.travel.active){
       this.supplyStorageFull=null;this.supply.interrupt('Unexpected world transition interrupted the supply trip.');
     }
@@ -849,6 +905,13 @@ export class CompanionController {
       if (owner.serviceReceipt) {
         observeServiceReceipt(owner.serviceReceipt,events,worldEvents,this.serviceContext());
         if (confirmServiceReceipt(owner.serviceReceipt,this.serviceContext())) this.unresolvedWorld = null;
+      } else if(owner.macro&&owner.workflowReceipt) {
+        owner.workflowAcknowledged ||= this.worldOwnerCurrent(owner)&&worldEvents.some(event=>owner.action.type==='storage'&&owner.action.operation!=='close'
+          ? event.type==='storageMoved'&&event.deposit===(owner.action.operation==='deposit')&&event.change===owner.action.count
+            &&owner.workflowReceipt!.itemChanges.has(event.item.itemId)
+          : event.type==='npcEnd'||['npcDialog','npcOptions','shopOpened','storageOpened','barterOpened'].includes(event.type)&&this.world.npc.id===owner.npcId);
+        if(owner.workflowAcknowledged&&owner.map===this.engine.map&&owner.worldGeneration===this.world.generation&&this.worldOwnerCurrent(owner)
+          &&confirmWorkflowReceipt(owner.workflowReceipt,this.context()))this.unresolvedWorld=null;
       } else if (owner.map !== this.engine.map || owner.worldGeneration !== this.world.generation
         || this.worldOwnerCurrent(owner) && (worldEvents.some(event => event.type === 'npcEnd')
           || (owner.receipt ? confirmVendingReceipt(owner.receipt, this.context())
@@ -1051,11 +1114,15 @@ export class CompanionController {
     const p = this.engine.player; const c = this.engine.character;
     const inventory: Record<number, number> = {};
     if (c.inventoryKnown) {
+      for(const itemId of this.macro.inventoryItemIds())inventory[itemId]=c.count(itemId);
       for (const rule of this.routineSpec?.rules ?? []) for (const condition of rule.conditions)
         if (condition.field === 'inventory') inventory[condition.itemId] = c.count(condition.itemId);
     }
     const predicates=(this.routineSpec?.rules??[]).flatMap(rule=>rule.conditions.filter((condition):condition is ActorPredicate=>condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent'));
-    return { actors:this.engine.actorObservation(predicates), map: this.engine.map, ...(p?.maxHp ? { hpPercent: p.hp / p.maxHp * 100 } : {}),
+    return { actors:this.engine.actorObservation([...predicates,...this.macroPredicates]), map: this.engine.map, ...(p?.maxHp ? { hpPercent: p.hp / p.maxHp * 100 } : {}),
+      ...(p?{level:p.level}:c.stats?.level!==undefined?{level:c.stats.level}:{}),
+      ...(c.stats?.jobLevel!==undefined?{jobLevel:c.stats.jobLevel}:{}),
+      ...(c.stats?.weight!==undefined&&c.stats.maxWeight?{weightPercent:c.stats.weight/c.stats.maxWeight*100}:{}),
       ...(c.stats?.maxSp ? { spPercent: (c.stats.sp ?? 0) / c.stats.maxSp * 100 } : {}),
       ...(c.stats?.zeny !== undefined ? { zeny: c.stats.zeny } : {}), ...(c.inventoryKnown ? { inventory } : {}) };
   }
@@ -1256,7 +1323,156 @@ export class CompanionController {
     this.waitingReason=this.engine.reason=this.partyFollow.snapshot().reason;
     return true;
   }
+  private macroFieldSettings(step: Extract<MacroStep,{type:'farm'}>, base=this.macroBase!): Settings {
+    const policy=mapPolicy(base);
+    if(!mapAllowed(policy,step.map)||policy.lockArea&&policy.lockArea.map!==step.map)throw new Error('Macro field conflicts with the configured map policy or lock area.');
+    const projected=structuredClone(base),automation=structuredClone(automationSettings(base));
+    projected.map=step.map;projected.targets=[...step.targets];
+    automation.travel={...automation.travel,destinationMap:step.map,waypoints:[],loop:false};
+    projected.automation=automation;return validateSettings(projected);
+  }
+  private endMacro(reason:string, failed=false):void {
+    if(!this.macro.active&&!this.macroBase)return;
+    if(failed)this.macro.fail(reason);
+    if(this.macro.active)this.macro.cancel(reason);
+    this.macroOwner=null;this.macroBase=null;this.macroPredicates=[];
+    this.supply.stop(reason);this.supplyIntent=null;this.supplyStorageFull=null;
+    this.escape.cancel(reason);this.partyHeal.cancel(reason);
+    this.requestedSettings=null;this.returnSettings=null;this.returning=false;
+    this.captureActionFailure();this.retireWorld();this.pending=null;
+    this.service.cancel(reason);this.workflow.cancel(reason);this.travel.cancel(reason);this.travelSettings=null;
+    this.engine.stop(reason);this.captureActionFailure();this.waitingReason=reason;
+  }
+  private pollMacro():void {
+    if(!this.macro.active)return;
+    if(this.characterName&&this.engine.player&&this.engine.player.name!==this.characterName){this.endMacro('Macro character changed.',true);return;}
+    const intent=this.macro.tick(this.observation());
+    if(!this.macro.active){this.endMacro(this.macro.snapshot().reason);return;}
+    if(intent&&!this.macroOwner){
+      // The step identity owns every child before it can write to the transport.
+      this.macroOwner={intent,phase:'settling',stopped:false,
+        ...(intent.step.type==='skill'&&intent.step.mode==='target'?{target:this.engine.macroTargetIdentity()??undefined}:{})};
+      this.waitingReason=this.engine.reason=`Macro ${this.macro.snapshot().currentRule}: preparing ${intent.step.type}.`;
+      this.engine.note(this.waitingReason);
+    }
+  }
+  private acknowledgeMacro(binding:NonNullable<Pending['macro']>,success:boolean,reason:string):void {
+    const owner=this.macroOwner;
+    if(!owner||owner.intent.id!==binding.id||owner.intent.generation!==binding.generation
+      ||this.macro.currentIntent?.generation!==binding.generation)return;
+    this.macro.acknowledge(binding.id,success,reason);this.macroOwner=null;
+    this.waitingReason=this.engine.reason=reason;this.engine.note(reason);
+    if(!this.macro.active){this.endMacro(this.macro.snapshot().reason);return;}
+    const field=this.macro.fieldIntent;
+    if(field&&!this.macro.snapshot().fieldSuspended){this.requestedSettings=this.macroFieldSettings(field);this.retryAt=0;}
+  }
+  private macroTransaction(owner:MacroOwner):void {
+    const step=owner.intent.step;
+    if(step.type!=='buy'&&step.type!=='store')throw new Error('Invalid macro service transaction.');
+    const context=this.context(),service=owner.service!,resolved=resolveServiceNpc(service,context.map,[...this.engine.actors.values()]);
+    if(resolved.state!=='resolved'||resolved.actor.id!==this.world.npc.id)throw new Error('Macro service NPC identity changed before the transaction.');
+    const budget=step.maxSpend-(owner.serviceFee??0),floors=dispositionStockFloors(automationSettings(this.macroBase!));
+    let steps:WorkflowStep[];
+    if(step.type==='buy')steps=[{type:'buy',rows:[{id:step.itemId,count:step.quantity}]}];
+    else {
+      const count=this.engine.character.count(step.itemId),keep=Math.max(step.keep,count-step.quantity,...floors.filter(row=>row.itemId===step.itemId).map(row=>row.count),
+        ...(automationSettings(this.macroBase!).disposition?.rules??[]).filter(row=>row.itemId===step.itemId).map(row=>row.keep));
+      if(keep>32767)throw new Error('Macro storage keep quantity exceeds the supported stock contract.');
+      const disposition=this.supplyContext().disposition;
+      const plan=planDisposition({maxSpend:budget,rules:[{itemId:step.itemId,keep,minimum:keep,desired:keep,maximum:keep,store:true,sell:false,cart:false,restock:'off',allowUnique:false}]},disposition);
+      if(plan.blocked.length||plan.unmet.length||!plan.actions.length)throw new Error(plan.blocked.join(' ')||plan.unmet.flatMap(row=>row.reasons).join(' ')||'No safely storable excess inventory.');
+      steps=plan.actions.map(action=>{const resource=this.resourceStep(action.command);if(!resource)throw new Error('Unsupported macro storage action.');return resource;});
+    }
+    const result=this.workflow.start({name:'Macro transaction',map:context.map,npcId:this.world.npc.id!,maxSpend:budget,
+      minStock:floors,steps,timeoutMs:Math.min(60_000,step.timeoutSeconds*1000)},context);
+    if(!result.ok)throw new Error(result.reasons.join(' '));
+    owner.phase='workflow';this.workflowTimeout=Math.min(60_000,step.timeoutSeconds*1000);this.workflowOutstanding=null;this.workflowDeadline=0;
+    this.pending={action:step.type==='buy'?{type:'shop',mode:'buy',rows:[{id:step.itemId,count:step.quantity}]}:{type:'storage',operation:'close'},
+      since:this.now(),routineId:null,generation:this.generation,worldGeneration:this.world.generation,map:this.engine.map,npcId:this.world.npc.id,
+      workflow:true,sent:false,macro:{id:owner.intent.id,generation:owner.intent.generation}};
+  }
+  private macroStockFloor(itemId:number):number {
+    const policy=automationSettings(this.macroBase!);
+    return Math.max(0,...dispositionStockFloors(policy).filter(row=>row.itemId===itemId).map(row=>row.count),
+      ...(policy.disposition?.rules??[]).filter(row=>row.itemId===itemId).map(row=>row.keep));
+  }
+  /** Macro selection yields decisions while existing receipts and movement drain. */
+  private macroTick():boolean {
+    const owner=this.macroOwner;
+    if(!this.macro.active||!owner)return false;
+    const step=owner.intent.step,binding={id:owner.intent.id,generation:owner.intent.generation};
+    try {
+      if(owner.phase==='settling') {
+        this.engine.tick(false);this.captureActionFailure();this.syncWorkflowOwner();
+        if(this.pending||this.featureReceipt||this.workflowOutstanding||this.unresolvedWorld||this.supply.ownsField||this.supply.uncertain
+          ||!this.engine.macroHandoffSettled()||!this.movementSettled()||this.now()<this.fencedUntil)return true;
+        if(!owner.stopped){owner.stopped=true;this.engine.stop('Preparing the selected macro step.');this.captureActionFailure();}
+        if(!this.engine.idleForActions())return true;
+        if(step.type==='farm') {
+          this.requestedSettings=this.macroFieldSettings(step);this.returnSettings=automationSettings(this.requestedSettings).travel.returnToLockMap?structuredClone(this.requestedSettings):null;
+          this.retryAt=0;owner.phase='farm';
+        } else if(step.type==='travel') {
+          const p=this.engine.player!;this.travel.start(this.engine.map,p,step.map,this.macroBase!.route_step,this.macroBase!.route_avoidWalls,mapPolicy(this.macroBase!));
+          owner.phase='travel';owner.travelTripId=this.travel.tripId;this.travelSettings=this.macroBase;
+        } else if(step.type==='buy'||step.type==='store') {
+          const definition=BUILTIN_SERVICES.find(service=>service.id===step.serviceId);
+          if(!definition||(step.type==='buy'?(definition.outcome.type!=='shopOpened'||definition.outcome.mode!=='buy'):definition.outcome.type!=='storageOpened'))throw new Error('Macro requires a catalog service with the corresponding opening outcome.');
+          const fee=definition.workflow.steps.reduce((total,row)=>total+('expectedCost' in row?row.expectedCost??0:0),0);
+          if(fee>step.maxSpend)throw new Error('Service fee exceeds the macro visit cap.');
+          owner.service=definition;owner.serviceFee=fee;owner.phase='service';
+          this.service.start({...definition,workflow:{...definition.workflow,maxSpend:Math.min(definition.workflow.maxSpend,step.maxSpend)}},this.serviceContext(),mapPolicy(this.macroBase!));
+        } else {
+          if(step.type==='useItem'&&this.engine.character.count(step.itemId)<=this.macroStockFloor(step.itemId))
+            throw new Error(`Macro item ${step.itemId} is unavailable above the configured stock reserve.`);
+          owner.phase='action';
+          const action:ExpandedAction=step.type==='useItem'?{type:'useItem',itemId:step.itemId}:step.mode==='self'?{type:'skill',mode:'self',skillId:step.skillId,level:step.level}:
+            (()=>{if(!owner.target||owner.target.targetId===undefined||!sameActionIdentity(owner.target,this.engine.macroTargetIdentity()))throw new Error('The macro combat target is no longer eligible in its observed lifetime.');return {type:'skill',mode:'target',skillId:step.skillId,level:step.level,target:owner.target.targetId} as const;})();
+          this.dispatch(action,null,false,binding);return true;
+        }
+      }
+      if(owner.phase==='farm') {
+        if(owner.travelTripId&&owner.travelTripId!==this.travel.tripId)throw new Error('The macro field trip was replaced by another travel owner.');
+        if(owner.travelTripId&&['failed','cancelled'].includes(this.travel.snapshot().state))throw new Error(this.travel.snapshot().reason);
+        this.resumeRun();
+        if(this.travel.active){owner.travelTripId=this.travel.tripId;return false;}
+        if(step.type==='farm'&&this.engine.running&&this.engine.map===step.map&&this.engine.player&&!this.engine.player.dead&&this.engine.actorActionIdentity())this.acknowledgeMacro(binding,true,'Macro field activated.');
+        return true;
+      }
+      if(owner.phase==='travel') {
+        const state=this.travel.snapshot();
+        if(owner.travelTripId!==this.travel.tripId||step.type!=='travel'||state.destination!==step.map)
+          throw new Error('The macro destination trip was replaced by another travel owner.');
+        if(state.state==='complete'&&this.engine.player&&!this.engine.player.dead&&this.engine.map===step.map&&this.engine.actorActionIdentity()){
+          this.travelSettings=null;this.acknowledgeMacro(binding,true,'Macro destination verified.');return true;
+        }
+        if(['failed','cancelled'].includes(state.state))throw new Error(state.reason);
+        return false;
+      }
+      if(owner.phase==='service') {
+        const state=this.service.snapshot();
+        if(state.state==='complete'){owner.serviceFee=state.spent;this.macroTransaction(owner);return false;}
+        if(['failed','cancelled'].includes(state.state))throw new Error(state.reason);
+        owner.travelTripId=this.travel.active?this.travel.tripId:owner.travelTripId;return false;
+      }
+      if(owner.phase==='closing') {
+        if(this.world.npc.id===null&&this.world.npc.mode==='idle'){this.acknowledgeMacro(binding,true,'Macro transaction and NPC close confirmed.');return true;}
+        const context=this.context(),storage=step.type==='store';
+        if(storage?this.world.npc.mode!=='storage':this.world.npc.mode!=='shop'||this.world.shop?.mode!=='buy')throw new Error('Macro NPC changed before close.');
+        const result=this.workflow.start({name:'Close macro transaction',map:context.map,npcId:this.world.npc.id!,maxSpend:0,minStock:[],
+          steps:[{type:storage?'closeStorage':'closeShop'}],timeoutMs:this.workflowTimeout},context);
+        if(!result.ok)throw new Error(result.reasons.join(' '));
+        owner.phase='closeReceipt';
+        this.pending={action:storage?{type:'storage',operation:'close'}:{type:'shop',mode:'buy',rows:[]},since:this.now(),routineId:null,
+          generation:this.generation,worldGeneration:this.world.generation,map:this.engine.map,npcId:this.world.npc.id,workflow:true,sent:false,macro:binding};
+        return false;
+      }
+      return false;
+    } catch(error) {
+      this.endMacro(error instanceof Error?error.message:'Macro operation failed.',true);return true;
+    }
+  }
   private resumeRun(): void {
+    if(this.macro.active&&(!this.macro.fieldIntent||this.macro.snapshot().fieldSuspended)&&this.macroOwner?.phase!=='farm')return;
     const settings = this.requestedSettings;
     if(this.partyFollow.enabled){this.partyFollow.update(this.partyFollowContext());if(this.partyFollow.snapshot().state!=='following')return;}
     if (!settings || this.warp.blocked || this.refine.blocked || this.deathCycle || this.socket.busy || this.memo.blocked || this.supply.ownsField || this.supply.uncertain || this.engine.running || this.travel.active || this.pending || this.workflow.snapshot().running
@@ -1323,6 +1539,8 @@ export class CompanionController {
   }
   tick(): void {
     const now = this.now();
+    // Macro duration and step deadlines cannot be renewed by another owner's wait.
+    this.pollMacro();
     this.partyFollow.advanceDeadline();
     this.social.tick();
     this.memo.tick(this.memoContext());
@@ -1394,10 +1612,11 @@ export class CompanionController {
     // Escape owns its own receipt rather than the scheduler's cost-only ACK.
     // It must run while a requested field run is already waiting below its HP floor.
     if (this.escapeTick()) return;
-    if(this.supplyTick())return;
+    if((!this.macro.active||this.supply.ownsField||this.supply.uncertain||!this.macroOwner&&!!this.macro.fieldIntent)&&this.supplyTick())return;
+    if(this.macroTick())return;
     const wasRunning = this.engine.running;
     const manualBlocker=this.engine.manualTargetActive?this.manualWorldBlocker():null;if(manualBlocker)this.engine.stop(manualBlocker);
-    this.engine.tick(); this.captureActionFailure();
+    this.engine.tick(!this.macroOwner); this.captureActionFailure();
     if (this.runRequested && wasRunning && !this.engine.running && !this.engine.player?.dead
       && !this.engine.reason.includes('HP reached')) {
       this.waitingReason = this.engine.reason; this.retryAt = Math.max(this.retryAt, now + 5_000);
@@ -1408,13 +1627,21 @@ export class CompanionController {
       this.pause('Game state became unavailable.'); return;
     }
     if (this.service.active) {
-      const action = this.service.tick(this.serviceContext());
+      let action:WorldAction|null;
+      try {action = this.service.tick(this.serviceContext());} catch(error) {
+        if(!this.macroOwner)throw error;
+        this.endMacro('Macro service movement is uncertain. No request will be repeated.',true);return;
+      }
       if (action) {
         const receipt = this.service.receipt()!;
         this.workflowDeadline = now + (receipt.outcome?.timeoutMs ?? 60_000);
         this.workflowOutstanding = { action, since:now, routineId:null, generation:this.generation,
-          worldGeneration:this.world.generation, map:this.engine.map, npcId:receipt.npcId, workflow:true, sent:true, serviceReceipt:receipt };
-        this.send(action);
+          worldGeneration:this.world.generation, map:this.engine.map, npcId:receipt.npcId, workflow:true, sent:true, serviceReceipt:receipt,
+          ...(this.macroOwner?{macro:{id:this.macroOwner.intent.id,generation:this.macroOwner.intent.generation}}:{}) };
+        try {this.send(action);} catch(error) {
+          if(!this.macroOwner)throw error;
+          this.endMacro('Macro service write is uncertain. No request will be repeated.',true);return;
+        }
       }
       this.syncWorkflowOwner(); return;
     }
@@ -1423,7 +1650,10 @@ export class CompanionController {
       if (player && (player.dead || !player.maxHp || player.hp / player.maxHp * 100 <= (this.travelSettings?.minHpPercent ?? 45))) {
         this.pause('Waiting for HP and a living character before travelling.');
       } else {
-        this.travel.tick(this.engine.map, player);
+        try {this.travel.tick(this.engine.map, player);} catch(error) {
+          if(!this.macroOwner)throw error;
+          this.endMacro('Macro travel write is uncertain. No request will be repeated.',true);return;
+        }
         const state = this.travel.snapshot();
         if (state.state === 'failed') {
           this.waitingReason = state.reason; this.retryAt = now + 2_000;
@@ -1443,9 +1673,13 @@ export class CompanionController {
         const actorIdentity=this.worldActionIdentity(action);
         this.workflowOutstanding = { ...(actorIdentity?{actorIdentity}:{}),action, since: now, routineId: this.pending?.routineId ?? null,
           generation: this.generation, worldGeneration: this.world.generation, map: this.engine.map,
-          npcId: this.world.npc.id, workflow: true, sent: true };
+          npcId: this.world.npc.id, workflow: true, sent: true,
+          ...(this.pending?.macro?{macro:this.pending.macro,workflowReceipt:this.workflow.receipt()??undefined,workflowAcknowledged:false}:{}) };
         if (this.pending?.workflow) { this.pending.sent = true; this.pending.since = now; }
-        this.send(action);
+        try {this.send(action);} catch(error) {
+          if(!this.macroOwner)throw error;
+          this.endMacro('Macro transaction write is uncertain. No request will be repeated.',true);return;
+        }
       }
       this.syncWorkflowOwner();
     }
@@ -1487,7 +1721,7 @@ export class CompanionController {
   }
   snapshot(): CompanionSnapshot {
     const snapshot = this.engine.snapshot();
-    const workflow = this.workflow.snapshot(); const routine = this.routine.snapshot(); const travel = this.travel.snapshot(); const service = this.service.snapshot();
+    const workflow = this.workflow.snapshot(); const routine = this.routine.snapshot(); const macro=this.macro.snapshot(); const travel = this.travel.snapshot(); const service = this.service.snapshot();
     const refine=this.refine.snapshot(this.refineContext());
     if(refine.blocked)snapshot.reason=refine.reason;
     else if(this.partyFollow.ownsTravel)snapshot.reason=this.partyFollow.snapshot().reason;
@@ -1497,13 +1731,15 @@ export class CompanionController {
     else if (this.travel.active || travel.state === 'complete' && this.travelSettings) snapshot.reason = travel.reason;
     else if (workflow.running) snapshot.reason = workflow.reason;
     else if (routine.state === 'running' || routine.state === 'waiting') snapshot.reason = routine.reason;
+    else if(this.macro.active)snapshot.reason=macro.reason;
+    if(this.macro.active&&this.waitingReason&&!this.engine.running)snapshot.reason=this.blockedReason||this.waitingReason;
     const executing = this.executing && (this.warp.busy || refine.state==='pending' || this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || this.engine.manualTargetActive || service.active || this.travel.active || workflow.running || !!this.pending
-      || this.partyFollow.ownsTravel || this.escape.inFlight || ['running','waiting'].includes(routine.state));
+      || this.partyFollow.ownsTravel || this.escape.inFlight || this.macro.active || ['running','waiting'].includes(routine.state));
     if (this.runRequested && !executing) snapshot.reason = this.blockedReason || this.waitingReason || snapshot.reason;
     if(this.runRequested&&this.now()<this.yieldUntil&&!this.blockedReason)snapshot.reason=this.waitingReason;
     return { ...snapshot, running: executing, runRequested: this.runRequested,
       state: executing ? 'running' : this.runRequested ? 'waiting' : 'idle',
       runIntent: this.runRequested, elapsedSeconds: this.runRequested ? Math.max(0, Math.floor((this.now() - this.started) / 1000)) : snapshot.elapsedSeconds,
-      refine, world: this.world.snapshot(), workflow, routine, travel, service, partyFollow:this.partyFollow.snapshot(), escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),deathRecoveryGuard:this.deathCycle?deathGuard(this.deathCycle):undefined,social:this.social.snapshot(),memo:this.memo.snapshot(this.memoContext()),socket:this.socket.snapshot(this.socketContext()),warp:this.warp.snapshot(this.warpContext()),partyHeal:this.partyHeal.snapshot() };
+      refine, world: this.world.snapshot(), workflow, routine, macro, travel, service, partyFollow:this.partyFollow.snapshot(), escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),deathRecoveryGuard:this.deathCycle?deathGuard(this.deathCycle):undefined,social:this.social.snapshot(),memo:this.memo.snapshot(this.memoContext()),socket:this.socket.snapshot(this.socketContext()),warp:this.warp.snapshot(this.warpContext()),partyHeal:this.partyHeal.snapshot() };
   }
 }

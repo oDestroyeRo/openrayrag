@@ -3,6 +3,7 @@ import { DirectRuntime, type DirectEvent } from './direct-runtime';
 import { BitWriter } from './binary';
 import { OP, type Entity } from './protocol';
 import { DEFAULT_SETTINGS } from './settings';
+import { FEATURE_OP, featureCommand } from './protocol-feature';
 
 const player:Entity={id:0,classId:6,name:'Synthetic',kind:0,level:15,hp:100,maxHp:100,sp:200,maxSp:200,x:100,y:100,dead:false,statuses:[]};
 function spawn(e=player,entryType=1){
@@ -58,6 +59,18 @@ describe('clientless shared-controller runtime',()=>{
   f.runtime.perform('command',{type:'skill',mode:'self',skillId:55,level:1});await flush();
   // Rejection or transport failure cannot manufacture a confirmed action receipt.
   expect(f.runtime.snapshot().actionResult?.status).not.toBe('confirmed');
+ });
+ it('dispatches a macro child through the clientless public API and the shared manual encoder',async()=>{
+  const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();
+  f.runtime.controller.engine.receive([{type:'inventory',items:[{bagId:501,itemId:501,type:1,count:3}],equipment:Array(10).fill(0),ammoId:-1}]);
+  const before=f.writes().length;
+  f.runtime.perform('macro',{settings:{...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000]},script:{version:1,name:'Use potion',durationSeconds:30,maxActions:1,maxSpend:0,
+    rules:[{name:'Potion',priority:0,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:1}],steps:[{type:'useItem',itemId:501,timeoutSeconds:20}]}]}});
+  await flush();expect(f.writes().slice(before)).toEqual([[...featureCommand({type:'useItem',itemId:501})]]);
+  expect(f.runtime.snapshot().macro).toMatchObject({state:'waiting',actionsCompleted:0});
+  f.runtime.control('stop',DEFAULT_SETTINGS);const stopped=f.writes().length;
+  await f.frame(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false).finish());await flush();
+  expect(f.runtime.snapshot().macro).toMatchObject({state:'cancelled',actionsCompleted:0});expect(f.writes()).toHaveLength(stopped);
  });
  it('freeze gates dispatch, reads frames while held, invalidates final ACK and settles native deliveries after apply',async()=>{
   const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();f.runtime.maintenance('a'.repeat(32),true);await flush();

@@ -12,6 +12,7 @@ import { WORLD_OP } from './world-protocol';
 import type { WalkGrid } from './navigation';
 import { dispositionContextFromStatus } from './disposition-ui';
 import { planDisposition } from './disposition';
+import type { MacroScript, MacroStep } from './macros';
 
 const player: Entity = { id: 1, classId: 0, name: 'Test', kind: 0, level: 7, hp: 100, maxHp: 100, x: 100, y: 100, dead: false };
 const monster: Entity = { id: 2, classId: 4000, name: 'Poring', kind: 1, level: 1, hp: 10, maxHp: 10, x: 101, y: 100, dead: false };
@@ -988,4 +989,269 @@ describe('maintenance settlement',()=>{
  it('never admits an unacknowledged physical Walk after Stop and timer expiry',()=>{
   const f=setup();f.controller.perform('command',{type:'manualTarget',command:{type:'walk',destination:{x:105,y:100}},owner:f.controller.engine.manualActorIdentity(1),map:'prt_fild08',policy:manualTargetPolicy(settings),timeoutSeconds:10});f.step();expect(f.sent.some(a=>a.type==='walk')).toBe(true);f.controller.stop();f.advance(10000);expect(f.controller.settledForMaintenance()).toBe(false);
  });
+});
+
+
+describe('macro controller supervision',()=>{
+  const farm:MacroStep={type:'farm',map:'prt_fild08',targets:[4000],timeoutSeconds:30};
+  const script=(steps:MacroStep[]=[farm],extra:MacroScript['rules']=[]):MacroScript=>({version:1,name:'Training',durationSeconds:120,maxActions:20,maxSpend:1000,
+    rules:[...extra,{name:'Initial field',priority:0,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:1}],steps}]});
+  function fixture(){const f=setup();f.controller.engine.receive([{type:'remove',id:2,dead:false},{type:'inventory',items:[{bagId:501,itemId:501,type:1,count:5}],equipment:Array(10).fill(0),ammoId:-1},
+    {type:'stats',level:7,jobLevel:3,hp:100,maxHp:100,sp:100,maxSp:100,zeny:1000,weight:50,maxWeight:1000}]);return f;}
+  const macro=(f:ReturnType<typeof fixture>,value=script(),input=settings)=>f.controller.perform('macro',{script:value,settings:input});
+  it('requires exact request fields, ready idle ownership and compatible map policy',()=>{
+    const f=fixture();expect(()=>f.controller.perform('macro',{script:script(),settings,raw:true})).toThrow('exactly');
+    const automation=policy();automation.follow={...automation.follow,mode:'partyLeader'};
+    expect(()=>macro(f,script(),{...settings,automation})).toThrow('Party leader');
+    automation.follow.mode='name';automation.mapPolicy={...DEFAULT_MAP_POLICY,lockArea:{map:'prontera',minX:95,maxX:105,minY:95,maxY:105}};
+    expect(()=>macro(f,script(),{...settings,map:'prontera',automation})).toThrow('lock area');
+    f.controller.start(settings);expect(()=>macro(f)).toThrow();
+  });
+  it('acknowledges a farm only after projected engine activation and stops it at the global deadline',()=>{
+    const f=fixture(),input=structuredClone(settings);macro(f,script(),input);
+    expect(f.controller.snapshot()).toMatchObject({runRequested:true,macro:{state:'monitoring',actionsCompleted:1},running:true});
+    expect(f.controller.engine.running).toBe(true);expect(f.controller.engine.settings.targets).toEqual([4000]);
+    input.targets=[9999];expect(f.controller.engine.settings.targets).toEqual([4000]);
+    f.advance(120000);expect(f.controller.snapshot()).toMatchObject({runRequested:false,macro:{state:'completed'}});expect(f.controller.engine.running).toBe(false);
+    expect(f.controller.settledForMaintenance()).toBe(true);
+  });
+  it('leaves farm activation unconfirmed while the HP guard blocks the field',()=>{
+    const f=fixture();f.controller.engine.player!.hp=40;macro(f);
+    expect(f.controller.macro.snapshot()).toMatchObject({actionsCompleted:0,pendingActionId:1});expect(f.controller.engine.running).toBe(false);
+    f.advance(30000);expect(f.controller.macro.snapshot().state).toBe('failed');expect(f.controller.runRequested).toBe(false);
+  });
+  it('reacts to level changes while a field is running and preserves the run counters across farms',()=>{
+    const f=fixture(),next:MacroScript['rules'][number]={name:'Next field',priority:100,cooldownSeconds:0,maxRuns:1,
+      conditions:[{field:'level',operator:'gte',value:8}],steps:[{...farm,targets:[1002]}]};
+    macro(f,script([farm],[next]));f.controller.engine.deaths=1;f.controller.engine.kills=5;f.controller.engine.looted=4;
+    f.controller.engine.player!.level=8;f.step();
+    expect(f.controller.macro.snapshot()).toMatchObject({actionsCompleted:2,sequencesCompleted:2,state:'monitoring'});
+    expect(f.controller.engine.settings.targets).toEqual([1002]);expect(f.controller.snapshot()).toMatchObject({deaths:1,kills:5,looted:4});
+    expect(f.sent.filter(action=>action.type==='stop')).toHaveLength(1);
+  });
+  it('drains a selected reactive item receipt, then restores the captured farm without renewing session limits',()=>{
+    const f=fixture(),automation=policy();automation.limits.kills=3;
+    const reactive:MacroScript['rules'][number]={name:'Heal',priority:100,cooldownSeconds:0,maxRuns:1,conditions:[{field:'hpPercent',operator:'lt',value:90}],
+      steps:[{type:'useItem',itemId:501,timeoutSeconds:20}]};
+    macro(f,script([farm],[reactive]),{...settings,automation});f.controller.engine.player!.hp=80;f.step();
+    expect(f.sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:501}]);expect(f.controller.engine.running).toBe(false);
+    f.step();expect(f.controller.macro.snapshot().actionsCompleted).toBe(1);
+    f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(40).bool(false));f.advance(1100);
+    expect(f.controller.macro.snapshot()).toMatchObject({actionsCompleted:2,fieldIntentActive:true,fieldSuspended:false});expect(f.controller.engine.running).toBe(true);
+    f.controller.engine.kills=3;f.step();expect(f.controller.engine.running).toBe(false);expect(f.controller.snapshot().reason).toContain('session limit');
+  });
+  it('stops a stationary normal attack once before admitting a reactive potion while the monster is alive',()=>{
+    const f=fixture(),reactive:MacroScript['rules'][number]={name:'Attack heal',priority:100,cooldownSeconds:0,maxRuns:1,conditions:[{field:'hpPercent',operator:'lt',value:90}],
+      steps:[{type:'useItem',itemId:501,timeoutSeconds:20}]};
+    macro(f,script([farm],[reactive]));f.controller.engine.receive([{type:'spawn',entity:{...monster}}]);f.step();
+    expect(f.sent).toContainEqual({type:'attack',id:2});expect(f.controller.engine.stationaryForCastAvailability()).toBe(false);
+    f.packet(new BitWriter().u8(OP.attack).i32(1).i32(2).i32(0).position(player));f.controller.engine.player!.hp=40;f.step();
+    expect(f.sent.filter(action=>action.type==='stop')).toHaveLength(1);expect(f.sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:501}]);
+    expect(f.controller.engine.entities.get(2)?.dead).toBe(false);expect(f.controller.macro.snapshot()).toMatchObject({state:'waiting',actionsCompleted:1});
+  });
+  it('continues an existing supply owner while a reactive macro step waits for handoff',()=>{
+    const f=fixture(),reactive:MacroScript['rules'][number]={name:'Supply response',priority:100,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:8}],
+      steps:[{type:'useItem',itemId:501,timeoutSeconds:20}]};
+    macro(f,script([farm],[reactive]));
+    let owns=true,visits=0;
+    // The real supply executor retains its intent; only its already-active ownership and empty next intent are isolated here.
+    vi.spyOn(f.controller.supply,'ownsField','get').mockImplementation(()=>owns);
+    vi.spyOn(f.controller.supply,'uncertain','get').mockReturnValue(false);
+    vi.spyOn(f.controller.supply,'resumeIntent').mockImplementation(()=>{visits++;return null;});
+    vi.spyOn(f.controller.supply,'next').mockReturnValue(null);
+    f.controller.engine.player!.level=8;f.step();expect(visits).toBe(1);expect(f.sent.filter(action=>action.type==='useItem')).toEqual([]);
+    expect(f.controller.macro.snapshot().pendingActionId).not.toBeNull();owns=false;f.step();
+    expect(f.sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:501}]);
+  });
+  it('waits for an existing field item before one Stop and the reactive child',()=>{
+    const f=fixture(),automation=policy();automation.items=[{itemId:501,resource:'hp',belowPercent:90,minStock:0,cooldownSeconds:1}];
+    const reactive:MacroScript['rules'][number]={name:'Level response',priority:100,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:8}],steps:[{type:'useItem',itemId:501,timeoutSeconds:20}]};
+    macro(f,script([farm],[reactive]),{...settings,automation});f.controller.engine.player!.hp=80;f.step();
+    expect(f.sent.filter(action=>action.type==='useItem')).toHaveLength(1);f.controller.engine.player!.level=8;f.step();
+    expect(f.sent.filter(action=>action.type==='stop')).toEqual([]);expect(f.sent.filter(action=>action.type==='useItem')).toHaveLength(1);
+    f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(40).bool(false));f.advance(1100);
+    expect(f.sent.filter(action=>action.type==='stop')).toHaveLength(1);expect(f.sent.filter(action=>action.type==='useItem')).toHaveLength(2);
+  });
+  it('Stop during a pending resource receipt retires the generation; late ACK cannot advance or restore farming',()=>{
+    const f=fixture();macro(f,script([farm,{type:'useItem',itemId:501,timeoutSeconds:20},farm]));f.step();
+    expect(f.sent.filter(action=>action.type==='useItem')).toHaveLength(1);f.controller.stop();const count=f.sent.length;
+    f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(40).bool(false));f.advance(1000);
+    expect(f.controller.macro.snapshot()).toMatchObject({state:'cancelled',actionsCompleted:1});expect(f.controller.runRequested).toBe(false);
+    expect(f.controller.engine.running).toBe(false);expect(f.sent).toHaveLength(count);
+  });
+  it.each(['map','clear'] as const)('fails active macro on unexpected %s and never restores it on reconnect',kind=>{
+    const f=fixture();macro(f);f.packet(kind==='map'?new BitWriter().u8(OP.map).string('prontera'):new BitWriter().u8(OP.clear));
+    expect(f.controller.macro.snapshot().state).toBe('failed');expect(f.controller.runRequested).toBe(false);expect(f.controller.engine.running).toBe(false);
+    f.controller.connect(true);f.receive({type:'enter',id:1,map:'prt_fild08'},{type:'spawn',entity:{...player}});f.step();expect(f.controller.active).toBe(false);
+  });
+
+  it.each([false,true])('moves a level-selected farm through a verified portal; stopped=%s',stopped=>{
+    let now=100000;const sent:Array<Action|ControllerAction>=[],c=new CompanionController(action=>sent.push(action),()=>now);
+    const packet=(w:BitWriter)=>c.receive(w.finish()),own={...player,x:170,y:370};
+    c.connect(true);packet(new BitWriter().u8(OP.enter).i32(1).string('prt_fild08'));packet(ownPacket(own,1));
+    const next:MacroScript['rules'][number]={name:'Town field',priority:100,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:8}],
+      steps:[{...farm,map:'prontera'}]};
+    c.perform('macro',{settings,script:script([farm],[next])});expect(c.macro.snapshot().actionsCompleted).toBe(1);
+    c.engine.deaths=1;c.engine.kills=4;c.engine.player!.level=8;now+=100;c.tick();
+    expect(c.travel.active).toBe(true);expect(c.macro.snapshot().actionsCompleted).toBe(1);
+    for(let i=0;i<20&&c.travel.snapshot().state==='walking';i++){
+      const cells=c.travel.snapshot().leg;if(cells.length>1){
+        const dirs=[[0,-1],[-1,-1],[-1,0],[-1,1],[0,1],[1,1],[1,0],[1,-1]],w=new BitWriter().u8(OP.walk).i32(1)
+          .position(cells[0]!).f32(cells[0]!.x).f32(cells[0]!.y).f32(.05).f32(0).u8(cells.length);
+        const d=cells.slice(1).map((cell,j)=>dirs.findIndex(([x,y])=>cell.x-cells[j]!.x===x&&cell.y-cells[j]!.y===y));
+        for(let j=0;j<d.length;j+=2)w.u8((d[j]!<<4)|(d[j+1]??0));packet(w.u8(0));
+      }
+      for(let j=0;j<15;j++){now+=100;c.tick();}
+    }
+    expect(c.travel.snapshot().state).toBe('transition');packet(new BitWriter().u8(OP.map).string('prontera'));
+    expect(c.macro.snapshot()).toMatchObject({state:'waiting',actionsCompleted:1});expect(c.engine.running).toBe(false);
+    if(stopped){c.stop();const count=sent.length;packet(ownPacket({...own,level:8,x:156,y:26},1));now+=100;c.tick();expect(c.macro.snapshot()).toMatchObject({state:'cancelled',actionsCompleted:1});expect(c.runRequested).toBe(false);expect(sent).toHaveLength(count);return;}
+    packet(ownPacket({...own,id:99,level:8,x:156,y:26},1));expect(c.macro.snapshot().actionsCompleted).toBe(1);
+    packet(ownPacket({...own,level:8,x:156,y:26},1));now+=100;c.tick();
+    expect(c.macro.snapshot()).toMatchObject({state:'monitoring',actionsCompleted:2});expect(c.engine.running).toBe(true);
+    expect(c.snapshot()).toMatchObject({map:'prontera',deaths:1,kills:4});
+  });
+  it('reserves a macro action identity and scheduler receipt before a transport exception',()=>{
+    let now=100000,c!:CompanionController;const observed:number[]=[];
+    c=new CompanionController(action=>{if(action.type==='useItem'){observed.push(c.macro.snapshot().pendingActionId!,c.engine.actionResult.sequence);throw Error('Synthetic failed write');}},()=>now,()=>grid);
+    c.connect(true);c.engine.receive([{type:'enter',id:1,map:'prt_fild08'},{type:'spawn',entity:{...player}},
+      {type:'inventory',items:[{bagId:501,itemId:501,type:1,count:3}],equipment:Array(10).fill(0),ammoId:-1}]);c.world.reset('prt_fild08');
+    c.perform('macro',{settings,script:script([{type:'useItem',itemId:501,timeoutSeconds:20}])});
+    expect(observed).toEqual([1,1]);expect(c.macro.snapshot()).toMatchObject({state:'failed',actionsCompleted:0});expect(c.runRequested).toBe(false);
+    expect(()=>c.perform('macro',{settings,script:script()})).toThrow('receipts');
+    c.receive(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false).finish());
+    expect(c.macro.snapshot().actionsCompleted).toBe(0);now+=1100;c.tick();expect(c.engine.running).toBe(false);
+  });
+  it.each(['trip','destination'] as const)('cannot acknowledge a destination after recovery replaces its %s',changed=>{
+    const f=fixture();f.controller.engine.player!.x=170;f.controller.engine.player!.y=370;
+    macro(f,script([{type:'travel',map:'prontera',timeoutSeconds:30}]));
+    const original=f.controller.travel.tripId;expect(f.controller.travel.active).toBe(true);
+    f.controller.travel.cancel('Death recovery took travel ownership.');
+    vi.spyOn(f.controller.travel,'tripId','get').mockReturnValue(original+(changed==='trip'?1:0));
+    if(changed==='trip')f.controller.engine.receive([{type:'map',map:'prontera'},{type:'spawn',entity:{...player,x:156,y:26}}]);
+    vi.spyOn(f.controller.travel,'snapshot').mockReturnValue({...f.controller.travel.snapshot(),state:'complete',destination:changed==='trip'?'prontera':'prt_fild08'});
+    f.step();expect(f.controller.macro.snapshot()).toMatchObject({state:'failed',actionsCompleted:0});expect(f.controller.runRequested).toBe(false);
+  });
+  it.each(['recovery','disposition','escape'] as const)('preserves the configured %s consumable reserve',source=>{
+    const f=fixture(),automation=policy(),itemId=source==='escape'?601:501;
+    if(source==='recovery')automation.items=[{itemId,resource:'hp',belowPercent:90,minStock:5,cooldownSeconds:1}];
+    else if(source==='escape')automation.escape={...DEFAULT_ESCAPE,enabled:true,minStock:5};
+    else automation.disposition={maxSpend:0,rules:[{itemId,keep:5,minimum:5,desired:5,maximum:5,store:false,cart:false,sell:false,restock:'off',allowUnique:false}]};
+    f.controller.engine.receive([{type:'inventory',items:[{bagId:itemId,itemId,type:1,count:5}],equipment:Array(10).fill(0),ammoId:-1}]);
+    macro(f,script([{type:'useItem',itemId,timeoutSeconds:20}]),{...settings,automation});
+    expect(f.sent.filter(action=>action.type==='useItem')).toEqual([]);expect(f.controller.macro.snapshot()).toMatchObject({state:'failed',actionsCompleted:0});
+    expect(f.controller.macro.snapshot().reason).toContain('stock reserve');
+  });
+  it('retains macro supervision through an already-sent emergency escape clear, map and living arrival',()=>{
+    const f=fixture(),automation=policy();automation.escape={...DEFAULT_ESCAPE,enabled:true,hpBelowPercent:60};
+    f.controller.engine.receive([{type:'inventory',items:[{bagId:601,itemId:601,type:1,count:5}],equipment:Array(10).fill(0),ammoId:-1}]);
+    macro(f,script(),{...settings,automation});f.controller.engine.player!.hp=50;for(let i=0;i<5;i++)f.step();
+    expect(f.sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:601}]);expect(f.controller.escape.snapshot().state).toBe('sent');
+    f.packet(new BitWriter().u8(OP.clear));expect(f.controller.macro.active).toBe(true);expect(f.controller.escape.snapshot().state).toBe('refreshing');
+    f.packet(new BitWriter().u8(OP.map).string('prt_fild08'));expect(f.controller.macro.active).toBe(true);
+    f.packet(ownPacket({...player,hp:100},2));expect(f.controller.escape.snapshot().state).toBe('confirmed');
+    expect(f.controller.macro.snapshot()).toMatchObject({state:'monitoring',actionsCompleted:1});expect(f.controller.runRequested).toBe(true);
+  });
+  it('uses current target eligibility and actor lifetime instead of a displayed name',()=>{
+    const f=fixture();macro(f);f.controller.engine.receive([{type:'spawn',entity:{...monster}},{type:'changeTarget',id:2}]);
+    const target=f.controller.engine.macroTargetIdentity();expect(target?.targetId).toBe(2);
+    f.controller.engine.receive([{type:'spawn',entity:{...player,id:3,name:'Other'}},{type:'attack',source:3,target:2,position:player}]);
+    expect(f.controller.engine.macroTargetIdentity()).toBeNull();
+    f.controller.engine.receive([{type:'spawn',entity:{...monster,classId:9999}},{type:'changeTarget',id:2}]);
+    expect(f.controller.engine.macroTargetIdentity()).toBeNull();
+  });
+  it('does not treat a macro Wing as an emergency escape owner or infer permission from its map result',()=>{
+    const f=fixture();f.controller.engine.receive([{type:'inventory',items:[{bagId:601,itemId:601,type:1,count:3}],equipment:Array(10).fill(0),ammoId:-1}]);
+    macro(f,script([{type:'useItem',itemId:601,timeoutSeconds:20},farm]));expect(f.sent).toContainEqual({type:'useItem',itemId:601});
+    f.packet(new BitWriter().u8(OP.map).string('prontera'));expect(f.controller.macro.snapshot()).toMatchObject({state:'failed',actionsCompleted:0});
+    expect(f.controller.runRequested).toBe(false);const count=f.sent.length;f.packet(ownPacket({...player,x:156,y:26},1));f.advance(1000);expect(f.sent).toHaveLength(count);
+    expect(()=>macro(f)).toThrow();
+  });
+  it.each(['self','target'] as const)('uses the manual %s skill codec and waits for its exact execution before restoring the field',mode=>{
+    const f=fixture(),skillId=mode==='self'?2:3;
+    f.controller.engine.receive([{type:'skills',learned:[{skillId,level:1}]}]);
+    const reactive:MacroScript['rules'][number]={name:'Level skill',priority:100,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:8}],
+      steps:[{type:'skill',skillId,level:1,mode,timeoutSeconds:20}]};
+    macro(f,script([farm],[reactive]));f.controller.engine.receive([{type:'spawn',entity:{...monster}},{type:'changeTarget',id:2}]);f.controller.engine.player!.level=8;f.step();
+    const action={type:'skill',skillId,level:1,mode,...(mode==='target'?{target:2}:{})};expect(f.sent.filter(row=>row.type==='skill')).toEqual([action]);
+    f.controller.engine.receive([{type:'skillResult',source:9,skillId,level:1,mode,...(mode==='target'?{target:2}:{}),indirect:false,motionSeconds:1,position:player}]);f.step();
+    expect(f.controller.macro.snapshot().actionsCompleted).toBe(1);
+    f.controller.engine.receive([{type:'skillResult',source:1,skillId,level:1,mode,...(mode==='target'?{target:2}:{}),indirect:false,motionSeconds:1,position:player}]);f.step();
+    expect(f.controller.macro.snapshot()).toMatchObject({actionsCompleted:2,fieldSuspended:false});expect(f.controller.engine.running).toBe(false);f.advance(3000);
+    expect(f.controller.engine.running).toBe(true);expect(f.sent.filter(row=>row.type==='skill')).toHaveLength(1);
+  });
+  function serviceFixture(type:'buy'|'store'){
+    const f=setup({width:400,height:400,walkable:()=>true}),definition=BUILTIN_SERVICES.find(service=>service.id===(type==='buy'?'tool-dealer-buy':'kafra-south-storage'))!;
+    // Keep the catalog NPC/approach identity; the fixture grid only supplies open collision cells.
+    f.controller.engine.receive([{type:'map',map:definition.map},{type:'spawn',entity:{...player,x:definition.approach.x,y:definition.approach.y}},
+      {type:'spawn',entity:{...player,id:20,kind:2,classId:50,name:definition.identity.name,...definition.identity.anchor}},
+      {type:'inventory',items:[{bagId:501,itemId:501,type:1,count:5}],equipment:Array(10).fill(0),ammoId:-1},
+      {type:'stats',level:7,jobLevel:3,hp:100,maxHp:100,sp:100,maxSp:100,zeny:1000,weight:50,maxWeight:1000},
+      {type:'skills',learned:[{skillId:1,level:5}]}]);
+    f.controller.world.reset(definition.map);
+    const start=(cap=100)=>macro(f,script([{type,serviceId:definition.id,itemId:501,quantity:2,...(type==='store'?{keep:3}:{}),maxSpend:cap,timeoutSeconds:30} as MacroStep]),{...settings,map:definition.map});
+    const open=()=>{
+      for(let i=0;i<8&&!f.sent.some(action=>action.type==='npcTalk');i++)f.step();
+      expect(f.sent,JSON.stringify(f.controller.snapshot().macro)+' '+f.controller.snapshot().service.reason).toContainEqual({type:'npcTalk',id:20});
+      f.packet(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(20).bool(true));
+      for(const row of definition.workflow.steps.slice(1)){
+        if(row.type==='advance')f.packet(new BitWriter().u8(WORLD_OP.npc).u8(1).string(row.exactDialogue!.name).string(row.exactDialogue!.text).bool(false));
+        else if(row.type==='option'){const labels=row.expectedOptions![0]!,w=new BitWriter().u8(WORLD_OP.npc).u8(2).i32(labels.length);for(const label of labels)w.string(label);f.packet(w);}
+        f.step();
+      }
+      if(type==='buy')f.packet(new BitWriter().u8(WORLD_OP.shop).u8(1).u8(0).i32(1).i32(501).i32(10));
+      else f.packet(new BitWriter().u8(WORLD_OP.storage).u8(1).i32(0).i32(0));
+      for(let i=0;i<5;i++)f.step();
+    };
+    return {...f,definition,start,open};
+  }
+  it('Stop during the service opener retains its child receipt without running a transaction from late dialogue',()=>{
+    const f=serviceFixture('buy');f.start();for(let i=0;i<8&&!f.sent.some(action=>action.type==='npcTalk');i++)f.step();
+    expect(f.sent).toContainEqual({type:'npcTalk',id:20});f.controller.stop();const count=f.sent.length;
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(20).bool(true));f.packet(new BitWriter().u8(WORLD_OP.npc).u8(2).i32(3).string('Buy').string('Sell').string('Cancel'));f.advance(1000);
+    expect(f.controller.macro.snapshot()).toMatchObject({state:'cancelled',actionsCompleted:0});expect(f.sent).toHaveLength(count);expect(f.controller.runRequested).toBe(false);
+  });
+  it('a buy opens the catalog shop, confirms inventory and balance, then waits for NPC close before ACK',()=>{
+    const f=serviceFixture('buy');f.start();f.open();
+    expect(f.sent).toContainEqual({type:'shop',mode:'buy',rows:[{id:501,count:2}]});expect(f.controller.macro.snapshot()).toMatchObject({actionsCompleted:0,spendReserved:100});
+    f.controller.engine.receive([{type:'inventoryDelta',add:true,bagId:501,change:2,weight:70,item:{bagId:501,itemId:501,type:1,count:7}},{type:'currency',zeny:980}]);
+    f.step();expect(f.sent.filter(action=>action.type==='shop'&&!action.rows.length)).toEqual([]);
+    f.packet(new BitWriter().u8(WORLD_OP.shop).u8(1).u8(0).i32(1).i32(501).i32(10));f.step();f.step();
+    expect(f.sent).toContainEqual({type:'shop',mode:'buy',rows:[]});expect(f.controller.macro.snapshot().actionsCompleted).toBe(0);
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(3));expect(f.controller.macro.snapshot()).toMatchObject({state:'completed',actionsCompleted:1,spendReserved:100});
+    expect(f.controller.runRequested).toBe(false);
+  });
+  it('rejects a purchase quote exceeding the reserved visit cap and leaves no orphan field',()=>{
+    const f=serviceFixture('buy');f.start(19);f.open();
+    expect(f.sent.filter(action=>action.type==='shop'&&action.rows.length)).toEqual([]);
+    expect(f.controller.macro.snapshot()).toMatchObject({state:'failed',spendReserved:19});expect(f.controller.runRequested).toBe(false);
+  });
+  it('accepts an authoritative natural shop close only after its exact purchase receipt',()=>{
+    const f=serviceFixture('buy');f.start();f.open();f.packet(new BitWriter().u8(WORLD_OP.npc).u8(3));
+    expect(f.controller.macro.snapshot().actionsCompleted).toBe(0);
+    f.controller.engine.receive([{type:'inventoryDelta',add:true,bagId:501,change:2,weight:70,item:{bagId:501,itemId:501,type:1,count:7}},{type:'currency',zeny:980}]);f.step();f.step();
+    expect(f.controller.macro.snapshot()).toMatchObject({state:'completed',actionsCompleted:1});expect(f.sent.filter(action=>action.type==='shop'&&!action.rows.length)).toEqual([]);
+  });
+  it('uses existing disposition protections for equipped storage items',()=>{
+    const f=serviceFixture('store');f.controller.engine.character.equipment[0]=501;f.start();f.open();
+    expect(f.sent.filter(action=>action.type==='storage'&&action.operation==='deposit')).toEqual([]);
+    expect(f.controller.macro.snapshot().state).toBe('failed');expect(f.controller.runRequested).toBe(false);
+  });
+  it('stores only the semantic item excess, preserving keep and confirming both containers before close',()=>{
+    const f=serviceFixture('store');f.start();f.open();
+    expect(f.sent).toContainEqual({type:'storage',operation:'deposit',bagId:501,count:2});
+    f.packet(new BitWriter().u8(WORLD_OP.storageMove).u8(1).i32(501).i16(2).i32(501).i16(2).i32(30).i32(2).bool(true));
+    expect(f.sent.filter(action=>action.type==='storage'&&action.operation==='close')).toEqual([]);
+    f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(2).i32(30).bool(false));f.step();f.step();
+    expect(f.sent).toContainEqual({type:'storage',operation:'close'});expect(f.controller.macro.snapshot().actionsCompleted).toBe(0);
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(3));expect(f.controller.macro.snapshot()).toMatchObject({state:'completed',actionsCompleted:1});
+    expect(f.controller.engine.character.count(501)).toBe(3);
+  });
+  it('retains a stopped buy receipt; late result plus contradictory balance cannot release ownership or advance',()=>{
+    const f=serviceFixture('buy');f.start();f.open();f.controller.stop();const count=f.sent.length;
+    f.packet(new BitWriter().u8(WORLD_OP.shop).u8(1).u8(0).i32(1).i32(501).i32(10));f.packet(new BitWriter().u8(WORLD_OP.npc).u8(3));f.advance(10000);
+    expect(()=>macro(f)).toThrow();expect(f.controller.macro.snapshot()).toMatchObject({state:'cancelled',actionsCompleted:0});expect(f.sent).toHaveLength(count);
+    f.controller.engine.receive([{type:'inventoryDelta',add:true,bagId:501,change:2,weight:70,item:{bagId:501,itemId:501,type:1,count:7}},{type:'currency',zeny:979}]);
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(3));expect(()=>macro(f)).toThrow();
+  });
 });

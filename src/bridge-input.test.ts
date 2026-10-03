@@ -57,6 +57,17 @@ async function fixture(ready=true,ownId=0){
   const input=(type='keydown',trusted=true)=>listeners.get(type)!({isTrusted:trusted} as Event);
   return {page,socket,c,packet,packetOn,input,invoke,start:(settings:Settings)=>page.__RAYRAG__!.control('start',settings),step:async(ms:number)=>vi.advanceTimersByTimeAsync(ms)};
 }
+it('dispatches a macro child through the game page API using the shared manual encoder',async()=>{
+  const f=await fixture();f.c.engine.receive([{type:'inventory',items:[{bagId:501,itemId:501,type:1,count:3}],equipment:Array(10).fill(0),ammoId:-1}]);
+  const before=f.socket.writes.length;
+  f.page.__RAYRAG__!.perform('macro',{settings:{...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000]},script:{version:1,name:'Use potion',durationSeconds:30,maxActions:1,maxSpend:0,
+    rules:[{name:'Potion',priority:0,cooldownSeconds:0,maxRuns:1,conditions:[{field:'level',operator:'gte',value:1}],steps:[{type:'useItem',itemId:501,timeoutSeconds:20}]}]}});
+  expect(f.socket.writes.slice(before).map(value=>[...new Uint8Array(value as ArrayBuffer)])).toEqual([[...featureCommand({type:'useItem',itemId:501})]]);
+  expect(f.c.snapshot().macro).toMatchObject({state:'waiting',actionsCompleted:0});
+  f.c.stop();const stopped=f.socket.writes.length;
+  await f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false).finish());
+  expect(f.c.snapshot().macro).toMatchObject({state:'cancelled',actionsCompleted:0});expect(f.socket.writes).toHaveLength(stopped);
+});
 beforeEach(()=>{vi.useFakeTimers();vi.setSystemTime(100_000);});
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks();captured.controller=null;captured.senders=[];});
 
