@@ -128,9 +128,9 @@ describe('stationary cast availability through the real controller',()=>{
     expect(f.c.snapshot().reason).toContain('Configured session limit reached');f.packet(look(1));f.advance(800);
     expect(f.sent.some(a=>a.type==='attack')).toBe(false);expect(f.c.engine.deaths).toBe(1);
   });
-  it('cancels recovery on official resource input instead of probing around the current official action',()=>{
+  it('retains the bounded availability recovery through official input',()=>{
     const f=fixture();f.start();f.packet(cast(1));f.advance(1300);f.c.manualCommand();f.advance(3000);
-    expect(f.sent.filter(a=>a.type==='look')).toHaveLength(1);expect(f.c.engine.observedCast).not.toBeNull();expect(f.c.runRequested).toBe(true);
+    expect(f.sent.filter(a=>a.type==='look')).toHaveLength(4);expect(f.c.engine.observedCast).not.toBeNull();expect(f.c.runRequested).toBe(true);
   });
   it('waits through all possible Look input-delay additions before dispatching combat',()=>{
     const f=fixture();f.start();f.packet(cast(1));f.advance(6300);expect(f.sent.filter(a=>a.type==='look')).toHaveLength(6);
@@ -158,14 +158,14 @@ describe('stationary cast availability through the real controller',()=>{
     expect(f.c.engine.observedCast).toMatchObject({revision:2});f.advance(1300);expect(f.sent.filter(a=>a.type==='look')).toHaveLength(1);
     expect(f.sent.some(a=>a.type==='attack')).toBe(false);f.packet(look(1));f.advance(300);expect(f.sent.some(a=>a.type==='attack')).toBe(true);
   });
-  it('extends panel input grace without renewing the query deadline or clearing the cast',()=>{
+  it('continues bounded availability recovery during repeated panel input without renewing its deadline',()=>{
     const f=fixture();f.start();f.packet(cast(1));for(let n=0;n<12;n++){f.c.manualInput();f.advance(1000);}
-    expect(f.sent.filter(a=>a.type==='look')).toHaveLength(0);f.advance(2000);expect(f.sent.filter(a=>a.type==='look')).toHaveLength(0);
+    expect(f.sent.filter(a=>a.type==='look')).toHaveLength(6);f.advance(2000);expect(f.sent.filter(a=>a.type==='look')).toHaveLength(6);
     expect(f.c.engine.observedOwnCastSettled()).toBe(false);expect(f.c.runRequested).toBe(true);expect(f.c.snapshot().reason).toContain('exhausted');
   });
-  it('stops automatic probes on official Look while allowing its ordered reply to settle availability',()=>{
+  it('keeps bounded automatic recovery through official Look until its ordered reply settles availability',()=>{
     const f=fixture();f.start();f.packet(cast(1));f.advance(1300);f.c.officialLook();f.advance(2000);
-    expect(f.sent.filter(a=>a.type==='look')).toHaveLength(1);f.packet(look(1));f.advance(300);
+    expect(f.sent.filter(a=>a.type==='look')).toHaveLength(3);f.packet(look(1));f.advance(800);
     expect(f.sent.some(a=>a.type==='attack')).toBe(true);expect(f.c.runRequested).toBe(true);
   });
   it('never resumes a stopped run when late availability arrives',()=>{
@@ -179,8 +179,8 @@ describe('stationary cast availability through the real controller',()=>{
     f.c.receive(look(1),old);f.advance(4000);expect(f.c.engine.observedCast).not.toBeNull();expect(f.sent.filter(a=>a.type==='look')).toHaveLength(1);
   });
   it('keeps a pending resource receipt unchanged while recovering only availability',()=>{
-    const f=fixture();f.start();f.c.manualCommand();f.c.engine.manualAction({type:'useItem',itemId:501});const sequence=f.c.engine.actionResult.sequence;
-    f.packet(cast(1));f.advance(2300);expect(f.sent.filter(a=>a.type==='look')).toHaveLength(1);
+    const f=fixture();f.settings.automation.items=[{itemId:501,resource:'hp',belowPercent:100,minStock:0,cooldownSeconds:30}];f.start();f.step();f.c.manualCommand();const sequence=f.c.engine.actionResult.sequence;
+    f.packet(cast(1));f.advance(2300);expect(f.sent.filter(a=>a.type==='look')).toHaveLength(2);
     f.packet(look(1));f.advance(300);expect(f.c.engine.observedCast).toBeNull();expect(f.c.engine.actionResult).toMatchObject({sequence,status:'pending'});
     expect(f.sent.filter(a=>a.type==='useItem')).toHaveLength(1);expect(f.sent.some(a=>a.type==='attack')).toBe(false);
     f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false).finish());f.advance(1000);
@@ -188,7 +188,7 @@ describe('stationary cast availability through the real controller',()=>{
     expect(f.sent.some(a=>a.type==='attack')).toBe(true);
   });
   it('retains canceled resource uncertainty after positive availability instead of replaying or restarting',()=>{
-    const f=fixture();f.start();f.c.manualCommand();f.c.engine.manualAction({type:'useItem',itemId:501});const sequence=f.c.engine.actionResult.sequence;
+    const f=fixture();f.settings.automation.items=[{itemId:501,resource:'hp',belowPercent:100,minStock:0,cooldownSeconds:30}];f.start();f.step();f.c.manualCommand();const sequence=f.c.engine.actionResult.sequence;
     f.packet(cast(1));f.advance(7000);expect(f.c.engine.actionResult).toMatchObject({sequence,status:'failed'});
     f.packet(look(1));f.advance(1000);expect(f.c.engine.observedCast).toBeNull();expect(f.sent.filter(a=>a.type==='useItem')).toHaveLength(1);
     expect(f.sent.some(a=>a.type==='attack')).toBe(false);expect(f.c.snapshot().reason).toContain('confirmed result');expect(f.c.runRequested).toBe(true);

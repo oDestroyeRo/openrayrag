@@ -304,7 +304,9 @@ fn resolve_profile(
 }
 
 #[tauri::command]
-pub(crate) async fn login_game(
+// URL/navigation calls and admission share the UI thread; a worker holding the
+// gate while waiting for that thread can deadlock its heartbeat command.
+pub(crate) fn login_game(
     app: tauri::AppHandle,
     window: WebviewWindow,
     request: LoginRequest,
@@ -377,10 +379,7 @@ fn reopen_game(
 }
 
 #[tauri::command]
-pub(crate) async fn reconnect_game(
-    app: tauri::AppHandle,
-    window: WebviewWindow,
-) -> Result<(), String> {
+pub(crate) fn reconnect_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
     super::require_window(&window, "main")?;
     let mut _permit = crate::maintenance::admit(&app)?;
     // Reuse this exact window. A concurrent close must never create a new one.

@@ -237,9 +237,9 @@ describe('real temporary-yield loot continuity', () => {
     controller.world.reset('prt_fild08'); controller.start(settings()); now += 100; controller.tick();
     controller.receive(newDropPacket().finish()); now++;
     controller.receive(new BitWriter().u8(OP.remove).i32(2).u8(3).finish());
-    controller.manualCommand(); expect(controller.runRequested).toBe(true); expect(controller.engine.running).toBe(false);
+    controller.manualCommand(); expect(controller.runRequested).toBe(true); expect(controller.engine.running).toBe(true);
     for (let n = 0; n < 19; n++) { now += 100; controller.tick(); }
-    expect(sent.filter(action => action.type === 'pickup')).toEqual([]);
+    expect(sent.filter(action => action.type === 'pickup')).toEqual([{ type: 'pickup', id: drop.id }]);
     now += 200; controller.tick(); now += 100; controller.tick();
     expect(sent.filter(action => action.type === 'pickup')).toEqual([{ type: 'pickup', id: drop.id }]);
     expect(controller.engine.kills).toBe(1); expect(controller.engine.looted).toBe(0);
@@ -252,7 +252,7 @@ describe('real temporary-yield loot continuity', () => {
     controller.world.reset('prt_fild08'); controller.start(settings()); now += 100; controller.tick(); controller.manualInput();
     controller.receive(newDropPacket().finish()); now++; controller.receive(new BitWriter().u8(OP.remove).i32(2).u8(3).finish());
     for (let n = 0; n < 19; n++) { now += 100; controller.tick(); }
-    expect(controller.engine.running).toBe(true); expect(controller.engine.kills).toBe(1); expect(sent).toEqual([{ type: 'attack', id: 2 }]);
+    expect(controller.engine.running).toBe(true); expect(controller.engine.kills).toBe(1); expect(sent).toEqual([{ type: 'attack', id: 2 }, { type: 'pickup', id: drop.id }]);
     now += 200; controller.tick(); expect(sent).toEqual([{ type: 'attack', id: 2 }, { type: 'pickup', id: drop.id }]);
     controller.receive(new BitWriter().u8(OP.pickup).i32(1).i32(drop.id).finish()); expect(controller.engine.looted).toBe(1);
   });

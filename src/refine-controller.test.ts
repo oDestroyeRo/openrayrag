@@ -64,7 +64,7 @@ describe('manual refine controller and shared protocol owner',()=>{
 const availabilityLook=(id:number)=>new BitWriter().u8(13).i32(id).i16(-1).i16(5000).u8(0).u8(1);
 describe('refining ownership with stationary cast recovery',()=>{
  it.each([0,1].flatMap(id=>['official','canceledReceipt'].map(owner=>({id,owner}))))(
-  'cancels automatic Look recovery through NPC closure for own$id $owner economic ownership',({id,owner})=>{
+  'separates requested-run availability from idle owned receipts for own$id $owner',({id,owner})=>{
    const f=fixture(id,true);expect(f.controller.engine.castAvailability.nonVending).toBe(false);
    if(owner==='canceledReceipt'){f.send();f.controller.stop();}
    f.receive(new BitWriter().u8(77).u8(3));expect(f.controller.engine.castAvailability.nonVending).toBe(true);
@@ -74,9 +74,16 @@ describe('refining ownership with stationary cast recovery',()=>{
     f.controller.officialRefineCommand(f.own.name);
    }else ownCast(f,42);
    const sent=f.commands.length;f.advance(1000);
-   expect(f.controller.snapshot().refine.blocked).toBe(true);expect(f.commands.slice(sent).some(action=>action.type==='look')).toBe(false);
-   expect(f.controller.engine.castAvailability.reason).toContain('Refining ownership');
-   expect(f.controller.engine.castAvailability.take({cast:f.controller.engine.observedCast,requested:true,ready:true,exclusive:true,reason:''})).toBeNull();
+   expect(f.controller.snapshot().refine.blocked).toBe(true);
+   if(owner==='official'){
+    expect(f.commands.slice(sent).some(action=>action.type==='look')).toBe(true);expect(f.controller.runRequested).toBe(true);
+    expect(f.controller.refine.companionReceiptPending).toBe(false);
+   }else{
+    expect(f.commands.slice(sent).some(action=>action.type==='look')).toBe(false);
+    expect(f.controller.engine.castAvailability.reason).toContain('Refining ownership');
+    expect(f.controller.engine.castAvailability.take({cast:f.controller.engine.observedCast,requested:true,ready:true,exclusive:true,reason:''})).toBeNull();
+    expect(f.controller.refine.companionReceiptPending).toBe(true);
+   }
    expect(f.controller.engine.observedCast).not.toBeNull();expect(f.packets).toHaveLength(owner==='official'?0:1);
   });
  it.each([0,1])('keeps own%s official economic hold and rejects baseline reconciliation during Look cooldown',id=>{

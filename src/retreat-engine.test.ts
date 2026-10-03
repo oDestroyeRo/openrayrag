@@ -53,6 +53,14 @@ describe('bounded normal ranged retreat',()=>{
   const f=setup();f.engage();f.clear();f.step();f.step(4100);f.step(4100);
   expect(f.engine.snapshot().retreat).toMatchObject({state:'skipped',settling:true});expect(f.sent.filter(a=>a.type==='walk')).toHaveLength(1);expect(f.engine.retreatOwned).toBe(true);expect(f.engine.runIntent).toBe(true);
  });
+ it('reconciles a trusted official position correction without another Stop or refreshed retreat allowance',()=>{
+  const f=setup();f.engage();f.clear();f.step();f.engine.officialGameplay();
+  f.engine.receive([{type:'position',id:1,position:{x:100,y:101}}]);
+  expect(f.sent.filter(a=>a.type==='stop')).toHaveLength(1);expect(f.engine.runIntent).toBe(true);
+  expect(f.engine.snapshot().retreat.attempts).toBe(1);
+  f.engine.receive([{type:'stop',id:1},{type:'changeTarget',id:0}]);f.step();
+  expect(f.engine.retreatOwned).toBe(false);expect(f.engine.running).toBe(true);
+ });
  it('late own Attack after a prior clear requires a fresh clear and sends at most one additional Stop',()=>{
   const f=setup();f.engage();f.clear();f.attack();f.attack();f.step();expect(f.sent.map(a=>a.type)).toEqual(['attack','stop','stop']);f.clear();f.step();expect(f.sent.at(-1)?.type).toBe('walk');
  });

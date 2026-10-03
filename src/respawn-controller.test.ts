@@ -134,12 +134,12 @@ describe('bounded death episode and authoritative arrival',()=>{
     f.c.stop();f.c.start(settings());f.advance(3000);expect(f.sent.filter(a=>a.type==='respawn')).toHaveLength(1);
     f.c.stop();expect(()=>f.c.perform('command',{type:'respawn'})).toThrow();
   });
-  it('uses a quiet window reset by actual commands but not panel viewing',()=>{
+  it('keeps the original death quiet window through panel and official input',()=>{
     const f=fixture();f.c.start(settings());f.step();f.packet(new BitWriter().u8(OP.death).i32(0));
     f.advance(1000);expect(f.sent.filter(a=>a.type==='respawn')).toEqual([]);f.c.manualInput();f.advance(2000);
     expect(f.sent.filter(a=>a.type==='respawn')).toHaveLength(1);
     const g=fixture();g.c.start(settings());g.step();g.packet(new BitWriter().u8(OP.death).i32(0));g.advance(1500);g.c.manualCommand();
-    g.advance(1900);expect(g.sent.filter(a=>a.type==='respawn')).toEqual([]);g.advance(200);expect(g.sent.filter(a=>a.type==='respawn')).toHaveLength(1);
+    g.advance(1900);expect(g.sent.filter(a=>a.type==='respawn')).toHaveLength(1);g.advance(200);expect(g.sent.filter(a=>a.type==='respawn')).toHaveLength(1);
   });
   it('holds canceled respawn uncertainty through actual takeover and drains a late ready arrival',()=>{
     const f=fixture();f.c.start(settings());f.step();f.die();f.c.manualCommand();f.advance(8000);f.fresh();

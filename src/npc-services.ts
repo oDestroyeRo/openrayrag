@@ -310,6 +310,7 @@ export class NpcServiceRuntime {
   private state: ServiceSnapshot['state'] = 'idle';
   private reason = 'No service running.';
   private deadline = 0;
+  private retainedPreparationDeadline:number|null=null;
   private binding: { actor: Entity; generation: number; connection: number } | null = null;
   private transition = false;
   private receiptValue: ServiceReceipt | null = null;
@@ -327,6 +328,9 @@ export class NpcServiceRuntime {
   }
   receipt(): ServiceReceipt | null {
     return this.receiptValue;
+  }
+  get preparingUnsent():boolean {
+    return this.active&&['preparing','travel','approach','locate'].includes(this.state)&&!this.receiptValue;
   }
   start(input: unknown, c: ServiceContext, policy:MapPolicy=DEFAULT_MAP_POLICY): void {
     if (this.active) throw new Error('Stop the current service first.');
@@ -352,6 +356,7 @@ export class NpcServiceRuntime {
     this.binding = null;
     this.transition = false;
     this.receiptValue = null;
+    this.retainedPreparationDeadline=null;
   }
   cancel(reason = 'Service stopped by you.', failed = false): void {
     if (this.travel.active) this.travel.cancel(reason, failed);
@@ -374,7 +379,7 @@ export class NpcServiceRuntime {
       distance(a, b.actor) === 0
     );
   }
-  observe(events: readonly GameEvent[], worldEvents: readonly WorldEvent[], c: ServiceContext): void {
+  observe(events: readonly GameEvent[], worldEvents: readonly WorldEvent[], c: ServiceContext,continuePreparation=false): void {
     if (this.receiptValue) observeServiceReceipt(this.receiptValue, events, worldEvents, c);
     if (!this.active) return;
     if (
@@ -392,6 +397,11 @@ export class NpcServiceRuntime {
     }
     for (const e of events)
       if (e.type === 'map' || e.type === 'clear') {
+        if(continuePreparation&&this.preparingUnsent){
+          this.retainedPreparationDeadline=Math.min(this.retainedPreparationDeadline??Infinity,this.deadline);
+          if(this.state!=='travel'&&this.state!=='approach')this.state='preparing';
+          this.reason='Retaining the unsent service visit after official travel.';continue;
+        }
         if (this.state === 'travel') {
           continue;
         }
@@ -428,7 +438,7 @@ export class NpcServiceRuntime {
   tick(c: ServiceContext): WorldAction | null {
     if (!this.active || !this.definition) return null;
     const s = this.definition;
-    if (this.now() > this.deadline) {
+    if (this.now() > Math.min(this.deadline,this.retainedPreparationDeadline??Infinity)) {
       this.cancel('Service phase timed out; no repeat request was sent.', true);
       return null;
     }
@@ -436,7 +446,8 @@ export class NpcServiceRuntime {
       !c.alive &&
       !(
         ((this.state === 'outcome' && this.transition) ||
-          (this.state === 'travel' && this.travel.snapshot().state === 'transition')) &&
+          (['travel','approach'].includes(this.state) && this.travel.snapshot().state === 'transition')||
+          this.retainedPreparationDeadline!==null&&this.preparingUnsent) &&
         !c.player
       )
     ) {

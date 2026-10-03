@@ -59,7 +59,7 @@ describe('observed own cast admission',()=>{
   const f=setup('attack',shape.id);f.prepare();f.packet(startProcShape(shape.id,shape));
   f.packet(procResult(shape.id,shape.skillId,shape.level,shape.mode==='self'?shape.id:2));f.advance(3000);
   expect(f.c.engine.observedOwnCastSettled()).toBe(false);expect(f.sent).toEqual([]);expect(f.c.runRequested).toBe(true);
-  expect(f.c.snapshot().reason).toContain('triggered');expect(()=>f.c.engine.manualAction({type:'useItem',itemId:501})).toThrow('cast');
+  expect(f.c.snapshot().reason).toContain('non-vending');expect(()=>f.c.engine.manualAction({type:'useItem',itemId:501})).toThrow('cast');
   f.packet(acceptedWalk(shape.id===0?1:0));expect(f.c.engine.observedOwnCastSettled()).toBe(false);
   f.packet(acceptedWalk(shape.id));expect(f.c.engine.observedOwnCastSettled()).toBe(true);f.advance(400);
   expect(f.sent.some(a=>a.type==='attack')).toBe(true);

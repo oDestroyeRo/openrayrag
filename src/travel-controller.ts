@@ -41,6 +41,8 @@ export interface TravelPlanningContext {
 export interface TravelPlanningOptions {
   context?: () => TravelPlanningContext;
   dispatchReady?: () => boolean;
+  /** Retain a requested trip through current-character official movement. */
+  continueRequested?: () => boolean;
   databaseTravel?: DatabaseTravelTransport;
   /** The same verified retired walk may reconcile the transport's original endpoint owner. */
   retiredWalkAccepted?: (requested:Position,accepted:Position) => void;
@@ -66,7 +68,11 @@ export class TravelController {
   private lastMovement:MovementReceipt|null=null;
   private retiredMovement:MovementReceipt|null=null;
   private executionIdentity: string | null = null;
+  private officialWalkUntil=0;
+  private officialArrival:1|2|null=null;
+  private officialInputUntil=0;
   private preparedDeparture:TravelTransition|null=null;
+  private officialDeparture:GameEvent|null=null;
   private databaseTrip:DatabaseTrip|null=null;
   private installedStart: Position | null = null;
   private latest: { map: string; player: Entity | undefined } = { map: '', player: undefined };
@@ -97,6 +103,7 @@ export class TravelController {
   get tripId():number {return this.trip;}
   get teleportPending():boolean {return !!this.databaseTrip?.sent;}
   get databasePreparing():boolean {return this.active&&!!this.databaseTrip&&!this.databaseTrip.sent;}
+  officialGameplay():void {if(this.active&&!this.databaseTrip?.sent)this.officialInputUntil=this.now()+4_000;}
   observeReady():void {
     const trip=this.databaseTrip,context=this.planningOptions.context?.();
     if(trip?.sent&&!trip.contradictory&&trip.phase==='map'&&context?.connection===trip.connection&&context.map===trip.toMap)
@@ -143,8 +150,14 @@ export class TravelController {
    * OutOfSight at the sent final portal leg holds uncertainty; it is not arrival. */
   prepareObservation(events:GameEvent[]):void {
     this.preparedDeparture=null;
+    this.officialDeparture=null;
     const event=events.length===1?events[0]:undefined,step=this.steps[0],receipt=this.lastMovement,context=this.planningOptions.context?.();
     const trip=this.databaseTrip;
+    if(!trip&&this.active&&this.purpose!=='party-follow'&&this.planningOptions.continueRequested?.()
+      &&event?.type==='remove'&&event.id===this.playerId&&event.reason===0&&!event.dead
+      &&context?.identity===this.executionIdentity&&context.map===this.map&&context.player?.id===this.playerId
+      &&context.player.name===this.ownName&&context.player.kind===0&&!context.player.dead&&context.player.hp>0)
+      this.officialDeparture=event;
     if(trip?.sent&&!trip.contradictory&&context?.connection===trip.connection&&event
       &&(event.type==='remove'&&event.id===trip.ownId&&event.reason===0&&!event.dead&&trip.phase==='source'
         ||event.type==='clear'&&trip.phase==='departed')
@@ -249,6 +262,13 @@ export class TravelController {
       && (!this.planningOptions.context || (context as TravelPlanningContext).identity === request.identity);
   }
   private plan(player: Entity, verified?: Position[]): void {
+    // A final approach belongs to its captured destination map. Official travel
+    // can move the character elsewhere, but cannot carry that collision grid.
+    if(this.approachTarget){
+      const grid=this.map===this.destination?this.gridFor(this.map):null;
+      this.approachNav=grid?new GridNavigator(grid):null;
+      if(this.map===this.destination&&!grid){this.cancel('No verified collision map for the retained final approach.',true);return;}
+    }
     const step = this.steps[0];
     const route = verified ?? (this.approachNav
       ? this.approachTarget ? this.approachNav.plan(cell(player), this.approachTarget, { avoidWalls: true }) : null
@@ -271,6 +291,54 @@ export class TravelController {
       this.observeRetired(event);
       if(this.databaseTrip) {this.observeDatabase(event,departure,proofs);continue;}
       if (!this.active) continue;
+      if(this.planningOptions.continueRequested?.()&&this.purpose!=='party-follow'){
+        if(event===this.officialDeparture){
+          this.officialDeparture=null;
+          this.generation++;this.planning?.abort.abort();this.planning=null;
+          const step=this.steps[0],end=this.leg?.cells.at(-1)??this.route.at(-1);
+          if(step&&end&&this.inPortal(end,step)&&this.now()>=this.officialInputUntil){
+            this.state='transition';this.deadline=this.now()+20_000;
+            this.reason='Waiting for the planned map transition.';
+          }else{
+            this.officialArrival=1;this.lastMovement=null;this.leg=null;this.route=[];this.installedStart=null;
+            this.state='transition';this.reason='Waiting for the same character after official travel.';
+          }
+          continue;
+        }
+        if(event.type==='map'||event.type==='clear'){
+          const step=this.steps[0],end=this.leg?.cells.at(-1)??(this.state==='transition'?this.route.at(-1):undefined);
+          if(!(event.type==='map'&&step&&event.map===step.portal.toMap&&end&&this.inPortal(end,step))){
+            this.generation++;this.planning?.abort.abort();this.planning=null;
+            this.officialArrival=event.type==='map'?1:2;this.officialWalkUntil=0;
+            this.lastMovement=null;this.leg=null;this.route=[];this.installedStart=null;
+            this.state='transition';this.reason='Waiting for the same character after official travel.';continue;
+          }
+        }
+        if(event.type==='spawn'&&this.officialArrival!==null&&event.entity.id===this.playerId){
+          const context=this.planningOptions.context?.();
+          if(event.entity.name!==this.ownName||event.entity.kind!==0||event.entryType!==this.officialArrival
+            ||event.entity.dead||event.entity.hp<=0||!context?.identity){this.cancel('Official travel changed the captured character.',true);continue;}
+          this.officialArrival=null;this.map=context.map;this.executionIdentity=context.identity;
+          this.replanOfficial(event.entity);continue;
+        }
+        if(event.type==='walk'&&event.id===this.playerId&&!event.walk.locked
+          &&(this.now()<this.officialInputUntil||!!this.officialWalkUntil)){
+          const end=event.walk.cells.at(-1),owned=!!this.leg&&distance(end??cell(event.walk.origin),this.leg.cells.at(-1)!)===0
+            &&event.walk.cells.length<=21&&(this.approachNav??travelNavigator(this.map,this.route))?.validRoute(event.walk.cells);
+          if(!owned&&end){
+            this.generation++;this.planning?.abort.abort();this.planning=null;
+            this.officialWalkUntil=this.now()+walkDuration(event.walk)+100;
+            this.lastMovement=null;this.leg=null;this.route=[];this.installedStart=null;
+            this.state='walking';this.reason='Waiting for official movement before replanning the trip.';continue;
+          }
+        }
+        if((event.type==='stop'||event.type==='position')&&event.id===this.playerId
+          &&(this.officialWalkUntil||this.now()<this.officialInputUntil)){
+          this.generation++;this.planning?.abort.abort();this.planning=null;
+          this.officialWalkUntil=this.now()+300;this.lastMovement=null;this.leg=null;this.route=[];
+          this.reason='Waiting for official movement before replanning the trip.';continue;
+        }
+      }
       if (this.state === 'planning') {
         if (event.type === 'map' || event.type === 'enter' || event.type === 'clear'
           || event.type === 'spawn' && event.entity.id === this.playerId
@@ -341,6 +409,22 @@ export class TravelController {
     if(this.active&&this.now()>this.deadline)
       this.cancel('Database teleport was not confirmed before its deadline. No retry will be sent.',true);
     if(!trip.sent) {
+      if(this.planningOptions.continueRequested?.()){
+        if(event.type==='walk'||event.type==='position'||event.type==='stop')return;
+        if(event.type==='map'||event.type==='clear'){
+          this.officialArrival=event.type==='map'?1:2;this.reason='Waiting for the same character before Database travel.';return;
+        }
+        if(event.type==='spawn'&&this.officialArrival!==null&&event.entity.id===trip.ownId){
+          if(event.entity.name!==trip.ownName||event.entity.kind!==0||event.entryType!==this.officialArrival
+            ||event.entity.dead||event.entity.hp<=0||context?.connection!==trip.connection||!context.identity){
+            this.cancel('Database travel changed the captured character before dispatch.',true);return;
+          }
+          this.officialArrival=null;trip.fromMap=context.map;trip.identity=context.identity;this.map=context.map;
+          if(context.map===trip.toMap){this.databaseTrip=null;this.state='complete';this.reason='Requested destination observed after official travel.';}
+          return;
+        }
+        if(event.type==='remove'&&event.id===trip.ownId&&!event.dead&&event.reason===0)return;
+      }
       if(event.type==='map'||event.type==='clear'||event.type==='enter'||event.type==='spawn'&&event.entity.id===trip.ownId
         ||'id' in event&&event.id===trip.ownId&&['remove','death','walk','position'].includes(event.type))
         this.cancel('Database travel source changed before dispatch.',true);
@@ -394,6 +478,14 @@ export class TravelController {
     const a = step.portal.area;
     return Math.abs(p.x - a.x) <= a.halfWidth && Math.abs(p.y - a.y) <= a.halfHeight;
   }
+  private replanOfficial(player:Entity):void {
+    if(this.approachTarget&&this.map===this.destination){this.steps=[];this.plan(player);return;}
+    this.approachNav=null;
+    // Keep the trip identity and its original total deadline when replanning.
+    const steps=routeBetweenMaps(this.map,cell(player),this.destination,this.avoidWalls,this.policy);
+    if(!steps){this.cancel('No verified route from the observed official movement destination.',true);return;}
+    this.steps=steps;this.plan(player);
+  }
   tick(map: string, player: Entity | undefined): void {
     this.latest = { map, player };
     if (!this.active) return;
@@ -402,6 +494,7 @@ export class TravelController {
     if(trip) {
       if(now>this.deadline){this.cancel(trip.sent?'Database teleport was not confirmed. Waiting for authoritative arrival or reconnect; no retry will be sent.':'Database travel preparation timed out before sending a request.',true);return;}
       if(trip.sent)return;
+      if(this.officialArrival!==null||!player){this.reason='Waiting for the original living character before Database travel.';return;}
       const context=this.planningOptions.context?.();
       if(!context||context.identity!==trip.identity||context.connection!==trip.connection||map!==trip.fromMap
         ||player?.id!==trip.ownId||player.name!==trip.ownName||player.dead||player.hp<=0) {
@@ -418,8 +511,20 @@ export class TravelController {
       }
       return;
     }
-    if (this.approachNav && now - this.since > 300_000) { this.cancel('Final NPC approach reached its five-minute limit.', true); return; }
+    if (this.approachTarget && now - this.since > 300_000) { this.cancel('Final NPC approach reached its five-minute limit.', true); return; }
     if (now - this.since > 1_200_000) { this.cancel('Travel reached its twenty-minute limit.', true); return; }
+    if(this.officialArrival!==null){
+      // The original total approach/trip ceiling above still advances. A
+      // superseded portal leg's old twenty-second deadline owns no new arrival.
+      return;
+    }
+    if(this.officialWalkUntil){
+      if(now<this.officialWalkUntil)return;
+      this.officialWalkUntil=0;
+      if(player&&this.planningOptions.context?.().identity===this.executionIdentity)this.replanOfficial(player);
+      else this.cancel('Official movement changed the captured character.',true);
+      return;
+    }
     if (this.planning) {
       if (!this.planningCurrent(this.planning)) this.cancel('Route planning state changed. Choose the destination again.', true);
       return;
@@ -468,6 +573,7 @@ export class TravelController {
     if(this.databaseTrip&&!this.databaseTrip.sent)this.databaseTrip=null;
     if(this.purpose==='party-follow'&&this.lastMovement)this.retiredMovement=structuredClone(this.lastMovement);
     this.lastMovement=null;
+    this.officialArrival=null;this.officialWalkUntil=0;this.officialInputUntil=0;
     this.generation++; this.planning?.abort.abort(); this.planning = null; this.installedStart = null;
     this.state = failed ? 'failed' : 'cancelled'; this.reason = reason;
     this.leg = null; this.route = []; this.awaitingSpawn = false;

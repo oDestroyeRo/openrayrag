@@ -71,6 +71,8 @@ export class ManualRefine {
   constructor(private readonly send:(packet:RefinePacket)=>void,private readonly now=Date.now,private readonly token=()=>crypto.randomUUID().replaceAll('-','')){}
   get busy():boolean { return this.state==='pending'; }
   get blocked():boolean { return this.receipt!==null||this.officialOwner!==null; }
+  /** Only Companion's own transmitted receipt owns automatic command arbitration. */
+  get companionReceiptPending():boolean {return this.receipt!==null;}
   get maintenanceBlocked():boolean { return this.prepared!==null||this.blocked; }
   preview(input:unknown,c:RefineContext):void {
     if(this.blocked)throw new Error('Wait for the previous refine transaction to reconcile.');

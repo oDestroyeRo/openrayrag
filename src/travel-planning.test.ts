@@ -9,16 +9,40 @@ import type { PlanningScheduler } from './route-planning';
 const player = (): Entity => ({id:1,x:170,y:370,name:'Fixture',classId:0,kind:0,level:1,hp:100,maxHp:100,dead:false});
 const policy = {...DEFAULT_MAP_POLICY,mode:'weighted' as const};
 const route = () => routeBetweenMaps('prt_fild08',player(),'prontera',false,policy)!;
-function setup() {
+function setup(continueRequested=false) {
+  let clock=100_000;
   const sent:Action[]=[], pending:Array<{resolve:(value:TravelStep[]|null)=>void;reject:(reason:unknown)=>void;signal?:AbortSignal}>=[];
   const context:TravelPlanningContext={identity:'connection-1/world-1/own-1',map:'prt_fild08',player:player()};
-  const travel=new TravelController(a=>sent.push(a),()=>100_000,undefined,{context:()=>context,
+  const travel=new TravelController(a=>sent.push(a),()=>clock,undefined,{context:()=>context,continueRequested:()=>continueRequested,
     plan:(_map,_from,_destination,_walls,_policy,options)=>new Promise((resolve,reject)=>pending.push({resolve,reject,signal:options?.signal}))});
   const start=()=>travel.start(context.map,context.player!,'prontera',10,false,policy);
-  return {travel,sent,pending,context,start};
+  return {travel,sent,pending,context,start,advance:(ms:number)=>{clock+=ms;}};
 }
 const flush=async()=>{await Promise.resolve();await Promise.resolve();};
 describe('weighted planning owns travel before yielding',()=>{
+  it.each(['stop','position'] as const)('retires planning before a trusted official %s replans the same trip',async type=>{
+    const f=setup(true);f.start();const trip=f.travel.tripId;f.travel.officialGameplay();
+    f.context.player={...player(),x:171};
+    f.travel.observe([type==='stop'?{type,id:1}:{type,id:1,position:{x:171,y:370}}]);
+    expect(f.pending[0]!.signal?.aborted).toBe(true);f.advance(301);f.travel.tick(f.context.map,f.context.player);
+    f.pending[0]!.resolve(route());await flush();expect(f.travel.active).toBe(true);
+    expect(f.travel.tripId).toBe(trip);expect(f.sent).toEqual([]);
+    f.advance(1_200_000);f.travel.tick(f.context.map,f.context.player);
+    expect(f.travel.snapshot()).toMatchObject({state:'failed',reason:'Travel reached its twenty-minute limit.'});
+  });
+  it.each(['resolve','reject'] as const)('retires a planner on official departure before its late %s can cancel the retained trip',async outcome=>{
+    const f=setup(true);f.start();const trip=f.travel.tripId;
+    const departure:GameEvent={type:'remove',id:1,dead:false,reason:0};
+    f.travel.prepareObservation([departure]);f.context.identity=null;f.context.player=undefined;
+    f.travel.observe([departure]);expect(f.pending[0]!.signal?.aborted).toBe(true);
+    if(outcome==='resolve')f.pending[0]!.resolve(route());else f.pending[0]!.reject(new Error('Retired planner'));
+    await flush();expect(f.travel.snapshot().state).toBe('transition');expect(f.travel.tripId).toBe(trip);expect(f.sent).toEqual([]);
+    f.context.map='prontera';f.travel.observe([{type:'map',map:'prontera'}]);
+    f.context.identity='connection-1/world-2/own-1';f.context.player={...player(),x:156,y:26};
+    f.travel.observe([{type:'spawn',entity:f.context.player,entryType:1}]);
+    f.travel.tick(f.context.map,f.context.player);expect(f.travel.snapshot().state).toBe('complete');
+    expect(f.travel.tripId).toBe(trip);expect(f.sent).toEqual([]);
+  });
   it('claims ownership before invoking a planner, blocks duplicate and approach starts and dispatches only on a later tick',async()=>{
     const f=setup();f.start();
     expect(f.travel.snapshot()).toMatchObject({state:'planning',destination:'prontera',policy});expect(f.travel.active).toBe(true);

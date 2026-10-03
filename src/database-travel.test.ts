@@ -230,6 +230,35 @@ describe('production shared-controller Database travel',()=>{
     const f=controllerFixture();f.c.officialLook();f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:30}]);
     f.advance(1_900);expect(f.teleports()).toHaveLength(0);f.step();expect(f.teleports()).toHaveLength(1);
   });
+  it('keeps the same unsent macro trip through official movement and a manual map change',()=>{
+    const f=controllerFixture('prt_fild08',own,0);f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:60}]);
+    const trip=f.c.travel.tripId;f.c.engine.deaths=1;f.c.engine.kills=7;f.c.engine.looted=4;f.c.manualCommand();
+    f.receive(new BitWriter().u8(OP.walk).i32(0).position(own).f32(own.x).f32(own.y).f32(.1).f32(.1).u8(2).u8(0x60).u8(0));
+    for(let i=0;i<10;i++){f.c.manualInput();f.step(1000);}
+    f.transition('prt_fild06');expect(f.c.travel.tripId).toBe(trip);expect(f.c.macro.active).toBe(true);
+    expect(f.teleports()).toHaveLength(0);f.advance(30_000);expect(f.teleports()).toHaveLength(1);
+    f.transition('prt_fild05');expect(f.c.macro.snapshot()).toMatchObject({state:'completed',actionsIssued:1,actionsCompleted:1});
+    expect(f.c.snapshot()).toMatchObject({deaths:1,kills:7,looted:4});expect(f.packets.filter(p=>p[0]===OP.stop)).toEqual([]);
+  });
+  it('does not renew a short macro deadline when manual travel changes the unsent source',()=>{
+    const f=controllerFixture('prt_fild08',own,0);f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:20}]);
+    f.advance(10_000);f.c.manualCommand();f.transition('prt_fild06');f.advance(10_000);
+    expect(f.c.macro.snapshot()).toMatchObject({state:'failed',actionsIssued:1,actionsCompleted:0});expect(f.teleports()).toHaveLength(0);
+  });
+  it('drains the sent Database receipt through official input and never replays it',()=>{
+    const f=controllerFixture();f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:60}]);f.step();f.c.manualCommand();
+    for(let i=0;i<15;i++){f.c.manualInput();f.step(100);}
+    expect(f.c.travel.teleportPending).toBe(true);expect(f.teleports()).toHaveLength(1);expect(f.c.macro.active).toBe(true);
+    f.transition('prt_fild05');expect(f.c.macro.snapshot()).toMatchObject({state:'completed',actionsCompleted:1});
+    expect(f.teleports()).toHaveLength(1);expect(f.packets.filter(p=>p[0]===OP.stop)).toEqual([]);
+  });
+  it('keeps an unsent trip during manual NPC input and dispatches once after its authoritative close',()=>{
+    const f=controllerFixture('prt_fild08',own,0);f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:60}]);const trip=f.c.travel.tripId;
+    f.advance(20_000);f.c.manualCommand();f.receive(new BitWriter().u8(77).u8(0).i32(3).bool(true));
+    f.advance(15_000);expect(f.teleports()).toHaveLength(0);expect(f.c.travel.tripId).toBe(trip);expect(f.c.macro.active).toBe(true);
+    f.receive(new BitWriter().u8(77).u8(3));expect(f.teleports()).toHaveLength(1);f.step();expect(f.teleports()).toHaveLength(1);
+    expect(f.packets.filter(p=>p[0]===OP.stop)).toEqual([]);
+  });
   it('completes explicit macro travel then activates farming on the requested map without renewing run counters',()=>{
     const f=controllerFixture();f.macro([{type:'travel',map:'prt_fild05',timeoutSeconds:30},{type:'farm',map:'prt_fild05',targets:[4000],timeoutSeconds:30}]);
     f.c.engine.deaths=1;f.c.engine.kills=5;f.c.engine.looted=4;f.step();
@@ -256,6 +285,21 @@ describe('production shared-controller Database travel',()=>{
     f.transition('prontera',{x:145,y:28},true);f.step();f.step();
     expect(f.c.service.snapshot().state).toBe('approach');expect(f.packets.some(p=>p[0]===OP.walk)).toBe(true);
     expect(f.c.macro.snapshot().actionsCompleted).toBe(0);
+  });
+  it('retains an unsent macro service approach through official travel and keeps its original step deadline',()=>{
+    const f=controllerFixture('prontera',{...own,x:145,y:28},0),definition=BUILTIN_SERVICES.find(service=>service.id==='kafra-south-storage')!;
+    f.macro([{type:'store',serviceId:definition.id,itemId:501,quantity:1,keep:1,maxSpend:100,timeoutSeconds:20}]);f.step();
+    expect(f.c.service.preparingUnsent).toBe(true);f.c.manualCommand(true);f.transition('prt_fild08',{x:170,y:370});
+    expect(f.c.macro.active).toBe(true);expect(f.c.macro.snapshot()).toMatchObject({actionsIssued:1,actionsCompleted:0});
+    expect(f.c.service.preparingUnsent).toBe(true);expect(f.c.service.snapshot().state).not.toBe('failed');
+    const worldRequests=()=>f.packets.filter(p=>[76,78,79,86,87,88,89].includes(p[0]!));expect(worldRequests()).toEqual([]);
+    f.step(300);const cells=f.c.travel.snapshot().leg,dirs=[[0,-1],[-1,-1],[-1,0],[-1,1],[0,1],[1,1],[1,0],[1,-1]],
+      walk=new BitWriter().u8(OP.walk).i32(0).position(cells[0]!).f32(cells[0]!.x).f32(cells[0]!.y).f32(.05).f32(.05).u8(cells.length);
+    const directions=cells.slice(1).map((p,i)=>dirs.findIndex(([x,y])=>p.x-cells[i]!.x===x&&p.y-cells[i]!.y===y));
+    for(let i=0;i<directions.length;i+=2)walk.u8((directions[i]!<<4)|(directions[i+1]??0));f.receive(walk.u8(0));
+    f.c.engine.receive([{type:'castStart',id:0,target:0,skillId:42,level:1,facing:0,flags:0,position:{x:170,y:370},remainingSeconds:30}]);
+    f.advance(19_600);expect(f.c.macro.snapshot()).toMatchObject({state:'failed',actionsIssued:1,actionsCompleted:0});expect(worldRequests()).toEqual([]);
+    expect(f.c.macro.snapshot().reason).toBe('Macro step confirmation timed out. Do not retry automatically.');
   });
   it('death recovery returns to the captured farming map through the same Database transport',()=>{
     const f=controllerFixture('prontera',{...own,dead:true,hp:0});f.settings.automation.recovery.enabled=false;

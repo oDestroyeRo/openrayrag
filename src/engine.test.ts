@@ -111,7 +111,7 @@ describe('combat and looting behavior', () => {
   });
   it('requires a fresh start after map change or reconnect', () => {
     const {engine,sent,step}=setup();engine.start(settings);step();
-    engine.receive([{type:'map',map:'prontera'}]);expect(engine.running).toBe(false);expect(engine.entities.size).toBe(0);expect(sent.at(-1)).toEqual({type:'stop'});
+    const before=sent.length;engine.receive([{type:'map',map:'prontera'}]);expect(engine.running).toBe(false);expect(engine.entities.size).toBe(0);expect(sent).toHaveLength(before);
     engine.disconnect();engine.connect(true);step();expect(engine.running).toBe(false);
   });
   it('stops after sleep or stale server traffic', () => {

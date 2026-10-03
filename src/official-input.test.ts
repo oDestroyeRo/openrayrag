@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { isOfficialGameplayCommand, isOfficialLookCommand, couldOwnOfficialGameplay } from './official-input';
+import { isOfficialGameplayCommand, isOfficialLookCommand, isOfficialMovementCommand, couldOwnOfficialGameplay } from './official-input';
 
 describe('pinned official outgoing command ownership', () => {
+  it('marks only physical command families for bounded official movement reconciliation',()=>{
+    for(const opcode of [7,11,19,29])expect(isOfficialMovementCommand(new Uint8Array([opcode,255,255]))).toBe(true);
+    for(const opcode of [2,3,13,45,47,48,59,64,80,82])expect(isOfficialMovementCommand(new Uint8Array([opcode,255,255]))).toBe(false);
+    const bytes=new Uint8Array([3,7,255]);expect(isOfficialMovementCommand(new DataView(bytes.buffer,1,2))).toBe(true);
+    const blob=new Blob([bytes]),read=vi.spyOn(blob,'arrayBuffer');
+    for(const value of [blob,{},'7',new ArrayBuffer(0)])expect(isOfficialMovementCommand(value)).toBe(false);
+    expect(read).not.toHaveBeenCalled();
+  });
   it('classifies only the Look opcode for manual grace without inspecting or retaining its private body',()=>{
     const bytes=new Uint8Array([3,13,255,255,7]);
     expect(isOfficialLookCommand(bytes.subarray(1,4))).toBe(true);expect(couldOwnOfficialGameplay(bytes.subarray(1,4))).toBe(true);
