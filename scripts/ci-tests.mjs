@@ -4,6 +4,7 @@ import { readFile, mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { spawnSync } from 'node:child_process';
 import { platforms, packageConfig, packageSmokes, assertArchitecture, installerFiles } from './ci-platform.mjs';
 
 const workflow=parse(await readFile(new URL('../.github/workflows/release.yml',import.meta.url),'utf8'));
@@ -56,6 +57,28 @@ test('only trusted main signs and centrally publishes every platform',()=>{
   for(const platform of ['windows','linux'])assert.ok(release.jobs.assemble.steps.some(s=>s.with?.path===`platform-bundles/${platform}`));
 });
 
+test('the reusable release admits only the environment signing names and rejects an empty key before building',()=>{
+  const names=['TAURI_SIGNING_PRIVATE_KEY','TAURI_SIGNING_PRIVATE_KEY_PASSWORD'];
+  assert.deepEqual(Object.keys(workflow.jobs.release.secrets).sort(),names);
+  assert.deepEqual(Object.keys(release.on.workflow_call.secrets).sort(),names);
+  for(const name of names){
+    assert.equal(workflow.jobs.release.secrets[name],'${{ secrets.'+name+' }}');
+    // The caller has no environment binding: the callee's release environment
+    // supplies these values. Presence is required at runtime, not at the call.
+    assert.equal(release.on.workflow_call.secrets[name].required,false);
+  }
+  const guard=release.jobs.build.steps[0];
+  assert.deepEqual(guard.env,{TAURI_SIGNING_PRIVATE_KEY:'${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}'});
+  for(const key of ['', 'synthetic-signing-input-only']){
+    const result=spawnSync('bash',['-c',guard.run],{
+      env:{...process.env,TAURI_SIGNING_PRIVATE_KEY:key},encoding:'utf8',
+    });
+    assert.equal(result.status,key?0:1);
+    assert.ok(!`${result.stdout}${result.stderr}`.includes('synthetic-signing-input-only'));
+    if(!key)assert.match(result.stdout+result.stderr,/signing key is unavailable/);
+  }
+});
+
 test('parallel production builders join before source-bound bundle verification and preserve draft recovery',()=>{
   const {build,assemble,publish}=release.jobs;
   assert.equal(release.jobs['release-platforms'].needs,'reconcile');
@@ -95,10 +118,10 @@ test('one reusable main release call queues the entire trusted lifecycle without
   assert.equal(caller.uses,'./.github/workflows/release-publish.yml');
   assert.deepEqual(caller.permissions,{contents:'write',actions:'read'});
   assert.deepEqual(caller.concurrency,{group:'rayrag-release-publication',queue:'max','cancel-in-progress':false});
-  assert.equal(caller.secrets,undefined);
+  assert.notEqual(caller.secrets,'inherit');
   assert.equal(caller.environment,undefined);
   assert.deepEqual(Object.keys(release.on),['workflow_call']);
-  assert.equal(release.on.workflow_call,null);
+  assert.deepEqual(Object.keys(release.on.workflow_call),['secrets']);
   assert.equal(release.concurrency,undefined);
   assert.deepEqual(release.env,workflow.env);
   for(const job of Object.values(release.jobs))assert.equal(job.concurrency,undefined);
@@ -154,8 +177,8 @@ test('skip, reuse and published plans never admit signing and failed builders ca
   }
   assert.ok(release.jobs.publish.if.startsWith('always()'));
   const signing=release.jobs.build.steps.filter(step=>JSON.stringify(step).includes('secrets.'));
-  assert.equal(signing.length,1);
-  assert.equal(signing[0].if,"needs.reconcile.outputs.state == 'build'");
+  assert.equal(signing.length,2);
+  for(const step of signing)assert.equal(step.if,"needs.reconcile.outputs.state == 'build'");
 });
 
 test('package smokes overlap, require both successes and finish cleanup before reporting a failure', async () => {
