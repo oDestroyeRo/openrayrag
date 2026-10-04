@@ -25,10 +25,11 @@ test('main PRs and merge queue always run all native platform lanes',()=>{
 });
 test('aggregate cannot report success after failed, cancelled, skipped or missing lanes',()=>{
   const gate=workflow.jobs.verify;
-  assert.equal(gate.name,'CI / required');assert.equal(gate.needs,'quality');assert.equal(gate.if,'always()');
+  assert.equal(gate.name,'CI / required');assert.deepEqual(gate.needs,['quality','security']);assert.equal(gate.if,'always()');
   assert.equal(gate.steps.length,1);
   assert.equal(gate.steps[0].env.QUALITY_RESULT,'${{ needs.quality.result }}');
-  assert.equal(gate.steps[0].run,'test "$QUALITY_RESULT" = success');
+  assert.equal(gate.steps[0].env.SECURITY_RESULT,'${{ needs.security.result }}');
+  assert.equal(gate.steps[0].run,'test "$QUALITY_RESULT" = success && test "$SECURITY_RESULT" = success');
   assert.equal(workflow.jobs.reconcile.needs,'verify');
   assert.deepEqual(workflow.jobs.build.needs,['reconcile','release-platforms']);
   assert.deepEqual(workflow.jobs.publish.needs,['reconcile','build']);
@@ -41,7 +42,7 @@ test('only trusted main signs and centrally publishes every platform',()=>{
   const jobs=Object.entries(workflow.jobs).filter(([,job])=>JSON.stringify(job).includes('secrets.TAURI_SIGNING_PRIVATE_KEY'));
   assert.deepEqual(jobs.map(([name])=>name),['build']);
   for(const job of Object.values(workflow.jobs))for(const step of job.steps||[]){
-    if(step.uses)assert.match(step.uses,/@[a-f0-9]{40}$/);
+    if(step.uses)assert.match(step.uses,/@v\d+\.\d+\.\d+$/);
     if(step.uses?.startsWith('actions/checkout@')){assert.equal(step.with.ref,'${{ github.sha }}');assert.equal(step.with['persist-credentials'],false);}
   }
   for(const platform of ['windows','linux'])assert.ok(workflow.jobs.build.steps.some(s=>s.with?.path===`platform-bundles/${platform}`));
