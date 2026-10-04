@@ -8,6 +8,7 @@ import { assetNames, platformReceipt, validatePlatformBuild, sha256 } from './re
 import { stampVersions } from './release.mjs';
 import { nativeSmoke } from './native-smoke.mjs';
 import { verifyAppImageExecutable } from './appimage-proof.mjs';
+import { runLoggedProcess, smokePackagingEnvironment } from './process-diagnostics.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const platforms = {
@@ -130,6 +131,9 @@ export async function build(platform, mode) {
   requireValue(spec && process.platform===spec.os && process.arch===spec.arch,'Wrong native package runner/architecture.');
   requireValue(mode==='--smoke'||mode==='--release','Choose the CI smoke or release package mode.');
   const smoke=mode==='--smoke';
+  const environment={...process.env,...(platform==='linux'?{NO_STRIP:'1'}:{})};
+  // Reject signing inputs before smoke version stamping or launching tools.
+  const buildEnvironment=smoke?smokePackagingEnvironment(environment):environment;
   const sourceSha=run('git',['rev-parse','HEAD']).toString().trim();
   requireValue(sourceSha===process.env.GITHUB_SHA,'Checkout differs from the requested workflow source.');
   requireValue(/^[1-9]\d*$/.test(process.env.GITHUB_RUN_ID||'')&&/^[1-9]\d*$/.test(process.env.GITHUB_RUN_ATTEMPT||''),'Missing workflow identity.');
@@ -143,7 +147,11 @@ export async function build(platform, mode) {
   const args=['build','--target',spec.target,'--bundles',spec.bundles,'--config',JSON.stringify(config),'--ci','--no-binary-patching'];
   if(smoke)args.push('--features','ci-smoke');
   args.push('--','--locked');
-  execFileSync(process.execPath,[join(root,'node_modules/@tauri-apps/cli/tauri.js'),...args],{cwd:root,stdio:'inherit',env:{...process.env,...(platform==='linux'?{NO_STRIP:'1'}:{})}});
+  const command=[join(root,'node_modules/@tauri-apps/cli/tauri.js'),...args];
+  if(smoke)await runLoggedProcess(process.execPath,command,{
+    cwd:root,env:buildEnvironment,report:join(root,'reports',`package-${platform}.log`),
+  });
+  else execFileSync(process.execPath,command,{cwd:root,stdio:'inherit',env:buildEnvironment});
   const release=join(root,'src-tauri/target',spec.target,'release');
   const payload=await inspect(platform,join(release,'bundle'),join(release,`rayrag-companion${platform==='windows'?'.exe':''}`),version,smoke?'com.rayrag.companion.ci':'com.rayrag.companion',smoke);
   const folder=join(root,'platform-bundles',platform);

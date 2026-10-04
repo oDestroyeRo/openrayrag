@@ -26,6 +26,11 @@ export const NODE_VERSION = "26.10.0",
   RUST_VERSION = "1.98.1";
 export const ENDPOINT = `https://github.com/${REPOSITORY}/releases/latest/download/latest.json`;
 export const sha256 = (data) => createHash("sha256").update(data).digest("hex");
+/**
+ * @param {unknown} ok
+ * @param {string} message
+ * @returns {asserts ok}
+ */
 export function requireValue(ok, message) {
   if (!ok) throw new Error(message);
 }

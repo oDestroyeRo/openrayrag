@@ -150,7 +150,11 @@ async function filesAt(folder, version) {
   );
   return new Map(
     await Promise.all(
-      names.map(async (name) => [name, await readFile(join(folder, name))]),
+      names.map(async (name) =>
+        /** @type {[string, Buffer]} */ (
+          [name, await readFile(join(folder, name))]
+        ),
+      ),
     ),
   );
 }
@@ -186,12 +190,12 @@ function trustedContext() {
   requireValue(
     process.env.GITHUB_REPOSITORY === REPOSITORY &&
       process.env.GITHUB_REF === "refs/heads/main" &&
-      ["push", "workflow_dispatch"].includes(process.env.GITHUB_EVENT_NAME),
+      ["push", "workflow_dispatch"].includes(process.env.GITHUB_EVENT_NAME ?? ""),
     "Release effects require the trusted main workflow.",
   );
   const sha = process.env.GITHUB_SHA;
   requireValue(
-    /^[a-f0-9]{40}$/.test(sha ?? "") &&
+    typeof sha === "string" && /^[a-f0-9]{40}$/.test(sha) &&
       exec("git", ["rev-parse", "HEAD"]) === sha,
     "Checkout is not the exact triggering SHA.",
   );
@@ -234,6 +238,7 @@ function trustedContext() {
     readTagObject: (objectSha) => readLocalTagObject(repositoryRoot, objectSha),
   };
 }
+/** @param {string} root @param {string} sha */
 export function readLocalTagObject(root, sha) {
   requireValue(/^[a-f0-9]{40}$/.test(sha), "Invalid annotated tag SHA.");
   const output = execFileSync("git", ["cat-file", "--batch"], {
@@ -294,6 +299,10 @@ export function readLocalTagObject(root, sha) {
   };
 }
 export class GitHubReleaseApi {
+  /**
+   * @param {string | undefined} token
+   * @param {((sha: string) => ReturnType<typeof readLocalTagObject>) | null} readTagObject
+   */
   constructor(token, readTagObject = null) {
     requireValue(
       typeof token === "string" && token.length > 0,
@@ -303,6 +312,13 @@ export class GitHubReleaseApi {
     this.tagObjects = new Map();
     this.readTagObject = readTagObject;
   }
+  /**
+   * JSON responses remain untrusted and are validated by the release engines.
+   * @param {"GET" | "POST" | "PATCH"} method
+   * @param {string} path
+   * @param {Record<string, unknown> | Buffer} [body]
+   * @param {{bytes?: boolean, accept?: string}} [options]
+   */
   async request(
     method,
     path,
@@ -343,7 +359,9 @@ export class GitHubReleaseApi {
     });
     if (response.status === 404 && method === "GET") return null;
     if (bytes && response.status === 302) {
-      const location = new URL(response.headers.get("location"));
+      const header = response.headers.get("location");
+      requireValue(header !== null, "Artifact download redirect is missing.");
+      const location = new URL(header);
       requireValue(
         location.protocol === "https:" &&
           (location.hostname.endsWith(".githubusercontent.com") ||
@@ -366,6 +384,7 @@ export class GitHubReleaseApi {
           (await boundedBytes(response, 8 * 1024 * 1024)).toString("utf8"),
         );
   }
+  /** @param {string} tag */
   async release(tag) {
     // The tag endpoint promises published releases only. Authenticated release
     // listing is required to recover drafts, including drafts on later pages.
@@ -390,6 +409,7 @@ export class GitHubReleaseApi {
   latest() {
     return this.request("GET", "releases/latest");
   }
+  /** @param {string} tag */
   async tagSha(tag) {
     const ref = await this.request(
       "GET",
@@ -416,6 +436,7 @@ export class GitHubReleaseApi {
     );
     return refs;
   }
+  /** @param {string} ref */
   planRef(ref) {
     requireValue(
       ref.startsWith(PLAN_REF_PREFIX),
@@ -423,6 +444,7 @@ export class GitHubReleaseApi {
     );
     return this.request("GET", `git/ref/${ref.slice("refs/".length)}`);
   }
+  /** @param {string} sha */
   async tagObject(sha) {
     requireValue(/^[a-f0-9]{40}$/.test(sha), "Invalid annotated tag SHA.");
     // Git objects are immutable by SHA. Refs are always read afresh.
@@ -434,6 +456,12 @@ export class GitHubReleaseApi {
       );
     return this.tagObjects.get(sha);
   }
+  /**
+   * @param {string} tag
+   * @param {string} message
+   * @param {string} sourceSha
+   * @param {string} pubDate
+   */
   createPlanTag(tag, message, sourceSha, pubDate) {
     requireValue(
       tag.startsWith(PLAN_REF_PREFIX.slice("refs/tags/".length)),
@@ -456,6 +484,7 @@ export class GitHubReleaseApi {
       },
     });
   }
+  /** @param {string} ref @param {string} sha */
   createPlanRef(ref, sha) {
     requireValue(
       ref.startsWith(PLAN_REF_PREFIX),
@@ -463,9 +492,11 @@ export class GitHubReleaseApi {
     );
     return this.request("POST", "git/refs", { ref, sha });
   }
+  /** @param {string} tag @param {string} sha */
   createTag(tag, sha) {
     return this.request("POST", "git/refs", { ref: `refs/tags/${tag}`, sha });
   }
+  /** @param {{tag: string, version: string}} id @param {string} body */
   createDraft(id, body) {
     return this.request("POST", "releases", {
       tag_name: id.tag,
@@ -480,6 +511,7 @@ export class GitHubReleaseApi {
       make_latest: "false",
     });
   }
+  /** @param {number} id */
   async assets(id) {
     const assets = await this.request(
       "GET",
@@ -522,11 +554,12 @@ export class GitHubReleaseApi {
             bytes && bytes.length === asset.size,
             "Asset size changed during download.",
           );
-          return [asset.name, bytes];
+          return /** @type {[string, Buffer]} */ ([asset.name, bytes]);
         }),
       ),
     );
   }
+  /** @param {number} id @param {string} name @param {Buffer} bytes */
   upload(id, name, bytes) {
     return this.request(
       "POST",
@@ -534,6 +567,7 @@ export class GitHubReleaseApi {
       bytes,
     );
   }
+  /** @param {number} id @param {Record<string, unknown>} body */
   publish(id, body) {
     // Also normalize older drafts' metadata; tag/provenance remain authoritative.
     return this.request("PATCH", `releases/${id}`, {
@@ -593,12 +627,14 @@ export class GitHubReleaseApi {
     }
   }
 }
+/** @param {Response} response @param {number} [limit] @returns {Promise<Buffer>} */
 async function boundedBytes(
   response,
   limit = MAX_RELEASE_BUNDLE + 1024 * 1024,
 ) {
   const chunks = [];
   let size = 0;
+  requireValue(response.body !== null, "Download response body is missing.");
   for await (const chunk of response.body) {
     size += chunk.length;
     requireValue(size <= limit, "Download exceeds release size bound.");
@@ -629,7 +665,7 @@ async function main() {
     source = trustedContext(),
     config = await readConfig(),
     publicKey = config.plugins.updater.pubkey;
-  let context = {
+  const context = {
     ...source,
     publicKey,
     verifyNative,
@@ -647,7 +683,7 @@ async function main() {
       );
       const fields = output.split("\0");
       requireValue(
-        fields.at(-1).trim() === "" && fields.length % 2 === 1,
+        fields.at(-1)?.trim() === "" && fields.length % 2 === 1,
         "Invalid Git commit range output.",
       );
       return Array.from({ length: (fields.length - 1) / 2 }, (_, i) => ({
@@ -677,11 +713,11 @@ async function main() {
     );
     return;
   }
-  context = await loadProductionPlan(
+  const loaded = await loadProductionPlan(
     context,
     await readFile(join(repositoryRoot, "release-plan.json")),
   );
-  const { id } = context;
+  const { id } = loaded;
   if (command === "stamp") {
     await stampVersions(repositoryRoot, id.version);
     exec(
@@ -715,18 +751,19 @@ async function main() {
         name.endsWith(".dmg"),
       );
     requireValue(dmgFiles.length === 1, "Expected exactly one bootstrap DMG.");
-    const names = assetNames(id.version),
-      payload = new Map([
-        [
-          names.archive,
-          await readFile(join(mac, "Rayrag Companion.app.tar.gz")),
-        ],
-        [
-          names.signature,
-          await readFile(join(mac, "Rayrag Companion.app.tar.gz.sig")),
-        ],
-        [names.dmg, await readFile(join(folder, "dmg", dmgFiles[0]))],
-      ]);
+    const names = assetNames(id.version);
+    /** @type {Map<string, Buffer>} */
+    const payload = new Map([
+      [
+        names.archive,
+        await readFile(join(mac, "Rayrag Companion.app.tar.gz")),
+      ],
+      [
+        names.signature,
+        await readFile(join(mac, "Rayrag Companion.app.tar.gz.sig")),
+      ],
+      [names.dmg, await readFile(join(folder, "dmg", dmgFiles[0]))],
+    ]);
     const runId = process.env.GITHUB_RUN_ID,
       runAttempt = process.env.GITHUB_RUN_ATTEMPT,
       artifactName = `release-${id.sourceSha}-${runId}-${runAttempt}`;
@@ -739,10 +776,11 @@ async function main() {
       const directory = join(repositoryRoot, "platform-bundles", platform);
       const platformFiles = new Map(
         await Promise.all(
-          (await readdir(directory)).map(async (name) => [
-            name,
-            await readFile(join(directory, name)),
-          ]),
+          (await readdir(directory)).map(async (name) =>
+            /** @type {[string, Buffer]} */ (
+              [name, await readFile(join(directory, name))]
+            ),
+          ),
         ),
       );
       platforms.push(validatePlatformBuild(platformFiles, id, build, target));
@@ -756,7 +794,7 @@ async function main() {
       `Verified complete macOS, Windows and Linux release ${id.version}.`,
     );
   } else if (command === "restore") {
-    await context.api.restoreArtifact(
+    await loaded.api.restoreArtifact(
       artifactFromEnv(),
       id,
       join(repositoryRoot, "release-bundle"),
@@ -776,7 +814,7 @@ async function main() {
         ? undefined
         : await filesAt(join(repositoryRoot, "release-bundle"), id.version);
     const result = await publishRelease({
-      ...context,
+      ...loaded,
       files,
       artifact: files ? artifactFromEnv() : undefined,
     });

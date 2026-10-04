@@ -75,8 +75,9 @@ function validateLedger(ctx, plans) {
   const sources = new Set(),
     versions = new Set();
   const bases = new Map([[ctx.bridge.sourceSha, ctx.bridge]]);
-  let previous = ctx.bridge,
-    predecessorHash = null;
+  let previous = ctx.bridge;
+  /** @type {string | null} */
+  let predecessorHash = null;
   for (const plan of sorted) {
     validatePlan(plan);
     requireValue(!sources.has(plan.sourceSha), "Duplicate reserved source.");

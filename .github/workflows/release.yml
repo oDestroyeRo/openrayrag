@@ -72,32 +72,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf libfuse2 xvfb dbus-daemon
-      - name: Verify GLib backport and optimized Linux iterators
-        env:
-          CI_PLATFORM: ${{ matrix.platform }}
-        run: |
-          mkdir -p reports
-          if [[ "$CI_PLATFORM" == linux ]]; then
-            python vendor/glib/verify.py --test 2>&1 | tee reports/glib.log
-          else
-            python vendor/glib/verify.py 2>&1 | tee reports/glib.log
-          fi
       - name: Verify source and covered behavior (no signing secrets)
         run: |
-          mkdir -p reports
           npm ci
-          npm ci --prefix tools/release
-          node --test scripts/*-tests.mjs
-          npm run build
-          npm test -- --reporter=junit --outputFile=reports/frontend.xml
-          cargo test --locked --manifest-path src-tauri/Cargo.toml 2>&1 | tee reports/native.log
-          cargo test --locked --features ci-smoke --manifest-path src-tauri/Cargo.toml 2>&1 | tee reports/native-ci.log
-          cargo clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings
-          cargo clippy --locked --features ci-smoke --manifest-path src-tauri/Cargo.toml -- -D warnings
-          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-      - name: Verify macOS release container contracts
-        if: matrix.platform == 'macos'
-        run: python -m unittest discover -s scripts -p 'release_test.py'
+          npm run check
       - name: Build, inspect, and smoke secret-free platform installers
         if: matrix.platform != 'linux'
         run: node scripts/ci-platform.mjs build ${{ matrix.platform }} --smoke

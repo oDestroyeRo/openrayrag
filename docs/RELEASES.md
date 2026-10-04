@@ -80,13 +80,23 @@ Run without release credentials:
 
 ```sh
 npm ci
-npm ci --prefix tools/release
-npm ci --prefix tools/release
-node --test scripts/*-tests.mjs
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p release_test.py
 npm run check
-cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 ```
+
+The same source-check entry point runs locally and in every native CI lane. It installs the isolated policy tools, type-checks the release entry point and its dependency graph, verifies the GLib backport, discovers script tests, builds/tests the frontend, tests and lints default/CI Rust features (including test targets), and checks formatting. Optimized GLib iterator tests run on Linux; macOS container tests run on macOS. `npm run check -- --plan` shows the exact platform plan without running it. Bounded diagnostic reports remain in `reports/`, including failures. Installer builds and save/reopen smoke remain separate CI lanes.
+
+For cross-file release review and a single hosted monitoring owner, see [release review](agents/release-review.md). `npm run ci:status -- <run-id> --sha <source-sha> --pr <number> --watch` prints only changed status snapshots and includes merge-policy checks outside the workflow. Omit `--pr` for main runs. `--failed-log <job-id>` saves a completed failed job's log privately even when the run is still active.
+
+Secret-free smoke builds retain verbose Tauri packaging output in `reports/package-<platform>.log`; production signing builds keep their existing output behavior. No signing inputs are admitted to diagnostic capture.
+
+`npm run release:verify -- --help` describes the read-only public proof command. Launch it through npm so isolated source dependencies use that npm's JavaScript entry point on every platform. Supply explicit source SHA, tag and optional workflow identity. Its report distinguishes authenticated metadata from anonymous public downloads, source/ledger reconstruction, signature/container/Actions ZIP proof and unrun native or GUI checks. Verifying an immutable ancestor release does not require it to be current main; request the latest-feed check explicitly.
+
+```sh
+npm run release:verify -- --source <40-character-sha> --tag <vX.Y.Z> --run-id <id> --run-attempt <attempt> --latest
+```
+
+On Windows/Linux, explicitly pass `--skip-native` to record that macOS container inspection was not run. The verifier never launches or installs the app. Original Actions artifacts must still be available to complete byte-for-byte proof.
+
 
 The release tests use synthetic in-memory signing keys and an injected fake GitHub API. They cover official commit analysis/notes, plan transport and reservation guards, out-of-order publication, reruns, missing/partial uploads, lost responses, rewritten ancestry, draft collisions, artifact expiry/digest conflicts, malformed metadata, credential-free CDN redirects, and native container mismatches. No test publishes a release or launches the app. Local unit checks do not prove a hosted build, actual artifact upload, environment secret access or GitHub publication; those require the first trusted workflow run and its source/artifact readback.
 
