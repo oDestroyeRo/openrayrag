@@ -440,6 +440,10 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     settings_close::close_requested(window.app_handle(), api);
+                } else if window.label() == "game" {
+                    // Native destroy bypasses CloseRequested. A user close must
+                    // invalidate even an updater-authorized retirement.
+                    direct::cancel(window.app_handle());
                 }
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
@@ -450,21 +454,15 @@ pub fn run() {
                         let _ = game.destroy();
                     }
                 } else if window.label() == "game" {
-                    direct::cancel(window.app_handle());
                     if let Ok(mut gate) = window
                         .app_handle()
                         .state::<maintenance::SharedGate>()
                         .lock()
                     {
-                        if !gate.lease.as_ref().is_some_and(|l| l.committed) {
-                            gate.page_closed();
-                            gate.game_generation += 1;
-                            gate.identity = None;
-                            if let Some(l) = gate.lease.as_mut() {
-                                l.invalidated = true;
-                                l.acknowledged = false;
-                            }
-                        }
+                        window
+                            .app_handle()
+                            .state::<direct::SharedDirect>()
+                            .game_destroyed(&mut gate);
                     }
                     if let Ok(mut state) = window.app_handle().state::<login::SharedLogin>().lock()
                     {

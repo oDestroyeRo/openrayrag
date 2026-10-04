@@ -12,6 +12,8 @@ export interface RuntimePort {
   now?:()=>number;
   guardNonce?:string;
 }
+interface MaintenanceOwner {nonce:string;revision:number}
+interface MaintenanceRequest {owner:MaintenanceOwner;commit:boolean;checking:boolean}
 /** Transport projection only: both modes retain the same controller and action policies. */
 export class DirectRuntime {
   readonly controller:CompanionController;
@@ -39,7 +41,8 @@ export class DirectRuntime {
   private resetAllowed=false;
   private initializationHeld=false;
   private nonce:string|null=null;
-  private leaseRevision:number|null=null;
+  private maintenanceOwner:MaintenanceOwner|null=null;
+  private pendingMaintenance:MaintenanceRequest|null=null;
   private probing=false;
   private publishing=false;
   private lastPublished=0;
@@ -61,7 +64,7 @@ export class DirectRuntime {
     try{await this.port.invoke('direct_connect',this.args());}
     catch{this.terminal('Explicit sign-in is required. Reconnect this account from the client.',false);}
   }
-  private mutate(){this.lease.mutate();if(this.nonce)void this.port.invoke('update_invalidate',{nonce:this.nonce,kind:'frame'}).catch(()=>{});}
+  private mutate(){this.pendingMaintenance=null;this.lease.mutate();if(this.nonce)void this.port.invoke('update_invalidate',{nonce:this.nonce,kind:'frame'}).catch(()=>{});}
   private send(packet:Uint8Array):Promise<unknown>{
     this.lease.assertDispatch();
     if(!this.opened||this.ended)throw new Error('Bot connection closed.');
@@ -140,14 +143,15 @@ export class DirectRuntime {
       await this.receive(batch.events);
       if(batch.delivery!==null)await this.port.invoke('direct_observed',this.args({delivery:batch.delivery}));
       if(this.nonce&&!this.probing){this.probing=true;const nonce=this.nonce;
-        void this.port.invoke('update_lease_alive',{nonce}).then(alive=>{if(alive===false){this.lease.release(nonce);if(this.nonce===nonce)this.nonce=null;}}).catch(()=>{}).finally(()=>{this.probing=false;});}
+        const owner=this.maintenanceOwner;
+        void this.port.invoke('update_lease_alive',{nonce}).then(alive=>{if(alive===false&&owner)this.releaseMaintenance(owner);}).catch(()=>{}).finally(()=>{this.probing=false;});}
       if(!this.ended&&!this.lease.blocked){
         if(this.controller.active&&this.now()-this.heartbeat>6000)this.controller.heartbeat(false);
         this.controller.tick();this.reconcile();
       }
       if(this.now()-this.lastPublished>=500){this.lastPublished=this.now();await this.publish();}
     }catch{this.terminal('Bot connection unavailable. Pending outcomes remain unresolved.',true);}
-    finally{this.polling=false;}
+    finally{this.polling=false;this.confirmMaintenance();}
   }
   control(action:'start'|'stop'|'heartbeat',...args:Parameters<CompanionController['start']>):void{
     this.lease.assertDispatch();this.mutate();
@@ -163,23 +167,59 @@ export class DirectRuntime {
     catch(error){this.controller.engine.reason=error instanceof Error?error.message:'Command failed.';}void this.publish();
   }
   maintenance(nonce:string,reserve:boolean|'commit'):void{
-    if(!reserve){this.lease.release(nonce);if(this.nonce===nonce)this.nonce=null;return;}
-    const settled=()=>!this.polling&&this.opened&&!this.ended&&this.writes.size===0&&this.login.phase==='complete'&&this.controller.settledForMaintenance();
-    if(reserve==='commit'){
-      void this.queue.then(async()=>{if(this.nonce!==nonce||this.leaseRevision===null||!this.lease.matches(nonce,this.leaseRevision)||!settled())return;
-        await this.port.invoke('update_final_ack',{nonce,identity:this.args(),revision:this.leaseRevision}).catch(()=>{});});return;
+    if(!reserve){
+      if(this.pendingMaintenance?.owner.nonce===nonce)this.pendingMaintenance=null;
+      if(this.maintenanceOwner?.nonce===nonce)this.releaseMaintenance(this.maintenanceOwner);
+      return;
     }
-    const revision=this.lease.reserve(nonce,settled());if(revision===null)return;
-    this.nonce=nonce;this.leaseRevision=revision;
+    if(reserve==='commit'){
+      const owner=this.maintenanceOwner;
+      if(!owner||owner.nonce!==nonce||!this.lease.matches(nonce,owner.revision))return;
+      this.pendingMaintenance={owner,commit:true,checking:false};
+    }else{
+      if(this.lease.blocked||!this.maintenanceReady())return;
+      this.pendingMaintenance={owner:{nonce,revision:this.lease.ownerRevision},commit:false,checking:false};
+    }
+    this.confirmMaintenance();
+  }
+  private maintenanceReady():boolean{
+    return this.opened&&!this.ended&&this.writes.size===0&&this.login.phase==='complete'&&this.controller.settledForMaintenance();
+  }
+  private releaseMaintenance(owner:MaintenanceOwner):void{
+    if(this.maintenanceOwner!==owner)return;
+    this.lease.release(owner.nonce);this.nonce=null;this.maintenanceOwner=null;
+    if(this.pendingMaintenance?.owner===owner)this.pendingMaintenance=null;
+  }
+  private confirmMaintenance():void{
+    const request=this.pendingMaintenance;if(!request||request.checking||this.polling)return;
+    const {owner,commit}=request,{nonce,revision}=owner;
+    if(this.lease.ownerRevision!==revision||!this.maintenanceReady()){
+      this.pendingMaintenance=null;if(!commit)this.releaseMaintenance(owner);return;
+    }
+    if(!commit&&this.maintenanceOwner!==owner){
+      if(this.lease.reserve(nonce,true)!==revision){this.pendingMaintenance=null;return;}
+      this.nonce=nonce;this.maintenanceOwner=owner;
+    }
+    request.checking=true;
     void this.queue.then(async()=>{
       // Includes each native flush promise. Native independently fences its queued
       // frames and pending writes while holding the update Gate lock.
-      await Promise.allSettled([...this.writes]);
-      if(!this.lease.matches(nonce,revision)||!settled()){this.lease.release(nonce);if(this.nonce===nonce)this.nonce=null;return;}
+      if(!commit)await Promise.allSettled([...this.writes]);
+      if(this.pendingMaintenance!==request)return;
+      request.checking=false;
+      if(this.maintenanceOwner!==owner||!this.lease.matches(nonce,revision)){
+        this.pendingMaintenance=null;if(!commit)this.releaseMaintenance(owner);return;
+      }
+      // receive() can finish before delivery observation or status publication.
+      // Retry only after cycle's finally clears polling, retaining this owner.
+      if(this.polling)return;
+      this.pendingMaintenance=null;
+      if(!this.maintenanceReady()){if(!commit)this.releaseMaintenance(owner);return;}
+      if(commit){await this.port.invoke('update_final_ack',{nonce,identity:this.args(),revision}).catch(()=>{});return;}
       this.lease.hold(nonce,revision);
-      try{if(await this.port.invoke('update_ack',{nonce,identity:this.args(),revision})!==true){this.lease.release(nonce);if(this.nonce===nonce)this.nonce=null;}}
+      try{if(await this.port.invoke('update_ack',{nonce,identity:this.args(),revision})!==true)this.releaseMaintenance(owner);}
       catch{/* Keep frozen until native proves the lease released. */}
-    });
+    }).catch(()=>{/* Native release remains authoritative after a failed confirmation. */});
   }
   snapshot(){return this.controller.snapshot();}
   async publish(){

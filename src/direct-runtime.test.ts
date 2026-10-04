@@ -31,6 +31,7 @@ function fixture(held=false){
  return{runtime,invoke,frame,open,ready,setEvents:(value:DirectEvent[])=>{events=value;},step:(ms:number)=>{now+=ms;},marker:()=>marker,writes:()=>invoke.mock.calls.filter(([name])=>name==='direct_send').map(([,args])=>(args as {bytes:number[]}).bytes)};
 }
 async function flush(){for(let i=0;i<20;i++)await Promise.resolve();}
+function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return{promise,resolve};}
 describe('clientless shared-controller runtime',()=>{
  it.each([0,1])('processes real first full resources + memo before Ready, own entry actor %s before guard reset',async actor=>{
   const f=fixture(true);await f.open();await f.frame(enter(actor));expect(f.writes()).toEqual([]);
@@ -93,11 +94,88 @@ describe('clientless shared-controller runtime',()=>{
   expect(f.invoke.mock.calls.some(([n])=>n==='update_invalidate')).toBe(true);expect(f.invoke.mock.calls.some(([n])=>n==='direct_observed')).toBe(true);
   f.runtime.maintenance('a'.repeat(32),'commit');await flush();expect(f.invoke.mock.calls.filter(([n])=>n==='update_final_ack')).toEqual([]);
  });
- it('pending poll application or actual send completion blocks update ACK',async()=>{
+ it('retries a same-owner reservation after the whole empty native poll cycle settles',async()=>{
+  const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();f.step(600);
+  const poll=deferred<unknown>(),observed=deferred<unknown>(),published=deferred<unknown>();
+  const original=f.invoke.getMockImplementation()!;
+  f.invoke.mockImplementation((name,args)=>name==='direct_poll'?poll.promise:name==='direct_observed'?observed.promise:name==='bridge_status'?published.promise:original(name,args));
+  const pending=f.runtime.cycle(),nonce='b'.repeat(32);f.runtime.maintenance(nonce,true);await flush();
+  expect(f.invoke.mock.calls.filter(([name])=>name==='update_ack')).toEqual([]);
+  poll.resolve({events:[],delivery:17});await flush();
+  expect(f.invoke).toHaveBeenCalledWith('direct_observed',expect.objectContaining({delivery:17}));
+  expect(f.invoke.mock.calls.filter(([name])=>name==='update_ack')).toEqual([]);
+  observed.resolve(undefined);await flush();
+  expect(f.invoke.mock.calls.filter(([name])=>name==='update_ack')).toEqual([]);
+  published.resolve(undefined);await pending;await flush();
+  expect(f.invoke.mock.calls.filter(([name])=>name==='update_ack')).toEqual([['update_ack',{nonce,identity:{sessionId:f.runtime.sessionId,connectionId:f.runtime.connectionId},revision:expect.any(Number)}]]);
+  expect(()=>f.runtime.control('heartbeat',DEFAULT_SETTINGS)).toThrow(/update/);
+ });
+ it('retries final confirmation requested during an empty native poll with the acknowledged owner revision',async()=>{
+  const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();const nonce='c'.repeat(32);
+  f.runtime.maintenance(nonce,true);await flush();
+  const acknowledgement=f.invoke.mock.calls.find(([name])=>name==='update_ack')!;
+  expect(acknowledgement).toBeDefined();
+  const poll=deferred<unknown>(),original=f.invoke.getMockImplementation()!;
+  f.invoke.mockImplementation((name,args)=>name==='direct_poll'?poll.promise:original(name,args));
+  const pending=f.runtime.cycle();f.runtime.maintenance(nonce,'commit');await flush();
+  expect(f.invoke.mock.calls.filter(([name])=>name==='update_final_ack')).toEqual([]);
+  poll.resolve({events:[],delivery:null});await pending;await flush();
+  expect(f.invoke.mock.calls.filter(([name])=>name==='update_final_ack')).toEqual([['update_final_ack',acknowledgement[1]]]);
+ });
+ it.each([true,'commit'] as const)('fences a pending %s confirmation after incoming frames, release, terminal closure or changed controller settlement',async stage=>{
+  for(const blocker of ['frame','release','closed','controller']){
+   const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();const nonce='d'.repeat(32);
+   if(stage==='commit'){f.runtime.maintenance(nonce,true);await flush();}
+   const poll=deferred<unknown>(),original=f.invoke.getMockImplementation()!;
+   f.invoke.mockImplementation((name,args)=>name==='direct_poll'?poll.promise:original(name,args));
+   const before=f.invoke.mock.calls.length,pending=f.runtime.cycle();f.runtime.maintenance(nonce,stage);await flush();
+   if(blocker==='release')f.runtime.maintenance(nonce,false);
+   if(blocker==='controller')vi.spyOn(f.runtime.controller,'settledForMaintenance').mockReturnValue(false);
+   const events:DirectEvent[]=blocker==='frame'?[{kind:'frame',bytes:[...new BitWriter().u8(OP.stop).i32(0).finish()]}]:blocker==='closed'?[{kind:'closed',reason:'synthetic closed'}]:[];
+   poll.resolve({events,delivery:events.length?18:null});await pending;await flush();
+   const calls=f.invoke.mock.calls.slice(before);
+   expect(calls.filter(([name])=>name==='update_ack'||name==='update_final_ack'),`${stage}: ${blocker}`).toEqual([]);
+   expect(calls.filter(([name])=>name==='direct_send')).toEqual([]);
+   if(events.length)expect(calls).toContainEqual(['direct_observed',expect.objectContaining({delivery:18})]);
+  }
+ });
+ it.each([true,'commit'] as const)('a released pending %s cannot acknowledge a replacement nonce',async stage=>{
+  const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();const nonce='e'.repeat(32),replacement='f'.repeat(32);
+  if(stage==='commit'){f.runtime.maintenance(nonce,true);await flush();}
+  const poll=deferred<unknown>(),original=f.invoke.getMockImplementation()!;
+  f.invoke.mockImplementation((name,args)=>name==='direct_poll'?poll.promise:original(name,args));
+  const before=f.invoke.mock.calls.length,pending=f.runtime.cycle();f.runtime.maintenance(nonce,stage);
+  f.runtime.maintenance(nonce,false);f.runtime.maintenance(replacement,true);await flush();
+  poll.resolve({events:[],delivery:null});await pending;await flush();
+  const confirmations=f.invoke.mock.calls.slice(before).filter(([name])=>name==='update_ack'||name==='update_final_ack');
+  expect(confirmations).toEqual([['update_ack',expect.objectContaining({nonce:replacement})]]);
+ });
+ it('native lease release cancels a deferred final confirmation',async()=>{
+  const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();const nonce='a'.repeat(32);
+  f.runtime.maintenance(nonce,true);await flush();
+  const poll=deferred<unknown>(),original=f.invoke.getMockImplementation()!;
+  f.invoke.mockImplementation((name,args)=>name==='direct_poll'?poll.promise:name==='update_lease_alive'?Promise.resolve(false):original(name,args));
+  const pending=f.runtime.cycle();f.runtime.maintenance(nonce,'commit');poll.resolve({events:[],delivery:null});await pending;await flush();
+  expect(f.invoke.mock.calls.filter(([name])=>name==='update_final_ack')).toEqual([]);
+  expect(()=>f.runtime.control('heartbeat',DEFAULT_SETTINGS)).not.toThrow();
+ });
+ it.each(['ack','probe'] as const)('a stale %s response cannot release a newer reservation even when its nonce is reused',async stale=>{
+  const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();const nonce='b'.repeat(32),response=deferred<unknown>();
+  const original=f.invoke.getMockImplementation()!;let first=true;
+  f.invoke.mockImplementation((name,args)=>{
+   if(name===(stale==='ack'?'update_ack':'update_lease_alive')&&first){first=false;return response.promise;}
+   return original(name,args);
+  });
+  f.runtime.maintenance(nonce,true);await flush();
+  if(stale==='probe')await f.runtime.cycle();
+  f.runtime.maintenance(nonce,false);f.runtime.maintenance(nonce,true);await flush();
+  response.resolve(false);await flush();
+  expect(()=>f.runtime.control('heartbeat',DEFAULT_SETTINGS)).toThrow(/update/);
+  f.runtime.maintenance(nonce,'commit');await flush();
+  expect(f.invoke.mock.calls.filter(([name])=>name==='update_final_ack')).toHaveLength(1);
+ });
+ it('actual send completion blocks update ACK',async()=>{
   const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();let release!:(value:unknown)=>void;
-  f.invoke.mockImplementation(name=>name==='direct_poll'?new Promise(resolve=>{release=resolve;}):Promise.resolve(undefined));
-  const pending=f.runtime.cycle();f.runtime.maintenance('b'.repeat(32),true);await flush();expect(f.invoke.mock.calls.some(([n])=>n==='update_ack')).toBe(false);
-  release({events:[],delivery:null});await pending;
   f.invoke.mockImplementation(name=>name==='direct_send'?new Promise(resolve=>{release=resolve;}):Promise.resolve(undefined));
   f.runtime.perform('command',{type:'sit',sitting:true});f.runtime.maintenance('b'.repeat(32),true);await flush();expect(f.invoke.mock.calls.some(([n])=>n==='update_ack')).toBe(false);release(undefined);await flush();
  });

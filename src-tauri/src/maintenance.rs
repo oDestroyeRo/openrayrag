@@ -27,6 +27,18 @@ pub(crate) struct Lease {
     pub final_ack: bool,
     pub invalidated: bool,
 }
+#[derive(Clone, PartialEq)]
+pub(crate) struct GameRetirement {
+    nonce: String,
+    game_generation: u64,
+    identity: Option<GameIdentity>,
+}
+struct Retirement {
+    owner: GameRetirement,
+    transport_joined: bool,
+    close_requested: bool,
+    destroyed: bool,
+}
 #[derive(Default)]
 struct PageLifetime {
     seen: AtomicBool,
@@ -54,6 +66,7 @@ pub(crate) struct Gate {
     pub observed: Option<Instant>,
     pub initialized: bool,
     pub form_revision: Option<u64>,
+    retirement: Option<Retirement>,
     navigation_authorized: Arc<AtomicBool>,
     page: Arc<PageLifetime>,
 }
@@ -94,6 +107,106 @@ impl SharedGate {
     }
 }
 impl Gate {
+    fn committed_for(&self, nonce: &str) -> bool {
+        self.lease.as_ref().is_some_and(|l| {
+            l.nonce == nonce
+                && l.committed
+                && !l.invalidated
+                && l.acknowledged
+                && (l.identity.is_none() || l.final_ack)
+                && l.revision == self.revision
+                && l.game_generation == self.game_generation
+                && l.identity == self.identity
+                && self.form_revision == Some(l.form_revision)
+        })
+    }
+    pub fn begin_retirement(
+        &mut self,
+        nonce: &str,
+        has_game: bool,
+    ) -> Result<GameRetirement, String> {
+        if !self.committed_for(nonce)
+            || self.retirement.is_some()
+            || has_game != self.identity.is_some()
+        {
+            return Err("Game settlement changed before retirement.".into());
+        }
+        let owner = GameRetirement {
+            nonce: nonce.to_owned(),
+            game_generation: self.game_generation,
+            identity: self.identity.clone(),
+        };
+        self.retirement = Some(Retirement {
+            owner: owner.clone(),
+            transport_joined: false,
+            close_requested: false,
+            destroyed: !has_game,
+        });
+        Ok(owner)
+    }
+    fn retirement_matches(&self, owner: &GameRetirement) -> bool {
+        self.committed_for(&owner.nonce)
+            && self.game_generation == owner.game_generation
+            && self.identity == owner.identity
+            && self.retirement.as_ref().is_some_and(|r| r.owner == *owner)
+    }
+    pub fn transport_retired(&mut self, owner: &GameRetirement) -> Result<(), String> {
+        if !self.retirement_matches(owner) {
+            return Err("Game settlement changed during retirement.".into());
+        }
+        self.retirement.as_mut().unwrap().transport_joined = true;
+        Ok(())
+    }
+    pub fn request_game_close(&mut self, owner: &GameRetirement) -> Result<(), String> {
+        if !self.retirement_matches(owner)
+            || !self
+                .retirement
+                .as_ref()
+                .is_some_and(|r| r.transport_joined && !r.close_requested && !r.destroyed)
+        {
+            return Err("Game settlement changed before close.".into());
+        }
+        self.retirement.as_mut().unwrap().close_requested = true;
+        Ok(())
+    }
+    pub fn updater_game_destroyed(&mut self) -> bool {
+        let Some(r) = self.retirement.as_ref() else {
+            return false;
+        };
+        if !r.transport_joined
+            || !r.close_requested
+            || r.destroyed
+            || !self.retirement_matches(&r.owner)
+        {
+            return false;
+        }
+        self.retirement.as_mut().unwrap().destroyed = true;
+        true
+    }
+    pub fn replacement_ready(&self, owner: &GameRetirement) -> bool {
+        self.retirement_matches(owner)
+            && self
+                .retirement
+                .as_ref()
+                .is_some_and(|r| r.transport_joined && r.destroyed)
+    }
+    pub fn game_closed(&mut self) {
+        self.retirement = None;
+        self.page_closed();
+        self.game_generation += 1;
+        self.identity = None;
+        if let Some(nonce) = self.lease.as_ref().map(|l| l.nonce.clone()) {
+            self.invalidate(&nonce);
+        }
+    }
+    pub fn release_retirement(&mut self, owner: &GameRetirement) {
+        if self.retirement.as_ref().is_some_and(|r| r.owner == *owner) {
+            self.retirement = None;
+        }
+        if self.lease.as_ref().is_some_and(|l| l.nonce == owner.nonce) {
+            self.lease = None;
+        }
+    }
     pub fn authorize_navigation(&mut self) {
         if self.lease.is_some() {
             return;
