@@ -10,6 +10,14 @@ import { isDeepStrictEqual } from 'node:util';
 
 const EXPECTED_CHECKS = ['webview-boot', 'offline-controller', 'native-settings-ipc', 'window-close-save'];
 
+export function smokeLaunch(binary, root, platform = process.platform, env = process.env) {
+  if (platform !== 'linux') return { binary: resolve(binary), prefixArgs: [], env };
+  return {
+    binary: 'dbus-run-session', prefixArgs: ['--', resolve(binary)],
+    env: { ...env, XDG_DATA_HOME: join(root, 'xdg-data'), XDG_CACHE_HOME: join(root, 'xdg-cache') },
+  };
+}
+
 export function validateResult(result, stage, token) {
   if (result?.protocol !== 1 || result.stage !== stage || result.token !== token || result.passed !== true
       || !EXPECTED_CHECKS.every(check => result.checks?.includes(check))) {
@@ -36,8 +44,12 @@ export function verifyReopened(saved, reopened) {
 }
 
 export async function runStage(binary, stage, { root, data, result, token, timeoutMs = 45_000, prefixArgs = [], env = process.env }) {
+  // A session wrapper may outlive or exit before its application. Own the whole
+  // POSIX process group so a timeout also closes descendants' inherited pipes.
+  const processGroup = process.platform !== 'win32';
   const child = spawn(binary, [...prefixArgs, `--ci-smoke-test=${stage}`], {
     shell: false,
+    detached: processGroup,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...env, RAYRAG_CI_ROOT: root, RAYRAG_CI_DATA_DIR: data, RAYRAG_CI_RESULT: result, RAYRAG_CI_TOKEN: token },
   });
@@ -49,10 +61,14 @@ export async function runStage(binary, stage, { root, data, result, token, timeo
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      if (processGroup && child.pid) {
+        try { process.kill(-child.pid, 'SIGKILL'); }
+        catch (error) { if (error.code !== 'ESRCH') reject(error); }
+      } else child.kill('SIGKILL');
     }, timeoutMs);
     child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('exit', (code, signal) => {
+    // Wait for all owned output pipes to close before temporary-data cleanup.
+    child.once('close', (code, signal) => {
       clearTimeout(timer);
       if (timedOut) reject(new Error(`Native ${stage} smoke timed out after ${timeoutMs} ms.`));
       else if (code !== 0) reject(new Error(`Native ${stage} smoke exited with ${signal ?? code}.${output ? `\n${output}` : ''}`));
@@ -69,11 +85,14 @@ export async function nativeSmoke(binary, outputFile) {
   const root = await mkdtemp(join(tmpdir(), 'rayrag-native-smoke-'));
   const data = join(root, 'data');
   await mkdir(data, { mode: 0o700 });
+  // Keep each package's GTK session and WebKit stores private, including reopen.
+  const launch = smokeLaunch(binary, root);
   try {
     const outcomes = [];
     for (const stage of ['save', 'reopen']) {
-      outcomes.push(await runStage(resolve(binary), stage, {
+      outcomes.push(await runStage(launch.binary, stage, {
         root, data, result: join(root, `${stage}.json`), token: randomUUID(),
+        prefixArgs: launch.prefixArgs, env: launch.env,
       }));
     }
     const [saved, reopened] = outcomes.map(outcome => outcome.document);

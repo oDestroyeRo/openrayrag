@@ -4,7 +4,7 @@ import { readFile, mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { platforms, packageConfig, assertArchitecture, installerFiles } from './ci-platform.mjs';
+import { platforms, packageConfig, packageSmokes, assertArchitecture, installerFiles } from './ci-platform.mjs';
 
 const workflow=parse(await readFile(new URL('../.github/workflows/release.yml',import.meta.url),'utf8'));
 test('main PRs and merge queue always run all native platform lanes',()=>{
@@ -31,11 +31,12 @@ test('aggregate cannot report success after failed, cancelled, skipped or missin
   assert.equal(gate.steps[0].env.SECURITY_RESULT,'${{ needs.security.result }}');
   assert.equal(gate.steps[0].run,'test "$QUALITY_RESULT" = success && test "$SECURITY_RESULT" = success');
   assert.equal(workflow.jobs.reconcile.needs,'verify');
-  assert.deepEqual(workflow.jobs.build.needs,['reconcile','release-platforms']);
-  assert.deepEqual(workflow.jobs.publish.needs,['reconcile','build']);
+  assert.equal(workflow.jobs.build.needs,'reconcile');
+  assert.deepEqual(workflow.jobs.assemble.needs,['reconcile','build','release-platforms']);
+  assert.deepEqual(workflow.jobs.publish.needs,['reconcile','assemble']);
 });
 test('only trusted main signs and centrally publishes every platform',()=>{
-  for(const name of ['reconcile','release-platforms','build','publish']){
+  for(const name of ['reconcile','release-platforms','build','assemble','publish']){
     assert.ok(workflow.jobs[name].if.includes("github.ref == 'refs/heads/main'"));
     assert.ok(workflow.jobs[name].if.includes("github.event_name == 'push'"));
   }
@@ -45,7 +46,67 @@ test('only trusted main signs and centrally publishes every platform',()=>{
     if(step.uses)assert.match(step.uses,/@v\d+\.\d+\.\d+$/);
     if(step.uses?.startsWith('actions/checkout@')){assert.equal(step.with.ref,'${{ github.sha }}');assert.equal(step.with['persist-credentials'],false);}
   }
-  for(const platform of ['windows','linux'])assert.ok(workflow.jobs.build.steps.some(s=>s.with?.path===`platform-bundles/${platform}`));
+  for(const platform of ['windows','linux'])assert.ok(workflow.jobs.assemble.steps.some(s=>s.with?.path===`platform-bundles/${platform}`));
+});
+
+test('parallel production builders join before source-bound bundle verification and preserve draft recovery',()=>{
+  const {build,assemble,publish}=workflow.jobs;
+  assert.equal(workflow.jobs['release-platforms'].needs,'reconcile');
+  const mac=build.steps.find(step=>step.uses?.startsWith('actions/upload-artifact@'));
+  assert.equal(mac.with.name,'signed-macos-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}');
+  assert.ok(mac.with.path.includes('macos/*.app.tar.gz'));
+  assert.ok(mac.with.path.includes('macos/*.app.tar.gz.sig'));
+  assert.ok(mac.with.path.includes('dmg/*.dmg'));
+  assert.ok(!mac.with.path.includes('*.app\n'));
+  assert.equal(mac.with.archive,true);
+  const downloads=assemble.steps.filter(step=>step.uses?.startsWith('actions/download-artifact@'));
+  assert.deepEqual(downloads.map(step=>step.with.name),[
+    mac.with.name,
+    'platform-windows-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+    'platform-linux-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+  ]);
+  assert.equal(downloads[0].with.path,'src-tauri/target/aarch64-apple-darwin/release/bundle');
+  const prepare=assemble.steps.findIndex(step=>step.run==='node scripts/release.mjs prepare');
+  for(const step of downloads)assert.ok(assemble.steps.indexOf(step)<prepare);
+  assert.ok(assemble.steps.slice(0,prepare).some(step=>step.run==='node scripts/release.mjs stamp'));
+  assert.ok(assemble.steps.slice(0,prepare).some(step=>step.run?.includes('rustup toolchain install')));
+  assert.ok(assemble.steps.some(step=>step.if==="needs.reconcile.outputs.state == 'reuse'"&&step.run==='node scripts/release.mjs restore'));
+  for(const name of ['artifact-id','artifact-run-id','artifact-digest']) {
+    assert.ok(assemble.outputs[name].includes(`needs.reconcile.outputs.${name}`));
+  }
+  assert.ok(!JSON.stringify(assemble).includes('secrets.'));
+  const restore=publish.steps.find(step=>step.run==='node scripts/release.mjs restore');
+  assert.equal(restore.env.RELEASE_ARTIFACT_ID,'${{ needs.assemble.outputs.artifact-id }}');
+  assert.equal(restore.env.RELEASE_ARTIFACT_RUN_ID,'${{ needs.assemble.outputs.artifact-run-id }}');
+  assert.equal(restore.env.RELEASE_ARTIFACT_DIGEST,'${{ needs.assemble.outputs.artifact-digest }}');
+  assert.equal(restore.if,"needs.reconcile.outputs.state != 'published'");
+});
+
+test('package smokes overlap, require both successes and finish cleanup before reporting a failure', async () => {
+  const packages=[{binary:'deb',report:'deb.json'},{binary:'appimage',report:'appimage.json'}];
+  for(const failing of [null,'deb','appimage']) {
+    const started=[],finished=[],release=new Map();
+    const check=async (binary,report)=>{
+      started.push([binary,report]);
+      await new Promise(resolve=>release.set(binary,resolve));
+      finished.push(binary);
+      if(binary===failing)throw new Error(`${binary} smoke failed`);
+    };
+    let settled=false;
+    const outcome=packageSmokes(packages,check).then(()=>{settled=true;return null;},error=>{settled=true;return error;});
+    assert.deepEqual(started,[['deb','deb.json'],['appimage','appimage.json']]);
+    release.get('deb')();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(settled,false);
+    release.get('appimage')();
+    const error=await outcome;
+    assert.deepEqual(finished,['deb','appimage']);
+    if(failing) {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.errors.length,1);
+      assert.equal(error.errors[0].message,`${failing} smoke failed`);
+    } else assert.equal(error,null);
+  }
 });
 test('smoke packages have separate identity and no gameplay or updater privileges',()=>{
   for(const platform of Object.keys(platforms)){

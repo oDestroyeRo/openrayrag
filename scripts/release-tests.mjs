@@ -747,7 +747,7 @@ test("workflow uses versioned actions, separates signing from PR checks and queu
   assert.match(gate, /QUALITY_RESULT: \$\{\{ needs\.quality\.result \}\}/);
   assert.match(gate, /test "\$QUALITY_RESULT" = success && test "\$SECURITY_RESULT" = success/);
   assert.match(source, /release-platforms:/);
-  assert.match(source, /needs: \[reconcile, release-platforms\]/);
+  assert.match(source, /needs: \[reconcile, build, release-platforms\]/);
   assert.match(source, /path: platform-bundles\/windows/);
   assert.match(source, /path: platform-bundles\/linux/);
   assert.match(source, /ref: \$\{\{ github.sha \}\}/);
