@@ -1,7 +1,8 @@
 // Linuxdeploy changes RPATH after the raw Tauri application has been built.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstat, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 
 export const APPIMAGE_RPATH = '$ORIGIN/../lib';
 const MAX_BYTES = 512 * 1024 * 1024;
@@ -432,10 +433,29 @@ function dynamicIdentity(path) {
   const needed = output('--print-needed');
   return { needed: needed === '' ? [] : needed.split('\n'), interpreter: output('--print-interpreter'), rpath: output('--print-rpath') };
 }
-async function executableBytes(path) {
-  const stat = await lstat(path);
-  requireValue(stat.isFile() && stat.size <= MAX_BYTES, 'AppImage proof requires a bounded regular executable file.');
-  return readFile(path);
+export async function executableBytes(path) {
+  // O_NOFOLLOW is unavailable on some platforms. AppImage proof must fail
+  // closed there rather than silently accepting a redirected executable.
+  requireValue(typeof constants.O_NOFOLLOW === 'number' && constants.O_NOFOLLOW !== 0,
+    'AppImage proof requires no-follow file support.');
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = await file.stat();
+    requireValue(stat.isFile() && stat.size <= MAX_BYTES, 'AppImage proof requires a bounded regular executable file.');
+    const bytes = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await file.read(bytes, offset, bytes.length - offset, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    // A concurrent append cannot make an unbounded read or conceal a change.
+    const extra = await file.read(Buffer.alloc(1), 0, 1, offset);
+    requireValue(offset === stat.size && extra.bytesRead === 0, 'AppImage executable size changed while reading.');
+    return bytes;
+  } finally {
+    await file.close();
+  }
 }
 
 export async function verifyAppImageExecutable(original, staged, extracted) {

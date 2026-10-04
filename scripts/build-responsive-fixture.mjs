@@ -1,12 +1,15 @@
 // Offline-only native WebKit/Chrome fixture. No app, socket or gameplay transport
 // is opened. Serve the output directory and load index.html in the chosen runtime.
+// An explicit output directory must be new; default outputs are unique.
 import { build } from 'esbuild';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-const output=resolve(process.argv[2]??'/tmp/rayrag-responsive-fixture');await mkdir(output,{recursive:true});
-await build({stdin:{resolveDir:root,contents:`
+const output=process.argv[2] ? resolve(process.argv[2]) : await mkdtemp(join(tmpdir(),'rayrag-responsive-fixture-'));
+if(process.argv[2]){await mkdir(dirname(output),{recursive:true});await mkdir(output,{mode:0o700});}
+const result=await build({stdin:{resolveDir:root,contents:`
 import {TravelController} from './src/travel-controller';
 import {TravelPlanner} from './src/travel';
 import {DEFAULT_MAP_POLICY} from './src/map-policy';
@@ -51,6 +54,7 @@ element('measure').addEventListener('click',async()=>{
   finally{measurement=null;element('plan').disabled=element('measure').disabled=false;}
 });
 window.routePlanningFixture={state,stop:()=>element('stop').click()};
-`},bundle:true,platform:'browser',target:'safari16',format:'iife',outfile:join(output,'fixture.js'),logLevel:'silent'});
-await writeFile(join(output,'index.html'),'<!doctype html><html><head><meta charset="utf-8"><title>Offline route planning fixture</title><style>body{font:16px system-ui;max-width:900px;margin:32px auto;background:#141b23;color:#e3eaf2}label{display:block;margin:12px 0}button,input,select{font:inherit;margin:8px;padding:8px}output{display:block}output p,#measurement-rows p{background:#223044;padding:10px;margin:6px 0}#measurement-state{font-weight:600}</style></head><body><main id="fixture"></main><script src="fixture.js"></script></body></html>');
+`},bundle:true,platform:'browser',target:'safari16',format:'iife',outfile:join(output,'fixture.js'),write:false,logLevel:'silent'});
+for(const file of result.outputFiles)await writeFile(file.path,file.contents,{flag:'wx',mode:0o600});
+await writeFile(join(output,'index.html'),'<!doctype html><html><head><meta charset="utf-8"><title>Offline route planning fixture</title><style>body{font:16px system-ui;max-width:900px;margin:32px auto;background:#141b23;color:#e3eaf2}label{display:block;margin:12px 0}button,input,select{font:inherit;margin:8px;padding:8px}output{display:block}output p,#measurement-rows p{background:#223044;padding:10px;margin:6px 0}#measurement-state{font-weight:600}</style></head><body><main id="fixture"></main><script src="fixture.js"></script></body></html>',{flag:'wx',mode:0o600});
 console.log(output);
