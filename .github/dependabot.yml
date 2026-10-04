@@ -15,6 +15,22 @@ updates:
         applies-to: version-updates
         patterns: ["*"]
         update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: /tools/release
+    schedule:
+      interval: cron
+      cronjob: "17 9 * * *"
+      timezone: Asia/Bangkok
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      prefix-development: chore
+      include: scope
+    groups:
+      release-tools-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
   - package-ecosystem: cargo
     directory: /src-tauri
     schedule:

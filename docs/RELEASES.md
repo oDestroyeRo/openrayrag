@@ -1,10 +1,24 @@
 # Desktop releases
 
-Every push to `main` verifies the exact triggering commit and builds Apple Silicon macOS, Windows x64 and Linux x64 releases. A manual run is accepted only from `main`. Pull requests run verification without signing secrets or release writes. The source versions stay at `0.1.0`; only a disposable CI checkout is stamped.
+Every push to `main` verifies the exact triggering commit. Releasable commits then build Apple Silicon macOS, Windows x64 and Linux x64 releases. A manual run is accepted only from `main`. Pull requests run verification without signing secrets or release writes. The source versions stay at `0.1.0`; only a disposable CI checkout is stamped.
 
 ## Version and client contract
 
-`N` is the triggering SHA's one-based position in `git rev-list --first-parent --reverse origin/main`. The release is `0.2.N`, tagged `v0.2.N`. Checkout uses full history and the exact event SHA; each release stage fetches current main again and rejects a SHA outside its first-parent ancestry. A tag must peel to the exact source SHA, including annotated tags. Existing releases are checked against current ancestry, so a rewritten main or conflicting tag fails closed. After exact tag creation and readback, release POST/PATCH requests set the ignored `target_commitish` metadata to `main`; GitHub documents that it is unused when the tag exists. This avoids its separate Workflows permission requirement when an older commit differs from current main in workflow files, and normalizes reused drafts. The peeled tag and signed provenance, never this metadata field, determine the source. Older-source tag creation still requires hosted API proof; an API denial fails closed without creating a release at another commit.
+Versions and notes use the official `@semantic-release/commit-analyzer` and `@semantic-release/release-notes-generator` plugins with the Conventional Commits preset, under the committed policy in `release.config.mjs`. The plugins are pure planning tools; the existing publisher owns signing, artifacts, tags and GitHub release mutations. They run from the separate locked `tools/release` development dependency graph. The desktop npm graph is unchanged; the semantic-release host and its npm/GitHub publisher plugins are intentionally absent.
+
+| Commit | Release |
+| --- | --- |
+| Breaking change (`!` or `BREAKING CHANGE`) | major |
+| `feat` | minor |
+| `fix`, `perf` | patch |
+| `chore(deps)`, `chore(deps-dev)`, `build(deps)`, `build(deps-dev)` | patch |
+| Routine `docs`, `ci`, other nonreleasable changes | skip |
+
+New versions are canonical stable SemVer, tagged `vX.Y.Z`. The triggering SHA's one-based position in `git rev-list --first-parent --reverse origin/main` remains a separate ordering/provenance value; it no longer determines the version. Full-history exact-event checkout and fresh main ancestry checks remain mandatory. Public tags must peel to the exact source SHA, including annotated tags. Rewritten ancestry or conflicting tags fails closed. Release POST/PATCH requests retain `target_commitish: main` after exact tag creation/readback; the peeled tag and signed provenance determine the source, rather than that API metadata.
+
+Analysis advances from the highest valid reserved ancestor, while release notes span from the last verified published release. A failed earlier build therefore retains its version reservation and its unpublished changes remain in later notes. Notes and their date are fixed by the source and reserved plan, so a retry does not regenerate different release text. A same-source retry reuses its existing plan; an older unplanned source superseded by a newer reservation is skipped.
+
+Before building, reconciliation stores a validated canonical plan and SHA256 in an annotated tag under `refs/tags/rayrag-release-plan/vX.Y.Z`, directly targeting the source commit. Plans include the predecessor plan hash, analysis/notes bases, policy hash, version and notes. Automation creates these objects/refs only and verifies them by readback; it never moves or deletes reservations. Administrative edits remain possible and are detected as conflicts. The first plan anchors to the independently verified final compatibility bridge; its exact source/version must be configured and proven before production rollout. This document does not select an unverified bridge version.
 
 CI stamps `package.json`, both root versions in `package-lock.json`, `src-tauri/Cargo.toml`, the root package in `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json`. Dependency versions do not change. Installation uses `npm ci` and Cargo uses `--locked` after stamping. No version commit, push, or release-trigger loop is created.
 
@@ -14,21 +28,22 @@ The committed updater configuration must enable `bundle.createUpdaterArtifacts` 
 https://github.com/oDestroyeRo/openrayrag/releases/latest/download/latest.json
 ```
 
-The native updater checks the fixed `latest-semver.json` URL in the same latest-release directory first. It accepts canonical stable SemVer, including minor and major upgrades, and falls back to `latest.json` only when the primary request returns HTTP 404. Successful metadata, including an up-to-date result, never triggers fallback. Authentication errors, rate limits, server errors, interrupted or oversized responses and malformed metadata fail the check. Both feeds require the same immutable versioned archive URL and signed-version verification. This compatibility bridge leaves the plugin endpoint and nine-asset release contract unchanged until the semantic release publisher is introduced.
+The native updater checks the fixed `latest-semver.json` URL in the same latest-release directory first. It accepts canonical stable SemVer, including minor and major upgrades, and falls back to `latest.json` only when the primary request returns HTTP 404. Successful metadata, including an up-to-date result, never triggers fallback. Authentication errors, rate limits, server errors, interrupted or oversized responses and malformed metadata fail the check. Both feeds retain immutable versioned archive URLs and signed-version verification.
 
-New schema-2 releases contain exactly nine assets; existing schema-1 releases retain their six-asset contract:
+New schema-3 releases contain exactly ten assets. Existing schema-1 and schema-2 releases retain their six- and nine-asset contracts:
 
-- `Rayrag_Companion_0.2.N_aarch64.app.tar.gz`: signed updater payload.
-- `Rayrag_Companion_0.2.N_aarch64.app.tar.gz.sig`: Tauri signature text.
-- `Rayrag_Companion_0.2.N_aarch64.dmg`: first-install bootstrap.
-- `Rayrag_Companion_0.2.N_x64-setup.exe`: Windows NSIS installer.
-- `Rayrag_Companion_0.2.N_amd64.deb`: Linux Debian package.
-- `Rayrag_Companion_0.2.N_x86_64.AppImage`: Linux AppImage.
-- `latest.json`: `darwin-aarch64` only, with the signature contents and the immutable URL `https://github.com/oDestroyeRo/openrayrag/releases/download/v0.2.N/Rayrag_Companion_0.2.N_aarch64.app.tar.gz`.
-- `provenance.json`: exact source SHA, first-parent count, version, target, application identifier, build run/attempt, artifact name, toolchain, and payload hashes/sizes.
-- `SHA256SUMS`: hashes of all other assets, including the manifest and provenance.
+- `Rayrag_Companion_X.Y.Z_aarch64.app.tar.gz`: signed updater payload.
+- `Rayrag_Companion_X.Y.Z_aarch64.app.tar.gz.sig`: Tauri signature text.
+- `Rayrag_Companion_X.Y.Z_aarch64.dmg`: first-install bootstrap.
+- `Rayrag_Companion_X.Y.Z_x64-setup.exe`: Windows NSIS installer.
+- `Rayrag_Companion_X.Y.Z_amd64.deb`: Linux Debian package.
+- `Rayrag_Companion_X.Y.Z_x86_64.AppImage`: Linux AppImage.
+- `latest-semver.json`: current `darwin-aarch64` release, signature contents and immutable archive URL under `releases/download/vX.Y.Z/`.
+- `latest.json`: the unchanged, verified final bridge manifest pointing to its immutable signed bridge archive. Dormant legacy clients install that bridge, restart, then discover the SemVer feed.
+- `provenance.json`: exact source SHA, separate first-parent ordinal, version, target, application identifier, build run/attempt, artifact name, toolchain, reserved plan and payload hashes/sizes.
+- `SHA256SUMS`: hashes of all other assets, including both manifests and provenance.
 
-Schema 2 provenance binds all three platform receipts to the same source SHA, release version, build run and attempt. Each receipt declares native build and package inspection, and records canonical installer hashes/sizes. Packaging checks the Windows application itself is AMD64 (the NSIS stub may be 32-bit), Linux ELF executables are x64 and Debian metadata matches. New Windows/Linux installers are manually downloaded; they are not advertised as macOS updater payloads.
+Schema-3 provenance binds all three platform receipts and the reserved plan to the same source and release version. Each receipt declares native build and package inspection, and records canonical installer hashes/sizes. Packaging checks the Windows application itself is AMD64 (the NSIS stub may be 32-bit), Linux ELF executables are x64 and Debian metadata matches. Windows/Linux installers remain manual downloads. The legacy feed is independently validated against the retained bridge release; it must not be rewritten to advertise a version old clients cannot accept.
 
 The updater archive is capped at 128 MiB and the signature at 4,096 characters, matching the installed client. The expanded app is capped at 512 MiB and 10,000 entries. Other release assets are capped at 256 MiB each. The updater signature authenticates both archive bytes and version. Verification checks the committed public key, Tauri/minisign Ed25519 signatures, BLAKE2b prehash, and signed trusted comment. The archive and DMG each must contain the expected identifier, exact version, ARM64-only executable, and valid ad-hoc Apple code signature. Their complete app manifests must also match: paths, file bytes/sizes, permissions, and link targets. This prevents a same-version but different bootstrap app. TAR extraction rejects links, devices, duplicate/escaping paths, special permissions, and excessive sizes. The current app does not require archive symlinks; adding frameworks with links requires an explicit verifier change.
 
@@ -38,37 +53,39 @@ Apple code signing remains ad-hoc. Releases are not Developer ID signed or notar
 
 The `release` GitHub environment must allow deployment only from the `main` branch. Store `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as environment secrets, never repository files or repository-level secrets. Keep the encrypted private key and recovery password outside the repository; do not print them or enable shell tracing. Only the build command receives these secrets. The committed key is public.
 
-The workflow has six stages:
+The desktop workflow keeps the `quality`, reusable `security` and always-running `CI / required` gate. Only successful trusted main pushes/dispatches call `release-publish.yml`. That single reusable call grants a `contents: write` / `actions: read` ceiling and holds the repository-wide `rayrag-release-publication` concurrency group with `queue: max` and `cancel-in-progress: false` across the entire lifecycle:
 
-1. `quality`: separate native macOS, Windows and Linux jobs run the complete frontend/native regressions, strict Clippy, formatting, native packaging and isolated settings-close/reopen smoke. Token access is read-only; no signing secrets are referenced.
-2. `verify` (`CI / required`): runs even if a matrix lane fails or is skipped, and passes only if every lane succeeds. Main requires this check.
-3. `reconcile`: a trusted main-only environment job inspects published releases and drafts. GitHub draft listing requires push access, so this read-only script receives `contents: write`. It uses paginated release listing because the tag endpoint only promises published releases.
-4. `release-platforms`: trusted Windows/Linux jobs stamp the exact source/version, build production installers without smoke instrumentation, validate architecture/package contents and upload receipts with hashes.
-5. `build`: a fresh CI checkout stamps and builds once, validates its assets, and uploads a complete Actions artifact. A draft rerun restores its original artifact; a verified published release skips rebuilding and signing.
-6. `publish`: a main-only environment job with repository write access restores and verifies that same artifact. This is the only stage that creates tags/releases or uploads release assets. Its repository-wide concurrency group uses `queue: max` and does not cancel active jobs. The GitHub queue is bounded and its order is not commit order, so the publisher compares first-parent version counts under the lock.
+1. `reconcile` installs the isolated tools, checks published releases/drafts and reserves or restores the exact-source plan. Draft inspection and create-only reservation need `contents: write`. No releasable change yields `skip` before any builder or publisher runs.
+2. `build` and the Windows/Linux `release-platforms` matrix start in parallel only for `build`. Each downloads the same `release-plan.json` Actions artifact, stamps its disposable checkout and builds production assets. Only the macOS build command receives signing secrets.
+3. `assemble` joins successful builders, downloads their payloads and the same plan, then verifies signatures, native containers, platform receipts and provenance before uploading the complete immutable bundle. A `reuse` plan restores its original artifact; a `published` plan runs no build, signing or native preparation.
+4. `publish` downloads the same plan and restores/verifies the complete bundle before creating public tags/releases or uploading assets. A published exact-source release is checked as a no-op. Every CLI stage cross-checks the transport plan against its durable reservation.
 
-Before publication, the publisher verifies any existing latest release, stages missing assets in a draft, downloads every asset for exact comparison, verifies the complete bundle and both native containers, and reads latest again. It explicitly sets `make_latest: true` only when the candidate is newer. An older build that finishes later may publish its own version, with `make_latest: false`. The same release ID, asset set, publication state and nondecreasing latest count are read back after the final PATCH, including after an ambiguous HTTP result. No API method deletes or replaces an asset or tag. Keep all automated publishers in this concurrency group; external manual publication is outside its lock.
+The plan artifact is named `release-plan-${github.sha}-${github.run_id}-${github.run_attempt}`. It transports the reserved plan rather than allocating a new version; if it expires, a later run reconstructs it from the validated annotated tag. The callee defines its own toolchain environment and uses the caller's source SHA, run, attempt and event. Jobs retain the `release` environment and reduce permissions per job. There is no inner publication lock that could conflict with the caller's lifecycle queue. GitHub permits up to 100 pending calls and queue order is not commit order, so ancestry and version checks remain necessary. External manual publication is outside this lock.
+
+Before publication, the publisher verifies any existing latest release, stages missing assets in a draft, downloads every asset for exact comparison, verifies the complete bundle and both native containers, and reads latest again. It explicitly sets `make_latest: true` only when the candidate is newer. An older build that finishes later may publish its own version, with `make_latest: false`. The same release ID, asset set, publication state and nondecreasing latest version/source order are read back after the final PATCH, including after an ambiguous HTTP result. No API method deletes or replaces an asset or tag. Keep all automated publishers in this concurrency group; external manual publication is outside its lock.
 
 ## Reruns and recovery
 
 A published tag with the exact source, valid signature, complete assets and matching provenance is a no-op before rebuilding. A conflicting published tag, malformed metadata, invalid latest release or incomplete published release fails closed. Never repair a published version by overwriting its files.
 
-Each draft records the original Actions artifact ID, build run ID and ZIP SHA256 digest in its release-body provenance marker. A rerun retrieves that artifact by ID, verifies API metadata plus the downloaded ZIP digest, and accepts only the exact six (schema 1) or nine (schema 2) flat expected files. Existing draft assets must match byte-for-byte. Missing assets can then be uploaded; a lost create/upload/publish response is reconciled by readback instead of an automatic overwrite.
+Each draft records the original Actions artifact ID, build run ID and ZIP SHA256 digest in its release-body provenance marker. A rerun retrieves that artifact by ID, verifies API metadata plus the downloaded ZIP digest, and accepts only the exact six (schema 1), nine (schema 2) or ten (schema 3) flat expected files. Existing draft assets must match byte-for-byte. Missing assets can then be uploaded; a lost create/upload/publish response is reconciled by readback instead of an automatic overwrite.
 
-A fresh nondeterministic rebuild cannot fill an old draft. If the original artifact expired, has conflicting metadata, or cannot be downloaded, leave the draft unpublished. Artifacts are retained for 90 days. The operator should recover the original complete artifact from retained trusted storage, investigate the named conflict, or explicitly retire the unpublished draft/tag after confirming no client used it; the workflow never performs destructive recovery. An upload left in a non-uploaded state also stops for operator recovery rather than silently replacing it. Competing builds for the same source may complete, but only the artifact bound to the existing draft can resume that draft.
+A fresh nondeterministic rebuild cannot fill an old draft. If the original artifact expired, has conflicting metadata, or cannot be downloaded, leave the draft unpublished. Artifacts are retained for 90 days. The operator should recover the original complete artifact from retained trusted storage, investigate the named conflict, or explicitly retire the unpublished draft/tag after confirming no client used it; the workflow never performs destructive recovery. An upload left in a non-uploaded state also stops for operator recovery rather than silently replacing it. Only the artifact bound to the existing draft can resume that draft. A reservation without a draft can build again, but must retain its reserved version and notes.
 
 ## Local checks and CI proof
 
 Run without release credentials:
 
 ```sh
+npm ci
+npm ci --prefix tools/release
 node --test scripts/*-tests.mjs
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p release_test.py
 npm run check
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 ```
 
-The release tests use synthetic in-memory signing keys and an injected fake GitHub API. They cover out-of-order publication, reruns, missing/partial uploads, lost responses, rewritten ancestry, draft collisions, artifact expiry/digest conflicts, malformed metadata, credential-free CDN redirects, and native container mismatches. No test publishes a release or launches the app. Local unit checks do not prove a hosted build, actual artifact upload, environment secret access or GitHub publication; those require the first trusted workflow run and its source/artifact readback.
+The release tests use synthetic in-memory signing keys and an injected fake GitHub API. They cover official commit analysis/notes, plan transport and reservation guards, out-of-order publication, reruns, missing/partial uploads, lost responses, rewritten ancestry, draft collisions, artifact expiry/digest conflicts, malformed metadata, credential-free CDN redirects, and native container mismatches. No test publishes a release or launches the app. Local unit checks do not prove a hosted build, actual artifact upload, environment secret access or GitHub publication; those require the first trusted workflow run and its source/artifact readback.
 
 The pipeline retains the tested Node `26.10.0`, Rust `1.98.1` and locked Tauri CLI `2.12.1`. Rust is installed with the runner's `rustup`, avoiding an unversioned setup action. Actions use current stable release tags, rather than commit SHAs, as requested; Dependabot checks for new tags every calendar day and proposes reviewed updates. Tags can be moved by their upstream maintainers, so this policy does not provide immutable action-source pinning. Checkout still uses the exact triggering commit, credentials are not persisted, and ZIP artifact format is explicit for release restoration. Security and all native platform checks must succeed before any release job. See [desktop CI](DESKTOP_CI.md) for dependency and code security coverage.
 
