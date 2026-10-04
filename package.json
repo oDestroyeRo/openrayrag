@@ -8,10 +8,13 @@
     "build": "npm run bridge && tsc --noEmit && vite build",
     "bridge": "node scripts/build-bridge.mjs",
     "test": "vitest run",
-    "check": "npm run build && npm test && cargo test --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings",
+    "check": "node scripts/check.mjs",
     "tauri": "tauri",
     "app:dev": "tauri dev",
-    "app:build": "tauri build"
+    "app:build": "tauri build",
+    "typecheck:release": "tsc --project tsconfig.release.json",
+    "ci:status": "node scripts/hosted-status.mjs",
+    "release:verify": "node scripts/release-public.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.1"
@@ -23,6 +26,7 @@
     "typescript": "7.0.2",
     "vite": "8.3.2",
     "vitest": "5.0.3",
-    "yaml": "2.9.1"
+    "yaml": "2.9.1",
+    "@types/node": "26.6.4"
   }
 }

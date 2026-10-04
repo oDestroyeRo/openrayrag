@@ -768,7 +768,7 @@ test("workflow uses versioned actions, separates signing from PR checks and queu
   assert.match(production, /path: platform-bundles\/windows/);
   assert.match(production, /path: platform-bundles\/linux/);
   assert.match(source, /ref: \$\{\{ github.sha \}\}/);
-  assert.match(source, /cargo test --locked/);
+  assert.match(quality, /npm run check/);
   assert.match(production, /--bundles app,dmg --ci -- --locked/);
 });
 

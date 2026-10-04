@@ -146,8 +146,11 @@ test('required quality checks execute the installed official-engine zero-braces 
   const guard = await readFile(new URL('./semantic-release-plan-tests.mjs', import.meta.url), 'utf8');
   assert.ok(guard.includes('official engines never call vulnerable braces walkers and use only trusted matcher patterns'));
   const quality = desktop.jobs.quality.steps.map(step => step.run ?? '').join('\n');
-  const install = quality.indexOf('npm ci --prefix tools/release');
-  const tests = quality.indexOf('node --test scripts/*-tests.mjs');
+  assert.ok(quality.includes('npm run check'));
+  const { verificationPlan } = await import('./check.mjs');
+  const plan = await verificationPlan();
+  const install = plan.findIndex(step => step.tool === 'npm' && step.args.join(' ').startsWith('ci --prefix tools/release'));
+  const tests = plan.findIndex(step => step.tool === 'node' && step.args.includes('scripts/semantic-release-plan-tests.mjs'));
   assert.ok(install >= 0 && tests > install);
   assert.deepEqual(desktop.jobs.verify.needs, ['quality', 'security']);
   assert.equal(desktop.jobs.release.needs, 'verify');
