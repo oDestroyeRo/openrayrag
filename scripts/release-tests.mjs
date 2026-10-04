@@ -24,7 +24,11 @@ import {
   validatePlatformBuild,
   validateInstaller,
 } from "./release-core.mjs";
-import { stampVersions, GitHubReleaseApi } from "./release.mjs";
+import {
+  stampVersions,
+  GitHubReleaseApi,
+  readLocalTagObject,
+} from "./release.mjs";
 // Ephemeral synthetic test key, never a release key and never serialized/logged.
 const pair = generateKeyPairSync("ed25519"),
   keyId = Buffer.alloc(8, 7);
@@ -636,55 +640,58 @@ test("native verification failure prevents any write", async () => {
   await assert.rejects(publishRelease(ctx), /architecture/);
   assert.equal(api.events.length, 0);
 });
-for (const ending of ["\n", "\r\n"]) test(`CI stamping synchronizes all five files with ${ending.length===2?"CRLF":"LF"} and leaves dependency versions alone`, async () => {
-  const root = await mkdtemp(join(tmpdir(), "rayrag-stamp-test-"));
-  try {
-    await mkdir(join(root, "src-tauri"));
-    const files = {
-      "package.json": json({
-        name: "rayrag-companion",
-        version: "0.1.0",
-        dependencies: { test: "9.0.0" },
-      }),
-      "package-lock.json": json({
-        version: "0.1.0",
-        packages: {
-          "": { version: "0.1.0" },
-          "node_modules/test": { version: "9.0.0" },
-        },
-      }),
-      "src-tauri/tauri.conf.json": json({
-        version: "0.1.0",
-        identifier: "com.rayrag.companion",
-      }),
-      "src-tauri/Cargo.toml":
-        '[package]\nname = "rayrag-companion"\nversion = "0.1.0"\n[dependencies]\ntest = "9.0.0"\n',
-      "src-tauri/Cargo.lock":
-        'version = 4\n\n[[package]]\nname = "rayrag-companion"\nversion = "0.1.0"\n\n[[package]]\nname = "test"\nversion = "9.0.0"\n',
-    };
-    await Promise.all(
-      Object.entries(files).map(([p, b]) => writeFile(join(root, p), b.toString().replaceAll("\n", ending))),
-    );
-    await stampVersions(root, "0.2.7");
-    await stampVersions(root, "0.2.7");
-    assert.equal(
-      JSON.parse(await readFile(join(root, "package-lock.json"))).packages[""]
-        .version,
-      "0.2.7",
-    );
-    assert.match(
-      await readFile(join(root, "src-tauri/Cargo.lock"), "utf8"),
-      /name = "test"\nversion = "9.0.0"/,
-    );
-    assert.equal(
-      JSON.parse(await readFile(join(root, "src-tauri/tauri.conf.json")))
-        .version,
-      "0.2.7",
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+for (const ending of ["\n", "\r\n"])
+  test(`CI stamping synchronizes all five files with ${ending.length === 2 ? "CRLF" : "LF"} and leaves dependency versions alone`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "rayrag-stamp-test-"));
+    try {
+      await mkdir(join(root, "src-tauri"));
+      const files = {
+        "package.json": json({
+          name: "rayrag-companion",
+          version: "0.1.0",
+          dependencies: { test: "9.0.0" },
+        }),
+        "package-lock.json": json({
+          version: "0.1.0",
+          packages: {
+            "": { version: "0.1.0" },
+            "node_modules/test": { version: "9.0.0" },
+          },
+        }),
+        "src-tauri/tauri.conf.json": json({
+          version: "0.1.0",
+          identifier: "com.rayrag.companion",
+        }),
+        "src-tauri/Cargo.toml":
+          '[package]\nname = "rayrag-companion"\nversion = "0.1.0"\n[dependencies]\ntest = "9.0.0"\n',
+        "src-tauri/Cargo.lock":
+          'version = 4\n\n[[package]]\nname = "rayrag-companion"\nversion = "0.1.0"\n\n[[package]]\nname = "test"\nversion = "9.0.0"\n',
+      };
+      await Promise.all(
+        Object.entries(files).map(([p, b]) =>
+          writeFile(join(root, p), b.toString().replaceAll("\n", ending)),
+        ),
+      );
+      await stampVersions(root, "0.2.7");
+      await stampVersions(root, "0.2.7");
+      assert.equal(
+        JSON.parse(await readFile(join(root, "package-lock.json"))).packages[""]
+          .version,
+        "0.2.7",
+      );
+      assert.match(
+        await readFile(join(root, "src-tauri/Cargo.lock"), "utf8"),
+        /name = "test"\nversion = "9.0.0"/,
+      );
+      assert.equal(
+        JSON.parse(await readFile(join(root, "src-tauri/tauri.conf.json")))
+          .version,
+        "0.2.7",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 test("GitHub adapter peels annotated tags instead of trusting target_commitish", async () => {
   const original = global.fetch;
   const paths = [];
@@ -736,23 +743,33 @@ test("workflow uses versioned actions, separates signing from PR checks and queu
   assert.match(quality, /fail-fast: false/);
   assert.match(quality, /node scripts\/ci-platform\.mjs build/);
   assert.match(quality, /--smoke/);
-  assert.match(await readFile(new URL("./ci-platform.mjs", import.meta.url), "utf8"), /nativeSmoke/);
+  assert.match(
+    await readFile(new URL("./ci-platform.mjs", import.meta.url), "utf8"),
+    /nativeSmoke/,
+  );
   const gate = source.slice(
     source.indexOf("  verify:"),
-    source.indexOf("  reconcile:"),
+    source.indexOf("  release:"),
   );
   assert.match(gate, /name: CI \/ required/);
   assert.match(gate, /needs: \[quality, security\]/);
   assert.match(gate, /if: always\(\)/);
   assert.match(gate, /QUALITY_RESULT: \$\{\{ needs\.quality\.result \}\}/);
-  assert.match(gate, /test "\$QUALITY_RESULT" = success && test "\$SECURITY_RESULT" = success/);
-  assert.match(source, /release-platforms:/);
-  assert.match(source, /needs: \[reconcile, build, release-platforms\]/);
-  assert.match(source, /path: platform-bundles\/windows/);
-  assert.match(source, /path: platform-bundles\/linux/);
+  assert.match(
+    gate,
+    /test "\$QUALITY_RESULT" = success && test "\$SECURITY_RESULT" = success/,
+  );
+  const production = await readFile(
+    new URL("../.github/workflows/release-publish.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(production, /release-platforms:/);
+  assert.match(production, /needs: \[reconcile, build, release-platforms\]/);
+  assert.match(production, /path: platform-bundles\/windows/);
+  assert.match(production, /path: platform-bundles\/linux/);
   assert.match(source, /ref: \$\{\{ github.sha \}\}/);
   assert.match(source, /cargo test --locked/);
-  assert.match(source, /--bundles app,dmg --ci -- --locked/);
+  assert.match(production, /--bundles app,dmg --ci -- --locked/);
 });
 
 test("GitHub draft lookup paginates and rejects duplicate tags", async () => {
@@ -1069,4 +1086,501 @@ test("release metadata uses main while the precreated tag retains the exact hist
       target_commitish: "main",
     },
   });
+});
+
+// Semantic assets and publication retain the old signed-container state machine.
+// The migration feed is copied exactly, while the new feed follows the plan.
+import {
+  migrationBridge,
+  legacyFeed,
+  verifiedRelease,
+} from "./release-core.mjs";
+import { planRelease, planSha256 } from "./semantic-release-plan.mjs";
+import { readReservations, reservePlan } from "./release-reservations.mjs";
+import {
+  planProduction,
+  planIdentity,
+  loadProductionPlan,
+} from "./release-planning.mjs";
+import { serializePlan } from "./semantic-release-plan.mjs";
+class PlannedApi extends FakeApi {
+  planReferences = new Map();
+  planObjects = new Map();
+  async planRefs() {
+    return [...this.planReferences.values()];
+  }
+  async planRef(ref) {
+    return this.planReferences.get(ref) ?? null;
+  }
+  async tagObject(sha) {
+    return this.planObjects.get(sha) ?? null;
+  }
+  async createPlanTag(tag, message, sourceSha) {
+    const sha = sha256(Buffer.from(message)).slice(0, 40);
+    const object = {
+      sha,
+      tag,
+      message,
+      object: { type: "commit", sha: sourceSha },
+    };
+    this.planObjects.set(sha, object);
+    return object;
+  }
+  async createPlanRef(ref, sha) {
+    assert.ok(
+      !this.planReferences.has(ref),
+      "reservation cannot be overwritten",
+    );
+    this.planReferences.set(ref, { ref, object: { type: "tag", sha } });
+  }
+}
+const semanticHistory = Array.from(
+  { length: migrationBridge.firstParentCount + 4 },
+  (_, i) =>
+    i === migrationBridge.firstParentCount - 1
+      ? migrationBridge.sourceSha
+      : String(i + 1).padStart(40, "0"),
+);
+async function semanticFixture(
+  api,
+  offset = 1,
+  previous = null,
+  type = "feat",
+) {
+  const n = migrationBridge.firstParentCount + offset;
+  const result = await planRelease({
+    source: {
+      sourceSha: semanticHistory[n - 1],
+      firstParentCount: n,
+      pubDate: await dateFor(),
+    },
+    published: {
+      sourceSha: migrationBridge.sourceSha,
+      version: migrationBridge.version,
+      tag: migrationBridge.tag,
+    },
+    reservation: previous,
+    analysisCommits: [
+      {
+        hash: semanticHistory[n - 1],
+        message: `${type}: improve app behavior`,
+      },
+    ],
+    notesCommits: [
+      ...(previous
+        ? [{ hash: previous.sourceSha, message: "feat: earlier app behavior" }]
+        : []),
+      {
+        hash: semanticHistory[n - 1],
+        message: `${type}: improve app behavior`,
+      },
+    ],
+  });
+  const plan = await reservePlan(
+    { api, history: semanticHistory, bridge: migrationBridge },
+    result.plan,
+  );
+  const ident = planIdentity(plan),
+    names = assetNames(ident.version),
+    bytes = Buffer.from("synthetic semantic app");
+  const payload = new Map([
+    [names.archive, bytes],
+    [names.signature, Buffer.from(signature(bytes, ident.version))],
+    [names.dmg, Buffer.from("synthetic semantic DMG")],
+    ...installers(ident.version),
+  ]);
+  const build = {
+    runId: String(100 + offset),
+    runAttempt: "1",
+    schemaVersion: 3,
+    artifactName: `release-${ident.sourceSha}-${100 + offset}-1`,
+  };
+  build.platforms = [WINDOWS_TARGET, LINUX_TARGET].map((target) =>
+    platformReceipt(payload, ident, build, target),
+  );
+  const files = createBundle(ident, payload, build, publicKey);
+  return {
+    api,
+    history: semanticHistory,
+    id: ident,
+    publicKey,
+    dateFor,
+    files,
+    artifact: artifact(offset),
+    verifyNative: async () => {},
+    verifyPlan: async (candidate) => {
+      const all = await readReservations({
+        api,
+        history: semanticHistory,
+        bridge: migrationBridge,
+      });
+      assert.equal(
+        planSha256(all.find((p) => p.sourceSha === candidate.sourceSha)),
+        planSha256(candidate),
+      );
+    },
+    plan,
+  };
+}
+test("semantic bundle binds plan/source ordinal and preserves exact legacy bridge feed", async () => {
+  const ctx = await semanticFixture(new PlannedApi());
+  assert.equal(ctx.id.version, "0.3.0");
+  assert.equal(ctx.files.size, 10);
+  assert.ok(ctx.files.get("latest.json").equals(legacyFeed()));
+  const current = JSON.parse(ctx.files.get("latest-semver.json"));
+  assert.equal(current.version, ctx.plan.version);
+  assert.equal(current.notes, ctx.plan.notes);
+  assert.equal(
+    validateBundle(ctx.files, ctx.id, publicKey).firstParentCount,
+    ctx.plan.firstParentCount,
+  );
+  const swapped = new Map(ctx.files);
+  swapped.set("latest.json", ctx.files.get("latest-semver.json"));
+  assert.throws(
+    () => validateBundle(swapped, ctx.id, publicKey),
+    /Legacy bridge/,
+  );
+  const foreign = structuredClone(ctx.id);
+  foreign.releasePlan.notes += " changed";
+  assert.throws(
+    () => validateBundle(ctx.files, foreign, publicKey),
+    /Bundle plan/,
+  );
+  assert.throws(
+    () =>
+      validateBundle(ctx.files, { ...ctx.id, firstParentCount: 1 }, publicKey),
+    /Bundle plan/,
+  );
+});
+test("semantic publish and retry use ten original assets and exact frozen reservation", async () => {
+  const api = new PlannedApi(),
+    ctx = await semanticFixture(api);
+  api.loseCreate = api.loseUpload = api.losePublish = true;
+  assert.equal(await publishRelease(ctx), "published-latest");
+  const meta = releaseMetadata(await api.latest());
+  assert.equal(meta.schemaVersion, 3);
+  assert.equal(meta.planSha256, planSha256(ctx.plan));
+  assert.equal(meta.firstParentCount, ctx.plan.firstParentCount);
+  assert.equal(
+    await publishRelease({ ...ctx, files: undefined, artifact: undefined }),
+    "already-published",
+  );
+  assert.equal(
+    (await verifiedRelease(ctx, await api.latest())).id.version,
+    ctx.plan.version,
+  );
+  const source = {
+    api,
+    history: semanticHistory,
+    sha: ctx.plan.sourceSha,
+    dateFor,
+  };
+  assert.equal(
+    (await loadProductionPlan(source, Buffer.from(serializePlan(ctx.plan)))).id
+      .version,
+    ctx.plan.version,
+  );
+  await assert.rejects(
+    loadProductionPlan(
+      { ...source, sha: migrationBridge.sourceSha },
+      Buffer.from(serializePlan(ctx.plan)),
+    ),
+    /workflow source/,
+  );
+  await assert.rejects(
+    loadProductionPlan(source, Buffer.from(JSON.stringify(ctx.plan))),
+    /workflow source/,
+  );
+});
+test("later semantic release cannot let an older source roll latest backwards", async () => {
+  const api = new PlannedApi(),
+    a = await semanticFixture(api),
+    b = await semanticFixture(api, 2, a.plan, "fix");
+  assert.equal(b.id.version, "0.3.1");
+  assert.equal(await publishRelease(b), "published-latest");
+  assert.equal(await publishRelease(a), "published-older");
+  assert.equal((await api.latest()).tag_name, b.id.tag);
+});
+test("semantic drafts resume original bytes and reject mixed artifact or altered plan marker", async () => {
+  const api = new PlannedApi(),
+    ctx = await semanticFixture(api);
+  api.failUpload = "latest-semver.json";
+  await assert.rejects(publishRelease(ctx), /incomplete/);
+  assert.equal((await preflight(ctx)).state, "reuse");
+  await assert.rejects(
+    publishRelease({ ...ctx, artifact: artifact(2) }),
+    /artifact run/,
+  );
+  const release = api.releases.get(ctx.id.tag),
+    marker = releaseMetadata(release);
+  const original = release.body;
+  release.body = original.replace(marker.planSha256, "f".repeat(64));
+  await assert.rejects(preflight(ctx), /plan conflict/);
+  release.body = original;
+  api.failUpload = null;
+  assert.equal(await publishRelease(ctx), "published-latest");
+});
+test("semantic publisher rejects crossed source/version ordering before promotion", async () => {
+  const api = new PlannedApi(),
+    a = await semanticFixture(api),
+    b = await semanticFixture(api, 2, a.plan, "fix");
+  await publishRelease(b);
+  // A false ordinal cannot be promoted even with an otherwise valid plan.
+  await assert.rejects(
+    publishRelease({
+      ...a,
+      id: { ...a.id, firstParentCount: b.plan.firstParentCount + 1 },
+    }),
+    /Candidate/,
+  );
+});
+function filesForPlan(plan, runId = "200") {
+  const ident = planIdentity(plan),
+    names = assetNames(plan.version),
+    bytes = Buffer.from("synthetic planned app");
+  const payload = new Map([
+    [names.archive, bytes],
+    [names.signature, Buffer.from(signature(bytes, plan.version))],
+    [names.dmg, Buffer.from("synthetic planned DMG")],
+    ...installers(plan.version),
+  ]);
+  const build = {
+    runId,
+    runAttempt: "1",
+    schemaVersion: 3,
+    artifactName: `release-${plan.sourceSha}-${runId}-1`,
+  };
+  build.platforms = [WINDOWS_TARGET, LINUX_TARGET].map((target) =>
+    platformReceipt(payload, ident, build, target),
+  );
+  return createBundle(ident, payload, build, publicKey);
+}
+async function planningFixture(messages) {
+  const api = new PlannedApi();
+  await publishRelease(context(api, 1));
+  const bridge = { ...id(1), firstParentCount: 1 };
+  delete bridge.pubDate;
+  const inputs = [];
+  const source = (n) => ({
+    api,
+    publicKey,
+    history,
+    sha: history[n - 1],
+    dateFor,
+    verifyNative: async () => {},
+    commitsBetween: async (base, head) => {
+      inputs.push([base, head]);
+      const lo = history.indexOf(base),
+        hi = history.indexOf(head);
+      return history
+        .slice(lo + 1, hi + 1)
+        .map((hash, i) => ({ hash, message: messages[lo + 1 + i] }))
+        .reverse();
+    },
+  });
+  return {
+    api,
+    bridge,
+    source,
+    inputs,
+    options: { bridge, feed: () => bundle(1).get("latest.json") },
+  };
+}
+test("docs and CI-only introduced commits skip production without reserving a version", async () => {
+  const fixture = await planningFixture([
+    "baseline",
+    "docs: clarify settings",
+    "ci(deps): update action",
+  ]);
+  const before = fixture.api.events.length;
+  assert.equal(
+    (await planProduction(fixture.source(3), fixture.options)).state,
+    "skip",
+  );
+  assert.equal(fixture.api.events.length, before);
+  assert.equal(fixture.api.planReferences.size, 0);
+});
+test("failed build reservation is frozen on retry and remains included in subsequent notes", async () => {
+  const fixture = await planningFixture([
+    "baseline",
+    "fix: correct item recovery",
+    "feat: add travel controls",
+  ]);
+  const a = await planProduction(fixture.source(2), fixture.options);
+  assert.equal(a.state, "build");
+  assert.equal(a.id.version, "0.2.2");
+  const retry = await planProduction(fixture.source(2), fixture.options);
+  assert.equal(serializePlan(retry.plan), serializePlan(a.plan));
+  const b = await planProduction(fixture.source(3), fixture.options);
+  assert.equal(b.id.version, "0.3.0");
+  assert.equal(b.plan.analysisBase.sourceSha, a.plan.sourceSha);
+  assert.equal(b.plan.notesBase.sourceSha, fixture.bridge.sourceSha);
+  assert.ok(b.plan.notes.includes("correct item recovery"));
+  assert.ok(b.plan.notes.includes("add travel controls"));
+});
+test("out-of-order unplanned source is skipped after a later reservation", async () => {
+  const fixture = await planningFixture([
+    "baseline",
+    "fix: correct recovery",
+    "feat: travel",
+  ]);
+  await planProduction(fixture.source(3), fixture.options);
+  const older = await planProduction(fixture.source(2), fixture.options);
+  assert.equal(older.state, "skip");
+  assert.match(older.reason, /superseded/);
+  assert.equal(fixture.api.planReferences.size, 1);
+});
+test("existing older published sources are verified; older unbuilt sources skip; drafts recover", async () => {
+  const fixture = await planningFixture([
+    "baseline",
+    "fix: recovery",
+    "feat: travel",
+  ]);
+  const a = await planProduction(fixture.source(2), fixture.options);
+  const b = await planProduction(fixture.source(3), fixture.options);
+  const artifactFor = (runId) => ({
+    id: runId + "0",
+    runId,
+    digest: "sha256:" + "a".repeat(64),
+  });
+  const ctxFor = (planned, runId) => ({
+    ...fixture.source(planned.plan.firstParentCount),
+    id: planned.id,
+    files: filesForPlan(planned.plan, runId),
+    artifact: artifactFor(runId),
+    verifyPlan: async (plan) => {
+      const all = await readReservations({
+        api: fixture.api,
+        history,
+        bridge: fixture.bridge,
+      });
+      assert.equal(
+        planSha256(all.find((p) => p.sourceSha === plan.sourceSha)),
+        planSha256(plan),
+      );
+    },
+  });
+  // B publishes first. Unbuilt A is now superseded and receives no public tag.
+  await publishRelease(ctxFor(b, "203"));
+  assert.equal(
+    (await planProduction(fixture.source(2), fixture.options)).state,
+    "skip",
+  );
+  await fixture.api.createTag(a.id.tag, a.id.sourceSha);
+  const draft = await fixture.api.createDraft(
+    a.id,
+    releaseBody(a.id, artifactFor("202"), 3),
+  );
+  const recovery = await planProduction(fixture.source(2), fixture.options);
+  assert.equal(recovery.state, "reuse");
+  assert.equal(recovery.artifact.runId, "202");
+  await publishRelease(ctxFor(a, "202"));
+  assert.equal(
+    (await planProduction(fixture.source(2), fixture.options)).state,
+    "published",
+  );
+  // A historical rerun cannot silently skip a corrupted published tag.
+  fixture.api.tags.set(a.id.tag, history[3]);
+  await assert.rejects(
+    planProduction(fixture.source(2), fixture.options),
+    /tag points/,
+  );
+  assert.equal((await fixture.api.release(a.id.tag)).id, draft.id);
+});
+test("downstream plan verification reads only the exact ref instead of rescanning history", async () => {
+  const api = new PlannedApi(),
+    ctx = await semanticFixture(api);
+  api.planRefs = async () => {
+    throw new Error("Downstream must not scan the complete ledger.");
+  };
+  const loaded = await loadProductionPlan(
+    { api, history: semanticHistory, sha: ctx.id.sourceSha, dateFor },
+    Buffer.from(serializePlan(ctx.plan)),
+  );
+  assert.equal(loaded.id.version, ctx.id.version);
+  api.planReferences.delete([...api.planReferences.keys()][0]);
+  await assert.rejects(loaded.verifyPlan(ctx.plan), /missing/);
+});
+test("GitHub reservation adapter uses canonical tag objects, create-only refs and immutable cache", async () => {
+  const original = global.fetch,
+    calls = [],
+    sha = "a".repeat(40),
+    sourceSha = "b".repeat(40);
+  global.fetch = async (url, options) => {
+    calls.push({
+      url: String(url),
+      method: options.method,
+      body: options.body && JSON.parse(options.body),
+    });
+    if (String(url).includes("matching-refs")) return Response.json([]);
+    if (options.method === "POST") return Response.json({ sha });
+    return Response.json({
+      sha,
+      tag: "rayrag-release-plan/v0.3.0",
+      message: "canonical\n",
+      object: { type: "commit", sha: sourceSha },
+    });
+  };
+  try {
+    const api = new GitHubReleaseApi("synthetic-only");
+    assert.deepEqual(await api.planRefs(), []);
+    await api.createPlanTag(
+      "rayrag-release-plan/v0.3.0",
+      "canonical\n",
+      sourceSha,
+      await dateFor(),
+    );
+    await api.createPlanRef("refs/tags/rayrag-release-plan/v0.3.0", sha);
+    await api.tagObject(sha);
+    await api.tagObject(sha);
+    assert.equal(
+      calls.filter(
+        (c) => c.method === "GET" && c.url.endsWith(`git/tags/${sha}`),
+      ).length,
+      1,
+    );
+    assert.equal(calls[1].body.message, "canonical\n");
+    assert.equal(calls[1].body.object, sourceSha);
+    assert.equal(calls[2].body.ref, "refs/tags/rayrag-release-plan/v0.3.0");
+    assert.ok(calls.every((c) => ["GET", "POST"].includes(c.method)));
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("fetched annotated reservations preserve exact message bytes without per-object REST calls", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rayrag-git-reservation-"));
+  try {
+    execFileSync("git", ["init", "--quiet", root], { stdio: "pipe" });
+    const source = "a".repeat(40),
+      message = '{"canonical":"message"}\n';
+    const object = `object ${source}\ntype commit\ntag rayrag-release-plan/v0.3.0\ntagger CI <ci@example.invalid> 1 +0000\n\n${message}`;
+    const sha = execFileSync(
+      "git",
+      ["hash-object", "-t", "tag", "-w", "--stdin"],
+      { cwd: root, input: object, encoding: "utf8", stdio: "pipe" },
+    ).trim();
+    const tag = readLocalTagObject(root, sha);
+    assert.equal(tag.message, message);
+    assert.equal(tag.object.sha, source);
+    assert.equal(tag.tag, "rayrag-release-plan/v0.3.0");
+    assert.equal(readLocalTagObject(root, "b".repeat(40)), null);
+    const api = new GitHubReleaseApi("synthetic-only", (objectSha) =>
+      readLocalTagObject(root, objectSha),
+    );
+    api.request = async () => {
+      throw new Error("Fetched immutable object must not use REST.");
+    };
+    assert.deepEqual(await api.tagObject(sha), tag);
+    assert.deepEqual(await api.tagObject(sha), tag);
+    const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: root,
+      input: "blob",
+      encoding: "utf8",
+      stdio: "pipe",
+    }).trim();
+    assert.throws(() => readLocalTagObject(root, blob), /annotated Git tag/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

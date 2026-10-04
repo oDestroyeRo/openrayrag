@@ -1,25 +1,51 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import {
+  readFile,
+  writeFile,
+  mkdir,
+  mkdtemp,
+  symlink,
+  rm,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import config, { canonicalJson } from "../release.config.mjs";
 import {
-  planRelease, validatePlan, serializePlan, planSha256,
-  RELEASE_POLICY, RELEASE_POLICY_SHA256, RELEASE_ENGINE_VERSIONS,
+  planRelease,
+  validatePlan,
+  serializePlan,
+  planSha256,
+  RELEASE_POLICY,
+  RELEASE_POLICY_SHA256,
+  RELEASE_ENGINE_VERSIONS,
   MAX_NOTES_BYTES,
-  stableVersion, compareVersions, bumpVersion,
+  stableVersion,
+  compareVersions,
+  bumpVersion,
 } from "./semantic-release-plan.mjs";
 
 const sha = (n) => n.toString(16).padStart(40, "0");
 const published = { sourceSha: sha(1), version: "0.2.63", tag: "v0.2.63" };
-const source = { sourceSha: sha(3), firstParentCount: 64, pubDate: "2026-10-02T23:59:58.000Z" };
+const source = {
+  sourceSha: sha(3),
+  firstParentCount: 64,
+  pubDate: "2026-10-02T23:59:58.000Z",
+};
 const commit = (message, n = 2) => ({ hash: sha(n), message });
 const inputFor = (messages = ["fix: recover a stopped update"]) => {
   const commits = messages.map((message, i) => commit(message, i + 10));
-  return { source: { ...source }, published: { ...published }, reservation: null,
-    analysisCommits: commits, notesCommits: structuredClone(commits) };
+  return {
+    source: { ...source },
+    published: { ...published },
+    reservation: null,
+    analysisCommits: commits,
+    notesCommits: structuredClone(commits),
+  };
 };
 async function planFor(messages) {
   const result = await planRelease(inputFor(messages));
@@ -28,21 +54,54 @@ async function planFor(messages) {
 }
 
 test("trusted policy uses only pinned pure plugins with a compatible current writer", async () => {
-  const pkg = JSON.parse(await readFile(new URL("../tools/release/package.json", import.meta.url), "utf8"));
-  const lock = JSON.parse(await readFile(new URL("../tools/release/package-lock.json", import.meta.url), "utf8"));
+  const pkg = JSON.parse(
+    await readFile(
+      new URL("../tools/release/package.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const lock = JSON.parse(
+    await readFile(
+      new URL("../tools/release/package-lock.json", import.meta.url),
+      "utf8",
+    ),
+  );
   for (const [name, version] of Object.entries(RELEASE_ENGINE_VERSIONS)) {
-    assert.equal(name === "conventional-changelog-writer" ? pkg.overrides[name] : pkg.devDependencies[name], version);
+    assert.equal(
+      name === "conventional-changelog-writer"
+        ? pkg.overrides[name]
+        : pkg.devDependencies[name],
+      version,
+    );
     assert.equal(lock.packages[`node_modules/${name}`].version, version);
   }
-  assert.deepEqual(config.plugins.map(([name]) => name), [
-    "@semantic-release/commit-analyzer", "@semantic-release/release-notes-generator",
-  ]);
+  assert.deepEqual(
+    config.plugins.map(([name]) => name),
+    [
+      "@semantic-release/commit-analyzer",
+      "@semantic-release/release-notes-generator",
+    ],
+  );
   assert.equal(lock.packages["node_modules/semantic-release"], undefined);
   assert.equal(lock.packages["node_modules/@semantic-release/npm"], undefined);
-  assert.equal(lock.packages["node_modules/@semantic-release/github"], undefined);
-  const rootLock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
-  assert.ok(!Object.keys(rootLock.packages).some((path) => /\/node_modules\/(?:braces|micromatch)$/.test(`/${path}`)));
-  assert.equal(RELEASE_POLICY_SHA256, createHash("sha256").update(canonicalJson(RELEASE_POLICY) + "\n").digest("hex"));
+  assert.equal(
+    lock.packages["node_modules/@semantic-release/github"],
+    undefined,
+  );
+  const rootLock = JSON.parse(
+    await readFile(new URL("../package-lock.json", import.meta.url), "utf8"),
+  );
+  assert.ok(
+    !Object.keys(rootLock.packages).some((path) =>
+      /\/node_modules\/(?:braces|micromatch)$/.test(`/${path}`),
+    ),
+  );
+  assert.equal(
+    RELEASE_POLICY_SHA256,
+    createHash("sha256")
+      .update(canonicalJson(RELEASE_POLICY) + "\n")
+      .digest("hex"),
+  );
   assert.ok(Object.isFrozen(RELEASE_POLICY.analyzer.releaseRules));
 });
 
@@ -51,14 +110,29 @@ for (const [message, releaseType, version, note] of [
   ["perf: reduce bot polling", "patch", "0.2.64", "Performance Improvements"],
   ["feat: add macro conditions", "minor", "0.3.0", "Features"],
   ["feat!: replace settings schema", "major", "1.0.0", "BREAKING CHANGES"],
-  ["fix: replace settings\n\nBREAKING CHANGE: profiles require migration", "major", "1.0.0", "profiles require migration"],
+  [
+    "fix: replace settings\n\nBREAKING CHANGE: profiles require migration",
+    "major",
+    "1.0.0",
+    "profiles require migration",
+  ],
   ["chore(deps): update Tauri", "patch", "0.2.64", "Dependencies"],
   ["chore(deps-dev): update TypeScript", "patch", "0.2.64", "Dependencies"],
   ["build(deps): update runtime", "patch", "0.2.64", "Dependencies"],
   ["build(deps-dev): update bundler", "patch", "0.2.64", "Dependencies"],
   ["chore(deps)!: replace native API", "major", "1.0.0", "replace native API"],
-  ["build(deps): replace library\n\nBREAKING CHANGE: old plugin API removed", "major", "1.0.0", "old plugin API removed"],
-  ["docs!: change supported configuration", "major", "1.0.0", "change supported configuration"],
+  [
+    "build(deps): replace library\n\nBREAKING CHANGE: old plugin API removed",
+    "major",
+    "1.0.0",
+    "old plugin API removed",
+  ],
+  [
+    "docs!: change supported configuration",
+    "major",
+    "1.0.0",
+    "change supported configuration",
+  ],
 ]) {
   test(`real engines: ${message.split("\n")[0]}`, async () => {
     const plan = await planFor([message]);
@@ -74,21 +148,35 @@ for (const [message, releaseType, version, note] of [
 }
 
 for (const messages of [
-  [], ["docs: explain macros"], ["ci: speed builds"], ["ci(deps): update checkout"],
-  ["chore: organize scripts"], ["build: clarify local command"],
-  ["refactor: rename internal field"], ["test: cover updater"],
+  [],
+  ["docs: explain macros"],
+  ["ci: speed builds"],
+  ["ci(deps): update checkout"],
+  ["chore: organize scripts"],
+  ["build: clarify local command"],
+  ["refactor: rename internal field"],
+  ["test: cover updater"],
   ["docs: explain macros", "ci(deps): update actions"],
 ]) {
   test(`real analyzer skips ${messages.join(" + ") || "an empty range"}`, async () => {
     const result = await planRelease(inputFor(messages), {
-      notesGenerator: () => { throw new Error("Skipped plans must not generate notes."); },
+      notesGenerator: () => {
+        throw new Error("Skipped plans must not generate notes.");
+      },
     });
-    assert.deepEqual(result, { state: "skip", reason: "No releasable changes." });
+    assert.deepEqual(result, {
+      state: "skip",
+      reason: "No releasable changes.",
+    });
   });
 }
 
 test("real analyzer uses the highest release type across introduced commits", async () => {
-  const plan = await planFor(["fix: recover update", "feat: add macro conditions", "ci: speed builds"]);
+  const plan = await planFor([
+    "fix: recover update",
+    "feat: add macro conditions",
+    "ci: speed builds",
+  ]);
   assert.equal(plan.version, "0.3.0");
   assert.match(plan.notes, /recover update/);
   assert.match(plan.notes, /add macro conditions/);
@@ -97,7 +185,10 @@ test("real analyzer uses the highest release type across introduced commits", as
 
 test("real analyzer filters a feature and its revert, and releases a standalone revert", async () => {
   const feature = commit("feat: add macro conditions", 20);
-  const revert = commit(`revert: feat: add macro conditions\n\nThis reverts commit ${feature.hash}.`, 21);
+  const revert = commit(
+    `revert: feat: add macro conditions\n\nThis reverts commit ${feature.hash}.`,
+    21,
+  );
   const input = inputFor();
   // The official engine expects Git log order: newest commit first.
   input.analysisCommits = [revert, feature];
@@ -130,7 +221,11 @@ test("reservation advances the version while unpublished changes remain in relea
   input.notesCommits.unshift(commit("feat: add macro conditions", 9));
   const { plan } = await planRelease(input);
   assert.equal(plan.version, "0.3.1");
-  assert.deepEqual(plan.analysisBase, { sourceSha: source.sourceSha, version: "0.3.0", tag: "v0.3.0" });
+  assert.deepEqual(plan.analysisBase, {
+    sourceSha: source.sourceSha,
+    version: "0.3.0",
+    tag: "v0.3.0",
+  });
   assert.deepEqual(plan.notesBase, published);
   assert.equal(plan.predecessorPlanSha256, planSha256(reservation));
   assert.match(plan.notes, /add macro conditions/);
@@ -140,75 +235,162 @@ test("reservation advances the version while unpublished changes remain in relea
 
 test("planning rejects reordered, stale or mismatched reservation baselines", async () => {
   const reservation = await planFor();
-  for (const badSource of [source, { ...source, firstParentCount: 63 }, { ...source, firstParentCount: 65 }]) {
-    await assert.rejects(planRelease({ ...inputFor(), source: badSource, reservation }), /follow the reserved source/);
+  for (const badSource of [
+    source,
+    { ...source, firstParentCount: 63 },
+    { ...source, firstParentCount: 65 },
+  ]) {
+    await assert.rejects(
+      planRelease({ ...inputFor(), source: badSource, reservation }),
+      /follow the reserved source/,
+    );
   }
-  const input = { ...inputFor(), reservation, source: { ...source, sourceSha: sha(4), firstParentCount: 65 } };
-  await assert.rejects(planRelease({ ...input, published: { ...published, version: "0.3.0", tag: "v0.3.0" } }), /precedes/);
-  await assert.rejects(planRelease({ ...input, published: { ...published, version: "0.2.64", tag: "v0.2.64" } }), /different sources/);
+  const input = {
+    ...inputFor(),
+    reservation,
+    source: { ...source, sourceSha: sha(4), firstParentCount: 65 },
+  };
+  await assert.rejects(
+    planRelease({
+      ...input,
+      published: { ...published, version: "0.3.0", tag: "v0.3.0" },
+    }),
+    /precedes/,
+  );
+  await assert.rejects(
+    planRelease({
+      ...input,
+      published: { ...published, version: "0.2.64", tag: "v0.2.64" },
+    }),
+    /different sources/,
+  );
 });
 
 test("canonical reservation bytes and hash survive parsed key reordering", async () => {
   const plan = await planFor();
   const reordered = Object.fromEntries(Object.entries(plan).reverse());
-  reordered.analysisBase = Object.fromEntries(Object.entries(reordered.analysisBase).reverse());
+  reordered.analysisBase = Object.fromEntries(
+    Object.entries(reordered.analysisBase).reverse(),
+  );
   assert.equal(serializePlan(reordered), serializePlan(plan));
   assert.equal(planSha256(reordered), planSha256(plan));
   assert.ok(serializePlan(plan).endsWith("\n"));
-  assert.equal(serializePlan(JSON.parse(serializePlan(plan))), serializePlan(plan));
+  assert.equal(
+    serializePlan(JSON.parse(serializePlan(plan))),
+    serializePlan(plan),
+  );
 });
 
 test("plan validation rejects tampered identities, policy, increments and metadata injection", async () => {
   const valid = await planFor();
   const corruptions = [
-    { extra: true }, { schemaVersion: 2 }, { repository: "other/repo" },
-    { sourceSha: "A".repeat(40) }, { sourceSha: valid.analysisBase.sourceSha },
-    { firstParentCount: 0 }, { firstParentCount: Number.MAX_SAFE_INTEGER + 1 },
-    { pubDate: "2026-02-30T00:00:00.000Z" }, { pubDate: "2026-10-02T23:59:58Z" },
-    { version: "v0.2.64" }, { version: "00.2.64" }, { version: "0.2.64+build" },
-    { version: "0.2.64-rc.1" }, { version: "0.2.65", tag: "v0.2.65" },
-    { tag: "v1.0.0" }, { releaseType: "prerelease" }, { releaseType: "minor" },
-    { policyVersion: 2 }, { policySha256: "a".repeat(64) },
+    { extra: true },
+    { schemaVersion: 2 },
+    { repository: "other/repo" },
+    { sourceSha: "A".repeat(40) },
+    { sourceSha: valid.analysisBase.sourceSha },
+    { firstParentCount: 0 },
+    { firstParentCount: Number.MAX_SAFE_INTEGER + 1 },
+    { pubDate: "2026-02-30T00:00:00.000Z" },
+    { pubDate: "2026-10-02T23:59:58Z" },
+    { version: "v0.2.64" },
+    { version: "00.2.64" },
+    { version: "0.2.64+build" },
+    { version: "0.2.64-rc.1" },
+    { version: "0.2.65", tag: "v0.2.65" },
+    { tag: "v1.0.0" },
+    { releaseType: "prerelease" },
+    { releaseType: "minor" },
+    { policyVersion: 2 },
+    { policySha256: "a".repeat(64) },
     { predecessorPlanSha256: "bad" },
     { analysisBase: { ...published, extra: true } },
     { notesBase: { ...published, sourceSha: sha(8) } },
-    { notes: "" }, { notes: " \n" }, { notes: "bad\0notes" }, { notes: "bad\ud800notes" },
+    { notes: "" },
+    { notes: " \n" },
+    { notes: "bad\0notes" },
+    { notes: "bad\ud800notes" },
     { notes: "a".repeat(MAX_NOTES_BYTES + 1) },
-    { notes: "<!-- rayrag-release:{} -->" }, { notes: "RAYRAG-RELEASE-PLAN:{}" },
+    { notes: "<!-- rayrag-release:{} -->" },
+    { notes: "RAYRAG-RELEASE-PLAN:{}" },
   ];
   for (const corruption of corruptions) {
-    assert.throws(() => validatePlan({ ...structuredClone(valid), ...corruption }), undefined,
-      JSON.stringify(corruption).slice(0, 200));
+    assert.throws(
+      () => validatePlan({ ...structuredClone(valid), ...corruption }),
+      undefined,
+      JSON.stringify(corruption).slice(0, 200),
+    );
   }
   assert.equal(validatePlan(valid), valid);
 });
 
 test("planner fails closed on malformed input or mismatched analysis and notes ranges", async () => {
   const mutations = [
-    (input) => { input.extra = true; },
-    (input) => { input.source.extra = true; },
-    (input) => { input.source.pubDate = "not a date"; },
-    (input) => { input.published.version = "0.2.63+build"; },
-    (input) => { input.published.tag = "v0.2.62"; },
-    (input) => { input.analysisCommits[0].hash = "bad"; },
-    (input) => { input.analysisCommits[0].message = null; },
-    (input) => { input.analysisCommits.push(input.analysisCommits[0]); },
-    (input) => { input.analysisCommits[0].message = "a".repeat(64 * 1024 + 1); },
-    (input) => { input.notesCommits = []; },
-    (input) => { input.notesCommits[0].message = "fix: replaced message"; },
+    (input) => {
+      input.extra = true;
+    },
+    (input) => {
+      input.source.extra = true;
+    },
+    (input) => {
+      input.source.pubDate = "not a date";
+    },
+    (input) => {
+      input.published.version = "0.2.63+build";
+    },
+    (input) => {
+      input.published.tag = "v0.2.62";
+    },
+    (input) => {
+      input.analysisCommits[0].hash = "bad";
+    },
+    (input) => {
+      input.analysisCommits[0].message = null;
+    },
+    (input) => {
+      input.analysisCommits.push(input.analysisCommits[0]);
+    },
+    (input) => {
+      input.analysisCommits[0].message = "a".repeat(64 * 1024 + 1);
+    },
+    (input) => {
+      input.notesCommits = [];
+    },
+    (input) => {
+      input.notesCommits[0].message = "fix: replaced message";
+    },
   ];
   for (const mutate of mutations) {
     const input = inputFor();
     mutate(input);
-    await assert.rejects(planRelease(input, { analyzer: () => { throw new Error("Engine should not run."); } }),
-      (error) => error.message !== "Engine should not run.");
+    await assert.rejects(
+      planRelease(input, {
+        analyzer: () => {
+          throw new Error("Engine should not run.");
+        },
+      }),
+      (error) => error.message !== "Engine should not run.",
+    );
   }
 });
 
 test("planner rejects unexpected plugin output before any plan can be reserved", async () => {
-  await assert.rejects(planRelease(inputFor(), { analyzer: () => "prerelease" }), /analyzer release type/);
-  await assert.rejects(planRelease(inputFor(), { notesGenerator: () => "<!-- rayrag-release:{} -->" }), /reserved provenance/);
-  await assert.rejects(planRelease(inputFor(), { notesGenerator: () => "x".repeat(MAX_NOTES_BYTES + 1) }), /release notes/);
+  await assert.rejects(
+    planRelease(inputFor(), { analyzer: () => "prerelease" }),
+    /analyzer release type/,
+  );
+  await assert.rejects(
+    planRelease(inputFor(), {
+      notesGenerator: () => "<!-- rayrag-release:{} -->",
+    }),
+    /reserved provenance/,
+  );
+  await assert.rejects(
+    planRelease(inputFor(), {
+      notesGenerator: () => "x".repeat(MAX_NOTES_BYTES + 1),
+    }),
+    /release notes/,
+  );
 });
 
 test("untrusted nested brace subjects stay strings; only trusted literal policy patterns are matched", async () => {
@@ -217,7 +399,8 @@ test("untrusted nested brace subjects stay strings; only trusted literal policy 
   assert.equal(plan.releaseType, "patch");
   assert.ok(plan.notes.includes(subject));
   for (const rule of RELEASE_POLICY.analyzer.releaseRules) {
-    for (const key of ["type", "scope"]) if (rule[key]) assert.match(rule[key], /^[a-z-]+$/);
+    for (const key of ["type", "scope"])
+      if (rule[key]) assert.match(rule[key], /^[a-z-]+$/);
   }
 });
 
@@ -243,8 +426,8 @@ test("official engines never call vulnerable braces walkers and use only trusted
       return original(value, pattern, ...args);
     };
     const {planRelease, RELEASE_POLICY} = await import('./scripts/semantic-release-plan.mjs');
-    // This depth actually exhausts braces@3.0.3 when used as a pattern.
-    const nested = '{'.repeat(4900) + 'payload' + '}'.repeat(4900);
+    // Untrusted scopes/subjects remain match values within the parser budget.
+    const nested = '{'.repeat(200) + 'payload' + '}'.repeat(200);
     const messages = [
       'fix(' + nested + '): ' + nested + '\\n\\n' + nested,
       'docs: nonrelease ' + nested,
@@ -269,7 +452,9 @@ test("official engines never call vulnerable braces walkers and use only trusted
     assert.equal(calls, 0);
   `;
   execFileSync(process.execPath, ["--input-type=module", "-e", script], {
-    cwd: fileURLToPath(new URL("../", import.meta.url)), stdio: "pipe", timeout: 60_000,
+    cwd: fileURLToPath(new URL("../", import.meta.url)),
+    stdio: "pipe",
+    timeout: 60_000,
   });
 });
 
@@ -280,11 +465,108 @@ test("shared SemVer boundary rejects unstable, noncanonical and unsafe numeric v
   assert.equal(compareVersions("1.0.9", "1.1.0"), -1);
   assert.equal(bumpVersion("0.2.63", "minor"), "0.3.0");
   assert.equal(bumpVersion("0.2.63", "major"), "1.0.0");
-  for (const value of ["v1.0.0", "01.0.0", "1.0.0-beta", "1.0.0+build", "9007199254740992.0.0", null]) {
+  for (const value of [
+    "v1.0.0",
+    "01.0.0",
+    "1.0.0-beta",
+    "1.0.0+build",
+    "9007199254740992.0.0",
+    null,
+  ]) {
     assert.throws(() => stableVersion(value), /stable release version/);
-    assert.throws(() => compareVersions("1.0.0", value), /stable release version/);
+    assert.throws(
+      () => compareVersions("1.0.0", value),
+      /stable release version/,
+    );
     assert.throws(() => bumpVersion(value, "patch"), /stable release version/);
   }
   assert.throws(() => bumpVersion("1.0.0", "preminor"), /release type/);
-  assert.throws(() => bumpVersion("9007199254740991.0.0", "major"), /stable release version/);
+  assert.throws(
+    () => bumpVersion("9007199254740991.0.0", "major"),
+    /stable release version/,
+  );
+});
+
+test("oversized commit lines reject before either official engine can run", async () => {
+  for (const message of [
+    "fix: " + "x".repeat(63500),
+    "fix: valid\n\n" + "x".repeat(4097),
+    "fix: " + "{".repeat(4900) + "payload" + "}".repeat(4900),
+  ]) {
+    const input = inputFor([message]);
+    let calls = 0;
+    await assert.rejects(
+      planRelease(input, {
+        analyzer: () => {
+          calls++;
+        },
+        notesGenerator: () => {
+          calls++;
+        },
+      }),
+    );
+    assert.equal(calls, 0);
+  }
+});
+test("JSON-escaped notes must fit the installed metadata budget", async () => {
+  const input = inputFor();
+  await assert.rejects(
+    planRelease(input, { notesGenerator: () => "x" + "\t".repeat(30_000) }),
+    /Serialized release notes/,
+  );
+});
+test("reviewed historical plans survive a future policy snapshot without trusting unknown hashes", async () => {
+  const old = await planFor(["fix: retain recovery"]),
+    folder = await mkdtemp(join(tmpdir(), "rayrag-policy-history-"));
+  try {
+    await mkdir(join(folder, "scripts"));
+    await mkdir(join(folder, "tools"));
+    await symlink(
+      fileURLToPath(new URL("../tools/release", import.meta.url)),
+      join(folder, "tools/release"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await writeFile(
+      join(folder, "scripts/semantic-release-plan.mjs"),
+      await readFile(new URL("./semantic-release-plan.mjs", import.meta.url)),
+    );
+    const configSource = await readFile(
+      new URL("../release.config.mjs", import.meta.url),
+      "utf8",
+    );
+    await writeFile(
+      join(folder, "release.config.mjs"),
+      configSource.replace(
+        "RELEASE_POLICY_VERSION = 1",
+        "RELEASE_POLICY_VERSION = 2",
+      ),
+    );
+    const future = await import(
+      pathToFileURL(join(folder, "release.config.mjs")).href
+    );
+    const snapshots = JSON.parse(
+      await readFile(
+        new URL("../release-policy-history.json", import.meta.url),
+      ),
+    );
+    snapshots.push({
+      sha256: future.RELEASE_POLICY_SHA256,
+      policy: future.RELEASE_POLICY,
+    });
+    await writeFile(
+      join(folder, "release-policy-history.json"),
+      JSON.stringify(snapshots),
+    );
+    const script = `import assert from 'node:assert/strict';
+      const {validatePlan} = await import(${JSON.stringify(pathToFileURL(join(folder, "scripts/semantic-release-plan.mjs")).href)});
+      const old = ${JSON.stringify(old)};
+      assert.equal(validatePlan(old).policyVersion, 1);
+      assert.throws(() => validatePlan({...old,policySha256:'f'.repeat(64)}), /trusted policy/);`;
+    execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+      timeout: 10_000,
+      stdio: "pipe",
+    });
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
 });

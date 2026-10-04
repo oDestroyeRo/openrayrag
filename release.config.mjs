@@ -14,7 +14,10 @@ const dependencyRules = ["chore", "build"].flatMap((type) =>
   ["deps", "deps-dev"].map((scope) => ({ type, scope, release: "patch" })),
 );
 const dependencySections = dependencyRules.map(({ type, scope }) => ({
-  type, scope, section: "Dependencies", effect: "bump",
+  type,
+  scope,
+  section: "Dependencies",
+  effect: "bump",
 }));
 
 function freeze(value) {
@@ -64,9 +67,10 @@ export const RELEASE_POLICY = freeze({
 export function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
-    return `{${Object.keys(value).sort().map(
-      (key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`,
-    ).join(",")}}`;
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value);
 }
@@ -80,6 +84,9 @@ export default freeze({
   tagFormat: "v${version}",
   plugins: [
     ["@semantic-release/commit-analyzer", RELEASE_POLICY.analyzer],
-    ["@semantic-release/release-notes-generator", RELEASE_POLICY.notesGenerator],
+    [
+      "@semantic-release/release-notes-generator",
+      RELEASE_POLICY.notesGenerator,
+    ],
   ],
 });
