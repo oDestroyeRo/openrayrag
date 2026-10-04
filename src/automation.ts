@@ -1,4 +1,5 @@
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
+import { hpPotionIds, isHpPotion } from './hp-potions';
 import { matchesSkillExecution } from './skill-execution';
 import type { AutomationSettings, LootRule, MonsterRule } from './settings';
 import type { Entity } from './protocol';
@@ -125,6 +126,7 @@ export class AutomationScheduler {
       if (action.type==='sit') { this.resting=action.sitting; if(!action.sitting)this.recoverySince=null; }
       const key = action.type==='useItem'?`item:${action.itemId}`:action.type==='skill'?`skill:${action.skillId}`:action.type;
       this.cooldown.set(key,this.now());
+      if(action.type==='useItem'&&isHpPotion(action.itemId))this.cooldown.set('hp-potions',this.now());
     }
     return {confirmed,failure:null};
   }
@@ -165,6 +167,17 @@ export class AutomationScheduler {
       if(resource===null)return {failure:`${r.resource.toUpperCase()} is unavailable for item rules.`};
       if(resource<=r.belowPercent&&ITEM_CATALOG[r.itemId]?.useType!==1)return {failure:`Item ${r.itemId} is not an untargeted usable item.`};
       if(resource<=r.belowPercent&&state.count(r.itemId)>r.minStock&&now-(this.cooldown.get(`item:${r.itemId}`)??-Infinity)>=r.cooldownSeconds*1000)return {action:{type:'useItem',itemId:r.itemId}};
+    }
+    const potions=a.hpPotions;
+    if(potions&&potions.mode!=='off') {
+      if(hp===null)return {failure:'HP is unavailable for HP potions.'};
+      if(hp<=potions.belowPercent) {
+        if(!state.inventoryKnown)return {failure:'Inventory is unavailable; HP potions need a full inventory update.'};
+        if(now-(this.cooldown.get('hp-potions')??-Infinity)>=potions.cooldownSeconds*1000) {
+          const itemId=hpPotionIds(potions).find(id=>!a.items.some(rule=>rule.itemId===id)&&state.count(id)>potions.minStock);
+          if(itemId!==undefined)return {action:{type:'useItem',itemId}};
+        }
+      }
     }
     for(const r of a.skills) {
       if(!this.matches(`Skill ${r.skillId}`,r.conditions,observations))continue;

@@ -29,6 +29,8 @@ import { DEFAULT_SUPPLY } from './supply-trip';
 import { previewSupplyTrip } from './supply-plan';
 import { DEFAULT_DISPOSITION, dispositionPreviewIsCurrent, planDisposition, type DispositionPlan } from './disposition';
 import { dispositionContextFromStatus, dispositionPreviewText, dispositionStockFloors } from './disposition-ui';
+import { HpPotionUi } from './hp-potion-ui';
+import { DEFAULT_HP_POTIONS } from './hp-potions';
 
 type FeatureUiMounts = Pick<ClientShell, 'sections' | 'manualTools' | 'sessionDetails'>;
 type Section = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows' | 'profiles';
@@ -243,6 +245,8 @@ export class FeatureUi {
   private attackStrategiesPresent = false;
   private partyHealPresent=false;
   private retreatPresent=false;
+  private hpPotionsPresent = false;
+  private readonly hpPotions: HpPotionUi;
   private macroUi!: MacroUi;
   private routePreview: { abort: AbortController; identity: string; settings: string; output: HTMLElement; current?: () => string; evidence?: string } | null = null;
   private previewIdentity(): string {
@@ -290,6 +294,13 @@ export class FeatureUi {
     try { storage = localStorage; } catch { storage = {getItem:()=>null,setItem:()=>{throw new Error('Profile storage is unavailable.');}}; }
     this.profiles = new ProfileStore(storage); this.services = new NpcServiceStore(storage);
     for (const [section, panel] of Object.entries(mounts.sections) as Array<[Section, HTMLElement]>) this.panels.set(section, panel);
+    this.hpPotions = new HpPotionUi(() => this.hooks.changed(), () => {
+      // FeatureUi mounts before SettingsForm exists. Read this independent
+      // control so an invalid draft elsewhere cannot interrupt status rendering.
+      const input = this.host.querySelector<HTMLInputElement>('#min-hp');
+      return input ? Number(input.value) : this.hooks.settings().minHpPercent;
+    });
+    this.panel('recovery').append(this.hpPotions.root);
     const combat = this.panel('combat');
     for (const [section, definitions] of Object.entries(fields) as Array<[Section,Field[]]>) {
       const grid = document.createElement('div'); grid.className = 'form-grid'; for (const field of definitions) grid.append(fieldElement(field)); this.panels.get(section)!.append(grid);
@@ -451,6 +462,9 @@ export class FeatureUi {
     const mp=object(automation.mapPolicy);for(const key of ['allow','deny'])mp[key]=this.host.querySelector<HTMLInputElement>(`#map-policy-${key}`)!.value.split(/[\s,]+/).filter(Boolean);
     mp.lockArea=this.host.querySelector<HTMLInputElement>('#map-policy-area')!.checked?Object.fromEntries(['map','minX','minY','maxX','maxY'].map(key=>{const value=this.host.querySelector<HTMLInputElement>(`#map-policy-${key}`)!.value;return [key,key==='map'?value:Number(value)];})):null;
     if(!this.retreatPresent&&JSON.stringify(automation.retreat)===JSON.stringify(DEFAULT_RETREAT))delete automation.retreat;
+    const hpPotions = this.hpPotions.read();
+    if (this.hpPotionsPresent || JSON.stringify(hpPotions) !== JSON.stringify(DEFAULT_HP_POTIONS)) automation.hpPotions = hpPotions;
+    else delete automation.hpPotions;
     return validateAutomation(automation as unknown as AutomationSettings);
   }
   write(automation: AutomationSettings): void {
@@ -460,6 +474,8 @@ export class FeatureUi {
     automation={...automation,partyHeal:automation.partyHeal??{...DEFAULT_PARTY_HEAL}};
     this.retreatPresent=Object.hasOwn(automation,'retreat');automation={...automation,retreat:automation.retreat??{...DEFAULT_RETREAT}};
     this.attackStrategiesPresent=Object.hasOwn(automation,'attackStrategies');
+    this.hpPotionsPresent = Object.hasOwn(automation, 'hpPotions');
+    this.hpPotions.write(automation.hpPotions ?? DEFAULT_HP_POTIONS);
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.settingInputs.get(field.path)!;
       const value = getPath(automation,field.path);
@@ -632,6 +648,7 @@ export class FeatureUi {
     this.syncFollowMode();
     for(const editor of this.editors.values())editor.lock(config);
     this.dispositionEditor.lock(config);
+    this.hpPotions.lock(config);
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-manual]'))button.disabled=manual;
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-service]'))button.disabled=service;
     this.social.lock(manual);this.refine.lock(manual);
@@ -654,6 +671,7 @@ export class FeatureUi {
   }
   render(value: unknown): void {
     this.status=object(value);this.macroUi.render(this.status.macro,this.observation());if(this.routePreview&&(this.routePreview.identity!==this.previewIdentity()||this.routePreview.evidence!==this.routePreview.current?.()))this.cancelRoutePreview();const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
+    this.hpPotions.update(character);
     const engagement=object(s.partyEngagement);const reasons=Array.isArray(engagement.reasons)?engagement.reasons.map(text):[];
     this.host.querySelector<HTMLElement>('#party-engagement-state')!.textContent=engagement.enabled===true?`Party exception active · ${number(engagement.accepted)??0} verified engagements · ${number(engagement.blocked)??0} excluded${reasons.length?'\n'+reasons.join('\n'):''}`:'Party exception is off; outside engagements remain excluded.';
     const heal=object(s.partyHeal);this.host.querySelector<HTMLElement>('#party-heal-state')!.textContent=`${text(heal.reason)||'Party Heal is off.'} · ${number(heal.attempts)??0} attempts · ${number(heal.confirmed)??0} executions confirmed${heal.resourceReadback===true?' · fresh resource readback':''}`;

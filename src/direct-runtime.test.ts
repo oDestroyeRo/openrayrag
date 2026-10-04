@@ -2,7 +2,7 @@ import { describe,it,expect,vi } from 'vitest';
 import { DirectRuntime, type DirectEvent } from './direct-runtime';
 import { BitWriter } from './binary';
 import { OP, type Entity } from './protocol';
-import { DEFAULT_SETTINGS } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
 import { FEATURE_OP, featureCommand } from './protocol-feature';
 
 const player:Entity={id:0,classId:6,name:'Synthetic',kind:0,level:15,hp:100,maxHp:100,sp:200,maxSp:200,x:100,y:100,dead:false,statuses:[]};
@@ -27,7 +27,7 @@ function fixture(held=false){
  const runtime=new DirectRuntime({invoke,now:()=>now,store:{read:()=>marker,write:value=>{marker=value;}}},'11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222');
  const frame=(packet:Uint8Array)=>runtime.receive([{kind:'frame',bytes:[...packet]}]);
  const open=()=>runtime.receive([{kind:'opened'},{kind:'enterSent',bytes:[...selected()]}]);
- const ready=async(actor=0)=>{await open();await frame(enter(actor));await frame(resources());await frame(memo());await runtime.receive([{kind:'readySent'}]);await frame(spawn({...player,id:actor}));};
+ const ready=async(actor=0,own=player)=>{await open();await frame(enter(actor));await frame(resources());await frame(memo());await runtime.receive([{kind:'readySent'}]);await frame(spawn({...own,id:actor}));};
  return{runtime,invoke,frame,open,ready,setEvents:(value:DirectEvent[])=>{events=value;},step:(ms:number)=>{now+=ms;},marker:()=>marker,writes:()=>invoke.mock.calls.filter(([name])=>name==='direct_send').map(([,args])=>(args as {bytes:number[]}).bytes)};
 }
 async function flush(){for(let i=0;i<20;i++)await Promise.resolve();}
@@ -72,6 +72,15 @@ describe('clientless shared-controller runtime',()=>{
   f.runtime.control('stop',DEFAULT_SETTINGS);const stopped=f.writes().length;
   await f.frame(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false).finish());await flush();
   expect(f.runtime.snapshot().macro).toMatchObject({state:'cancelled',actionsCompleted:0});expect(f.writes()).toHaveLength(stopped);
+ });
+ it('automatically uses the selected carried HP potion through the direct transport',async()=>{
+  const f=fixture();await f.ready(0,{...player,x:124,y:90,hp:55});f.step(1200);await f.runtime.cycle();
+  f.runtime.controller.engine.receive([{type:'heal',id:0,hp:55,maxHp:100},{type:'inventory',items:[{bagId:504,itemId:504,type:1,count:3},{bagId:505,itemId:505,type:1,count:20}],equipment:Array(10).fill(0),ammoId:-1}]);
+  const automation=structuredClone(DEFAULT_AUTOMATION);automation.hpPotions={mode:'selected',itemIds:[501,504],belowPercent:60,minStock:0,cooldownSeconds:5};
+  f.runtime.control('start',{...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0,automation});
+  f.step(1000);await f.runtime.cycle();await flush();
+  expect(f.writes().filter(bytes=>bytes[0]===FEATURE_OP.useItem),f.runtime.snapshot().reason).toEqual([[...featureCommand({type:'useItem',itemId:504})]]);
+  f.step(1000);await f.runtime.cycle();await flush();expect(f.writes().filter(bytes=>bytes[0]===FEATURE_OP.useItem)).toHaveLength(1);
  });
  it.each(['ordered','missing','early'])('Database macro travel requires ordered native Ready flush evidence: %s',async ready=>{
   const f=fixture();await f.ready();f.step(30000);await f.frame(new BitWriter().u8(FEATURE_OP.sp).i32(200).i32(200).finish());await f.runtime.cycle();
