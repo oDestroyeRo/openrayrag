@@ -50,7 +50,7 @@ test('executable reads retain the checked handle across pathname replacement', {
       return result;
     });
     assert.equal((await executableBytes(path)).toString(), 'checked bytes');
-    assert.equal(await readFile(path, 'utf8'), 'redirected bytes');
+    assert.equal((await executableBytes(path)).toString(), 'redirected bytes');
   } finally { await rm(folder, { recursive: true, force: true }); }
 });
 
