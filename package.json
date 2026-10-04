@@ -11,15 +11,18 @@
     "check": "npm run build && npm test && cargo test --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings",
     "tauri": "tauri",
     "app:dev": "tauri dev",
-    "app:build": "tauri build --bundles app"
+    "app:build": "tauri build"
   },
-  "dependencies": { "@tauri-apps/api": "2.12.1" },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.1"
+  },
   "devDependencies": {
     "@tabler/icons": "3.48.0",
     "@tauri-apps/cli": "2.12.1",
+    "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "vite": "8.3.2",
     "vitest": "5.0.3",
-    "esbuild": "0.28.2"
+    "yaml": "2.9.1"
   }
 }

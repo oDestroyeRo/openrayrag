@@ -54,7 +54,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
             <div class="console-primary">
               <div class="console-setup-summary"><span class="console-setup-copy">${UI_ICONS.settings}<span id="console-setup-summary">Review your bot setup</span></span><button id="console-edit-setup" type="button" class="text-button" data-client-navigation="setup">${UI_ICONS.pencil}Edit setup</button></div>
               <section class="panel console-activity" aria-labelledby="client-activity-title"><div class="panel-title"><h3 id="client-activity-title">Activity</h3><span id="target-label">No active target</span></div><div class="console-log-heading" aria-hidden="true"><span>Time</span><span>Event</span></div><ol id="log" class="log"><li class="empty">No activity observed yet.</li></ol><div class="console-run-metrics"><div><strong id="attacks">0</strong><span>Engaged</span></div><div><strong id="kills">0</strong><span>Defeated</span></div><div><strong id="looted">0</strong><span>Pickups confirmed</span></div></div><p id="session-details" class="session-details">Session time and task state appear after connection.</p></section>
-              <details class="console-connection"><summary>Connection & session</summary><div class="console-connection-copy"><span id="client-version">macOS · preview</span><button id="disconnect" type="button" class="secondary" title="Closes the connection; cannot undo server actions" disabled>Disconnect</button></div><div id="client-session-details" class="client-session-details"></div></details>
+              <details class="console-connection"><summary>Connection & session</summary><div class="console-connection-copy"><span id="client-version">Desktop · preview</span><button id="disconnect" type="button" class="secondary" title="Closes the connection; cannot undo server actions" disabled>Disconnect</button></div><div id="client-session-details" class="client-session-details"></div></details>
             </div>
             <div class="console-secondary">
               <section class="panel activity console-map" aria-labelledby="client-field-title">
@@ -73,7 +73,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
         </section>
 
         <section id="client-page-bot" class="client-page" role="tabpanel" aria-labelledby="client-tab-bot" hidden>
-          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Setup</h2><p>Changes save automatically on this Mac and restore when you reopen the app.</p></div>
+          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Setup</h2><p>Changes save automatically on this computer and restore when you reopen the app.</p></div>
           <nav class="client-bot-nav" role="tablist" aria-label="Bot sections">
             <button id="client-bot-tab-combat" type="button" role="tab" data-client-bot-nav="combat" aria-controls="client-bot-combat" aria-selected="true">Combat</button>
             <button id="client-bot-tab-recovery" type="button" role="tab" data-client-bot-nav="recovery" aria-controls="client-bot-recovery" aria-selected="false" tabindex="-1">Recovery</button>
@@ -136,7 +136,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
                 <label for="character-slot">Character<select id="character-slot"><option value="0">Slot 1</option><option value="1">Slot 2</option><option value="2">Slot 3</option></select></label>
               </div>
               <div class="signin-options">
-                <label><input id="remember-login" type="checkbox" /> Save login on this Mac</label>
+                <label><input id="remember-login" type="checkbox" /> Save login on this computer</label>
                 <label><input id="auto-login" type="checkbox" disabled /> Sign in when app opens</label>
                 <label><input id="auto-reconnect" type="checkbox" disabled /> Reconnect after connection loss · this session</label>
                 <button id="forget-login" type="button" class="text-button" hidden>Forget local saved login</button>
@@ -151,7 +151,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
           <section class="panel" aria-labelledby="client-updates-title"><div class="panel-title"><h3 id="client-updates-title">Client updates</h3></div><p id="update-status" class="hint">Signed updates install automatically when every game and login action is stopped.</p><a id="update-download" href="https://github.com/oDestroyeRo/openrayrag/releases/latest" target="_blank" rel="noreferrer">Download release manually</a></section>
         </section>
       </div>
-      <footer><span>Session stays on this Mac</span><span>Passwords stay in memory unless you save locally</span></footer>
+      <footer><span>Session stays on this computer</span><span>Passwords stay in memory unless you save locally</span></footer>
     </main>`;
 
   function required<T extends HTMLElement>(selector: string): T {

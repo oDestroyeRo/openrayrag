@@ -102,7 +102,7 @@ describe('NPC service UI ownership gates', () => {
     expect(s.panel.all().some((node) => node.textContent.startsWith('Verified contract'))).toBe(true);
     await s.button('Save / update').click();
     expect(s.store.list()).toHaveLength(1);
-    expect(s.hooks.notify).toHaveBeenLastCalledWith('NPC service saved on this Mac.');
+    expect(s.hooks.notify).toHaveBeenLastCalledWith('NPC service saved on this computer.');
     await s.button('Export saved').click();
     expect(JSON.parse(s.field('Import or export service document').value).services).toHaveLength(1);
     await s.button('Import document').click();

@@ -148,8 +148,8 @@ function mainSettledForUpdate():boolean {
 async function pollUpdate():Promise<void>{
   if(!native||!closeRegistered||closeBusy||closeStatus||updatePolling||updateBusy)return;updatePolling=true;
   try{
-    const state=await invoke<{version:string;phase:string;message:string;availableVersion:string|null}>('update_status');
-    element('client-version').textContent=`macOS · v${state.version}`;if(closeBusy||closeStatus)return;element('update-status').textContent=state.message;
+    const state=await invoke<{version:string;platform?:string;phase:string;message:string;availableVersion:string|null}>('update_status');
+    element('client-version').textContent=`${({macos:'macOS',windows:'Windows',linux:'Linux'} as Record<string,string>)[state.platform??'']??'Desktop'} · v${state.version}`;if(closeBusy||closeStatus)return;element('update-status').textContent=state.message;
     if(state.phase==='waiting'&&accountDraft()){element('update-status').textContent='Update waits for your account draft. Sign in or clear the draft first.';return;}
     if(state.phase!=='waiting'||!mainSettledForUpdate())return;
     updateBusy=true;updateSettled=new Promise(resolve=>{updateFinished=resolve;});updateButtons();if(saveTimer){clearTimeout(saveTimer);saveTimer=undefined;}
@@ -406,7 +406,7 @@ function render(s: GameStatus): void {
   if (!list.childElementCount) { const empty=document.createElement('li'); empty.className='empty'; empty.textContent='No activity observed yet.'; list.append(empty); }
   botConsole.render(s); updateButtons(); resumeFieldRun(s);
 }
-if (!native) message('Browser preview · Launch the macOS app with npm run app:dev to connect.');
+if (!native) message('Browser preview · Launch the desktop app with npm run app:dev to connect.');
 if (native) {
   void (async () => {
   try {

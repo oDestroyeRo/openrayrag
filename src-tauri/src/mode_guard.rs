@@ -91,20 +91,13 @@ fn mark(path: PathBuf, mode: ConnectionMode) -> Result<String, String> {
         mode,
         nonce: uuid::Uuid::new_v4().to_string(),
     };
-    let mut f = file::open_at(
-        &dir,
-        ".connection-hold.tmp",
-        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
-        0o600,
-    )
-    .map_err(|_| ERROR)?;
-    file::access_list::clear(&f).map_err(|_| ERROR)?;
+    let mut f = file::create_private_file(&dir, ".connection-hold.tmp").map_err(|_| ERROR)?;
     file::verify_private(&f, false).map_err(|_| ERROR)?;
     f.write_all(&serde_json::to_vec(&hold).map_err(|_| ERROR)?)
         .map_err(|_| ERROR)?;
     f.sync_all().map_err(|_| ERROR)?;
     file::rename_at(&dir, ".connection-hold.tmp", "connection-hold.json").map_err(|_| ERROR)?;
-    dir.sync_all().map_err(|_| ERROR)?;
+    file::sync_directory(&dir).map_err(|_| ERROR)?;
     Ok(hold.nonce)
 }
 fn clear(path: PathBuf, mode: ConnectionMode, nonce: &str) -> Result<(), String> {
@@ -116,11 +109,11 @@ fn clear(path: PathBuf, mode: ConnectionMode, nonce: &str) -> Result<(), String>
         return Err(ERROR.into());
     }
     file::remove_private_file(&dir, "connection-hold.json").map_err(|_| ERROR)?;
-    dir.sync_all().map_err(|_| ERROR)?;
+    file::sync_directory(&dir).map_err(|_| ERROR)?;
     Ok(())
 }
 fn path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app.path().app_data_dir().map_err(|_| ERROR.into())
+    crate::app_data(app).map_err(|_| ERROR.into())
 }
 pub(crate) fn mark_admitted(
     app: &tauri::AppHandle,

@@ -59,6 +59,36 @@ class ArchiveSafety(unittest.TestCase):
             release.extract_zip(archive, root, ['payload'])
             self.assertEqual((root / 'payload').read_bytes(), b'a')
 
+    def test_workflow_zip_supports_exact_legacy_and_multiplatform_layouts_only(self):
+        layouts = [['mac', 'manifest'], ['mac', 'windows', 'linux', 'manifest']]
+        for names in [layouts[0], layouts[1], ['mac', 'windows', 'manifest'], ['mac', 'mac', 'manifest']]:
+            with self.subTest(names=names), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                archive = root / 'artifact.zip'
+                with zipfile.ZipFile(archive, 'w') as target:
+                    for name in names:
+                        target.writestr(name, b'payload')
+                if names in layouts:
+                    release.extract_zip(archive, root, layouts)
+                    self.assertEqual(sorted(p.name for p in root.iterdir() if p.name != 'artifact.zip'), sorted(names))
+                else:
+                    with self.assertRaisesRegex(ValueError, 'unexpected or duplicate'):
+                        release.extract_zip(archive, root, layouts)
+
+    def test_workflow_zip_rejects_oversized_or_empty_asset_before_extracting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            archive = root / 'artifact.zip'
+            with zipfile.ZipFile(archive, 'w') as target:
+                target.writestr('payload', b'12345')
+            with mock.patch.object(release, 'ASSET_LIMIT', 4), self.assertRaisesRegex(ValueError, 'bounds'):
+                release.extract_zip(archive, root, ['payload'])
+            self.assertFalse((root / 'payload').exists())
+            with zipfile.ZipFile(archive, 'w') as target:
+                target.writestr('payload', b'')
+            with self.assertRaisesRegex(ValueError, 'bounds'):
+                release.extract_zip(archive, root, ['payload'])
+
     def test_app_manifest_compares_bytes_modes_paths_and_link_targets(self):
         for mutation in ['bytes', 'mode', 'path', 'link']:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:

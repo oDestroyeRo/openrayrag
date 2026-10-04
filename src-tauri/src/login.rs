@@ -244,10 +244,7 @@ impl LoginState {
 pub(crate) type SharedLogin = Mutex<LoginState>;
 
 fn login_store(app: &tauri::AppHandle) -> Result<local_store::LocalLoginStore, String> {
-    let directory = app
-        .path()
-        .app_data_dir()
-        .map_err(|_| "Local saved login is unavailable.")?;
+    let directory = crate::app_data(app).map_err(|_| "Local saved login is unavailable.")?;
     Ok(local_store::LocalLoginStore::new(directory))
 }
 
@@ -578,11 +575,13 @@ mod tests {
 
     #[test]
     fn handoff_is_one_shot_expires_and_preserves_cancellation_across_navigation() {
-        let mut state = LoginState::default();
-        state.pending = Some(PendingLogin {
-            profile: profile(),
-            expires_at: Instant::now() + Duration::from_secs(10),
-        });
+        let mut state = LoginState {
+            pending: Some(PendingLogin {
+                profile: profile(),
+                expires_at: Instant::now() + Duration::from_secs(10),
+            }),
+            ..LoginState::default()
+        };
         assert!(state.claim("test-page".into()).profile.is_some());
         assert!(state.claim("test-page".into()).profile.is_none());
         state.pending = Some(PendingLogin {

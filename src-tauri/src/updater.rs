@@ -11,11 +11,14 @@ use std::{
 };
 use tauri::{Manager, WebviewWindow};
 const FEED: &str = "https://github.com/oDestroyeRo/openrayrag/releases/latest/download/latest.json";
+const AUTOMATIC_SUPPORTED: bool = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+const MANUAL_UPDATE: &str = "Download the latest release to update this platform. Automatic installation is available on Apple Silicon macOS.";
 const RELEASE: &str = "https://github.com/oDestroyeRo/openrayrag/releases/latest";
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Status {
     pub version: String,
+    pub platform: &'static str,
     pub phase: String,
     pub available_version: Option<String>,
     pub message: String,
@@ -47,9 +50,20 @@ impl Default for UpdateState {
         Self {
             status: Status {
                 version: env!("CARGO_PKG_VERSION").into(),
-                phase: "checking".into(),
+                platform: std::env::consts::OS,
+                phase: if AUTOMATIC_SUPPORTED {
+                    "checking"
+                } else {
+                    "manual"
+                }
+                .into(),
                 available_version: None,
-                message: "Checking for signed client updates.".into(),
+                message: if AUTOMATIC_SUPPORTED {
+                    "Checking for signed client updates."
+                } else {
+                    MANUAL_UPDATE
+                }
+                .into(),
                 bytes: 0,
                 release_url: RELEASE,
             },
@@ -161,6 +175,9 @@ fn download_client(https_only: bool) -> Result<reqwest::Client, String> {
         .map_err(|_| "Update networking is unavailable.".into())
 }
 async fn check(app: tauri::AppHandle) {
+    if !AUTOMATIC_SUPPORTED {
+        return;
+    }
     let result = async {
         let client = download_client(true)?;
         let metadata = bounded(&client, FEED, 64_000, |_| {}).await?;
@@ -215,6 +232,12 @@ async fn check(app: tauri::AppHandle) {
     }
 }
 pub(crate) fn schedule(app: &tauri::AppHandle) {
+    if crate::ci_smoke::active() {
+        return;
+    }
+    if !AUTOMATIC_SUPPORTED {
+        return;
+    }
     let shared = app.state::<SharedUpdate>();
     let Ok(mut u) = shared.lock() else { return };
     if u.busy || u.candidate.is_some() || Instant::now() < u.next {
@@ -248,13 +271,46 @@ pub(crate) fn update_open_release(window: WebviewWindow) -> Result<(), String> {
     crate::require_window(&window, "main")?;
     // Explicit main-window click; fixed public URL only, no process capability
     // or caller-supplied arguments are exposed to either webview.
-    std::process::Command::new("/usr/bin/open")
+    open_release_page().map_err(|_| {
+        "Could not open the release download. Visit the repository Releases page.".into()
+    })
+}
+fn open_release_page() -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{
+            UI::Shell::ShellExecuteW, UI::WindowsAndMessaging::SW_SHOWNORMAL,
+        };
+        let verb: Vec<u16> = "open".encode_utf16().chain([0]).collect();
+        let url: Vec<u16> = RELEASE.encode_utf16().chain([0]).collect();
+        // SAFETY: fixed URL/verb are live NUL-terminated buffers. No caller
+        // supplies a program, URL, or arguments to this native command.
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                url.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        } as isize;
+        if result <= 32 {
+            return Err(std::io::Error::other("Release browser unavailable"));
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new(if cfg!(target_os = "macos") {
+            "/usr/bin/open"
+        } else {
+            "xdg-open"
+        })
         .arg(RELEASE)
         .spawn()
         .map(|_| ())
-        .map_err(|_| {
-            "Could not open the release download. Visit the repository Releases page.".into()
-        })
+    }
 }
 #[tauri::command]
 pub(crate) fn current_form(
@@ -262,11 +318,7 @@ pub(crate) fn current_form(
     window: WebviewWindow,
 ) -> Result<Option<FormDocument>, String> {
     crate::require_window(&window, "main")?;
-    current_form::load(
-        app.path()
-            .app_data_dir()
-            .map_err(|_| "Settings storage unavailable.")?,
-    )
+    current_form::load(crate::app_data(&app).map_err(|_| "Settings storage unavailable.")?)
 }
 #[tauri::command]
 pub(crate) fn save_current_form(
@@ -277,9 +329,7 @@ pub(crate) fn save_current_form(
     crate::require_window(&window, "main")?;
     let mut gate = crate::maintenance::admit(&app)?;
     current_form::save(
-        app.path()
-            .app_data_dir()
-            .map_err(|_| "Settings storage unavailable.")?,
+        crate::app_data(&app).map_err(|_| "Settings storage unavailable.")?,
         &document,
     )?;
     gate.form_revision = Some(document.revision);
@@ -302,6 +352,9 @@ pub(crate) fn update_reserve(
     document: FormDocument,
 ) -> Result<String, String> {
     crate::require_window(&window, "main")?;
+    if !AUTOMATIC_SUPPORTED {
+        return Err(MANUAL_UPDATE.into());
+    }
     let shared = app.state::<SharedGate>();
     let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
     if app
@@ -321,12 +374,9 @@ pub(crate) fn update_reserve(
     {
         return Err("Waiting for login to settle.".into());
     }
-    let loaded = current_form::load(
-        app.path()
-            .app_data_dir()
-            .map_err(|_| "Settings storage unavailable.")?,
-    )?
-    .ok_or("Save current settings before updating.")?;
+    let loaded =
+        current_form::load(crate::app_data(&app).map_err(|_| "Settings storage unavailable.")?)?
+            .ok_or("Save current settings before updating.")?;
     if serde_json::to_vec(&loaded).ok() != serde_json::to_vec(&document).ok() {
         return Err("Current settings changed before update settlement.".into());
     }
@@ -397,6 +447,9 @@ pub(crate) async fn update_install(
     nonce: String,
 ) -> Result<bool, String> {
     crate::require_window(&window, "main")?;
+    if !AUTOMATIC_SUPPORTED {
+        return Err(MANUAL_UPDATE.into());
+    }
     let candidate = {
         let shared = app.state::<SharedGate>();
         let mut g = shared.lock().map_err(|_| "Update state unavailable.")?;
@@ -503,6 +556,24 @@ pub(crate) async fn update_install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_updates_are_admitted_only_on_apple_silicon_macos() {
+        let state = UpdateState::default();
+        assert_eq!(state.status.platform, std::env::consts::OS);
+        assert_eq!(
+            state.status.phase,
+            if AUTOMATIC_SUPPORTED {
+                "checking"
+            } else {
+                "manual"
+            }
+        );
+        assert!(state.candidate.is_none());
+        assert_eq!(state.status.bytes, 0);
+        if !AUTOMATIC_SUPPORTED {
+            assert_eq!(state.status.message, MANUAL_UPDATE);
+        }
+    }
     #[test]
     fn interrupted_and_oversized_downloads_never_become_candidates() {
         use std::{

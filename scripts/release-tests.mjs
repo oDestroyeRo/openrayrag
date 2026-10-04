@@ -4,6 +4,7 @@ import { generateKeyPairSync, sign, createHash } from "node:crypto";
 import { mkdtemp, writeFile, readFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   identity,
   assetNames,
@@ -17,6 +18,11 @@ import {
   publishRelease,
   countOf,
   sha256,
+  WINDOWS_TARGET,
+  LINUX_TARGET,
+  platformReceipt,
+  validatePlatformBuild,
+  validateInstaller,
 } from "./release-core.mjs";
 import { stampVersions, GitHubReleaseApi } from "./release.mjs";
 // Ephemeral synthetic test key, never a release key and never serialized/logged.
@@ -44,25 +50,68 @@ function signature(data, version, commentVersion = version) {
     `untrusted comment: synthetic test signature\n${Buffer.concat([Buffer.from("ED"), keyId, raw]).toString("base64")}\ntrusted comment: ${comment}\n${sign(null, Buffer.concat([raw, Buffer.from(comment)]), pair.privateKey).toString("base64")}\n`,
   ).toString("base64");
 }
-function bundle(n = 2, dmg = "synthetic dmg") {
+function installers(version) {
+  const names = assetNames(version),
+    pe = Buffer.alloc(128),
+    appimage = Buffer.alloc(64);
+  pe.write("MZ");
+  pe.writeUInt32LE(64, 60);
+  pe.set([80, 69, 0, 0], 64);
+  pe.writeUInt16LE(0x14c, 68);
+  pe.writeUInt16LE(0x10b, 88);
+  appimage.set([127, 69, 76, 70, 2, 1, 1], 0);
+  appimage.set([65, 73, 2], 8);
+  appimage.writeUInt16LE(62, 18);
+  const ar = (name, data) =>
+    Buffer.concat([
+      Buffer.from(
+        name.padEnd(16) +
+          "0".padEnd(12) +
+          "0".padEnd(6) +
+          "0".padEnd(6) +
+          "100644".padEnd(8) +
+          String(data.length).padEnd(10) +
+          "`\n",
+      ),
+      data,
+      ...(data.length % 2 ? [Buffer.from("\n")] : []),
+    ]);
+  const deb = Buffer.concat([
+    Buffer.from("!<arch>\n"),
+    ar("debian-binary/", Buffer.from("2.0\n")),
+    ar("control.tar.gz/", Buffer.from("control")),
+    ar("data.tar.gz/", Buffer.from("data")),
+  ]);
+  return new Map([
+    [names.windows, pe],
+    [names.appimage, appimage],
+    [names.deb, deb],
+  ]);
+}
+function bundle(n = 2, dmg = "synthetic dmg", schemaVersion = 2) {
   const ident = id(n),
     names = assetNames(ident.version),
     archive = Buffer.from(`synthetic archive for ${ident.version}`),
     runId = String(100 + n);
-  return createBundle(
-    ident,
-    new Map([
-      [names.archive, archive],
-      [names.signature, Buffer.from(signature(archive, ident.version) + "\n")],
-      [names.dmg, Buffer.from(dmg)],
-    ]),
-    {
-      runId,
-      runAttempt: "1",
-      artifactName: `release-${ident.sourceSha}-${runId}-1`,
-    },
-    publicKey,
-  );
+  const payload = new Map([
+    [names.archive, archive],
+    [names.signature, Buffer.from(signature(archive, ident.version) + "\n")],
+    [names.dmg, Buffer.from(dmg)],
+  ]);
+  const build = {
+    runId,
+    runAttempt: "1",
+    artifactName: `release-${ident.sourceSha}-${runId}-1`,
+    schemaVersion,
+  };
+  if (schemaVersion === 2) {
+    for (const [name, bytes] of installers(ident.version))
+      payload.set(name, bytes);
+    build.platforms = [WINDOWS_TARGET, LINUX_TARGET].map((target) =>
+      platformReceipt(payload, ident, build, target),
+    );
+  }
+  return createBundle(ident, payload, build, publicKey);
 }
 const artifact = (n) => ({
   id: String(1000 + n),
@@ -141,7 +190,10 @@ class FakeApi {
     const release = [...this.releases.values()].find((r) => r.id === releaseId);
     assert.equal(
       this.stored.get(releaseId).length,
-      6,
+      expectedNames(
+        releaseMetadata(release).version,
+        releaseMetadata(release).schemaVersion,
+      ).length,
       "publish occurs only after completeness",
     );
     assert.deepEqual(Object.keys(options).sort(), [
@@ -236,6 +288,121 @@ test("complete bundle uses immutable tag archive and signature contents", () => 
     latest.platforms["darwin-aarch64"].signature,
     files.get(assetNames("0.2.2").signature).toString().trim(),
   );
+  assert.equal(files.size, 9);
+  assert.deepEqual(Object.keys(latest.platforms), ["darwin-aarch64"]);
+  assert.equal(JSON.parse(files.get("provenance.json")).platforms.length, 3);
+});
+test("legacy six-asset bundles remain valid without Windows or Linux receipts", () => {
+  const files = bundle(2, "legacy dmg", 1);
+  assert.equal(validateBundle(files, id(2), publicKey).schemaVersion, 1);
+  assert.equal(files.size, 6);
+  assert.throws(
+    () =>
+      validateBundle(
+        new Map([
+          ...files,
+          [assetNames(id(2).version).windows, Buffer.from("extra")],
+        ]),
+        id(2),
+        publicKey,
+      ),
+    /asset set/,
+  );
+});
+test("new payload cannot omit a platform or claim legacy metadata with extra installers", () => {
+  const files = bundle();
+  files.delete(assetNames(id(2).version).deb);
+  assert.throws(() => validateBundle(files, id(2), publicKey), /asset set/);
+  const forged = bundle();
+  changeJson(forged, "provenance.json", (p) => {
+    p.schemaVersion = 1;
+    delete p.platforms;
+  });
+  assert.throws(() => validateBundle(forged, id(2), publicKey), /asset set/);
+});
+for (const [name, mutate] of [
+  ["different source", (m) => (m.sourceSha = history[0])],
+  ["different version", (m) => (m.version = "0.2.3")],
+  ["different target", (m) => (m.target = LINUX_TARGET)],
+  ["different run", (m) => (m.runId = "999")],
+  ["different attempt", (m) => (m.runAttempt = "2")],
+  ["missing checks", (m) => m.checks.pop()],
+  ["duplicate checks", (m) => m.checks.push("package-contents")],
+  ["different bytes", (m) => m.files[0].bytes++],
+  ["different hash", (m) => (m.files[0].sha256 = "0".repeat(64))],
+  ["foreign name", (m) => (m.files[0].name = "foreign.exe")],
+])
+  test(`platform receipts reject ${name}`, () => {
+    const all = installers(id(2).version),
+      name = assetNames(id(2).version).windows,
+      files = new Map([[name, all.get(name)]]),
+      build = { runId: "102", runAttempt: "1" };
+    const receipt = platformReceipt(files, id(2), build, WINDOWS_TARGET);
+    mutate(receipt);
+    files.set("platform-build.json", json(receipt));
+    assert.throws(() =>
+      validatePlatformBuild(files, id(2), build, WINDOWS_TARGET),
+    );
+  });
+test("platform receipt validation binds actual installer bytes and canonical metadata", () => {
+  const all = installers(id(2).version),
+    name = assetNames(id(2).version).windows,
+    files = new Map([[name, all.get(name)]]),
+    build = { runId: "102", runAttempt: "1" };
+  const receipt = platformReceipt(files, id(2), build, WINDOWS_TARGET);
+  files.set("platform-build.json", json(receipt));
+  assert.deepEqual(
+    validatePlatformBuild(files, id(2), build, WINDOWS_TARGET),
+    receipt,
+  );
+  files.set("foreign.exe", Buffer.from("extra"));
+  assert.throws(
+    () => validatePlatformBuild(files, id(2), build, WINDOWS_TARGET),
+    /unexpected files/,
+  );
+  files.delete("foreign.exe");
+  files.get(name)[120] ^= 1;
+  assert.throws(
+    () => validatePlatformBuild(files, id(2), build, WINDOWS_TARGET),
+    /hashes/,
+  );
+  files.get(name)[120] ^= 1;
+  files.set("platform-build.json", Buffer.from(JSON.stringify(receipt)));
+  assert.throws(
+    () => validatePlatformBuild(files, id(2), build, WINDOWS_TARGET),
+    /noncanonical/,
+  );
+});
+for (const [name, mutate] of [
+  ["missing platform", (p) => p.platforms.pop()],
+  ["duplicate target", (p) => (p.platforms[2] = p.platforms[1])],
+  ["foreign platform run", (p) => (p.platforms[1].runId = "999")],
+  ["foreign platform source", (p) => (p.platforms[1].sourceSha = history[0])],
+])
+  test(`complete release rejects ${name}`, () => {
+    const files = bundle();
+    changeJson(files, "provenance.json", mutate);
+    assert.throws(() => validateBundle(files, id(2), publicKey));
+  });
+test("installer containers reject a renamed foreign architecture or malformed header", () => {
+  const files = installers("0.2.2"),
+    n = assetNames("0.2.2");
+  for (const [name, bytes] of files) validateInstaller(name, bytes, "0.2.2");
+  const pe = Buffer.from(files.get(n.windows));
+  pe.writeUInt32LE(0xffffffff, 60);
+  assert.throws(() => validateInstaller(n.windows, pe, "0.2.2"), /PE header/);
+  const arm = Buffer.from(files.get(n.appimage));
+  arm.writeUInt16LE(183, 18);
+  assert.throws(() => validateInstaller(n.appimage, arm, "0.2.2"), /x86_64/);
+  const noImage = Buffer.from(files.get(n.appimage));
+  noImage[10] = 1;
+  assert.throws(
+    () => validateInstaller(n.appimage, noImage, "0.2.2"),
+    /type 2/,
+  );
+  const deb = Buffer.from(files.get(n.deb));
+  deb.write("foreign-binary", 8);
+  assert.throws(() => validateInstaller(n.deb, deb, "0.2.2"), /members/);
 });
 for (const [name, change] of [
   [
@@ -295,7 +462,7 @@ test("new publish creates exact tag, finishes uploads, verifies and promotes", a
   assert.equal((await preflight(ctx)).state, "build");
   assert.equal(await publishRelease(ctx), "published-latest");
   assert.equal(await api.tagSha(id(2).tag), id(2).sourceSha);
-  assert.equal(api.events.filter((e) => e[0] === "upload").length, 6);
+  assert.equal(api.events.filter((e) => e[0] === "upload").length, 9);
   assert.deepEqual(api.events.at(-1), ["publish", "v0.2.2", "true"]);
 });
 test("published rerun is verified no-op even if a competing rebuild differs", async () => {
@@ -327,7 +494,7 @@ test("uncertain create/upload/publish responses reconcile by exact readback", as
   api.loseCreate = api.loseUpload = api.losePublish = true;
   assert.equal(await publishRelease(context(api)), "published-latest");
   assert.equal(api.releases.size, 1);
-  assert.equal(api.events.filter((e) => e[0] === "upload").length, 6);
+  assert.equal(api.events.filter((e) => e[0] === "upload").length, 9);
 });
 test("partial upload stays draft and rerun resumes the same original bundle", async () => {
   const api = new FakeApi(),
@@ -345,6 +512,47 @@ test("partial upload stays draft and rerun resumes the same original bundle", as
     ).length,
     1,
   );
+});
+test("legacy incomplete drafts resume six original assets and the next release publishes nine", async () => {
+  const api = new FakeApi(),
+    ctx = context(api);
+  ctx.files = bundle(2, "original legacy", 1);
+  api.failUpload = "latest.json";
+  await assert.rejects(publishRelease(ctx), /incomplete/);
+  const originalUploads = api.events.filter(
+    (e) => e[0] === "upload" && e[1].endsWith(".app.tar.gz"),
+  ).length;
+  assert.equal((await preflight(ctx)).state, "reuse");
+  await assert.rejects(
+    publishRelease({ ...ctx, files: bundle(2) }),
+    /another build/,
+  );
+  api.failUpload = null;
+  assert.equal(await publishRelease(ctx), "published-latest");
+  assert.equal(api.stored.get(1).length, 6);
+  assert.equal(
+    api.events.filter((e) => e[0] === "upload" && e[1].endsWith(".app.tar.gz"))
+      .length,
+    originalUploads,
+  );
+  assert.equal(await publishRelease(context(api, 3)), "published-latest");
+  assert.equal(api.stored.get(api.releases.get("v0.2.3").id).length, 9);
+  assert.equal(api.latestTag, "v0.2.3");
+});
+test("a failed Linux upload leaves the new release draft until all nine assets verify", async () => {
+  const api = new FakeApi(),
+    ctx = context(api);
+  api.failUpload = assetNames(ctx.id.version).deb;
+  await assert.rejects(publishRelease(ctx), /incomplete/);
+  assert.equal(api.latestTag, null);
+  assert.equal((await api.release(ctx.id.tag)).draft, true);
+  assert.equal(
+    api.events.some((e) => e[0] === "publish"),
+    false,
+  );
+  api.failUpload = null;
+  assert.equal(await publishRelease(ctx), "published-latest");
+  assert.equal(api.stored.get(1).length, 9);
 });
 test("draft cannot mix a new build artifact with old assets", async () => {
   const api = new FakeApi(),
@@ -428,7 +636,7 @@ test("native verification failure prevents any write", async () => {
   await assert.rejects(publishRelease(ctx), /architecture/);
   assert.equal(api.events.length, 0);
 });
-test("CI stamping synchronizes all five files and leaves dependency versions alone", async () => {
+for (const ending of ["\n", "\r\n"]) test(`CI stamping synchronizes all five files with ${ending.length===2?"CRLF":"LF"} and leaves dependency versions alone`, async () => {
   const root = await mkdtemp(join(tmpdir(), "rayrag-stamp-test-"));
   try {
     await mkdir(join(root, "src-tauri"));
@@ -455,7 +663,7 @@ test("CI stamping synchronizes all five files and leaves dependency versions alo
         'version = 4\n\n[[package]]\nname = "rayrag-companion"\nversion = "0.1.0"\n\n[[package]]\nname = "test"\nversion = "9.0.0"\n',
     };
     await Promise.all(
-      Object.entries(files).map(([p, b]) => writeFile(join(root, p), b)),
+      Object.entries(files).map(([p, b]) => writeFile(join(root, p), b.toString().replaceAll("\n", ending))),
     );
     await stampVersions(root, "0.2.7");
     await stampVersions(root, "0.2.7");
@@ -514,10 +722,34 @@ test("workflow pins actions, separates signing from PR checks and queues every p
   );
   assert.match(source, /queue: max/);
   assert.match(source, /cancel-in-progress: false/);
-  assert.doesNotMatch(
-    source.slice(source.indexOf("  verify:"), source.indexOf("  build:")),
-    /secrets\./,
+  const quality = source.slice(
+    source.indexOf("  quality:"),
+    source.indexOf("  verify:"),
   );
+  assert.doesNotMatch(quality, /secrets\./);
+  assert.doesNotMatch(quality, /contents: write|actions: write/);
+  for (const target of ["aarch64-apple-darwin", WINDOWS_TARGET, LINUX_TARGET])
+    assert.ok(
+      quality.includes(`target: ${target}`),
+      `Missing platform ${target}`,
+    );
+  assert.match(quality, /fail-fast: false/);
+  assert.match(quality, /node scripts\/ci-platform\.mjs build/);
+  assert.match(quality, /--smoke/);
+  assert.match(await readFile(new URL("./ci-platform.mjs", import.meta.url), "utf8"), /nativeSmoke/);
+  const gate = source.slice(
+    source.indexOf("  verify:"),
+    source.indexOf("  reconcile:"),
+  );
+  assert.match(gate, /name: CI \/ required/);
+  assert.match(gate, /needs: quality/);
+  assert.match(gate, /if: always\(\)/);
+  assert.match(gate, /QUALITY_RESULT: \$\{\{ needs\.quality\.result \}\}/);
+  assert.match(gate, /test "\$QUALITY_RESULT" = success/);
+  assert.match(source, /release-platforms:/);
+  assert.match(source, /needs: \[reconcile, release-platforms\]/);
+  assert.match(source, /path: platform-bundles\/windows/);
+  assert.match(source, /path: platform-bundles\/linux/);
   assert.match(source, /ref: \$\{\{ github.sha \}\}/);
   assert.match(source, /cargo test --locked/);
   assert.match(source, /--bundles app,dmg --ci -- --locked/);
@@ -622,6 +854,57 @@ test("artifact restore checks the actual ZIP digest before extracting", async ()
     assert.equal(calls, 2);
   } finally {
     global.fetch = original;
+  }
+});
+test("artifact restore extracts the immutable original legacy or multiplatform ZIP", async () => {
+  for (const schemaVersion of [1, 2]) {
+    const root = await mkdtemp(join(tmpdir(), "rayrag-restore-test-"));
+    try {
+      const source = join(root, "source"),
+        destination = join(root, "restored"),
+        zip = join(root, "artifact.zip"),
+        files = bundle(2, "original", schemaVersion);
+      await mkdir(source);
+      for (const [name, bytes] of files)
+        await writeFile(join(source, name), bytes);
+      execFileSync("python3", [
+        "-c",
+        "import pathlib,sys,zipfile\nroot=pathlib.Path(sys.argv[1])\nwith zipfile.ZipFile(sys.argv[2],'w') as out:\n for item in sorted(root.iterdir()): out.write(item,item.name)",
+        source,
+        zip,
+      ]);
+      const bytes = await readFile(zip),
+        original = { ...artifact(2), digest: `sha256:${sha256(bytes)}` },
+        api = new GitHubReleaseApi("synthetic-token");
+      api.request = async (_method, path) =>
+        path.endsWith("/zip")
+          ? bytes
+          : {
+              id: Number(original.id),
+              expired: false,
+              digest: original.digest,
+              workflow_run: {
+                id: Number(original.runId),
+                head_sha: id(2).sourceSha,
+              },
+            };
+      await api.restoreArtifact(original, id(2), destination);
+      const restored = new Map(
+        await Promise.all(
+          [...files.keys()].map(async (name) => [
+            name,
+            await readFile(join(destination, name)),
+          ]),
+        ),
+      );
+      assert.deepEqual(restored, files);
+      assert.equal(
+        validateBundle(restored, id(2), publicKey).schemaVersion,
+        schemaVersion,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -730,8 +1013,8 @@ test("duplicate JSON fields are rejected instead of accepting last-wins metadata
     prerelease: false,
     tag_name: id(2).tag,
     body: releaseBody(id(2), artifact(2)).replace(
-      '"schemaVersion":1',
-      '"schemaVersion":1,"schemaVersion":1',
+      '"schemaVersion":2',
+      '"schemaVersion":2,"schemaVersion":2',
     ),
   };
   assert.throws(() => releaseMetadata(release), /Malformed/);
