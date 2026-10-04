@@ -41,6 +41,11 @@ windows-sys = { version = "=0.61.2", features = ["Wdk_Foundation", "Wdk_Storage_
 objc2 = "=0.6.4"
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication"] }
 
+# Backport RUSTSEC-2024-0429 while Tauri's Linux GTK stack requires GLib 0.18.
+# See vendor/glib/PATCHES.md for source integrity and the removal condition.
+[patch.crates-io]
+glib = { path = "../vendor/glib" }
+
 # Avoid malformed Mach-O proc macros from Rust 1.98's --strip-debug on macOS.
 # This affects build dependencies only, not the final application binary.
 [profile.release.build-override]

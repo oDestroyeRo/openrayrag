@@ -72,6 +72,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf libfuse2 xvfb dbus-daemon
+      - name: Verify GLib backport and optimized Linux iterators
+        env:
+          CI_PLATFORM: ${{ matrix.platform }}
+        run: |
+          mkdir -p reports
+          if [[ "$CI_PLATFORM" == linux ]]; then
+            python vendor/glib/verify.py --test 2>&1 | tee reports/glib.log
+          else
+            python vendor/glib/verify.py 2>&1 | tee reports/glib.log
+          fi
       - name: Verify source and covered behavior (no signing secrets)
         run: |
           mkdir -p reports
