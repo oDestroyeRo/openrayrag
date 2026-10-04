@@ -10,7 +10,11 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{Manager, WebviewWindow};
-const FEED: &str = "https://github.com/oDestroyeRo/openrayrag/releases/latest/download/latest.json";
+const FEED: &str =
+    "https://github.com/oDestroyeRo/openrayrag/releases/latest/download/latest-semver.json";
+const LEGACY_FEED: &str =
+    "https://github.com/oDestroyeRo/openrayrag/releases/latest/download/latest.json";
+const MAX_METADATA: usize = 64_000;
 const AUTOMATIC_SUPPORTED: bool = cfg!(all(target_os = "macos", target_arch = "aarch64"));
 const MANUAL_UPDATE: &str = "Download the latest release to update this platform. Automatic installation is available on Apple Silicon macOS.";
 const RELEASE: &str = "https://github.com/oDestroyeRo/openrayrag/releases/latest";
@@ -86,18 +90,13 @@ struct Platform {
 }
 fn version(v: &str) -> Option<semver::Version> {
     let n = semver::Version::parse(v).ok()?;
-    if n.major != 0
-        || n.minor != 2
-        || !n.pre.is_empty()
-        || !n.build.is_empty()
-        || n.to_string() != v
-    {
+    if !n.pre.is_empty() || !n.build.is_empty() || n.to_string() != v {
         return None;
     }
     Some(n)
 }
 fn parse_feed(bytes: &[u8], current: &str) -> Result<Option<(String, Platform)>, String> {
-    if bytes.len() > 64_000 {
+    if bytes.len() > MAX_METADATA {
         return Err("Update metadata is too large.".into());
     }
     let f: Feed = serde_json::from_slice(bytes).map_err(|_| "Update metadata is invalid.")?;
@@ -118,39 +117,79 @@ fn parse_feed(bytes: &[u8], current: &str) -> Result<Option<(String, Platform)>,
     }
     Ok(Some((f.version, p)))
 }
+#[derive(Debug)]
+enum DownloadError {
+    Request,
+    Status(reqwest::StatusCode),
+    Interrupted,
+    SizeLimit,
+}
+impl DownloadError {
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Request | Self::Status(_) => "Update download failed.",
+            Self::Interrupted => "Update download was interrupted.",
+            Self::SizeLimit => "Update exceeds its size limit.",
+        }
+    }
+}
+impl From<DownloadError> for String {
+    fn from(error: DownloadError) -> Self {
+        error.message().into()
+    }
+}
 async fn bounded(
     client: &reqwest::Client,
     url: &str,
     limit: usize,
     mut progress: impl FnMut(usize),
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, DownloadError> {
     let mut response = client
         .get(url)
         .send()
         .await
-        .map_err(|_| "Update download failed.")?
-        .error_for_status()
-        .map_err(|_| "Update download failed.")?;
+        .map_err(|_| DownloadError::Request)?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(DownloadError::Status(status));
+    }
     if response.content_length().is_some_and(|n| n > limit as u64) {
-        return Err("Update exceeds its size limit.".into());
+        return Err(DownloadError::SizeLimit);
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| "Update download was interrupted.")?
+        .map_err(|_| DownloadError::Interrupted)?
     {
         if bytes
             .len()
             .checked_add(chunk.len())
             .map_or(true, |n| n > limit)
         {
-            return Err("Update exceeds its size limit.".into());
+            return Err(DownloadError::SizeLimit);
         }
         bytes.extend_from_slice(&chunk);
         progress(bytes.len());
     }
     Ok(bytes)
+}
+async fn find_update(
+    client: &reqwest::Client,
+    primary: &str,
+    legacy: &str,
+    current: &str,
+) -> Result<Option<(String, Platform)>, String> {
+    let metadata = match bounded(client, primary, MAX_METADATA, |_| {}).await {
+        Ok(metadata) => metadata,
+        // A missing feed permits the legacy bridge. Any other failure must
+        // remain visible rather than silently select an older update feed.
+        Err(DownloadError::Status(reqwest::StatusCode::NOT_FOUND)) => {
+            bounded(client, legacy, MAX_METADATA, |_| {}).await?
+        }
+        Err(error) => return Err(error.into()),
+    };
+    parse_feed(&metadata, current)
 }
 fn key() -> String {
     serde_json::from_str::<serde_json::Value>(include_str!("../tauri.conf.json"))
@@ -180,8 +219,9 @@ async fn check(app: tauri::AppHandle) {
     }
     let result = async {
         let client = download_client(true)?;
-        let metadata = bounded(&client, FEED, 64_000, |_| {}).await?;
-        let Some((v, p)) = parse_feed(&metadata, env!("CARGO_PKG_VERSION"))? else {
+        let Some((v, p)) =
+            find_update(&client, FEED, LEGACY_FEED, env!("CARGO_PKG_VERSION")).await?
+        else {
             return Ok(None);
         };
         {
@@ -595,6 +635,89 @@ pub(crate) async fn update_install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        collections::VecDeque,
+        io::{Read, Write},
+        net::TcpListener,
+        sync::mpsc,
+    };
+    type FeedResult = Result<Option<(String, Platform)>, String>;
+
+    fn feed(version: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "version": version,
+            "platforms": {"darwin-aarch64": {
+                "url": format!("https://github.com/oDestroyeRo/openrayrag/releases/download/v{version}/Rayrag_Companion_{version}_aarch64.app.tar.gz"),
+                "signature": "test"
+            }}
+        }))
+        .unwrap()
+    }
+
+    fn response(status: &str, body: &[u8]) -> Vec<u8> {
+        let mut bytes = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        bytes.extend_from_slice(body);
+        bytes
+    }
+
+    fn find_from_server(responses: Vec<Vec<u8>>, current: &str) -> (FeedResult, Vec<String>) {
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", server.local_addr().unwrap());
+        server.set_nonblocking(true).unwrap();
+        let (stop, stopped) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let mut responses = VecDeque::from(responses);
+            let mut paths = Vec::new();
+            loop {
+                match server.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        let mut request = Vec::new();
+                        let mut chunk = [0; 2048];
+                        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                            let count = stream.read(&mut chunk).unwrap();
+                            assert!(count > 0);
+                            request.extend_from_slice(&chunk[..count]);
+                            assert!(request.len() < 8192);
+                        }
+                        paths.push(
+                            String::from_utf8_lossy(&request)
+                                .split_whitespace()
+                                .nth(1)
+                                .unwrap()
+                                .to_owned(),
+                        );
+                        let bytes = responses
+                            .pop_front()
+                            .unwrap_or_else(|| response("500 Unexpected request", b""));
+                        let _ = stream.write_all(&bytes);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if stopped.recv_timeout(Duration::from_millis(5)).is_ok() {
+                            break;
+                        }
+                    }
+                    Err(error) => panic!("Synthetic feed server failed: {error}"),
+                }
+            }
+            paths
+        });
+        let result = tauri::async_runtime::block_on(find_update(
+            &download_client(false).unwrap(),
+            &format!("{base}/latest-semver.json"),
+            &format!("{base}/latest.json"),
+            current,
+        ));
+        stop.send(()).unwrap();
+        (result, thread.join().unwrap())
+    }
+
     #[test]
     fn automatic_updates_are_admitted_only_on_apple_silicon_macos() {
         let state = UpdateState::default();
@@ -615,11 +738,7 @@ mod tests {
     }
     #[test]
     fn interrupted_and_oversized_downloads_never_become_candidates() {
-        use std::{
-            io::{Read, Write},
-            net::TcpListener,
-        };
-        fn fetch(response: &'static [u8], limit: usize) -> Result<Vec<u8>, String> {
+        fn fetch(response: &'static [u8], limit: usize) -> Result<Vec<u8>, DownloadError> {
             let server = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("http://{}/synthetic", server.local_addr().unwrap());
             let thread = std::thread::spawn(move || {
@@ -669,8 +788,160 @@ mod tests {
             .is_none());
         f["platforms"]["darwin-aarch64"]["url"] = "https://evil.test/app".into();
         assert!(parse_feed(&serde_json::to_vec(&f).unwrap(), "0.1.0").is_err());
-        for v in ["0.2.10-beta", "0.2.10+other", "0.3.0", "v0.2.10"] {
+        for v in [
+            "0.2.10-beta",
+            "0.2.10+other",
+            "v0.2.10",
+            "01.2.10",
+            "1.02.10",
+            "1.2.010",
+            "1.2",
+            " 1.2.10",
+            "1.2.10 ",
+        ] {
             assert!(version(v).is_none());
+        }
+        for v in ["0.2.10", "0.3.0", "1.0.0", "12.30.100"] {
+            assert!(version(v).is_some());
+            let metadata = feed(v);
+            assert_eq!(parse_feed(&metadata, "0.2.9").unwrap().unwrap().0, v);
+            assert!(parse_feed(&metadata, v).unwrap().is_none());
+            assert!(parse_feed(&metadata, "13.0.0").unwrap().is_none());
+        }
+    }
+    #[test]
+    fn primary_feed_success_and_current_version_never_use_legacy() {
+        for current in ["0.2.63", "1.0.0", "2.0.0"] {
+            let (result, paths) = find_from_server(
+                vec![
+                    response("200 OK", &feed("1.0.0")),
+                    response("200 OK", &feed("3.0.0")),
+                ],
+                current,
+            );
+            assert_eq!(paths, ["/latest-semver.json"]);
+            let found = result.unwrap();
+            if current == "0.2.63" {
+                assert_eq!(found.unwrap().0, "1.0.0");
+            } else {
+                assert!(found.is_none());
+            }
+        }
+    }
+    #[test]
+    fn missing_primary_feed_uses_legacy_once() {
+        let (result, paths) = find_from_server(
+            vec![
+                response("404 Not Found", b""),
+                response("200 OK", &feed("0.2.64")),
+            ],
+            "0.2.63",
+        );
+        assert_eq!(result.unwrap().unwrap().0, "0.2.64");
+        assert_eq!(paths, ["/latest-semver.json", "/latest.json"]);
+        let (result, paths) = find_from_server(
+            vec![
+                response("404 Not Found", b""),
+                response("200 OK", &feed("0.2.63")),
+            ],
+            "0.2.63",
+        );
+        assert!(result.unwrap().is_none());
+        assert_eq!(paths, ["/latest-semver.json", "/latest.json"]);
+    }
+    #[test]
+    fn primary_failure_never_uses_legacy() {
+        let mut truncated = response("200 OK", &feed("1.0.0"));
+        truncated.pop();
+        let mut streamed = format!(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n",
+            MAX_METADATA + 1
+        )
+        .into_bytes();
+        streamed.extend_from_slice(&vec![b'x'; MAX_METADATA + 1]);
+        streamed.extend_from_slice(b"\r\n0\r\n\r\n");
+        let failures = [
+            response("403 Forbidden", b""),
+            response("429 Too Many Requests", b""),
+            response("500 Internal Server Error", b""),
+            response("502 Bad Gateway", b""),
+            response("503 Service Unavailable", b""),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 64001\r\nConnection: close\r\n\r\n".to_vec(),
+            response("200 OK", &vec![b'x'; MAX_METADATA + 1]),
+            streamed,
+            truncated,
+            response("200 OK", b"invalid json"),
+            response("200 OK", &feed("1.0.0-beta.1")),
+            response("204 No Content", b""),
+            Vec::new(),
+        ];
+        for failure in failures {
+            let (result, paths) =
+                find_from_server(vec![failure, response("200 OK", &feed("0.2.64"))], "0.2.63");
+            assert!(result.is_err());
+            assert_eq!(paths, ["/latest-semver.json"]);
+        }
+    }
+    #[test]
+    fn missing_primary_does_not_hide_legacy_failure() {
+        for failure in [
+            response("404 Not Found", b""),
+            response("403 Forbidden", b""),
+            response("500 Internal Server Error", b""),
+            response("200 OK", b"invalid json"),
+            response("200 OK", &vec![b'x'; MAX_METADATA + 1]),
+            Vec::new(),
+        ] {
+            let (result, paths) =
+                find_from_server(vec![response("404 Not Found", b""), failure], "0.2.63");
+            assert!(result.is_err());
+            assert_eq!(paths, ["/latest-semver.json", "/latest.json"]);
+        }
+    }
+    #[test]
+    fn semver_feed_still_requires_exact_archive_and_bounded_signature() {
+        let mut metadata: serde_json::Value = serde_json::from_slice(&feed("1.2.3")).unwrap();
+        let expected = metadata["platforms"]["darwin-aarch64"]["url"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for url in [
+            expected.replace("v1.2.3/", "v1.2.2/"),
+            expected.replace("Companion_1.2.3_", "Companion_1.2.2_"),
+            format!("{expected}?download=1"),
+            expected.replace("aarch64", "x64"),
+            expected.replace("https://", "http://"),
+        ] {
+            metadata["platforms"]["darwin-aarch64"]["url"] = url.into();
+            assert!(parse_feed(&serde_json::to_vec(&metadata).unwrap(), "0.2.63").is_err());
+        }
+        metadata["platforms"]["darwin-aarch64"]["url"] = expected.into();
+        metadata["platforms"]["darwin-aarch64"]["signature"] = "x".repeat(4097).into();
+        assert!(parse_feed(&serde_json::to_vec(&metadata).unwrap(), "0.2.63").is_err());
+        metadata["platforms"] = serde_json::json!({});
+        assert!(parse_feed(&serde_json::to_vec(&metadata).unwrap(), "0.2.63").is_err());
+    }
+    #[test]
+    fn feed_version_cannot_override_authenticated_archive_version() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let signed: serde_json::Value =
+            serde_json::from_str(include_str!("update-signature-test.json")).unwrap();
+        let payload = STANDARD
+            .decode(signed["payloadBase64"].as_str().unwrap())
+            .unwrap();
+        let public_key = signed["publicKey"].as_str().unwrap();
+        for advertised in ["0.2.27", "1.0.0"] {
+            let mut metadata: serde_json::Value =
+                serde_json::from_slice(&feed(advertised)).unwrap();
+            metadata["platforms"]["darwin-aarch64"]["signature"] = signed["signature"].clone();
+            let (v, platform) = parse_feed(&serde_json::to_vec(&metadata).unwrap(), "0.1.0")
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                update_install::verify(&payload, &platform.signature, public_key, &v).is_ok(),
+                advertised == "0.2.27"
+            );
+            assert!(update_install::verify(&payload, &platform.signature, "invalid", &v).is_err());
         }
     }
 }
