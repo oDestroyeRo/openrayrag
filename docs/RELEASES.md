@@ -14,6 +14,8 @@ The committed updater configuration must enable `bundle.createUpdaterArtifacts` 
 https://github.com/oDestroyeRo/openrayrag/releases/latest/download/latest.json
 ```
 
+The native updater checks the fixed `latest-semver.json` URL in the same latest-release directory first. It accepts canonical stable SemVer, including minor and major upgrades, and falls back to `latest.json` only when the primary request returns HTTP 404. Successful metadata, including an up-to-date result, never triggers fallback. Authentication errors, rate limits, server errors, interrupted or oversized responses and malformed metadata fail the check. Both feeds require the same immutable versioned archive URL and signed-version verification. This compatibility bridge leaves the plugin endpoint and nine-asset release contract unchanged until the semantic release publisher is introduced.
+
 New schema-2 releases contain exactly nine assets; existing schema-1 releases retain their six-asset contract:
 
 - `Rayrag_Companion_0.2.N_aarch64.app.tar.gz`: signed updater payload.
