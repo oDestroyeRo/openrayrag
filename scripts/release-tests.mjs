@@ -1501,6 +1501,33 @@ test("downstream plan verification reads only the exact ref instead of rescannin
   api.planReferences.delete([...api.planReferences.keys()][0]);
   await assert.rejects(loaded.verifyPlan(ctx.plan), /missing/);
 });
+test("GitHub reservation listing finds existing plans using the matching-ref wire contract", async () => {
+  const original = global.fetch;
+  const ref = {
+    ref: "refs/tags/rayrag-release-plan/v0.3.0",
+    object: { type: "tag", sha: "a".repeat(40) },
+  };
+  global.fetch = async (url, options) => {
+    assert.equal(options.method, "GET");
+    // GitHub returns an empty list for the unmatched refs/tags/... namespace.
+    // Its endpoint takes tags/..., while response ref names retain refs/tags/.
+    return Response.json(
+      String(url) ===
+        "https://api.github.com/repos/oDestroyeRo/openrayrag/git/matching-refs/tags/rayrag-release-plan/"
+        ? [ref]
+        : [],
+    );
+  };
+  try {
+    assert.deepEqual(
+      await new GitHubReleaseApi("synthetic-only").planRefs(),
+      [ref],
+    );
+  } finally {
+    global.fetch = original;
+  }
+});
+
 test("GitHub reservation adapter uses canonical tag objects, create-only refs and immutable cache", async () => {
   const original = global.fetch,
     calls = [],

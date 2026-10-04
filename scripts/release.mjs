@@ -408,7 +408,7 @@ export class GitHubReleaseApi {
   async planRefs() {
     const refs = await this.request(
       "GET",
-      `git/matching-refs/${PLAN_REF_PREFIX.slice("refs/")}`,
+      `git/matching-refs/${PLAN_REF_PREFIX.slice("refs/".length)}`,
     );
     requireValue(
       Array.isArray(refs) && refs.length < MAX_RESERVATIONS,
