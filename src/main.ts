@@ -6,6 +6,7 @@ import { listen } from '@tauri-apps/api/event';
 import { validateSettings, type Settings } from './settings';
 import { FeatureUi } from './feature-ui';
 import { ReconnectPolicy, PersistentFieldRun } from './reconnect';
+import { RunIntentDispatch } from './run-intent-dispatch';
 import { validStatus, statusHeartbeatFresh, type GameStatus } from './game-status';
 import { SettingsForm } from './settings-form';
 import { normalAttackProfile } from './combat';
@@ -53,52 +54,25 @@ let previousSession: string | undefined;
 const reconnect = new ReconnectPolicy();
 const fieldRun = new PersistentFieldRun();
 let sessionLoginAvailable = false;
-let runGeneration = 0;
-let loginGeneration = 0;
-let pendingService: Promise<unknown> | null = null;
-let pendingManual:Promise<unknown>|null=null;
-let pendingResume: Promise<unknown> | null = null;
-let pendingLogin: Promise<unknown> | null = null;
-let stopping = false;
-let limitHeld = false;
-let limitStopPending = false;
-let pendingLimitStop: Promise<unknown> | null = null;
+const dispatches = new RunIntentDispatch(fieldRun, reconnect, (command, args) => invoke(command, args));
 function runActive(): boolean { return fieldRun.requested || !!latest?.runRequested || !!latest?.running || features.active(); }
 function configureReconnect(): void {
   reconnect.configure(fieldRun.requested || element<HTMLInputElement>('auto-reconnect').checked,
     sessionLoginAvailable, fieldRun.requested);
 }
 function holdAtRunLimit(): void {
-  if (!fieldRun.limitReason || limitHeld || limitStopPending || !gameOpen) return;
-  const generation = runGeneration;
-  limitStopPending = true;
-  const pending = [pendingResume, pendingLogin].filter((task): task is Promise<unknown> => task !== null);
-  const task = (async () => {
-    try {
-      await invoke('control_bot', { action: 'stop' });
-      if (pending.length) {
-        await Promise.allSettled(pending);
-        if (generation === runGeneration && fieldRun.limitReason) await invoke('control_bot', { action: 'stop' });
-      }
-      if (generation === runGeneration) limitHeld = true;
-    } catch { /* Retry when the controller returns. */ }
-    finally { limitStopPending = false; }
-  })();
-  pendingLimitStop = task;
-  void task.finally(() => { if (pendingLimitStop === task) pendingLimitStop = null; });
+  const task = dispatches.holdAtRunLimit(gameOpen);
+  if (task) void task.finally(updateButtons);
 }
 function resumeFieldRun(s: GameStatus): void {
-  if (!native || closeBusy || busy || stopping || loginBusy || pendingResume) return;
+  if (!native || closeBusy || busy || dispatches.stopping || loginBusy || dispatches.pending.resume) return;
   holdAtRunLimit();
-  const request = fieldRun.resumeFor(s);
-  if (!request) return;
-  const generation = runGeneration;
-  const task = invoke('control_bot', { action: 'start', settings: request.settings, escapeGuard: request.escapeGuard, supplyGuard:request.supplyGuard, deathRecoveryGuard:request.deathRecoveryGuard });
-  pendingResume = task;
-  void task.then(() => { fieldRun.completeResume(request, true); })
-    .catch(() => {
-      if (fieldRun.completeResume(request, false) && generation === runGeneration) message('Waiting to reach the game controller before resuming.');
-    }).finally(() => { if (pendingResume === task) pendingResume = null; updateButtons(); });
+  const task = dispatches.resume(s);
+  if (!task) return;
+  void task.then(receipt => {
+    const result = receipt.outcome;
+    if (result.status === 'failed') message('Waiting to reach the game controller before resuming.');
+  }).finally(updateButtons);
 }
 const features = new FeatureUi(shell.main, {
   settings: () => form.runSettings(), apply: value => form.applyProfile(value), map: () => latest?.map ?? '', character: () => latest?.player?.name ?? '',
@@ -114,8 +88,8 @@ const form = new SettingsForm(shell.main, features, {
     mapInfo: latest?.mapInfo ?? { code: '', name: '', source: 'observed', monsters: [] },
     level: latest?.player?.level ?? null,
     runActive: runActive(),
-    controlsLocked: !closeRegistered || closeBusy || updateBusy || busy || stopping || loginBusy || runActive(),
-    targetsLocked: !closeRegistered || closeBusy || updateBusy || busy || stopping || loginBusy || !native || Date.now() - receivedAt >= 7000
+    controlsLocked: !closeRegistered || closeBusy || updateBusy || busy || dispatches.stopping || loginBusy || runActive(),
+    targetsLocked: !closeRegistered || closeBusy || updateBusy || busy || dispatches.stopping || loginBusy || !native || Date.now() - receivedAt >= 7000
       || !latest?.connected || !latest.compatible || !latest.player || runActive(),
     retainedTargets: fieldRun.requested ? fieldRun.targetIds : undefined,
   }),
@@ -149,14 +123,14 @@ function mainUpdateWaitReason():string|null {
   if(accountDraft())return 'Update waits for your account draft. Sign in or clear the draft first.';
   if(updateBusy)return 'Update settlement is already in progress.';
   if(busy)return 'Update waits for the current request to finish.';
-  if(stopping)return 'Update waits for Stop to finish.';
+  if(dispatches.stopping)return 'Update waits for Stop to finish.';
   if(loginBusy)return 'Update waits for sign-in to finish.';
   if(heartbeatPending)return 'Update waits for the current connection check to finish.';
-  if(pendingLogin)return 'Update waits for the pending sign-in request to finish.';
-  if(pendingResume)return 'Update waits for the pending automation resume to finish.';
-  if(pendingService)return 'Update waits for the pending service action to finish.';
-  if(pendingManual)return 'Update waits for the pending manual action to finish.';
-  if(pendingLimitStop||limitStopPending)return 'Update waits for automation to stop at its configured limit.';
+  if(dispatches.pending.login)return 'Update waits for the pending sign-in request to finish.';
+  if(dispatches.pending.resume)return 'Update waits for the pending automation resume to finish.';
+  if(dispatches.pending.service)return 'Update waits for the pending service action to finish.';
+  if(dispatches.pending.manual)return 'Update waits for the pending manual action to finish.';
+  if(dispatches.pending.limit)return 'Update waits for automation to stop at its configured limit.';
   if(features.hasUnsavedMacro())return 'Update waits for your macro draft. Save or clear it first.';
   if(!features.settledForMaintenance())return 'Update waits for pending game actions or previews to finish.';
   if(runActive()||fieldRun.requested)return 'Update waits for automation to stop.';
@@ -216,40 +190,23 @@ const botConsole = new BotConsole(shell.main, {
   manualTools: () => shell.showPage('manual'),
 });
 function disconnectReady():boolean {
-  return native && gameOpen && accountReady && !updateBusy && !busy && !stopping && !loginBusy && !pendingLogin && !pendingResume
-    && !pendingService && !pendingManual && !pendingLimitStop && !heartbeatPending && !runActive()
+  return native && gameOpen && accountReady && !updateBusy && !busy && !dispatches.stopping && !loginBusy && !dispatches.pending.login && !dispatches.pending.resume
+    && !dispatches.pending.service && !dispatches.pending.manual && !dispatches.pending.limit && !heartbeatPending && !runActive()
     && features.settledForMaintenance() && !(latest?.connected && latest.player && Date.now()-receivedAt>=7000);
 }
 
 
 async function featureRequest(action: string, request: unknown): Promise<unknown> {
-  if (!native || updateBusy || busy || stopping || loginBusy || !latest?.connected || !latest.compatible || !latest.player || (action==='service'?features.serviceBlocked():(action==='warp'||action==='warpPreview')&&features.warpActivationReady()?fieldRun.requested:runActive()) || Date.now()-receivedAt >= 7000) {
+  if (!native || updateBusy || busy || dispatches.stopping || loginBusy || !latest?.connected || !latest.compatible || !latest.player || (action==='service'?features.serviceBlocked():(action==='warp'||action==='warpPreview')&&features.warpActivationReady()?fieldRun.requested:runActive()) || Date.now()-receivedAt >= 7000) {
     throw new Error('Stop automation and connect a verified character before sending a manual command.');
   }
   busy=true;updateButtons();
   try {
-    if(action==='service') {
-      const generation=++runGeneration;fieldRun.stop();reconnect.cancel();limitHeld=false;
-      const pending=pendingResume;if(pending)await pending.catch(()=>{});
-      if(generation!==runGeneration||stopping)throw new Error('Service request canceled by Stop.');
-      const task=invoke('control_bot',{action,request});pendingService=task;
-      try{return await task;}finally{if(pendingService===task)pendingService=null;}
-    }
-    if(action==='macro') {
-      const generation=++runGeneration;fieldRun.stop();reconnect.cancel();limitHeld=false;
-      const pending=pendingResume;if(pending)await pending.catch(()=>{});
-      if(generation!==runGeneration||stopping)throw new Error('Macro request canceled by Stop.');
-      const task=invoke('control_bot',{action,request});pendingManual=task;
-      try { const result=await task;if(generation!==runGeneration)await invoke('control_bot',{action:'stop'});return result; }
-      finally { if(pendingManual===task)pendingManual=null; }
-    }
-    if(action==='command'&&request&&typeof request==='object'&&'type' in request&&request.type==='manualTarget') {
-      const generation=++runGeneration;reconnect.cancel();
-      const task=invoke('control_bot',{action,request});pendingManual=task;
-      try {const result=await task;if(generation!==runGeneration&&stopping)await invoke('control_bot',{action:'stop'});return result;}
-      finally{if(pendingManual===task)pendingManual=null;}
-    }
-    return await invoke('control_bot',{action,request});
+    const result = (await dispatches.feature(action, request)).outcome;
+    if (result.status === 'failed') throw result.error;
+    if (result.status === 'retired') throw new Error(action === 'service' ? 'Service request canceled by Stop.'
+      : action === 'macro' ? 'Macro request canceled by Stop.' : 'Stop automation and connect a verified character before sending a manual command.');
+    return result.value;
   } finally { busy=false;updateButtons(); }
 }
 
@@ -277,21 +234,21 @@ function updateButtons(): void {
   let checked:Settings|null = null;
   try { checked=validateSettings(form.runSettings()); configHelp.textContent=''; }
   catch(error) { configHelp.textContent=ready && error instanceof Error ? error.message : ''; }
-  startButton.disabled = !canStartField({native,fresh,busy,stopping,loginBusy,runActive:runActive(),connected:latest?.connected===true,compatible:latest?.compatible===true,
+  startButton.disabled = !canStartField({native,fresh,busy,stopping:dispatches.stopping,loginBusy,runActive:runActive(),connected:latest?.connected===true,compatible:latest?.compatible===true,
     map:latest?.map??'',player:latest?.player??null,settings:checked});
-  stopButton.disabled = stopping || !gameOpen && !fieldRun.requested && !loginBusy;
+  stopButton.disabled = dispatches.stopping || !gameOpen && !fieldRun.requested && !loginBusy;
   openButton.disabled = false;
   element<HTMLButtonElement>('disconnect').disabled = !disconnectReady();
-  botConsole.lock(busy || stopping || loginBusy || !ready || runActive() || !features.settledForMaintenance(), !native ? 'Browser preview · native connection required.' : busy || stopping || loginBusy ? 'Wait for the current request to finish.' : !ready ? 'Connect a fresh verified character to use manual controls.' : runActive() || !features.settledForMaintenance() ? 'Stop the bot; wait for pending actions before manual control.' : '');
-  element<HTMLButtonElement>('signin').disabled = !native || !accountReady || busy || stopping || loginBusy || !!(latest?.connected && latest.player);
-  element<HTMLButtonElement>('forget-login').disabled = busy || stopping || loginBusy;
+  botConsole.lock(busy || dispatches.stopping || loginBusy || !ready || runActive() || !features.settledForMaintenance(), !native ? 'Browser preview · native connection required.' : busy || dispatches.stopping || loginBusy ? 'Wait for the current request to finish.' : !ready ? 'Connect a fresh verified character to use manual controls.' : runActive() || !features.settledForMaintenance() ? 'Stop the bot; wait for pending actions before manual control.' : '');
+  element<HTMLButtonElement>('signin').disabled = !native || !accountReady || busy || dispatches.stopping || loginBusy || !!(latest?.connected && latest.player);
+  element<HTMLButtonElement>('forget-login').disabled = busy || dispatches.stopping || loginBusy;
   for (const id of ['username', 'password', 'character-slot', 'remember-login']) {
-    element<HTMLInputElement>(id).disabled = !accountReady || busy || stopping || loginBusy;
+    element<HTMLInputElement>(id).disabled = !accountReady || busy || dispatches.stopping || loginBusy;
   }
-  element<HTMLSelectElement>('connection-mode').disabled = !accountReady || gameOpen || busy || stopping || loginBusy;
-  element<HTMLInputElement>('auto-login').disabled = busy || stopping || loginBusy || !element<HTMLInputElement>('remember-login').checked;
-  element<HTMLInputElement>('auto-reconnect').disabled = busy || stopping || loginBusy || !sessionLoginAvailable;
-  features.lock(busy || stopping || loginBusy || runActive(),busy || stopping || loginBusy || !ready || runActive(),busy || stopping || loginBusy || !ready || features.serviceBlocked(),busy || stopping || loginBusy || !ready || fieldRun.requested);
+  element<HTMLSelectElement>('connection-mode').disabled = !accountReady || gameOpen || busy || dispatches.stopping || loginBusy;
+  element<HTMLInputElement>('auto-login').disabled = busy || dispatches.stopping || loginBusy || !element<HTMLInputElement>('remember-login').checked;
+  element<HTMLInputElement>('auto-reconnect').disabled = busy || dispatches.stopping || loginBusy || !sessionLoginAvailable;
+  features.lock(busy || dispatches.stopping || loginBusy || runActive(),busy || dispatches.stopping || loginBusy || !ready || runActive(),busy || dispatches.stopping || loginBusy || !ready || features.serviceBlocked(),busy || dispatches.stopping || loginBusy || !ready || fieldRun.requested);
 }
 
 function showSavedLogin(profile: SavedLogin | null): void {
@@ -304,9 +261,7 @@ function showSavedLogin(profile: SavedLogin | null): void {
 }
 
 async function signIn(): Promise<void> {
-  if (!native || !accountReady || busy || stopping || loginBusy || latest?.connected && latest.player) return;
-  reconnect.signIn();
-  const generation = ++loginGeneration;
+  if (!native || !accountReady || busy || dispatches.stopping || loginBusy || latest?.connected && latest.player) return;
   const username = element<HTMLInputElement>('username').value.trim();
   const password = element<HTMLInputElement>('password');
   const characterSlot = Number(element<HTMLSelectElement>('character-slot').value);
@@ -317,26 +272,23 @@ async function signIn(): Promise<void> {
   previousSession = latest?.sessionId;
   loginBusy = true; loginStartedAt = Date.now(); updateButtons();
   try {
-    const task = invoke('login_game', { request: {
+    const task = dispatches.login({
       credentials: reuse ? null : { username, password: password.value, characterSlot },
       characterSlot, remember, autoLogin, mode,
-    } });
-    pendingLogin = task;
-    await task;
-    if (generation !== loginGeneration) return;
+    });
+    password.value = '';
+    const result = (await task).outcome;
+    if (result.status === 'retired') return;
+    if (result.status === 'failed') {
+      previousSession = undefined;
+      loginBusy = false;
+      message(typeof result.error === 'string' ? result.error : 'Could not start automatic sign-in.', true);
+      return;
+    }
     gameOpen = true;accountBaseline=accountFields();
     if (remember) showSavedLogin({ username, characterSlot, autoLogin, mode });
     message(mode==='botOnly'?'Opening bot connection for sign-in…':'Loading the game client for sign-in…');
-  } catch (error) {
-    if (generation !== loginGeneration) return;
-    previousSession = undefined;
-    loginBusy = false;
-    message(typeof error === 'string' ? error : 'Could not start automatic sign-in.', true);
-  } finally {
-    if (generation === loginGeneration) pendingLogin = null;
-    password.value = '';
-    updateButtons();
-  }
+  } finally { updateButtons(); }
 }
 
 element<HTMLFormElement>('signin-form').addEventListener('submit', event => {
@@ -367,41 +319,27 @@ element('disconnect').addEventListener('click', () => {
   void perform(async () => { await invoke('close_game'); });
 });
 startButton.addEventListener('click', () => void perform(async () => {
-  if (!latest?.player || stopping) return;
-  const checked = validateSettings(form.runSettings()), generation = ++runGeneration;
-  fieldRun.begin(checked, latest.player.name, latest.sessionId, { kills: latest.kills, looted: latest.looted, deaths: latest.deaths, attacks: latest.attacks });
-  limitHeld = false; configureReconnect();
+  if (!latest?.player || dispatches.stopping) return;
+  const checked = validateSettings(form.runSettings());
+  const task = dispatches.start(checked, latest);
+  configureReconnect();
   reconnect.observe(latest.connected, true, latest.login.phase, Date.now(), latest.login.message);
-  const supplyGuard=fieldRun.supplyGuardForStart(checked,latest.player.name,latest.sessionId);
-  const deathRecoveryGuard=fieldRun.deathGuardForStart(checked,latest.player.name,latest.sessionId);
-  const supplyCharacter=latest.player.name,supplySession=latest.sessionId;
-  const task = invoke('control_bot', { action: 'start', settings: checked,
-    escapeGuard: fieldRun.guardForStart(checked, latest?.player?.name ?? '', latest?.sessionId ?? ''),
-    supplyGuard, deathRecoveryGuard });
-  pendingResume = task;
-  try { await task;if(generation===runGeneration){fieldRun.completeSupplyStart(supplyCharacter,supplySession,supplyGuard);fieldRun.completeDeathStart(supplyCharacter,supplySession,deathRecoveryGuard);} }
-  catch (error) { if (generation === runGeneration) { fieldRun.stop(); configureReconnect(); } throw error; }
-  finally { if (pendingResume === task) pendingResume = null; }
+  const result = (await task).outcome;
+  if (result.status === 'failed') {
+    configureReconnect();
+    message(typeof result.error === 'string' ? result.error : 'Unable to contact the game.', true);
+  }
 }));
 stopButton.addEventListener('click', () => {
-  if (stopping) return;
-  const generation = ++runGeneration; ++loginGeneration;
-  fieldRun.stop(); reconnect.cancel(); limitHeld = false; loginBusy = false; previousSession = undefined;
-  const pending = [pendingResume, pendingLogin, pendingLimitStop, pendingService,pendingManual].filter((task): task is Promise<unknown> => task !== null);
-  stopping = true; updateButtons();
-  void (async () => {
-    try {
-      await invoke('control_bot', { action: 'stop' });
-      // A request already crossing the native boundary may finish after Stop.
-      // Cancel its one-shot login / Start again before unlocking the controls.
-      if (pending.length) {
-        await Promise.allSettled(pending);
-        if (generation === runGeneration) await invoke('control_bot', { action: 'stop' });
-      }
-      message('Bot stopped.');
-    } catch { message('Run cancelled. The game controller is unavailable.'); }
-    finally { stopping = false; pendingLogin = null; pendingResume = null; updateButtons(); }
-  })();
+  if (dispatches.stopping) return;
+  const task = dispatches.stop();
+  loginBusy = false; previousSession = undefined;
+  updateButtons();
+  void task.then(receipt => {
+    const result = receipt.outcome;
+    if (result.status === 'accepted') message('Bot stopped.');
+    else if (result.status === 'failed') message('Run cancelled. The game controller is unavailable.');
+  }).finally(updateButtons);
 });
 function render(s: GameStatus): void {
   // Navigation is asynchronous: the previous page may still publish its terminal
@@ -462,8 +400,8 @@ if (native) {
     features.clearSocial();
     features.clearMemo();
     features.clearMacro();
-    ++runGeneration; ++loginGeneration; fieldRun.stop(); reconnect.cancel();
-    sessionLoginAvailable = false; pendingResume = null; pendingLogin = null; limitHeld = false; previousSession = undefined;
+    dispatches.gameClosed();
+    sessionLoginAvailable = false; previousSession = undefined;
     gameOpen = false; latest = null; receivedAt = 0; loginBusy = false;
     form.refresh();
     element('status').textContent = 'OFFLINE'; element('status').classList.remove('active'); element('status').dataset.state = 'OFFLINE';
@@ -505,21 +443,19 @@ if (native) {
       message('Sign-in is taking too long. Waiting before reconnecting again.', true);
     }
     updateButtons();
-    const retry = !closeBusy && !updateBusy && gameOpen && !busy && !stopping && !loginBusy && !(latest?.connected && latest.player)
+    const retry = !closeBusy && !updateBusy && gameOpen && !busy && !dispatches.stopping && !loginBusy && !(latest?.connected && latest.player)
       && !fieldRun.limitReason ? reconnect.takeDue(Date.now()) : null;
     if (retry !== null) {
-      const generation = ++loginGeneration;
       loginBusy = true; loginStartedAt = Date.now(); previousSession = latest?.sessionId; updateButtons();
       message(`Reconnecting · attempt ${retry}. ${fieldRun.requested ? 'The bot will resume when your character is ready.' : 'Combat remains stopped.'}`);
-      const task = invoke('reconnect_game'); pendingLogin = task;
-      void task.then(() => { if (generation === loginGeneration) gameOpen = true; })
-        .catch(error => {
-          if (generation !== loginGeneration) return;
+      void dispatches.reconnect().then(receipt => {
+        const result = receipt.outcome;
+        if (result.status === 'accepted') gameOpen = true;
+        else if (result.status === 'failed') {
           previousSession = undefined; loginBusy = false;
-          if (typeof error === 'string' && /(?:sign in|account)/i.test(error)) reconnect.observe(false, false, 'failed', Date.now(), 'Explicit sign-in required.');
-          else reconnect.networkFailure(Date.now());
-          message(reconnect.requiresSignIn ? 'Waiting for you to sign in again before resuming.' : 'Reconnect could not restore the connection. Waiting before trying again.', true); updateButtons();
-        }).finally(() => { if (pendingLogin === task) pendingLogin = null; });
+          message(reconnect.requiresSignIn ? 'Waiting for you to sign in again before resuming.' : 'Reconnect could not restore the connection. Waiting before trying again.', true);
+        }
+      }).finally(updateButtons);
     }
     element('reconnect-help').textContent = fieldRun.limitReason || (reconnect.requiresSignIn
       ? 'Sign in again to resume the requested run.'

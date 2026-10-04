@@ -4,6 +4,14 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Run intent dispatch
+
+Issue [#115](https://github.com/oDestroyeRo/openrayrag/issues/115) tracks dispatch ownership in the main window. The Run intent dispatch module owns pending native requests, retirement and Stop compensation; existing field/reconnect policies retain run allowances. Immutable receipts recheck ownership when the window consumes a result. Game closure retires outcomes while outstanding requests continue to block update admission until they settle.
+
+Checked on 2026-10-04: 24 module cases and seven additional main-window cases cover deferred Start, login, reconnect and resume; failed initial Stop; controls locked through the final compensating Stop; replacement connections; retirement during promise delivery; limit holds; service/macro handoff; and updater waiting after game closure. The 85 focused tests and full local checks passed: 3,514 frontend tests, 137 native tests with one optional public probe ignored, build/typechecking, Clippy and formatting, 83 Node helper tests with one Linux-specific skip, and eight Python release tests. Independent source review found no blocking findings.
+
+This proof uses deferred native adapters and synthetic main-window events. Deployed-game actions, forced network failures and installed updates were not exercised for this refactor. Hosted packaging and smoke results are recorded separately in the issue.
+
 ### Desktop CI
 
 Issue [#112](https://github.com/oDestroyeRo/openrayrag/issues/112) records the exact-head hosted gates, production release and public artifact evidence. Every PR into main runs the full frontend suite and both production/CI-feature native suites, strict Clippy and formatting on macOS ARM64, Windows x64 and Linux x64. Packaged smoke tests exercise the macOS app, extracted NSIS application, Debian application and AppImage launcher with temporary settings; each proves offline initialization, immediate-close persistence and reopening. Platform-specific storage regressions cover ownership, access lists, links, locks and repeated atomic writes. Installer architecture and executable identity are checked independently. Main requires the aggregate result. See [desktop CI](DESKTOP_CI.md).
