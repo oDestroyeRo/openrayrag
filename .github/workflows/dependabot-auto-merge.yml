@@ -1,0 +1,52 @@
+name: Dependabot auto merge
+on:
+  workflow_run:
+    workflows: [Desktop CI and release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Dependabot PR desktop CI run to merge or retry
+        required: true
+        type: string
+      dry_run:
+        description: Check eligibility without merging or starting a release
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+# Keep every successful dependency run; serialize merges and release dispatches.
+concurrency:
+  group: dependabot-auto-merge
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: >-
+      github.repository == 'oDestroyeRo/openrayrag' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      # workflow_run uses default-branch code; never check out the dependency PR.
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Merge the verified dependency update and start main release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        run: node scripts/dependabot-auto-merge.mjs
