@@ -141,27 +141,69 @@ function formChanged():void {
   if(saveTimer)clearTimeout(saveTimer);
   saveTimer=setTimeout(()=>{void currentForm.flush().catch(()=>{element('update-status').textContent='Updates are waiting for valid, saved current settings.';});},300);
 }
-function mainSettledForUpdate():boolean {
-  return closeRegistered&&!closeBusy&&accountReady&&currentForm.initialized&&!accountDraft()&&!updateBusy&&!busy&&!stopping&&!loginBusy&&!heartbeatPending&&!pendingLogin&&!pendingResume&&!pendingService&&!pendingManual&&!pendingLimitStop
-    &&!limitStopPending&&!features.hasUnsavedMacro()&&features.settledForMaintenance()&&!runActive()&&!fieldRun.requested&&!reconnect.waitingUntil;
+function mainUpdateWaitReason():string|null {
+  if(!closeRegistered)return 'Update waits for settings initialization.';
+  if(closeBusy)return 'Update waits for the settings window to finish closing.';
+  if(!accountReady)return 'Update waits for the saved account to finish loading.';
+  if(!currentForm.initialized)return 'Update waits for current settings to be restored.';
+  if(accountDraft())return 'Update waits for your account draft. Sign in or clear the draft first.';
+  if(updateBusy)return 'Update settlement is already in progress.';
+  if(busy)return 'Update waits for the current request to finish.';
+  if(stopping)return 'Update waits for Stop to finish.';
+  if(loginBusy)return 'Update waits for sign-in to finish.';
+  if(heartbeatPending)return 'Update waits for the current connection check to finish.';
+  if(pendingLogin)return 'Update waits for the pending sign-in request to finish.';
+  if(pendingResume)return 'Update waits for the pending automation resume to finish.';
+  if(pendingService)return 'Update waits for the pending service action to finish.';
+  if(pendingManual)return 'Update waits for the pending manual action to finish.';
+  if(pendingLimitStop||limitStopPending)return 'Update waits for automation to stop at its configured limit.';
+  if(features.hasUnsavedMacro())return 'Update waits for your macro draft. Save or clear it first.';
+  if(!features.settledForMaintenance())return 'Update waits for pending game actions or previews to finish.';
+  if(runActive()||fieldRun.requested)return 'Update waits for automation to stop.';
+  if(reconnect.waitingUntil)return 'Update waits for the scheduled reconnect to finish.';
+  return null;
+}
+type UpdateStep='settings'|'reserve'|'confirmation';
+function updateDeferredReason(step:UpdateStep,error:unknown):string {
+  // Only known generic messages may cross this boundary. Unknown errors can
+  // contain paths, account details or payloads, so report only their stage.
+  const reasons:Record<string,string>={
+    'No verified update is ready.':'The verified update is no longer ready.',
+    'Waiting for login to settle.':'Sign-in has not finished.',
+    'Save current settings before updating.':'Current settings need to be saved.',
+    'Current settings changed before update settlement.':'Current settings changed while preparing the update.',
+    'Waiting for a fresh stopped client before updating.':'The connection has not confirmed a fresh stopped state.',
+    'Game update settlement is unavailable.':'The game could not be reached for update confirmation.',
+    'Update settlement expired.':'The game confirmation expired.',
+    'Update settlement changed.':'Game activity changed during update confirmation.',
+    'Login settlement changed.':'Sign-in activity changed during update confirmation.',
+    'Game settlement changed before replacement.':'Game activity changed before installation.',
+  };
+  const reason=typeof error==='string'&&Object.hasOwn(reasons,error)?reasons[error]:null;
+  const fallback={settings:'Current settings could not be saved. Check the settings form.',reserve:'The connection could not be prepared for update confirmation.',confirmation:'The game could not complete update confirmation.'};
+  return `Update deferred. ${reason??fallback[step]} It will retry automatically.`;
 }
 async function pollUpdate():Promise<void>{
   if(!native||!closeRegistered||closeBusy||closeStatus||updatePolling||updateBusy)return;updatePolling=true;
   try{
     const state=await invoke<{version:string;platform?:string;phase:string;message:string;availableVersion:string|null}>('update_status');
     element('client-version').textContent=`${({macos:'macOS',windows:'Windows',linux:'Linux'} as Record<string,string>)[state.platform??'']??'Desktop'} · v${state.version}`;if(closeBusy||closeStatus)return;element('update-status').textContent=state.message;
-    if(state.phase==='waiting'&&accountDraft()){element('update-status').textContent='Update waits for your account draft. Sign in or clear the draft first.';return;}
-    if(state.phase!=='waiting'||!mainSettledForUpdate())return;
+    if(state.phase!=='waiting')return;
+    const waiting=mainUpdateWaitReason();if(waiting){element('update-status').textContent=waiting;return;}
     updateBusy=true;updateSettled=new Promise(resolve=>{updateFinished=resolve;});updateButtons();if(saveTimer){clearTimeout(saveTimer);saveTimer=undefined;}
     let nonce:string|null=null;
+    let step:UpdateStep='settings';
     try{
+      element('update-status').textContent='Saving current settings before updating.';
       const document=await currentForm.flush();if(closeBusy)return;
+      step='reserve';element('update-status').textContent='Preparing the connection for update confirmation.';
       nonce=await invoke<string>('update_reserve',{document});if(closeBusy)return;
+      step='confirmation';element('update-status').textContent='Update waits for game confirmation that all actions have stopped. It will retry automatically.';
       for(let attempt=0;attempt<20;attempt++){
         if(await invoke<boolean>('update_install',{nonce}))break;
         await new Promise(resolve=>setTimeout(resolve,100));
       }
-    }catch{if(!closeStatus)element('update-status').textContent='Update deferred. Waiting for valid saved settings and settled game actions. Use the release download if needed.';}
+    }catch(error){if(!closeStatus)element('update-status').textContent=updateDeferredReason(step,error);}
     finally{if(nonce)await invoke('update_release',{nonce}).catch(()=>{});updateBusy=false;updateFinished();updateButtons();}
   }catch{element('update-status').textContent='Update check unavailable. It will retry automatically.';}
   finally{updatePolling=false;}
