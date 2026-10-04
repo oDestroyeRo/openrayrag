@@ -500,28 +500,52 @@ pub(crate) async fn update_install(
         c
     };
     // A committed lease continues blocking commands while window destruction finishes.
+    let mut retirement_owner = None;
     let result = async {
+        let retirement = {
+            // URL queries dispatch to the UI thread, whose commands may need
+            // SharedGate. Capture the mode first; retirement rechecks the lease
+            // generation and identity after acquiring the admission lock.
+            let mode = app
+                .get_webview_window("game")
+                .as_ref()
+                .map(crate::direct::window_mode)
+                .transpose()?;
+            let shared = app.state::<SharedGate>();
+            let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
+            app.state::<crate::direct::SharedDirect>()
+                .retire_for_update(&mut gate, &nonce, mode)?
+        };
+        retirement_owner = Some(retirement.owner());
+        let owner = retirement
+            .join(
+                app.state::<SharedGate>().inner(),
+                app.state::<crate::direct::SharedDirect>().inner(),
+            )
+            .await?;
         if let Some(game) = app.get_webview_window("game") {
+            {
+                let shared = app.state::<SharedGate>();
+                let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
+                app.state::<crate::direct::SharedDirect>()
+                    .request_game_close(&mut gate, &owner)?;
+            }
             game.destroy()
                 .map_err(|_| "Could not close the settled game.")?;
         }
         for _ in 0..40 {
-            if app.get_webview_window("game").is_none() {
+            let gate = app.state::<SharedGate>();
+            if app.get_webview_window("game").is_none()
+                && gate
+                    .lock()
+                    .map_err(|_| "Update state unavailable.")?
+                    .replacement_ready(&owner)
+            {
                 break;
             }
             tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(25)))
                 .await
                 .map_err(|_| "Window settlement unavailable.")?;
-        }
-        if app
-            .state::<SharedGate>()
-            .lock()
-            .map_err(|_| "Update state unavailable.")?
-            .lease
-            .as_ref()
-            .map_or(true, |l| l.invalidated)
-        {
-            return Err("Game settlement changed before replacement.".into());
         }
         if app.get_webview_window("game").is_some() {
             Err("Game window did not close; update deferred.".into())
@@ -530,7 +554,17 @@ pub(crate) async fn update_install(
                 u.status.phase = "installing".into();
                 u.status.message = "Installing the verified client update.".into();
             }
+            let install_app = app.clone();
             tauri::async_runtime::spawn_blocking(move || {
+                let shared = install_app.state::<SharedGate>();
+                let gate = shared.lock().map_err(|_| "Update state unavailable.")?;
+                if install_app.get_webview_window("game").is_some()
+                    || !install_app
+                        .state::<crate::direct::SharedDirect>()
+                        .replacement_ready(&gate, &owner)
+                {
+                    return Err("Game settlement changed before replacement.".into());
+                }
                 update_install::install(&candidate.bytes, &candidate.version)
             })
             .await
@@ -539,10 +573,15 @@ pub(crate) async fn update_install(
     }
     .await;
     if let Err(e) = result {
-        app.state::<SharedGate>()
-            .lock()
-            .map_err(|_| "Update state unavailable.")?
-            .lease = None;
+        {
+            let shared = app.state::<SharedGate>();
+            let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
+            if let Some(owner) = retirement_owner {
+                gate.release_retirement(&owner);
+            } else if gate.lease.as_ref().is_some_and(|l| l.nonce == nonce) {
+                gate.lease = None;
+            }
+        }
         if let Ok(mut u) = app.state::<SharedUpdate>().lock() {
             u.status.phase = "error".into();
             u.status.message = e.clone();

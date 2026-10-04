@@ -2,7 +2,7 @@
 use crate::{
     direct_wire,
     login::{ConnectionMode, LoginProfile, SharedLogin},
-    maintenance::{GameIdentity, Gate, SharedGate},
+    maintenance::{GameIdentity, GameRetirement, Gate, SharedGate},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
@@ -138,7 +138,75 @@ struct State {
 }
 #[derive(Default)]
 pub(crate) struct SharedDirect(Mutex<State>);
+pub(crate) struct UpdateRetirement {
+    owner: GameRetirement,
+    epoch: u64,
+    task: Option<JoinHandle<()>>,
+}
+impl UpdateRetirement {
+    pub(crate) fn owner(&self) -> GameRetirement {
+        self.owner.clone()
+    }
+    // The task may need SharedGate to finish. Never join it under either lock.
+    pub(crate) async fn join(
+        self,
+        gate: &SharedGate,
+        direct: &SharedDirect,
+    ) -> Result<GameRetirement, String> {
+        let joined = if let Some(task) = self.task {
+            match task.await {
+                Ok(()) => Ok(()),
+                Err(error) if error.is_cancelled() => Ok(()),
+                Err(_) => Err("Game transport retirement failed."),
+            }
+        } else {
+            Ok(())
+        };
+        let mut gate = gate.lock().map_err(|_| "Update state unavailable.")?;
+        let mut state = direct.0.lock().map_err(|_| "Transport unavailable.")?;
+        if state.joining == Some(self.epoch) {
+            state.joining = None;
+        }
+        joined?;
+        if state.epoch != self.epoch || !state.empty() {
+            return Err("Game transport changed during retirement.".into());
+        }
+        gate.transport_retired(&self.owner)?;
+        Ok(self.owner)
+    }
+}
 impl State {
+    fn push(&mut self, gate: &mut Gate, epoch: u64, event: Option<Event>) -> Result<(), String> {
+        let current = self
+            .current
+            .as_mut()
+            .filter(|c| c.epoch == epoch)
+            .ok_or("Connection replaced.")?;
+        mutate(gate);
+        if let Some(event) = event {
+            current.push_event(event)?;
+        }
+        Ok(())
+    }
+    fn empty(&self) -> bool {
+        self.connecting.is_none()
+            && self.joining.is_none()
+            && self.current.is_none()
+            && self.retired.is_none()
+    }
+    fn settled_for(&self, identity: &GameIdentity) -> bool {
+        self.connecting.is_none()
+            && self.joining.is_none()
+            && self.retired.is_none()
+            && self.current.as_ref().is_some_and(|c| {
+                SharedDirect::matches(c, &identity.session_id, &identity.connection_id)
+                    && c.connected
+                    && c.pending == 0
+                    && c.delivery.is_none()
+                    && c.queue.is_empty()
+                    && c.outgoing.capacity() == c.outgoing.max_capacity()
+            })
+    }
     fn reserve(&mut self) -> Result<(u64, Option<JoinHandle<()>>), String> {
         if self.current.is_some() || self.connecting.is_some() || self.joining.is_some() {
             return Err("Disconnect or reconnect before creating another transport.".into());
@@ -237,18 +305,70 @@ impl SharedDirect {
     }
     // Caller holds SharedGate, preventing retirement/frame/write admission from racing ACK.
     pub(crate) fn settled_for(&self, identity: &GameIdentity) -> bool {
-        self.0.lock().ok().is_some_and(|s| {
-            s.connecting.is_none()
-                && s.joining.is_none()
-                && s.retired.is_none()
-                && s.current.as_ref().is_some_and(|c| {
-                    Self::matches(c, &identity.session_id, &identity.connection_id)
-                        && c.connected
-                        && c.pending == 0
-                        && c.delivery.is_none()
-                        && c.queue.is_empty()
-                })
+        self.0.lock().ok().is_some_and(|s| s.settled_for(identity))
+    }
+    // Caller holds SharedGate, in the same order as ordinary cancellation and frames.
+    pub(crate) fn retire_for_update(
+        &self,
+        gate: &mut Gate,
+        nonce: &str,
+        mode: Option<ConnectionMode>,
+    ) -> Result<UpdateRetirement, String> {
+        let mut state = self.0.lock().map_err(|_| "Transport unavailable.")?;
+        let settled = match mode {
+            Some(ConnectionMode::BotOnly) => gate
+                .identity
+                .as_ref()
+                .is_some_and(|identity| state.settled_for(identity)),
+            Some(ConnectionMode::GameClient) | None => state.empty(),
+        };
+        if !settled {
+            return Err("Game transport is not settled for retirement.".into());
+        }
+        let owner = gate.begin_retirement(nonce, mode.is_some())?;
+        state.epoch = state.epoch.wrapping_add(1);
+        let task = state.current.take().and_then(|mut c| c.task.take());
+        if let Some(task) = &task {
+            state.joining = Some(state.epoch);
+            task.abort();
+        }
+        Ok(UpdateRetirement {
+            owner,
+            epoch: state.epoch,
+            task,
         })
+    }
+    pub(crate) fn replacement_ready(&self, gate: &Gate, owner: &GameRetirement) -> bool {
+        self.0
+            .lock()
+            .ok()
+            .is_some_and(|s| s.empty() && gate.replacement_ready(owner))
+    }
+    pub(crate) fn request_game_close(
+        &self,
+        gate: &mut Gate,
+        owner: &GameRetirement,
+    ) -> Result<(), String> {
+        if !self.0.lock().map_err(|_| "Transport unavailable.")?.empty() {
+            return Err("Game transport changed before close.".into());
+        }
+        gate.request_game_close(owner)
+    }
+    pub(crate) fn cancel_admitted(&self, gate: &mut Gate) {
+        if let Ok(mut state) = self.0.lock() {
+            mutate(gate);
+            state.cancel();
+        }
+    }
+    pub(crate) fn game_destroyed(&self, gate: &mut Gate) {
+        if let Ok(mut state) = self.0.lock() {
+            if state.empty() && gate.updater_game_destroyed() {
+                return;
+            }
+            mutate(gate);
+            state.cancel();
+        }
+        gate.game_closed();
     }
 }
 fn mutate(gate: &mut Gate) {
@@ -258,10 +378,7 @@ fn mutate(gate: &mut Gate) {
     }
 }
 pub(crate) fn cancel_admitted(app: &tauri::AppHandle, gate: &mut Gate) {
-    if let Ok(mut state) = app.state::<SharedDirect>().0.lock() {
-        mutate(gate);
-        state.cancel();
-    }
+    app.state::<SharedDirect>().cancel_admitted(gate);
 }
 pub(crate) fn cancel(app: &tauri::AppHandle) {
     if let Ok(mut gate) = app.state::<SharedGate>().lock() {
@@ -282,16 +399,7 @@ fn push(app: &tauri::AppHandle, epoch: u64, event: Option<Event>) -> Result<(), 
     let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
     let shared = app.state::<SharedDirect>();
     let mut state = shared.0.lock().map_err(|_| "Transport unavailable.")?;
-    let current = state
-        .current
-        .as_mut()
-        .filter(|c| c.epoch == epoch)
-        .ok_or("Connection replaced.")?;
-    mutate(&mut gate);
-    if let Some(event) = event {
-        current.push_event(event)?;
-    }
-    Ok(())
+    state.push(&mut gate, epoch, event)
 }
 fn incoming_capacity(app: &tauri::AppHandle, epoch: u64) -> Result<bool, String> {
     let shared = app.state::<SharedDirect>();
@@ -780,6 +888,267 @@ mod tests {
             delivery_sequence: 0,
             outgoing,
             task: None,
+        }
+    }
+    fn committed_gate(has_game: bool) -> SharedGate {
+        let shared = SharedGate::default();
+        {
+            let mut gate = shared.lock().unwrap();
+            gate.initialized = true;
+            gate.form_revision = Some(1);
+            gate.game_generation = 7;
+            if has_game {
+                gate.identity = Some(GameIdentity {
+                    session_id: "s".into(),
+                    connection_id: "c".into(),
+                });
+                gate.observed = Some(std::time::Instant::now());
+            }
+            gate.reserve("update".into(), 1, has_game).unwrap();
+            if let Some(identity) = gate.identity.clone() {
+                assert!(gate.acknowledge("update", identity.clone(), 3));
+                gate.lease.as_mut().unwrap().final_requested = true;
+                assert!(gate.final_ack("update", &identity, 3));
+            }
+            gate.commit("update").unwrap();
+        }
+        shared
+    }
+    #[tokio::test]
+    async fn updater_retirement_preserves_committed_game_client_and_startup_leases() {
+        for mode in [Some(ConnectionMode::GameClient), None] {
+            let shared = committed_gate(mode.is_some());
+            let direct = SharedDirect::default();
+            let retirement = direct
+                .retire_for_update(&mut shared.lock().unwrap(), "update", mode)
+                .unwrap();
+            let owner = retirement.owner();
+            assert!(!direct.replacement_ready(&shared.lock().unwrap(), &owner));
+            retirement.join(&shared, &direct).await.unwrap();
+            let mut gate = shared.lock().unwrap();
+            if mode.is_some() {
+                assert!(!direct.replacement_ready(&gate, &owner));
+                direct.request_game_close(&mut gate, &owner).unwrap();
+                // This is the same production helper called by game Destroyed.
+                direct.game_destroyed(&mut gate);
+            }
+            assert!(direct.replacement_ready(&gate, &owner));
+            assert!(!gate.lease.as_ref().unwrap().invalidated);
+            assert_eq!(gate.game_generation, 7);
+            assert_eq!(gate.revision, 0);
+            assert!(gate.admit().is_err());
+            // Ordinary cancellation still fences the committed empty transport.
+            direct.cancel_admitted(&mut gate);
+            assert!(gate.lease.as_ref().unwrap().invalidated);
+            assert!(!direct.replacement_ready(&gate, &owner));
+        }
+    }
+    #[tokio::test]
+    async fn updater_bot_retirement_joins_outside_locks_and_cannot_cancel_replacement() {
+        struct DropProof {
+            gate: Arc<SharedGate>,
+            direct: Arc<SharedDirect>,
+            stopped: Arc<AtomicBool>,
+        }
+        impl Drop for DropProof {
+            fn drop(&mut self) {
+                assert!(self.gate.try_lock().is_ok());
+                assert!(self.direct.0.try_lock().is_ok());
+                self.stopped.store(true, Ordering::SeqCst);
+            }
+        }
+        let shared = Arc::new(committed_gate(true));
+        let direct = Arc::new(SharedDirect::default());
+        let stopped = Arc::new(AtomicBool::new(false));
+        let proof = DropProof {
+            gate: shared.clone(),
+            direct: direct.clone(),
+            stopped: stopped.clone(),
+        };
+        let (started, ready) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _proof = proof;
+            started.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        ready.await.unwrap();
+        {
+            let mut state = direct.0.lock().unwrap();
+            state.epoch = 9;
+            state.current = Some(connection(9));
+            state.current.as_mut().unwrap().task = Some(task);
+        }
+        let retirement = direct
+            .retire_for_update(
+                &mut shared.lock().unwrap(),
+                "update",
+                Some(ConnectionMode::BotOnly),
+            )
+            .unwrap();
+        let owner = retirement.owner();
+        assert!(!direct.replacement_ready(&shared.lock().unwrap(), &owner));
+        assert!(direct.0.lock().unwrap().joining.is_some());
+        retirement.join(&shared, &direct).await.unwrap();
+        assert!(stopped.load(Ordering::SeqCst));
+        let mut gate = shared.lock().unwrap();
+        {
+            let mut state = direct.0.lock().unwrap();
+            assert!(!state.cancel_if_epoch(9));
+            assert!(state
+                .push(&mut gate, 9, Some(Event::Frame { bytes: vec![1] }))
+                .is_err());
+        }
+        direct.request_game_close(&mut gate, &owner).unwrap();
+        direct.game_destroyed(&mut gate);
+        assert!(direct.replacement_ready(&gate, &owner));
+        {
+            let mut state = direct.0.lock().unwrap();
+            state.epoch = 11;
+            state.current = Some(connection(11));
+            assert!(!state.cancel_if_epoch(9));
+        }
+        assert!(direct
+            .retire_for_update(&mut gate, "update", Some(ConnectionMode::BotOnly))
+            .is_err());
+        assert!(direct.request_game_close(&mut gate, &owner).is_err());
+        assert!(!direct.replacement_ready(&gate, &owner));
+        assert!(direct.0.lock().unwrap().current.as_ref().unwrap().connected);
+    }
+    #[tokio::test]
+    async fn cancellation_during_updater_join_cannot_revive_the_committed_lease() {
+        let shared = committed_gate(true);
+        let direct = SharedDirect::default();
+        {
+            let mut state = direct.0.lock().unwrap();
+            state.epoch = 1;
+            state.current = Some(connection(1));
+            state.current.as_mut().unwrap().task = Some(tokio::spawn(std::future::pending()));
+        }
+        let retirement = direct
+            .retire_for_update(
+                &mut shared.lock().unwrap(),
+                "update",
+                Some(ConnectionMode::BotOnly),
+            )
+            .unwrap();
+        let owner = retirement.owner();
+        direct.cancel_admitted(&mut shared.lock().unwrap());
+        assert!(retirement.join(&shared, &direct).await.is_err());
+        let mut gate = shared.lock().unwrap();
+        assert!(gate.lease.as_ref().unwrap().invalidated);
+        assert!(direct.0.lock().unwrap().empty());
+        assert!(direct.request_game_close(&mut gate, &owner).is_err());
+        assert!(!direct.replacement_ready(&gate, &owner));
+    }
+    #[tokio::test]
+    async fn updater_retirement_rejects_every_unsettled_native_owner() {
+        for blocker in 0..10 {
+            let shared = committed_gate(true);
+            let direct = SharedDirect::default();
+            let (outgoing, _receiver) = mpsc::channel(16);
+            {
+                let mut state = direct.0.lock().unwrap();
+                state.current = Some(connection(1));
+                match blocker {
+                    0 => state.connecting = Some(1),
+                    1 => state.joining = Some(1),
+                    2 => state.retired = Some(tokio::spawn(std::future::pending())),
+                    3 => state.current.as_mut().unwrap().pending = 1,
+                    4 => state.current.as_mut().unwrap().delivery = Some(1),
+                    5 => state
+                        .current
+                        .as_mut()
+                        .unwrap()
+                        .push_event(Event::ReadySent)
+                        .unwrap(),
+                    6 => state.current.as_mut().unwrap().connected = false,
+                    7 => state.current.as_mut().unwrap().session = "stale".into(),
+                    8 => {
+                        let (result, _) = oneshot::channel();
+                        outgoing
+                            .try_send(Outgoing {
+                                bytes: vec![1],
+                                result,
+                            })
+                            .unwrap();
+                        state.current.as_mut().unwrap().outgoing = outgoing;
+                    }
+                    _ => {}
+                }
+            }
+            let mode = if blocker == 9 {
+                ConnectionMode::GameClient
+            } else {
+                ConnectionMode::BotOnly
+            };
+            assert!(
+                direct
+                    .retire_for_update(&mut shared.lock().unwrap(), "update", Some(mode))
+                    .is_err(),
+                "blocker {blocker}"
+            );
+            let task = direct.0.lock().unwrap().retired.take();
+            if let Some(task) = task {
+                task.abort();
+                let _ = task.await;
+            }
+            assert!(direct.0.lock().unwrap().current.is_some());
+        }
+    }
+    #[tokio::test]
+    async fn stale_or_invalidated_retirement_never_owns_game_destruction() {
+        for change in 0..7 {
+            let shared = committed_gate(true);
+            let direct = SharedDirect::default();
+            assert!(direct
+                .retire_for_update(
+                    &mut shared.lock().unwrap(),
+                    "stale",
+                    Some(ConnectionMode::GameClient)
+                )
+                .is_err());
+            let retirement = direct
+                .retire_for_update(
+                    &mut shared.lock().unwrap(),
+                    "update",
+                    Some(ConnectionMode::GameClient),
+                )
+                .unwrap();
+            let owner = retirement.join(&shared, &direct).await.unwrap();
+            let mut gate = shared.lock().unwrap();
+            direct.request_game_close(&mut gate, &owner).unwrap();
+            match change {
+                0 => gate.lease.as_mut().unwrap().nonce = "other".into(),
+                1 => gate.game_generation += 1,
+                2 => gate.identity.as_mut().unwrap().connection_id = "replacement".into(),
+                3 => gate.revision += 1,
+                4 => gate.form_revision = Some(2),
+                5 => gate.invalidate("update"),
+                _ => direct.cancel_admitted(&mut gate), // User CloseRequested.
+            }
+            direct.game_destroyed(&mut gate);
+            assert!(gate.lease.as_ref().unwrap().invalidated);
+            assert_eq!(gate.identity, None);
+            assert!(!direct.replacement_ready(&gate, &owner));
+            assert!(gate.transport_retired(&owner).is_err());
+        }
+    }
+    #[tokio::test]
+    async fn unowned_close_and_native_frames_invalidate_committed_leases() {
+        let shared = committed_gate(true);
+        let direct = SharedDirect::default();
+        direct.game_destroyed(&mut shared.lock().unwrap());
+        assert!(shared.lock().unwrap().lease.as_ref().unwrap().invalidated);
+        for event in [Some(Event::Frame { bytes: vec![1] }), None] {
+            let shared = committed_gate(true);
+            let direct = SharedDirect::default();
+            direct.0.lock().unwrap().current = Some(connection(1));
+            let mut gate = shared.lock().unwrap();
+            direct.0.lock().unwrap().push(&mut gate, 1, event).unwrap();
+            assert!(gate.lease.as_ref().unwrap().invalidated);
+            assert!(direct
+                .retire_for_update(&mut gate, "update", Some(ConnectionMode::BotOnly))
+                .is_err());
         }
     }
     #[test]
