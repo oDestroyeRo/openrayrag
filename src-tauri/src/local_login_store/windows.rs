@@ -9,7 +9,7 @@ use std::{
         io::{AsRawHandle, FromRawHandle},
     },
     path::{Component, Prefix},
-    ptr::{null, null_mut},
+    ptr::{null, null_mut, NonNull},
 };
 use windows_sys::{
     Wdk::{
@@ -186,6 +186,41 @@ impl Drop for SecurityAllocation {
         }
     }
 }
+// SAFETY: non-null acl points into a live GetSecurityInfo allocation (or an
+// owned ACL buffer), and user is a validated SID retained by the caller.
+unsafe fn verify_owner_acl(acl: *mut ACL, user: PSID) -> io::Result<()> {
+    let acl = NonNull::new(acl).ok_or_else(invalid)?;
+    if IsValidAcl(acl.as_ptr()) == 0 {
+        return Err(invalid());
+    }
+    let acl_ref = acl.as_ref();
+    if acl_ref.AceCount != 1 {
+        return Err(invalid());
+    }
+    let mut ace = null_mut();
+    checked(GetAce(acl.as_ptr(), 0, &mut ace))?;
+    let ace = NonNull::new(ace).ok_or_else(invalid)?;
+    let header = ace.cast::<ACE_HEADER>().as_ref();
+    let sid_offset = offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+    // Check the ACE header and space for the SID header before taking a typed
+    // reference or calling SID APIs. IsValidAcl already bounds ACEs to the ACL.
+    if header.AceType != ACCESS_ALLOWED_ACE_TYPE as u8
+        || header.AceFlags & (INHERITED_ACE | INHERIT_ONLY_ACE) as u8 != 0
+        || (header.AceSize as usize) < sid_offset + offset_of!(SID, SubAuthority)
+    {
+        return Err(invalid());
+    }
+    let allowed = ace.cast::<ACCESS_ALLOWED_ACE>().as_ref();
+    let sid = (&allowed.SidStart as *const u32).cast_mut().cast();
+    if allowed.Mask != FILE_ALL_ACCESS
+        || IsValidSid(sid) == 0
+        || GetLengthSid(sid) as usize > header.AceSize as usize - sid_offset
+        || EqualSid(sid, user) == 0
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
 pub(crate) fn verify_private(file: &File, directory: bool) -> io::Result<()> {
     verify_kind(file, directory)?;
     let user = User::current()?;
@@ -209,35 +244,23 @@ pub(crate) fn verify_private(file: &File, directory: bool) -> io::Result<()> {
         return Err(io::Error::from_raw_os_error(result as i32));
     }
     let allocation = SecurityAllocation(descriptor);
+    let descriptor = NonNull::new(allocation.0).ok_or_else(invalid)?;
+    let owner = NonNull::new(owner).ok_or_else(invalid)?;
     let mut control = 0;
     let mut revision = 0;
     unsafe {
         checked(GetSecurityDescriptorControl(
-            allocation.0,
+            descriptor.as_ptr(),
             &mut control,
             &mut revision,
         ))?;
-        if owner.is_null()
-            || acl.is_null()
-            || EqualSid(owner, user.sid()) == 0
+        if IsValidSid(owner.as_ptr()) == 0
+            || EqualSid(owner.as_ptr(), user.sid()) == 0
             || control & SE_DACL_PROTECTED == 0
-            || (*acl).AceCount != 1
         {
             return Err(invalid());
         }
-        let mut ace = null_mut();
-        checked(GetAce(acl, 0, &mut ace))?;
-        let allowed = ace.cast::<ACCESS_ALLOWED_ACE>();
-        if (*allowed).Header.AceType != ACCESS_ALLOWED_ACE_TYPE as u8
-            || (*allowed).Header.AceFlags & (INHERITED_ACE | INHERIT_ONLY_ACE) as u8 != 0
-            || (*allowed).Mask != FILE_ALL_ACCESS
-            || EqualSid(
-                (&(*allowed).SidStart as *const u32).cast_mut().cast(),
-                user.sid(),
-            ) == 0
-        {
-            return Err(invalid());
-        }
+        verify_owner_acl(acl, user.sid())?;
     }
     Ok(())
 }
@@ -585,6 +608,55 @@ mod tests {
     use windows_sys::Win32::Security::Authorization::{
         ConvertStringSecurityDescriptorToSecurityDescriptorW, SetSecurityInfo,
     };
+    #[test]
+    fn owner_acl_rejects_null_and_malformed_entries_before_sid_comparison() {
+        let user = User::current().unwrap();
+        assert!(unsafe { verify_owner_acl(null_mut(), user.sid()) }.is_err());
+        for mutation in [
+            "revision",
+            "short_ace",
+            "truncated_sid",
+            "invalid_sid",
+            "type",
+            "flags",
+            "mask",
+            "count",
+        ] {
+            let mut descriptor = PrivateDescriptor::new(false).unwrap();
+            let acl = descriptor.acl.as_mut_ptr().cast::<ACL>();
+            let mut ace = null_mut();
+            checked(unsafe { GetAce(acl, 0, &mut ace) }).unwrap();
+            let mut allowed = NonNull::new(ace).unwrap().cast::<ACCESS_ALLOWED_ACE>();
+            unsafe {
+                let entry = allowed.as_mut();
+                match mutation {
+                    "revision" => (*acl).AclRevision = 0,
+                    "short_ace" => entry.Header.AceSize = size_of::<ACCESS_ALLOWED_ACE>() as u16,
+                    "truncated_sid" => entry.Header.AceSize = 16,
+                    "invalid_sid" => {
+                        NonNull::from(&mut entry.SidStart)
+                            .cast::<SID>()
+                            .as_mut()
+                            .SubAuthorityCount = u8::MAX
+                    }
+                    "type" => entry.Header.AceType = u8::MAX,
+                    "flags" => entry.Header.AceFlags = INHERITED_ACE as u8,
+                    "mask" => entry.Mask = FILE_GENERIC_READ,
+                    "count" => (*acl).AceCount = 0,
+                    _ => unreachable!(),
+                }
+                assert!(
+                    verify_owner_acl(acl, descriptor.user.sid()).is_err(),
+                    "{mutation}"
+                );
+            }
+        }
+        let mut descriptor = PrivateDescriptor::new(false).unwrap();
+        assert!(unsafe {
+            verify_owner_acl(descriptor.acl.as_mut_ptr().cast(), descriptor.user.sid())
+        }
+        .is_ok());
+    }
     // Keep numeric native errors in this synthetic test: public commands must
     // continue returning generic messages without paths or stored payloads.
     fn stage<T>(name: &str, result: io::Result<T>) -> T {

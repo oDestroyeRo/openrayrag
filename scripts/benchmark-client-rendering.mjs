@@ -4,6 +4,7 @@
 // --ref bundles src/ from that commit; omitted bundles the working tree. The
 // harness stays current, so the same workload runs against baseline and candidate.
 // No timing pass/fail gates: compare work counters, output parity and sample medians.
+// Explicit --output files must not already exist.
 import { build } from 'esbuild';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -14,6 +15,14 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
+export async function writeBenchmarkReport(report, requestedOutput) {
+  const output = requestedOutput ? resolve(requestedOutput)
+    : join(await mkdtemp(join(tmpdir(), 'rayrag-client-rendering-report-')), 'report.json');
+  await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  return output;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const options = new Map();
 for (let i = 2; i < process.argv.length; i += 2) {
@@ -24,7 +33,6 @@ const samples = Number(options.get('--samples') ?? 5), iterations = Number(optio
 if (![samples, iterations].every(n => Number.isInteger(n) && n > 0)) throw new Error('Samples and iterations must be positive integers.');
 const commit = execFileSync('git', ['rev-parse', '--verify', `${options.get('--ref') ?? 'HEAD'}^{commit}`], { cwd: root, encoding: 'utf8' }).trim();
 const chromePath = options.get('--chrome') ?? process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const output = resolve(options.get('--output') ?? join(tmpdir(), `rayrag-client-rendering-${Date.now()}.json`));
 const temporary = await mkdtemp(join(tmpdir(), 'rayrag-client-rendering-'));
 const sourceHashes = new Map();
 const harnessFiles = ['scripts/benchmark-client-rendering.mjs', 'scripts/client-rendering-fixture.ts', 'scripts/client-rendering-native.ts', 'package-lock.json'];
@@ -137,11 +145,12 @@ try {
       return { name: row.name, elapsedRatio: row.medianElapsedMs / old.medianElapsedMs, rendererTaskRatio: row.medianRendererTaskMs / old.medianRendererTaskMs, sameVisibleOutcome: true };
     });
   }
-  await writeFile(output, `${JSON.stringify(report, null, 2)}\n`);
+  const output = await writeBenchmarkReport(report, options.get('--output'));
   console.log(`Saved ${output}; ${report.probes.passed.length} behavior probes passed.`);
 } finally {
   cdp?.socket.close();
   if (chrome && chrome.exitCode === null) { chrome.kill('SIGTERM'); await Promise.race([new Promise(resolve => chrome.once('exit', resolve)), pause(5000)]); if (chrome.exitCode === null) chrome.kill('SIGKILL'); }
   if (server) await new Promise(resolve => server.close(resolve));
   await rm(temporary, { recursive: true, force: true });
+}
 }

@@ -1,10 +1,82 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, copyFile, readFile, rm } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { mkdtemp, mkdir, writeFile, copyFile, readFile, rm, open, symlink, rename, appendFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { APPIMAGE_RPATH, compareElfIdentity, compareDynamicIdentity, verifyAppImageExecutable } from './appimage-proof.mjs';
+import { APPIMAGE_RPATH, compareElfIdentity, compareDynamicIdentity, executableBytes, verifyAppImageExecutable } from './appimage-proof.mjs';
+
+const noFollow = typeof constants.O_NOFOLLOW === 'number' && constants.O_NOFOLLOW !== 0;
+
+test('executable reads fail closed when no-follow support is unavailable', { skip: noFollow }, async () => {
+  await assert.rejects(executableBytes('unused'), /no-follow file support/);
+});
+
+test('executable reads reject symlinks, nonregular files and oversized sparse files', { skip: !noFollow }, async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'rayrag-appimage-files-'));
+  try {
+    const regular = join(folder, 'regular'), linked = join(folder, 'linked'), oversized = join(folder, 'oversized');
+    await writeFile(regular, 'retained executable bytes');
+    await symlink(regular, linked);
+    assert.equal((await executableBytes(regular)).toString(), 'retained executable bytes');
+    await assert.rejects(executableBytes(linked), { code: 'ELOOP' });
+    await assert.rejects(executableBytes(folder), /bounded regular executable/);
+    const file = await open(oversized, 'wx');
+    try { await file.truncate(512 * 1024 * 1024 + 1); } finally { await file.close(); }
+    await assert.rejects(executableBytes(oversized), /bounded regular executable/);
+    const fifo = join(folder, 'fifo');
+    execFileSync('mkfifo', [fifo]);
+    await assert.rejects(executableBytes(fifo), /bounded regular executable/);
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
+test('executable reads retain the checked handle across pathname replacement', { skip: !noFollow }, async t => {
+  const folder = await mkdtemp(join(tmpdir(), 'rayrag-appimage-replace-'));
+  try {
+    const path = join(folder, 'executable');
+    await writeFile(path, 'checked bytes');
+    const file = await open(path, 'r'), prototype = Object.getPrototypeOf(file);
+    await file.close();
+    const stat = prototype.stat;
+    let replaced = false;
+    t.mock.method(prototype, 'stat', async function (...args) {
+      const result = await stat.apply(this, args);
+      if (!replaced) {
+        replaced = true;
+        await rename(path, join(folder, 'retained'));
+        await writeFile(path, 'redirected bytes');
+      }
+      return result;
+    });
+    assert.equal((await executableBytes(path)).toString(), 'checked bytes');
+    assert.equal((await executableBytes(path)).toString(), 'redirected bytes');
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
+test('executable reads bound concurrent growth and close the rejected handle', { skip: !noFollow }, async t => {
+  const folder = await mkdtemp(join(tmpdir(), 'rayrag-appimage-growth-'));
+  try {
+    const path = join(folder, 'executable');
+    await writeFile(path, 'checked bytes');
+    const file = await open(path, 'r'), prototype = Object.getPrototypeOf(file);
+    await file.close();
+    const stat = prototype.stat;
+    let closed = false;
+    t.mock.method(prototype, 'stat', async function (...args) {
+      const result = await stat.apply(this, args);
+      await appendFile(path, ' appended after inspection');
+      const close = this.close;
+      t.mock.method(this, 'close', async function (...args) {
+        closed = true;
+        return close.apply(this, args);
+      });
+      return result;
+    });
+    await assert.rejects(executableBytes(path), /size changed while reading/);
+    assert.equal(closed, true);
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
 
 function fixture({ patched = false, reorder = false, extra = false, relocateInterp = false, property = false, extendMetadata = false,
   metadataBelowOffset = false, mappedSectionTable = false } = {}) {
@@ -287,7 +359,7 @@ test('requires unchanged needed-library order, interpreter and exact relocatable
   ]) assert.throws(() => compareDynamicIdentity(dynamic, { ...dynamic, ...changed }), /differ/);
 });
 
-test('extracted executable must exactly match the post-Linuxdeploy staging hash', async () => {
+test('extracted executable must exactly match the post-Linuxdeploy staging hash', { skip: !noFollow }, async () => {
   const folder = await mkdtemp(join(tmpdir(), 'rayrag-appimage-hash-'));
   try {
     const original = join(folder, 'original'), staged = join(folder, 'staged'), extracted = join(folder, 'extracted');
