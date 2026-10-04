@@ -11,8 +11,14 @@ function setup() {
   const view: FeatureUi = Object.create(FeatureUi.prototype);
   const settings = vi.fn(() => ({ ...DEFAULT_SETTINGS, automation: view.read() }));
   let rows: Array<Record<string, unknown>> = [];
+  // This partial fixture skips construction; keep lazily mounted controls by reference.
+  const mountedInputs = new Map<string, ReturnType<typeof host.querySelector>>();
   Object.assign(view, {
     host, hooks: { settings },
+    settingInputs: { get: (path: string) => {
+      if (!mountedInputs.has(path)) mountedInputs.set(path, host.querySelector(`[data-setting="${path}"]`));
+      return mountedInputs.get(path);
+    } },
     editors: new Map([['attackStrategies', { read: () => structuredClone(rows), write: (value: typeof rows) => { rows = structuredClone(value); } }]]),
     dispositionEditor: { read: () => [], write: () => {} },
   });

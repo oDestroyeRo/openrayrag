@@ -4,6 +4,10 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Client rendering performance
+
+Issue [#117](https://github.com/oDestroyeRo/openrayrag/issues/117) records the renderer comparison. The real-main offline Chromium benchmark preserved text, 322 control states, HP/SP bars and map pixels across six workloads; repeated status/HP/movement replay used 60–66% less time, and unchanged statuses created 86% fewer elements. All 140 focused tests and full local checks passed: 3,525 frontend tests, 137 native tests with one optional public probe ignored, build/typechecking, Clippy and formatting, 83 Node helper tests with one Linux-specific skip, and eight Python release tests. Independent review found no blocking findings. See [client rendering performance](CLIENT_PERFORMANCE.md) for repeatable commands, source-bound measurements and memory/native/live proof limits.
+
 ### Run intent dispatch
 
 Issue [#115](https://github.com/oDestroyeRo/openrayrag/issues/115) tracks dispatch ownership in the main window. The Run intent dispatch module owns pending native requests, retirement and Stop compensation; existing field/reconnect policies retain run allowances. Immutable receipts recheck ownership when the window consumes a result. Game closure retires outcomes while outstanding requests continue to block update admission until they settle.

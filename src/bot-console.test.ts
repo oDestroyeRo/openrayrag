@@ -9,7 +9,9 @@ import type { Entity } from './protocol';
 
 class Node {
   children: Node[] = []; parent: Node | null = null; id = ''; className = ''; type = ''; disabled = false; hidden = false;
-  private text = ''; private selected = ''; width = 400; height = 400;
+  private text = ''; private selected = ''; private canvasWidth = 400; private canvasHeight = 400;
+  get width() { return this.canvasWidth; } set width(value: number) { this.canvasWidth = value; }
+  get height() { return this.canvasHeight; } set height(value: number) { this.canvasHeight = value; }
   style = { aspectRatio: '' }; attributes = new Map<string, string>(); classes = new Set<string>();
   classList = { toggle: (name: string, value: boolean) => value ? this.classes.add(name) : this.classes.delete(name) };
   listeners = new Map<string, Array<(event: { preventDefault(): void; clientX: number; clientY: number }) => void>>();
@@ -27,7 +29,8 @@ class Node {
   setAttribute(name: string, value: string): void { this.attributes.set(name, value); }
   addEventListener(name: string, listener: (event: { preventDefault(): void; clientX: number; clientY: number }) => void): void { this.listeners.set(name, [...this.listeners.get(name) ?? [], listener]); }
   getBoundingClientRect() { return { left: 50, top: 100, width: 800, height: 800 }; }
-  getContext() { return { createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) }), putImageData() {}, clearRect() {}, fillText() {}, drawImage() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {} }; }
+  readonly context = { createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) }), putImageData: vi.fn(), clearRect: vi.fn(), fillText: vi.fn(), drawImage: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), arc: vi.fn(), fill: vi.fn() };
+  getContext() { return this.context; }
   async emit(name: string, x = 0, y = 0): Promise<void> {
     for (const listener of this.listeners.get(name) ?? []) listener({ preventDefault() {}, clientX: x, clientY: y });
     for (let i = 0; i < 12; i++) await Promise.resolve();
@@ -41,7 +44,7 @@ const monster: Entity = { ...player, id: 2, kind: 1, classId: 4000, name: 'Porin
 function fixture() {
   vi.stubGlobal('document', { createElement: (tag: string) => new Node(tag) });
   const engine = new BotEngine(() => {}); engine.connect(true);
-  engine.receive([{ type: 'enter', id: 0, map: 'prt_fild08' }, { type: 'spawn', entity: player }, { type: 'spawn', entity: monster }, { type: 'inventory', items: [{ itemId: 501, bagId: 501, count: 3, type: 1 }, { itemId: 610, bagId: 610, count: 2, type: 1 }], equipment: Array(10).fill(0), ammoId: -1 }]);
+  engine.receive([{ type: 'enter', id: 0, map: 'prt_fild08' }, { type: 'spawn', entity: { ...player } }, { type: 'spawn', entity: { ...monster } }, { type: 'inventory', items: [{ itemId: 501, bagId: 501, count: 3, type: 1 }, { itemId: 610, bagId: 610, count: 2, type: 1 }], equipment: Array(10).fill(0), ammoId: -1 }]);
   const host = new Node('main');
   const ids = ['radar', 'console-walk-x', 'console-walk-y', 'console-item', 'console-use-item', 'console-walk-form', 'console-walk', 'console-action', 'console-item-info', 'console-item-result', 'console-latest-action', 'console-target-result', 'console-lock', 'console-loot-settings', 'console-item-tools', 'open', 'console-levels', 'console-weight', 'console-zeny', 'console-experience', 'console-base-experience', 'console-job-experience', 'console-stock-count', 'monster-list', 'console-drops', 'navigation-info'];
   for (const id of ids) { const node = new Node(id === 'radar' ? 'canvas' : id === 'console-item' ? 'select' : id === 'console-walk-x' || id === 'console-walk-y' ? 'input' : 'div'); node.id = id; host.append(node); }
@@ -104,6 +107,60 @@ describe('bot console map coordinates', () => {
 });
 
 describe('bot console inventory and monitoring', () => {
+  it('retains map pixels and backing dimensions for HP/metadata updates while always refreshing locks', () => {
+    const f = fixture(), canvas = f.get('radar'), context = canvas.context;
+    const width = vi.spyOn(canvas, 'width', 'set'), height = vi.spyOn(canvas, 'height', 'set');
+    context.drawImage.mockClear(); context.clearRect.mockClear();
+    const status = f.engine.snapshot(); status.player!.hp--;
+    status.navigation!.ready = false; status.navigation!.reachable = 17; status.navigation!.routeLength = 9;
+    f.view.render(status);
+    expect(context.drawImage).not.toHaveBeenCalled(); expect(context.clearRect).not.toHaveBeenCalled();
+    expect(width).not.toHaveBeenCalled(); expect(height).not.toHaveBeenCalled();
+    expect(f.get('navigation-info').textContent).toContain('17 reachable');
+    expect(f.get('navigation-info').textContent).toContain('9 route cells');
+    expect(f.get('navigation-info').textContent).toContain('outside verified safe ground');
+    f.view.lock(true, 'Automation owns controls.'); f.view.render(status);
+    expect(f.get('console-walk').disabled).toBe(true); expect(f.get('console-lock').textContent).toBe('Automation owns controls.');
+  });
+  it('redraws each changed overlay from exact copied coordinates, including in-place fractional edits', () => {
+    const f = fixture(), context = f.get('radar').context, status = f.engine.snapshot();
+    status.drops = [{ id: 99, itemId: 501, count: 1, x: origin.x, y: origin.y, isNew: true }];
+    f.view.render(status); context.drawImage.mockClear();
+    const changed = (edit: () => void) => { edit(); f.view.render(status); expect(context.drawImage).toHaveBeenCalledOnce(); context.drawImage.mockClear(); };
+    changed(() => { status.player!.x += .125; });
+    changed(() => { status.monsters[0]!.y += .25; });
+    changed(() => { status.drops[0]!.x += .5; });
+    changed(() => { status.navigation!.goal = { x: origin.x + 2, y: origin.y }; });
+    changed(() => { status.navigation!.route = [{ ...origin }, { x: origin.x + 1, y: origin.y }]; });
+    changed(() => { status.navigation!.route[1]!.y++; });
+    changed(() => { status.navigation!.leg = [{ ...origin }, { x: origin.x, y: origin.y + 1 }]; });
+    changed(() => { status.navigation!.leg[0]!.x++; });
+    status.monsters[0]!.hp--; status.drops[0]!.count++; f.view.render(status);
+    expect(context.drawImage).not.toHaveBeenCalled();
+    // Dead actors are still part of the existing radar projection.
+    status.monsters[0]!.dead = true; changed(() => { status.monsters[0]!.x++; });
+  });
+  it('restores map paint after unsupported maps, disconnect, context restoration and external resize', async () => {
+    const f = fixture(), canvas = f.get('radar'), context = canvas.context, status = f.engine.snapshot();
+    f.view.render({ ...status, map: 'unknown-map', navigation: null });
+    expect(f.get('navigation-info').textContent).toContain('Collision unavailable');
+    expect(context.fillText).toHaveBeenCalled();
+    f.view.render(null); expect(f.get('navigation-info').textContent).toContain('Connect a character');
+    context.drawImage.mockClear(); f.view.render(status); expect(context.drawImage).toHaveBeenCalledOnce();
+    context.drawImage.mockClear(); await canvas.emit('contextrestored'); expect(context.drawImage).toHaveBeenCalledOnce();
+    context.drawImage.mockClear(); canvas.width = 500; f.view.render(status);
+    expect(canvas.width).toBe(grid.width); expect(context.drawImage).toHaveBeenCalledOnce();
+  });
+  it('retains unchanged drop rows and detects count, item, coordinate, ordering and removal edits', () => {
+    const f = fixture(), status = f.engine.snapshot(), drops = f.get('console-drops');
+    status.drops = [{ id: 99, itemId: 501, count: 1, x: origin.x, y: origin.y, isNew: true }, { id: 100, itemId: 610, count: 2, x: origin.x + 1, y: origin.y, isNew: true }];
+    f.view.render(status); const first = drops.children[0]; f.view.render(structuredClone(status)); expect(drops.children[0]).toBe(first);
+    status.drops[0]!.count = 3; f.view.render(status); expect(drops.children[0]).not.toBe(first); expect(drops.children[0]!.textContent).toContain('× 3');
+    status.drops[0]!.itemId = 610; status.drops[0]!.x += .25; f.view.render(status); expect(drops.children[0]!.textContent).toContain(String(status.drops[0]!.x));
+    const texts = drops.children.map(row => row.textContent); status.drops.reverse(); f.view.render(status); expect(drops.children.map(row => row.textContent)).toEqual(texts.reverse());
+    status.drops = []; f.view.render(status); expect(drops.textContent).toBe('No drops observed.');
+    f.view.render(null); expect(drops.textContent).toBe('No drops observed.');
+  });
   it('keeps selection, coordinate drafts and focused action nodes through telemetry; never selects a default item', () => {
     const f = fixture(), selector = f.get('console-item'), attack = f.get('monster-list').all().find(node => node.tag === 'button');
     expect(selector.value).toBe(''); selector.value = '501'; f.get('console-walk-x').value = '123'; f.render();

@@ -1,6 +1,7 @@
 import { CurrentForm } from './current-form';
 import { SettingsClose, type CloseRequest } from './settings-close';
 import { BotConsole } from './bot-console';
+import { ActivityLog } from './activity-log';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { validateSettings, type Settings } from './settings';
@@ -27,6 +28,7 @@ element('update-download').addEventListener('click',event=>{
 const openButton = element<HTMLButtonElement>('open');
 const startButton = element<HTMLButtonElement>('start');
 const stopButton = element<HTMLButtonElement>('stop');
+const activityLog = new ActivityLog(element('log'));
 const native = isTauri();
 let closeRegistered=!native;
 let closeBusy=false;
@@ -226,8 +228,7 @@ function updateButtons(): void {
   element('console-setup-summary').textContent = dashboard.setup;
   element('client-account-label').textContent = latest?.connected && latest.compatible && latest.player ? 'Account' : 'Connect account';
   startButton.hidden = dashboard.state === 'RUNNING';
-  try { element('death-cap').textContent = clientDeathCap(form.snapshot().settings.automation?.respawn); }
-  catch { element('death-cap').textContent = '—'; }
+  element('death-cap').textContent = dashboardSettings ? clientDeathCap(dashboardSettings.automation?.respawn) : '—';
   if(!closeRegistered||closeBusy||updateBusy){botConsole.lock(true,closeBusy?'Saving current settings before closing.':!closeRegistered?'Preparing saved settings.':'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.lock(true,true,true);return;}
   form.refresh();
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
@@ -377,13 +378,7 @@ function render(s: GameStatus): void {
   element('target-label').textContent = s.target || 'No active target';
   message(reason,
     s.login.phase === 'failed' || s.connected && !s.compatible);
-  const list = element('log'); list.replaceChildren();
-  for (const entry of s.log.slice(0,50)) {
-    const li = document.createElement('li'); const time = document.createElement('time'); const text = document.createElement('span');
-    time.textContent = new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-    text.textContent = entry.text; li.append(time, text); list.append(li);
-  }
-  if (!list.childElementCount) { const empty=document.createElement('li'); empty.className='empty'; empty.textContent='No activity observed yet.'; list.append(empty); }
+  activityLog.render(s.log);
   botConsole.render(s); updateButtons(); resumeFieldRun(s);
 }
 if (!native) message('Browser preview · Launch the desktop app with npm run app:dev to connect.');
@@ -409,7 +404,7 @@ if (native) {
     element('character').title='No character connected'; element('location').title='Connect an account to load your character.';
     element('hp-text').textContent='— / —'; element('hp-bar').style.width='0%'; element('sp-text').textContent='— / —'; element('sp-bar').style.width='0%'; element('death-count').textContent='—';
     for (const id of ['attacks','kills','looted','nearby']) element(id).textContent='0'; element('map-label').textContent='WAITING'; element('target-label').textContent='No active target';
-    const empty=document.createElement('li'); empty.className='empty'; empty.textContent='Session activity will appear after connection.'; element('log').replaceChildren(empty);
+    activityLog.render([], 'Session activity will appear after connection.');
     message('Disconnected. Select an account and character to connect again.'); botConsole.render(null); updateButtons();
   });
   try {

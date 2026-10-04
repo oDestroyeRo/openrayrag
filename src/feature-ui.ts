@@ -233,6 +233,7 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
 }
 
 export class FeatureUi {
+  private readonly settingInputs = new Map<string, HTMLInputElement | HTMLSelectElement>();
   private readonly manualTargets:ManualTargetUi;
   private readonly panels = new Map<Section, HTMLElement>(); private readonly editors = new Map<string,RuleEditor>();
   private readonly profiles: ProfileStore; private readonly services: NpcServiceStore; private locked = false; private manualLocked = true; private serviceLocked = true;
@@ -320,6 +321,10 @@ export class FeatureUi {
     this.host.addEventListener('change', () => this.cancelRoutePreview());
     this.host.addEventListener('click', event => { if ((event.target as HTMLElement).closest('#stop, #start')) this.cancelRoutePreview(); });
     this.host.addEventListener('input',event => { this.cancelRoutePreview(); if ((event.target as HTMLElement).dataset.setting || (event.target as HTMLElement).id.startsWith('map-policy-')) this.hooks.changed(); });
+    for (const definitions of Object.values(fields)) for (const field of definitions) {
+      this.settingInputs.set(field.path, this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!);
+    }
+    this.settingInputs.set('disposition.maxSpend', this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!);
     this.write(DEFAULT_AUTOMATION);
   }
   private panel(section: Section): HTMLElement { return this.panels.get(section)!; }
@@ -430,9 +435,9 @@ export class FeatureUi {
   read(): AutomationSettings {
     const automation = structuredClone(DEFAULT_AUTOMATION) as unknown as Record<string,unknown>;
     automation.partyHeal={...DEFAULT_PARTY_HEAL};automation.retreat=structuredClone(DEFAULT_RETREAT);automation.mapPolicy=structuredClone(DEFAULT_MAP_POLICY);automation.disposition=structuredClone(DEFAULT_DISPOSITION);automation.supply=structuredClone(DEFAULT_SUPPLY);
-    object(automation.disposition).maxSpend=Number(this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!.value);
+    object(automation.disposition).maxSpend=Number(this.settingInputs.get('disposition.maxSpend')!.value);
     for (const definitions of Object.values(fields)) for (const field of definitions) {
-      const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
+      const input = this.settingInputs.get(field.path)!;
       setPath(automation,field.path,field.kind === 'checkbox' ? (input as HTMLInputElement).checked : field.kind === 'text' || field.options ? input.value : Number(input.value));
     }
     if(!this.partyHealPresent&&Object.entries(DEFAULT_PARTY_HEAL).every(([key,value])=>object(automation.partyHeal)[key]===value))delete automation.partyHeal;
@@ -456,7 +461,7 @@ export class FeatureUi {
     this.retreatPresent=Object.hasOwn(automation,'retreat');automation={...automation,retreat:automation.retreat??{...DEFAULT_RETREAT}};
     this.attackStrategiesPresent=Object.hasOwn(automation,'attackStrategies');
     for (const definitions of Object.values(fields)) for (const field of definitions) {
-      const input = this.host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-setting="${field.path}"]`)!;
+      const input = this.settingInputs.get(field.path)!;
       const value = getPath(automation,field.path);
       if (field.kind === 'checkbox') (input as HTMLInputElement).checked = value === true; else input.value = String(value ?? (field.path==='follow.mode'?'name':''));
     }
@@ -465,7 +470,7 @@ export class FeatureUi {
     this.host.querySelector<HTMLInputElement>('#map-policy-area')!.checked=mp.lockArea!==null;
     for(const key of ['map','minX','minY','maxX','maxY'] as const)this.host.querySelector<HTMLInputElement>(`#map-policy-${key}`)!.value=String(mp.lockArea?.[key]??(key==='map'?'':0));
     const policy=automation.disposition??DEFAULT_DISPOSITION;
-    this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!.value=String(policy.maxSpend);
+    this.settingInputs.get('disposition.maxSpend')!.value=String(policy.maxSpend);
     this.dispositionEditor.write(policy.rules.map(row=>({...row,store:row.store?'1':'0',cart:row.cart?'1':'0',sell:row.sell?'1':'0',allowUnique:row.allowUnique?'1':'0'})));
     this.dispositionPlan=null;this.dispositionOutput().textContent='No preview generated. No items will be moved or sold.';this.syncFollowMode();
   }
