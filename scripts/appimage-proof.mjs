@@ -267,11 +267,18 @@ function validateMetadataLoad(elf, program, moved) {
     'ELF relocated metadata LOAD permissions or mapping differ.');
   const sections = moved.filter(section => mappedBy(section, program)).sort((a, b) => a.offset - b.offset);
   requireValue(sections.length > 0, 'ELF new LOAD contains no relocated metadata.');
+  const spans = sections.map(section => ({ offset: section.offset, size: section.size }));
+  // Bundled Patchelf may place the actual section/program header table before
+  // the relocated sections. These are the already parsed linker tables, not
+  // an arbitrary unallocated payload.
+  for (const [offset, size] of [[elf.table, elf.sections.length * 64], [elf.phOffset, elf.phSize]])
+    if (offset >= program.offset && offset + size <= program.offset + program.fileSize) spans.push({ offset, size });
+  spans.sort((a, b) => a.offset - b.offset);
   let cursor = program.offset;
-  for (const section of sections) {
-    requireValue(section.offset === cursor && relocatable(section), 'ELF new LOAD contains unexpected mapped data.');
-    cursor += Number(roundUp(BigInt(section.size), 8n));
-    requireValue(elf.bytes.subarray(section.offset + section.size, cursor).every(byte => byte === 0),
+  for (const span of spans) {
+    requireValue(span.offset === cursor, 'ELF new LOAD contains unexpected mapped data.');
+    cursor += Number(roundUp(BigInt(span.size), 8n));
+    requireValue(elf.bytes.subarray(span.offset + span.size, cursor).every(byte => byte === 0),
       'ELF metadata LOAD padding differs.');
   }
   requireValue(cursor === program.offset + program.fileSize, 'ELF metadata LOAD extent differs.');
@@ -370,15 +377,14 @@ function compareProgramMappings(original, deployed) {
     // LOAD. Existing executable/data mappings remain byte-for-byte equivalent.
     // https://github.com/NixOS/patchelf/blob/0.18.0/src/patchelf.cc#L729-L827
     requireValue(original.bytes.readUInt16LE(16) === 3, 'Unsupported executable metadata LOAD relocation.');
-    const alignment = original.programs.reduce((value, program) => program.alignment > value ? program.alignment : value, 4096n);
-    const endAddress = original.programs.reduce((value, program) => {
-      const end = program.address + BigInt(program.memorySize); return end > value ? end : value;
-    }, 0n);
-    const offset = roundUp(BigInt(original.bytes.length), 4096n);
-    const address = roundUp(endAddress, alignment) > offset ? roundUp(endAddress, alignment) : offset;
-    requireValue(extra[0].offset === Number(offset) && extra[0].address === address && extra[0].alignment === alignment,
+    const added = extra[0], page = 4096n;
+    const pageStart = added.address / page * page, pageEnd = roundUp(added.address + BigInt(added.memorySize), page);
+    requireValue(added.offset >= original.bytes.length && added.alignment >= page
+      && added.address % page === BigInt(added.offset) % page
+      && before.every(program => pageEnd <= program.address / page * page
+        || pageStart >= roundUp(program.address + BigInt(program.memorySize), page)),
       'ELF relocated metadata LOAD placement differs.');
-    validateMetadataLoad(deployed, extra[0], moved);
+    validateMetadataLoad(deployed, added, moved);
   }
   const leftHeaders = canonicalHeaders(original), rightHeaders = canonicalHeaders(deployed, original);
   requireValue(leftHeaders.length === rightHeaders.length && leftHeaders.every((header, index) => header === rightHeaders[index]),
