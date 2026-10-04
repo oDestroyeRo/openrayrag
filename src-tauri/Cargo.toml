@@ -25,7 +25,7 @@ libc = "=0.2.189"
 tauri-plugin-updater = { version = "=2.13.1", default-features = false, features = ["rustls-tls"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
-base64 = "0.22"
+base64 = "0.23"
 minisign-verify = "0.3"
 semver = "1"
 tempfile = "3"
