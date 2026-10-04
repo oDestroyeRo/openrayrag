@@ -709,14 +709,14 @@ test("GitHub adapter peels annotated tags instead of trusting target_commitish",
     global.fetch = original;
   }
 });
-test("workflow pins actions, separates signing from PR checks and queues every publisher", async () => {
+test("workflow uses versioned actions, separates signing from PR checks and queues every publisher", async () => {
   const source = await readFile(
     new URL("../.github/workflows/release.yml", import.meta.url),
     "utf8",
   );
   assert.equal(
     [...source.matchAll(/uses: [^\n]+@([^\s]+)/g)].every((m) =>
-      /^[a-f0-9]{40}$/.test(m[1]),
+      /^v\d+\.\d+\.\d+$/.test(m[1]),
     ),
     true,
   );
@@ -742,10 +742,10 @@ test("workflow pins actions, separates signing from PR checks and queues every p
     source.indexOf("  reconcile:"),
   );
   assert.match(gate, /name: CI \/ required/);
-  assert.match(gate, /needs: quality/);
+  assert.match(gate, /needs: \[quality, security\]/);
   assert.match(gate, /if: always\(\)/);
   assert.match(gate, /QUALITY_RESULT: \$\{\{ needs\.quality\.result \}\}/);
-  assert.match(gate, /test "\$QUALITY_RESULT" = success/);
+  assert.match(gate, /test "\$QUALITY_RESULT" = success && test "\$SECURITY_RESULT" = success/);
   assert.match(source, /release-platforms:/);
   assert.match(source, /needs: \[reconcile, release-platforms\]/);
   assert.match(source, /path: platform-bundles\/windows/);

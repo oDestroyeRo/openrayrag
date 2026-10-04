@@ -1,6 +1,6 @@
 # Desktop CI
 
-Pull requests into `main`, merge-queue candidates and main pushes run the same three native lanes. `CI / required` always executes and passes only when the whole matrix succeeds. Main branch protection requires that check and an up-to-date pull request; force pushes and deletion are blocked. No path filter permits a change to bypass verification.
+Pull requests into `main`, merge-queue candidates and main pushes run the same three native lanes. `CI / required` always executes and passes only when the whole platform matrix and reusable security workflow succeed. Main branch protection requires that check and an up-to-date pull request; force pushes and deletion are blocked. No path filter permits a change to bypass verification.
 
 | Platform | Runner / target | Packages |
 | --- | --- | --- |
@@ -15,6 +15,20 @@ The startup smoke uses the real packaged executable, native IPC and WebView. It 
 Only trusted `main` jobs can reach the release environment/signing key or write releases. Windows/Linux production packages carry source/run-bound build receipts, and the macOS publisher validates and publishes one immutable nine-file bundle. Legacy six-file macOS releases remain verifiable. See [release contracts](RELEASES.md). Windows/Linux currently use manual installers; automated updates remain Apple Silicon macOS only.
 
 A green gate proves the automated contracts and packaged startup checks. It cannot guarantee every live game action, every server/map change or every installed desktop configuration. CI deliberately has no game account credentials. Feature changes must add behavior-focused regression proof; live with-game-client and bot-only verification remains separate and is recorded in [feature verification](LOCAL_FEATURE_VERIFICATION.md).
+
+## Native GitHub security
+
+The reusable `security.yml` runs on every desktop PR, merge-group candidate and main push, with no path filters or inherited release secrets. It also runs every calendar day at 09:37 Bangkok time (02:37 UTC) and can be dispatched manually. CodeQL analyzes TypeScript/JavaScript, Rust, Python release scripts and GitHub Actions using the extended security query suite. Rust extraction uses the tested toolchain, Linux desktop prerequisites and freshly generated bridge; CodeQL's `none` build mode can still execute Cargo build scripts and procedural macros.
+
+Dependency review compares PR base/head commits or merge-group base/head commits. It blocks new high/critical vulnerabilities across runtime, development and unknown scopes, including both npm and Cargo lockfiles. It needs no PR comment write access. `Security / required` rejects failed, cancelled or unexpectedly skipped applicable jobs, and `CI / required` includes that result before signing/publication. Scanner success establishes completion/upload, not an absence of findings. GitHub's separate CodeQL merge-protection ruleset blocks newly introduced high/critical security alerts and errors on `main`; the rule is activated after the first main analysis is available. Native ruleset protection does not apply to merge queue groups, although the scan execution and dependency-review checks still run there.
+
+Dependabot checks npm `/`, Cargo `/src-tauri` and GitHub Actions `/` at 09:17 Bangkok time every calendar day. Explicit cron schedules include weekends (`daily` only means weekdays). Minor/patch version updates are grouped by ecosystem; major and security fixes remain separate reviewed PRs, subject to the same desktop and security gate. No dependency PR is automatically merged. Merge Dependabot PRs with a merge commit: [Dependabot-authored squash commits can receive read-only tokens](https://docs.github.com/en/code-security/reference/code-scanning/troubleshoot-analysis-errors/resource-not-accessible) on main and fail CodeQL uploads. Existing application/toolchain pins stay reproducible until deliberately updated and validated.
+
+Repository settings enable Dependabot alerts and automatic security-fix PRs, secret scanning and secret push protection. These native features are settings outside YAML and should be checked after repository transfers or policy changes. Alerts and scan details are available in the repository's [Security tab](https://github.com/oDestroyeRo/openrayrag/security). GitHub's native scanners cover this source/dependency task, so there is no duplicate Semgrep/Trivy service or extra scan credential.
+
+Actions use full stable version tags verified against upstream releases, maintained by Dependabot. This intentionally follows the requested tag policy; tags remain mutable. Credential-free exact-commit checkout, minimal job permissions, trusted-main-only Rust cache writes, explicit ZIP artifacts, bounded timeouts and serialized publication retain the existing release boundaries. Superseded PR platform jobs are cancelled; main release runs remain independent.
+
+Primary guidance: [Dependabot options](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference), [dependency review action](https://github.com/actions/dependency-review-action), [CodeQL language support](https://codeql.github.com/docs/codeql-overview/supported-languages-and-frameworks/), [Rust extraction](https://docs.github.com/en/code-security/reference/code-scanning/codeql/build-options-for-compiled-languages), [merge protection](https://docs.github.com/en/code-security/concepts/code-scanning/merge-protection), [secret scanning](https://docs.github.com/en/code-security/concepts/secret-security/secret-scanning).
 
 Local checks:
 
