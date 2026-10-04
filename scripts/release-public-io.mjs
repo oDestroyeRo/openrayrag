@@ -2,7 +2,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { chmod, mkdtemp, open, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 
 export const REPOSITORY = "oDestroyeRo/openrayrag";
 export const MAX_METADATA = 16 * 1024 * 1024;
@@ -55,6 +55,15 @@ export function runReadOnly(command, args, options = {}) {
     // Child stderr can contain environment/configuration data. Keep it private.
     throw new Error(`${command} verification command failed (exit ${error.status ?? "unavailable"}).`);
   }
+}
+
+export function npmInstallCommand(environment = process.env, platform = process.platform) {
+  const path = platform === "win32" ? win32 : posix;
+  const cli = environment.npm_execpath;
+  requireValue(typeof cli === "string" && path.isAbsolute(cli) && path.basename(cli) === "npm-cli.js",
+    "Run verification through npm run release:verify.");
+  // Use the launching npm's JavaScript entry point, including on Windows.
+  return { file: process.execPath, args: [cli, "ci", "--ignore-scripts", "--no-audit", "--no-fund"] };
 }
 
 export function githubMetadata(repository = REPOSITORY, execute = runReadOnly) {

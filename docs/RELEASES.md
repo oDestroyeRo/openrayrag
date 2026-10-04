@@ -89,7 +89,7 @@ For cross-file release review and a single hosted monitoring owner, see [release
 
 Secret-free smoke builds retain verbose Tauri packaging output in `reports/package-<platform>.log`; production signing builds keep their existing output behavior. No signing inputs are admitted to diagnostic capture.
 
-`npm run release:verify -- --help` describes the read-only public proof command. Supply explicit source SHA, tag and optional workflow identity. Its report distinguishes authenticated metadata from anonymous public downloads, source/ledger reconstruction, signature/container/Actions ZIP proof and unrun native or GUI checks. Verifying an immutable ancestor release does not require it to be current main; request the latest-feed check explicitly.
+`npm run release:verify -- --help` describes the read-only public proof command. Launch it through npm so isolated source dependencies use that npm's JavaScript entry point on every platform. Supply explicit source SHA, tag and optional workflow identity. Its report distinguishes authenticated metadata from anonymous public downloads, source/ledger reconstruction, signature/container/Actions ZIP proof and unrun native or GUI checks. Verifying an immutable ancestor release does not require it to be current main; request the latest-feed check explicitly.
 
 ```sh
 npm run release:verify -- --source <40-character-sha> --tag <vX.Y.Z> --run-id <id> --run-attempt <attempt> --latest

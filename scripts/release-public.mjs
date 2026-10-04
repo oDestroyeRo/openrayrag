@@ -3,13 +3,13 @@ import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   REPOSITORY, requireValue, createReportDirectory, privateWriter,
-  githubMetadata, anonymousBytes, downloadActionsZip, privateEnvironment, runReadOnly,
+  githubMetadata, anonymousBytes, downloadActionsZip, privateEnvironment, runReadOnly, npmInstallCommand,
 } from "./release-public-io.mjs";
 import { peelTag, verifySource } from "./release-public-source.mjs";
 
 const MAX_PUBLIC_TOTAL = 512 * 1024 * 1024;
 const MAX_PUBLICATION_ATTEMPTS = 20;
-export const HELP = `Usage: node scripts/release-public.mjs --source <40-character SHA> --tag <vX.Y.Z>
+export const HELP = `Usage: npm run release:verify -- --source <40-character SHA> --tag <vX.Y.Z>
   [--repo oDestroyeRo/openrayrag] [--run-id <ID>] [--run-attempt <attempt>]
   [--latest] [--skip-native]
 
@@ -223,6 +223,7 @@ export async function verifyPublishedRelease(options, io) {
 export async function main(args = process.argv.slice(2)) {
   const options = parseOptions(args);
   if (options.help) { console.log(HELP); return; }
+  npmInstallCommand(); // Reject a missing npm launch context before downloads or writes.
   requireValue(options.skipNative || process.platform === "darwin", "macOS container verification requires macOS; use --skip-native to record that gap.");
   const folder = await createReportDirectory();
   console.log(`Evidence directory: ${folder}`);

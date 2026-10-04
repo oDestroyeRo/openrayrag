@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   REPOSITORY, anonymousBytes, githubMetadata, privateWriter, privateEnvironment,
-  createReportDirectory, downloadActionsZip, runReadOnly,
+  createReportDirectory, downloadActionsZip, runReadOnly, npmInstallCommand,
 } from "./release-public-io.mjs";
 import { parseOptions, releaseSnapshot, verifyPublishedRelease, publicationEvidence } from "./release-public.mjs";
 import { peelTag, commitsBetween, verifySource } from "./release-public-source.mjs";
@@ -25,6 +25,25 @@ test("read-only process execution keeps metacharacters literal even when a calle
     ["-e", "process.stdout.write(process.argv.at(-1))", "--", literal],
     { shell: true });
   assert.equal(output.toString("utf8"), literal);
+});
+
+test("source dependency installation uses the launching npm CLI without a command shell", () => {
+  for (const [platform, cli] of [["win32", "C:\\Program Files\\Node & Tools\\node_modules\\npm\\bin\\npm-cli.js"], ["darwin", "/opt/node & tools/npm/bin/npm-cli.js"]]) {
+    const command = npmInstallCommand({ npm_execpath: cli }, platform);
+    assert.equal(command.file, process.execPath);
+    assert.deepEqual(command.args, [cli, "ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
+  }
+  for (const cli of [undefined, "npm.cmd", "relative/npm-cli.js", "/tmp/npx-cli.js"])
+    assert.throws(() => npmInstallCommand({ npm_execpath: cli }, "darwin"), /npm run release:verify/);
+});
+
+test("CLI rejects missing npm launch context before creating evidence or downloading", () => {
+  const env = { ...process.env };
+  delete env.npm_execpath;
+  assert.throws(() => execFileSync(process.execPath,
+    [fileURLToPath(new URL("./release-public.mjs", import.meta.url)), "--source", sourceSha, "--tag", "v1.8.4", "--skip-native"],
+    { env, stdio: ["ignore", "pipe", "pipe"] }), error =>
+    error.status === 1 && error.stdout.length === 0 && /npm run release:verify/.test(error.stderr.toString("utf8")));
 });
 
 test("CLI accepts dynamic canonical source/tag/run inputs and makes latest opt-in", () => {

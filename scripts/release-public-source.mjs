@@ -3,7 +3,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { REPOSITORY, privateEnvironment, requireValue, runReadOnly } from "./release-public-io.mjs";
+import { REPOSITORY, privateEnvironment, requireValue, runReadOnly, npmInstallCommand } from "./release-public-io.mjs";
 
 const SOURCE_FILES = [
   "scripts/release-core.mjs", "scripts/release-native.py",
@@ -40,10 +40,8 @@ export async function loadSourceValidators(folder, sourceSha, git) {
     await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
     await writeFile(destination, git(["show", `${sourceSha}:${name}`]), { flag: "wx", mode: 0o600 });
   }
-  // Windows npm is a command shim. Keep its shell text constant rather than
-  // interpolating paths or release inputs into a shell command.
-  runReadOnly(process.platform === "win32" ? "cmd.exe" : "npm",
-    process.platform === "win32" ? ["/d", "/s", "/c", "npm ci --ignore-scripts --no-audit --no-fund"] : ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], {
+  const npm = npmInstallCommand();
+  runReadOnly(npm.file, npm.args, {
     cwd: join(folder, "tools/release"), env: privateEnvironment(dirname(folder)),
   });
   const [core, planner, reservations, tags] = await Promise.all([
