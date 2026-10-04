@@ -48,7 +48,8 @@ export function runReadOnly(command, args, options = {}) {
   try {
     return execFileSync(command, args, {
       stdio: ["ignore", "pipe", "pipe"], timeout: 180_000,
-      maxBuffer: MAX_METADATA, ...options,
+      // Callers may adjust env/cwd/timeout, but cannot enable shell evaluation.
+      maxBuffer: MAX_METADATA, ...options, shell: false,
     });
   } catch (error) {
     // Child stderr can contain environment/configuration data. Keep it private.

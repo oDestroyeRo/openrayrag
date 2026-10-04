@@ -85,7 +85,7 @@ npm run check
 
 The same source-check entry point runs locally and in every native CI lane. It installs the isolated policy tools, type-checks the release entry point and its dependency graph, verifies the GLib backport, discovers script tests, builds/tests the frontend, tests and lints default/CI Rust features (including test targets), and checks formatting. Optimized GLib iterator tests run on Linux; macOS container tests run on macOS. `npm run check -- --plan` shows the exact platform plan without running it. Bounded diagnostic reports remain in `reports/`, including failures. Installer builds and save/reopen smoke remain separate CI lanes.
 
-For cross-file release review and a single hosted monitoring owner, see [release review](agents/release-review.md). `npm run ci:status -- <run-id> --sha <source-sha> --watch` prints only changed status snapshots; `--failed-log <job-id>` saves a completed failed job's log privately even when the run is still active.
+For cross-file release review and a single hosted monitoring owner, see [release review](agents/release-review.md). `npm run ci:status -- <run-id> --sha <source-sha> --pr <number> --watch` prints only changed status snapshots and includes merge-policy checks outside the workflow. Omit `--pr` for main runs. `--failed-log <job-id>` saves a completed failed job's log privately even when the run is still active.
 
 Secret-free smoke builds retain verbose Tauri packaging output in `reports/package-<platform>.log`; production signing builds keep their existing output behavior. No signing inputs are admitted to diagnostic capture.
 

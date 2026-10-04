@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   REPOSITORY, anonymousBytes, githubMetadata, privateWriter, privateEnvironment,
-  createReportDirectory, downloadActionsZip,
+  createReportDirectory, downloadActionsZip, runReadOnly,
 } from "./release-public-io.mjs";
 import { parseOptions, releaseSnapshot, verifyPublishedRelease, publicationEvidence } from "./release-public.mjs";
 import { peelTag, commitsBetween, verifySource } from "./release-public-source.mjs";
@@ -18,6 +18,14 @@ import { Readable } from "node:stream";
 const sha = value => createHash("sha256").update(value).digest("hex");
 const sourceSha = "a".repeat(40);
 const options = () => parseOptions(["--source", sourceSha, "--tag", "v1.8.4", "--skip-native"]);
+
+test("read-only process execution keeps metacharacters literal even when a caller requests a shell", () => {
+  const literal = "-n spaces & | ; $(printf should-not-run)";
+  const output = runReadOnly(process.execPath,
+    ["-e", "process.stdout.write(process.argv.at(-1))", "--", literal],
+    { shell: true });
+  assert.equal(output.toString("utf8"), literal);
+});
 
 test("CLI accepts dynamic canonical source/tag/run inputs and makes latest opt-in", () => {
   assert.equal(options().latest, false);

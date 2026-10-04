@@ -20,6 +20,21 @@ export async function readApi(path, binary = false, execute = exec) {
   return binary ? stdout : JSON.parse(stdout);
 }
 
+export async function pullRequestStatus(number, expectedSha, execute = exec) {
+  const { stdout } = await execute('gh', ['pr', 'view', id(number), '--repo', repository, '--json', 'headRefOid,state,mergeStateStatus,reviewDecision,statusCheckRollup'], {
+    encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: 60_000, windowsHide: true, shell: false,
+  });
+  const result = JSON.parse(stdout);
+  requireValue(result.headRefOid === expectedSha, 'Pull request head differs from the workflow source.');
+  requireValue(Array.isArray(result.statusCheckRollup) && typeof result.mergeStateStatus === 'string', 'Missing pull request check metadata.');
+  const checks = result.statusCheckRollup.map(check => ({
+    name: check.name ?? check.context,
+    status: check.status?.toLowerCase() ?? (['PENDING', 'EXPECTED'].includes(check.state) ? 'pending' : 'completed'),
+    conclusion: check.conclusion?.toLowerCase() ?? (check.state === 'SUCCESS' ? 'success' : check.state === 'FAILURE' || check.state === 'ERROR' ? 'failure' : null),
+  })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return { number: id(number), state: result.state, mergeState: result.mergeStateStatus, reviewDecision: result.reviewDecision ?? null, checks };
+}
+
 export async function snapshot(runId, read = readApi, expectedSha) {
   runId = id(runId);
   const run = await read(`actions/runs/${runId}`);
@@ -70,21 +85,24 @@ export function parseOptions(args) {
       requireValue(/^[a-f0-9]{40}$/.test(sha ?? ''), 'Expected a complete source SHA.');
       options.expectedSha = sha;
     } else if (flag === '--failed-log' && !options.jobId) options.jobId = id(args[++index]);
-    else throw new Error('Usage: npm run ci:status -- <run-id> [--sha <source-sha>] [--watch | --failed-log <job-id>]');
+    else if (flag === '--pr' && !options.pullRequest) options.pullRequest = id(args[++index]);
+    else throw new Error('Usage: npm run ci:status -- <run-id> [--sha <source-sha>] [--pr <number>] [--watch | --failed-log <job-id>]');
   }
   requireValue(!(options.watch && options.jobId), 'Download one failed log from a snapshot, or watch status changes.');
   return options;
 }
 
-export async function watchRun(options, { read = readApi, output = console.log, wait = milliseconds => new Promise(done => setTimeout(done, milliseconds)), maxSnapshots = 160 } = {}) {
+export async function watchRun(options, { read = readApi, readPullRequest = pullRequestStatus, output = console.log, wait = milliseconds => new Promise(done => setTimeout(done, milliseconds)), maxSnapshots = 160 } = {}) {
   let previous;
   for (let index = 0; index < maxSnapshots; index++) {
     const state = await snapshot(options.runId, read, options.expectedSha);
+    if (options.pullRequest) state.pullRequest = await readPullRequest(options.pullRequest, state.sourceSha);
     const encoded = JSON.stringify(state);
     if (encoded !== previous) output(encoded);
     previous = encoded;
     if (options.jobId) output(JSON.stringify(await saveFailedLog(state, options.jobId, read)));
-    if (!options.watch || state.status === 'completed') return state;
+    const pendingPolicy = state.pullRequest && (state.pullRequest.mergeState === 'UNKNOWN' || state.pullRequest.checks.some(check => check.status !== 'completed'));
+    if (!options.watch || (state.status === 'completed' && !pendingPolicy)) return state;
     await wait(45_000);
   }
   throw new Error('Watch reached its two-hour bound; take a fresh snapshot to continue.');
@@ -92,9 +110,9 @@ export async function watchRun(options, { read = readApi, output = console.log, 
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const options = parseOptions(process.argv.slice(2));
-  if (options.help) console.log('npm run ci:status -- <run-id> [--sha <source-sha>] [--watch | --failed-log <job-id>]\nRead-only metadata. Watch polls every 45 seconds and prints changes. Failed logs are saved privately, including when other jobs still run.');
+  if (options.help) console.log('npm run ci:status -- <run-id> [--sha <source-sha>] [--pr <number>] [--watch | --failed-log <job-id>]\nRead-only metadata. Watch polls every 45 seconds and prints changes. --pr includes merge eligibility and external checks such as the CodeQL policy summary. Failed logs are saved privately, including when other jobs still run.');
   else {
     const state = await watchRun(options);
-    if (state.status === 'completed' && state.conclusion !== 'success') process.exitCode = 1;
+    if (state.status === 'completed' && (state.conclusion !== 'success' || (state.pullRequest && state.pullRequest.mergeState !== 'CLEAN'))) process.exitCode = 1;
   }
 }

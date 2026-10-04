@@ -62,8 +62,9 @@ test('large output keeps memory and report bounded while slow consoles receive e
   const result = await runLoggedProcess(process.execPath, ['--input-type=module', '-e', script], { ...options, maxBytes: 1024 });
   assert.equal(received, 256 * 8192 + 'FINAL PACKAGING ERROR'.length);
   assert.ok(result.discardedBytes > 0);
-  assert.ok((await stat(report)).size <= 1024);
-  const log = await readFile(report, 'utf8');
+  const bytes = await readFile(report);
+  assert.ok(bytes.length <= 1024);
+  const log = bytes.toString('utf8');
   assert.match(log, /^x+/);
   assert.match(log, /diagnostic output truncated/);
   assert.match(log, /FINAL PACKAGING ERROR[\s\S]*exit=0/);
