@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BotEngine } from './engine';
+import type { GameStatus } from './game-status';
+import { searchGrid } from './navigation';
 
 const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, isTauri: () => true }));
@@ -75,7 +77,10 @@ class Element {
   getBoundingClientRect(){return{height:160};}
   focus():void{} scrollIntoView():void{}
 
-  getContext() { return { clearRect() {}, fillText() {} }; }
+  getContext() { return {
+    clearRect() {}, fillText() {}, createImageData() { return { data: { set() {} } }; }, putImageData() {}, drawImage() {},
+    beginPath() {}, lineTo() {}, moveTo() {}, stroke() {}, arc() {}, fill() {},
+  }; }
   addEventListener(type: string, callback: (event: { preventDefault(): void;target?:Element }) => unknown): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), callback]);
   }
@@ -106,6 +111,114 @@ async function fixture(saved: { username: string; characterSlot: number; autoLog
   return { root, main, index:()=>elements.get('client-manual-index')!.children, get: (id: string) => elements.get(id)!, calls: (command: string) => ipc.invoke.mock.calls.filter(call => call[0] === command) };
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+function pendingNative() {
+  let resolve!: () => void, reject!: (error: unknown) => void;
+  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+function readyStatus(sessionId = 'synthetic-old'): GameStatus {
+  const grid = searchGrid('prt_fild08')!;
+  let x = 0, y = 0;
+  while (y < grid.height && !grid.walkable({ x, y })) {
+    if (++x === grid.width) { x = 0; y++; }
+  }
+  return {
+    ...new BotEngine(() => {}).snapshot(), sessionId, map: 'prt_fild08', connected: true, compatible: true,
+    reconnectAvailable: true, login: { phase: 'complete', message: '' },
+    player: { id: 0, classId: 4, kind: 0, name: 'Synthetic', level: 30, hp: 100, maxHp: 100, x, y, dead: false, statuses: [] },
+    mapInfo: { code: 'prt_fild08', name: 'Synthetic field', source: 'observed',
+      monsters: [{ classId: 4000, name: 'Synthetic monster', level: 1, maxHp: 100, spawnCount: null, visibleCount: 0 }] },
+  };
+}
+async function settleMain() { for (let i = 0; i < 50; i++) await Promise.resolve(); }
+async function publishStatus(status: GameStatus) {
+  ipc.listen.mock.calls.find(call => call[0] === 'game-status')![1]({ payload: status });
+  await settleMain();
+}
+function closeGame() { ipc.listen.mock.calls.find(call => call[0] === 'game-closed')![1]({ payload: undefined }); }
+
+describe('main run intent dispatch wiring', () => {
+  it.each(['start', 'resume', 'reconnect'])('keeps Stop locked until deferred %s settles and the compensating Stop completes', async kind => {
+    const f = await fixture(), sent = pendingNative(), finalStop = pendingNative();
+    let starts = 0, stops = 0;
+    ipc.invoke.mockImplementation((command: string, args?: { action?: string; document?: { revision: number } }) => {
+      if (command === 'save_current_form') return Promise.resolve(args!.document!.revision);
+      if (command === 'control_bot' && args?.action === 'start') {
+        starts++;
+        if (kind === 'start' || kind === 'resume' && starts === 2) return sent.promise;
+      }
+      if (command === 'control_bot' && args?.action === 'stop' && ++stops === 2) return finalStop.promise;
+      if (command === 'reconnect_game') return sent.promise;
+      return Promise.resolve(undefined);
+    });
+    const ready = readyStatus(); await publishStatus(ready); await f.get('select-targets').emit('click');
+    expect(f.get('start').disabled).toBe(false);
+    await f.get('start').emit('click'); await settleMain();
+    if (kind === 'resume') await publishStatus(readyStatus('synthetic-new'));
+    if (kind === 'reconnect') {
+      await publishStatus({ ...ready, connected: false, player: null, login: { phase: 'idle', message: '' } });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(f.calls('reconnect_game')).toHaveLength(1);
+    }
+    await f.get('stop').emit('click');
+    expect(f.get('stop').disabled).toBe(true); expect(f.get('radius').disabled).toBe(true);
+    const actions = () => f.calls('control_bot').map(call => (call[1] as { action: string }).action).filter(action => action !== 'heartbeat');
+    expect(actions().at(-1)).toBe('stop');
+    sent.resolve(); await settleMain();
+    expect(actions().slice(-2)).toEqual(['stop', 'stop']);
+    expect(f.get('stop').disabled).toBe(true); expect(f.get('radius').disabled).toBe(true);
+    finalStop.resolve(); await settleMain();
+    expect(f.get('radius').disabled).toBe(false); expect(f.get('notice').textContent).toBe('Bot stopped.');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.calls('reconnect_game')).toHaveLength(kind === 'reconnect' ? 1 : 0);
+    expect(actions().filter(action => action === 'start')).toHaveLength(kind === 'resume' ? 2 : 1);
+  });
+
+  it.each(['success', 'failure'])('retires %s sign-in at native completion before metadata reaches the main UI', async result => {
+    const f = await fixture(), sent = pendingNative();
+    f.get('username').value = 'synthetic-user'; f.get('password').value = 'synthetic-password';
+    f.get('remember-login').checked = true;
+    ipc.invoke.mockImplementation((command: string) => command === 'login_game' ? sent.promise : Promise.resolve(undefined));
+    await f.get('signin-form').emit('submit');
+    void sent.promise.then(closeGame, closeGame);
+    if (result === 'success') sent.resolve(); else sent.reject('Old sign-in failed');
+    await settleMain();
+    expect(f.get('saved-account').textContent).toBe('Session only'); expect(f.get('password').value).toBe('');
+    expect(f.get('connection-mode').disabled).toBe(false); expect(f.get('signin').disabled).toBe(false);
+    expect(f.get('notice').textContent).toBe('Disconnected. Select an account and character to connect again.');
+  });
+
+  it('keeps the updater waiting for native sign-in after game closure retires its UI phase', async () => {
+    const f = await fixture({ username: 'synthetic-user', characterSlot: 0, autoLogin: false }), sent = pendingNative();
+    ipc.invoke.mockImplementation(async (command: string, args?: { document: { revision: number } }) => {
+      if (command === 'login_game') return sent.promise;
+      if (command === 'update_status') return { version: '0.2.27', phase: 'waiting', message: 'Update ready' };
+      if (command === 'save_current_form') return args!.document.revision;
+      if (command === 'update_reserve') return 'a'.repeat(32);
+      if (command === 'update_install') return true;
+    });
+    await f.get('signin-form').emit('submit'); closeGame();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(f.get('update-status').textContent).toBe('Update waits for the pending sign-in request to finish.');
+    expect(f.calls('update_reserve')).toEqual([]); expect(f.calls('update_install')).toEqual([]);
+    sent.resolve(); await settleMain();
+    expect(f.get('connection-mode').disabled).toBe(false);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(f.calls('update_reserve')).toHaveLength(1); expect(f.calls('update_install')).toHaveLength(1);
+    expect(f.calls('control_bot')).toEqual([]);
+  });
+
+  it('does not publish an old Stop receipt into a replacement offline UI', async () => {
+    const f = await fixture(), sent = pendingNative(); await publishStatus(readyStatus());
+    ipc.invoke.mockImplementation((command: string, args?: { action: string }) =>
+      command === 'control_bot' && args?.action === 'stop' ? sent.promise : Promise.resolve(undefined));
+    await f.get('stop').emit('click'); void sent.promise.then(closeGame); sent.resolve();
+    await settleMain();
+    expect(f.get('notice').textContent).toBe('Disconnected. Select an account and character to connect again.');
+    expect(f.get('connection-mode').disabled).toBe(false);
+  });
+});
 
 const closeToken='11111111-1111-4111-8111-111111111111';
 async function requestClose(token=closeToken):Promise<void> {
