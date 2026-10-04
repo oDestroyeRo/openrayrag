@@ -65,6 +65,13 @@ export async function installerFiles(platform,bundle) {
   // Inspect installer files directly; AppDir staging trees contain library links.
   return files;
 }
+export async function packageSmokes(packages, check = nativeSmoke) {
+  // Each smoke owns a private data/WebKit/DBus context. Await both cleanups even
+  // if one fails, and retain its sequential save/reopen assertions.
+  const outcomes = await Promise.allSettled(packages.map(({ binary, report }) => check(binary, report)));
+  const errors = outcomes.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
+  if (errors.length) throw new AggregateError(errors, 'Packaged native smoke failed.');
+}
 async function inspect(platform,bundle,binary,version,identifier,smoke) {
   const files=await installerFiles(platform,bundle);
   const names=assetNames(version);
@@ -88,13 +95,15 @@ async function inspect(platform,bundle,binary,version,identifier,smoke) {
       const extract=join(temporary,'debian');
       run('dpkg-deb',['--extract',deb,extract]);
       const debBinary=await matchingApplication(extract,binary);
-      if(smoke)await nativeSmoke(debBinary,join(root,'reports/smoke-deb.json'));
       run(appimage,['--appimage-extract'],{cwd:temporary});
       const staged=join(bundle,'appimage','Rayrag Companion.AppDir/usr/bin/rayrag-companion');
       const extracted=join(temporary,'squashfs-root/usr/bin/rayrag-companion');
       if(smoke)await writeFile(join(root,'reports/appimage-elf.txt'),[binary,staged].map(path=>run('readelf',['-lW','-SW','-dW',path]).toString()).join('\n'));
       await verifyAppImageExecutable(binary,staged,extracted);
-      if(smoke)await nativeSmoke(join(temporary,'squashfs-root/AppRun'),join(root,'reports/smoke.json'));
+      if(smoke)await packageSmokes([
+        { binary: debBinary, report: join(root,'reports/smoke-deb.json') },
+        { binary: join(temporary,'squashfs-root/AppRun'), report: join(root,'reports/smoke.json') },
+      ]);
       payload.set(names.deb,await readFile(deb));payload.set(names.appimage,await readFile(appimage));
     } else {
       const app=join(bundle,'macos','Rayrag Companion.app');
