@@ -78,7 +78,7 @@ class Element {
   focus():void{} scrollIntoView():void{}
 
   getContext() { return {
-    clearRect() {}, fillText() {}, createImageData() { return { data: { set() {} } }; }, putImageData() {}, drawImage() {},
+    clearRect() {}, fillText() {}, createImageData(width: number, height: number) { return { data: new Uint8ClampedArray(width * height * 4) }; }, putImageData() {}, drawImage() {},
     beginPath() {}, lineTo() {}, moveTo() {}, stroke() {}, arc() {}, fill() {},
   }; }
   addEventListener(type: string, callback: (event: { preventDefault(): void;target?:Element }) => unknown): void {

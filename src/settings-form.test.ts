@@ -78,8 +78,15 @@ function setup() {
   const recursiveSettings = vi.fn(() => form.runSettings());
   let strategies: Array<Record<string, unknown>> = [];
   let disposition: Array<Record<string, unknown>> = [];
+  // This adapter omits the full FeatureUi constructor, so mount permanent
+  // controls lazily and retain their references just as the real constructor does.
+  const mountedInputs = new Map<string, Element>();
   Object.assign(editor, {
     host, hooks: { settings: recursiveSettings },
+    settingInputs: { get: (path: string) => {
+      if (!mountedInputs.has(path)) mountedInputs.set(path, host.querySelector(`[data-setting="${path}"]`)!);
+      return mountedInputs.get(path);
+    } },
     editors: new Map([['attackStrategies', { read: () => structuredClone(strategies), write: (rows: typeof strategies) => { strategies = structuredClone(rows); } }]]),
     dispositionEditor: { read: () => structuredClone(disposition), write: (rows: typeof disposition) => { disposition = structuredClone(rows); } },
     profiles: { list: () => [{ id: 'saved-profile' }] }, hydrateProfileSelection: vi.fn(),

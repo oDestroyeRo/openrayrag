@@ -3,7 +3,8 @@ import type { Snapshot } from './engine';
 import { ITEM_CATALOG, itemName } from './game-catalog';
 import { previewManualTarget } from './manual-target';
 import { actorKey, manualTargetView } from './manual-target-view';
-import { GridNavigator, NAVIGATION_MAPS, searchGrid } from './navigation';
+import { NAVIGATION_MAPS, searchGrid } from './navigation';
+import { paintMapCollision } from './map-raster';
 import type { Position } from './protocol';
 import type { Settings } from './settings';
 
@@ -35,6 +36,8 @@ export class BotConsole {
   private pending = false;
   private rasterMap = '';
   private raster: HTMLCanvasElement | null = null;
+  private mapSignature: string | null = null;
+  private dropTexts: string[] | null = null;
   private inventorySignature = '';
   private inventoryWorld: string | null = null;
   private readonly monsters = new Map<string, { root: HTMLElement; text: HTMLElement; button: HTMLButtonElement }>();
@@ -46,6 +49,9 @@ export class BotConsole {
   private readonly use: HTMLButtonElement;
   constructor(private readonly host: HTMLElement, private readonly hooks: Hooks) {
     this.canvas = this.get('radar'); this.x = this.get('console-walk-x'); this.y = this.get('console-walk-y');
+    this.canvas.addEventListener('contextrestored', () => {
+      this.rasterMap = ''; this.raster = null; this.mapSignature = null; this.drawMap();
+    });
     this.items = this.get('console-item'); this.use = this.get('console-use-item');
     this.canvas.addEventListener('click', event => {
       const point = mapCoordinate(event.clientX, event.clientY, this.canvas.getBoundingClientRect(), this.canvas.width, this.canvas.height);
@@ -169,9 +175,13 @@ export class BotConsole {
     let empty = list.querySelector<HTMLElement>('.console-empty');
     if (!empty) { list.textContent = ''; for (const row of this.monsters.values()) list.append(row.root); empty = document.createElement('p'); empty.className = 'console-empty'; list.append(empty); }
     empty.hidden = live.size > 0; empty.textContent = 'No living monsters observed.';
-    const drops = this.get('console-drops'); drops.replaceChildren();
-    for (const drop of status?.drops ?? []) { const row = document.createElement('p'); row.textContent = `${itemName(drop.itemId)} × ${drop.count} · ${drop.x}, ${drop.y}`; drops.append(row); }
-    if (!drops.childElementCount) drops.textContent = 'No drops observed.';
+    const dropTexts = (status?.drops ?? []).map(drop => `${itemName(drop.itemId)} × ${drop.count} · ${drop.x}, ${drop.y}`);
+    if (this.dropTexts?.length !== dropTexts.length || dropTexts.some((text, index) => text !== this.dropTexts![index])) {
+      const drops = this.get('console-drops'); drops.replaceChildren();
+      for (const text of dropTexts) { const row = document.createElement('p'); row.textContent = text; drops.append(row); }
+      if (!dropTexts.length) drops.textContent = 'No drops observed.';
+      this.dropTexts = dropTexts;
+    }
     const manual = status?.manualTarget;
     this.get('console-target-result').textContent = manual && manual.sequence > 0
       ? `Latest bounded command #${manual.sequence}: ${manual.state} · ${manual.reason}${manual.settling ? ' · awaiting movement/Stop reconciliation' : ''}` : 'No bounded command observed.';
@@ -188,24 +198,33 @@ export class BotConsole {
     if (this.rasterMap !== map) {
       this.rasterMap = map; this.raster = null; const grid = searchGrid(map);
       if (grid) {
-        const nav = new GridNavigator(grid), raster = document.createElement('canvas'); raster.width = grid.width; raster.height = grid.height;
+        const raster = document.createElement('canvas'); raster.width = grid.width; raster.height = grid.height;
         const context = raster.getContext('2d');
         if (context) {
           const image = context.createImageData(grid.width, grid.height);
-          for (let y = 0; y < grid.height; y++) for (let x = 0; x < grid.width; x++) {
-            const state = nav.tileState({ x, y }), color = state === 'blocked' ? [9, 17, 34] : state === 'portal' ? [121, 79, 48] : [41, 67, 58];
-            image.data.set([...color, 255], (x + (grid.height - 1 - y) * grid.width) * 4);
-          }
+          paintMapCollision(grid, image.data);
           context.putImageData(image, 0, 0); this.raster = raster;
         }
       }
     }
-    canvas.width = this.raster?.width ?? 400; canvas.height = this.raster?.height ?? 400; canvas.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const width = this.raster?.width ?? 400, height = this.raster?.height ?? 400;
+    const resized = canvas.width !== width || canvas.height !== height;
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    canvas.style.aspectRatio = `${width} / ${height}`;
     const n = status?.navigation;
     this.get('navigation-info').textContent = n ? `${n.width} × ${n.height} · ${n.reachable.toLocaleString()} reachable · ${n.blocked.toLocaleString()} blocked · ${n.excluded.toLocaleString()} portal exclusions${n.routeLength ? ` · ${n.routeLength} route cells` : ''}${n.ready ? '' : ' · character outside verified safe ground'}`
       : map ? `Collision unavailable for ${map}. ${NAVIGATION_MAPS.length} maps supported.` : 'Connect a character to inspect its field.';
-    if (!this.raster) { ctx.font = '13px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#94a3b8'; ctx.fillText('Waiting for verified map collision', canvas.width / 2, canvas.height / 2); return; }
+    const point = (position: Position) => [position.x, position.y];
+    const signature = JSON.stringify([map, width, height, status?.player ? point(status.player) : null,
+      (status?.monsters ?? []).map(point), (status?.drops ?? []).map(point), n?.goal ? point(n.goal) : null,
+      (n?.route ?? []).map(point), (n?.leg ?? []).map(point)]);
+    if (!resized && signature === this.mapSignature) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!this.raster) {
+      ctx.font = '13px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#94a3b8'; ctx.fillText('Waiting for verified map collision', canvas.width / 2, canvas.height / 2);
+      this.mapSignature = signature; return;
+    }
     ctx.imageSmoothingEnabled = false; ctx.drawImage(this.raster, 0, 0);
     const route = (cells: Position[], color: string, width: number) => {
       ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
@@ -219,5 +238,6 @@ export class BotConsole {
     for (const monster of status?.monsters ?? []) dot(monster, '#fdba74', 2.5);
     for (const drop of status?.drops ?? []) dot(drop, '#c4b5fd', 2);
     if (n?.goal) dot(n.goal, '#7dd3fc', 3.5); if (status?.player) dot(status.player, '#86efac', 4);
+    this.mapSignature = signature;
   }
 }
