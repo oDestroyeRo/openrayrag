@@ -337,3 +337,10 @@ body:has(.client-shell) { margin: 0; background: var(--client-bg); }
 .client-shell .macro-actions select { flex: 1 1 160px; }
 .client-shell .macro-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; font-size: 12px; line-height: 1.6; }
 .client-shell #macro-state { white-space: pre-wrap; }
+
+.client-shell .hp-potion-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 0; border-top: 1px solid var(--client-border); }
+.client-shell .hp-potion-choice { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 180px; }
+.client-shell .hp-potion-position { min-width: 16px; color: var(--client-accent); }
+.client-shell .hp-potion-stock { color: var(--client-muted); font-size: 12px; }
+.client-shell .hp-potion-row .button-row { margin: 0; }
+.client-shell .hp-potion-panel .notice { margin-top: 10px; }

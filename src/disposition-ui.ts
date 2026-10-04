@@ -1,3 +1,4 @@
+import { hpPotionIds } from './hp-potions';
 import { ITEM_CATALOG, itemName } from './game-catalog';
 import type { InventoryItem } from './protocol-feature';
 import { WorldState } from './world-state';
@@ -42,11 +43,14 @@ const compatibleAmmoIds = Object.entries(AMMO_CATALOG).filter(([, info]) => info
 
 export function dispositionStockFloors(settings: AutomationSettings): { itemId: number; count: number }[] {
   const floors = settings.items.map(row => ({ itemId: row.itemId, count: row.minStock }));
+  floors.push(...hpPotionIds(settings.hpPotions).map(itemId => ({ itemId, count: settings.hpPotions!.minStock })));
   const escape = settings.escape;
   if (escape?.enabled && escape.method === 'item') floors.push({ itemId: escape.mode === 'random' ? 601 : 602, count: escape.minStock });
   if (settings.loadout.enabled && settings.loadout.minAmmoStock > 0)
     floors.push(...compatibleAmmoIds.map(itemId => ({ itemId, count: settings.loadout.minAmmoStock })));
-  return floors;
+  const unique = new Map<number, number>();
+  for (const row of floors) unique.set(row.itemId, Math.max(unique.get(row.itemId) ?? 0, row.count));
+  return [...unique].map(([itemId, count]) => ({ itemId, count }));
 }
 
 /** Read-only adapter. No game/controller hooks are available to this module. */

@@ -1,0 +1,346 @@
+[
+  {
+    "name": "legacy absent",
+    "valid": true,
+    "absent": true
+  },
+  {
+    "name": "selected ordered",
+    "valid": true,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "any empty selection",
+    "valid": true,
+    "policy": {
+      "mode": "any",
+      "itemIds": [],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "off retains selection",
+    "valid": true,
+    "policy": {
+      "mode": "off",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "all known potions",
+    "valid": true,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        569,
+        501,
+        545,
+        502,
+        503,
+        546,
+        504,
+        547
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "unknown mode",
+    "valid": false,
+    "policy": {
+      "mode": "all",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "selected empty",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "duplicate ids",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        501
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "SP potion",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        505
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "status potion",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        506
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "teleport item",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        601
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "unknown item",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        2147483647
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "null ids",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": null,
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "boolean id",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        true
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "float id",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501.5
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "too many",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        501,
+        501,
+        501,
+        501,
+        501,
+        501,
+        501,
+        501
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "below zero",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 0,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "below too high",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 101,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "float threshold",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 60.5,
+      "minStock": 0,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "negative reserve",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 60,
+      "minStock": -1,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "reserve too high",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 60,
+      "minStock": 10000,
+      "cooldownSeconds": 5
+    }
+  },
+  {
+    "name": "zero cooldown",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 0
+    }
+  },
+  {
+    "name": "cooldown too high",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 3601
+    }
+  },
+  {
+    "name": "unknown field",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 60,
+      "minStock": 0,
+      "cooldownSeconds": 5,
+      "script": "no"
+    }
+  },
+  {
+    "name": "explicit null",
+    "valid": false,
+    "policy": null
+  },
+  {
+    "name": "missing cooldown",
+    "valid": false,
+    "policy": {
+      "mode": "selected",
+      "itemIds": [
+        501,
+        504
+      ],
+      "belowPercent": 60,
+      "minStock": 0
+    }
+  }
+]

@@ -21,7 +21,7 @@ function checkedSettings(value: unknown): Settings {
     // Older profiles predate escape and loadout controls. Only these sections
     // get defaults; unknown fields and missing older sections still fail closed.
     const a = record(value.automation) ? { escape: DEFAULT_AUTOMATION.escape, loadout: structuredClone(DEFAULT_AUTOMATION.loadout), ...value.automation } : value.automation;
-    if (!record(a) || !keys(a, [...Object.keys(DEFAULT_AUTOMATION), ...(Object.hasOwn(a, 'disposition') ? ['disposition'] : []), ...(Object.hasOwn(a, 'supply') ? ['supply'] : []), ...(Object.hasOwn(a,'attackStrategies')?['attackStrategies']:[]), ...(Object.hasOwn(a,'mapPolicy')?['mapPolicy']:[]), ...(Object.hasOwn(a,'partyHeal')?['partyHeal']:[]), ...(Object.hasOwn(a,'retreat')?['retreat']:[])])) throw new Error('Profile contains unknown automation settings.');
+    if (!record(a) || !keys(a, [...Object.keys(DEFAULT_AUTOMATION), ...(Object.hasOwn(a, 'disposition') ? ['disposition'] : []), ...(Object.hasOwn(a, 'supply') ? ['supply'] : []), ...(Object.hasOwn(a,'attackStrategies')?['attackStrategies']:[]), ...(Object.hasOwn(a,'mapPolicy')?['mapPolicy']:[]), ...(Object.hasOwn(a,'partyHeal')?['partyHeal']:[]), ...(Object.hasOwn(a,'retreat')?['retreat']:[]), ...(Object.hasOwn(a,'hpPotions')?['hpPotions']:[])])) throw new Error('Profile contains unknown automation settings.');
     const arrayKeys: Record<string, string[]> = {
       items: ['itemId','resource','belowPercent','minStock','cooldownSeconds'],
       skills: ['skillId','level','target','hpBelowPercent','spAbovePercent','cooldownSeconds'],

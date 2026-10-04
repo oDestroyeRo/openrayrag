@@ -1,4 +1,5 @@
 import { validateMapPolicy, type MapPolicy } from './map-policy';
+import { validateHpPotions, type HpPotionSettings } from './hp-potions';
 import type { Position } from './protocol';
 import { validActorConditions, type ActorPredicate } from './actor-observations';
 import { validateDispositionPolicy, type DispositionPolicy } from './disposition';
@@ -30,6 +31,7 @@ export interface AutomationSettings {
   recovery: { enabled: boolean; hpStart: number; hpEnd: number; spStart: number; spEnd: number; timeoutSeconds: number };
   escape?: EscapeSettings;
   items: ItemRule[];
+  hpPotions?: HpPotionSettings;
   skills: SkillRule[];
   equipment: EquipmentRule[];
   attackStrategies?: AttackStrategyRule[];
@@ -87,11 +89,12 @@ export function validateRetreat(value:RetreatSettings):RetreatSettings {
 }
 export function validateAutomation(a: AutomationSettings): AutomationSettings {
   try {
-    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies','mapPolicy','partyHeal','retreat']);
+    strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies','mapPolicy','partyHeal','retreat','hpPotions']);
     if(Object.hasOwn(a,'partyHeal')) {
       const h=a.partyHeal!;strictKeys(h,['enabled','level','hpBelowPercent','spReserve','cooldownSeconds','maxAttempts']);
       if(typeof h.enabled!=='boolean'||!bounded(h.level,1,10)||!bounded(h.hpBelowPercent,1,100)||!bounded(h.spReserve,0,0x7fffffff)||!bounded(h.cooldownSeconds,1,3600)||!bounded(h.maxAttempts,1,100))throw new Error();
     }
+    if(Object.hasOwn(a,'hpPotions'))validateHpPotions(a.hpPotions);
     if(Object.hasOwn(a,'retreat'))validateRetreat(a.retreat!);
     if (Object.hasOwn(a,'mapPolicy')) validateMapPolicy(a.mapPolicy);
     if (Object.hasOwn(a,'supply')) validateSupplySettings(a.supply);

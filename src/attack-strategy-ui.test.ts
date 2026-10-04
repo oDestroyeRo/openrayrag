@@ -1,3 +1,4 @@
+import { DEFAULT_HP_POTIONS, type HpPotionSettings } from './hp-potions';
 import { describe, expect, it, vi } from 'vitest';
 import { FeatureUi } from './feature-ui';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
@@ -12,9 +13,11 @@ function setup() {
   const settings = vi.fn(() => ({ ...DEFAULT_SETTINGS, automation: view.read() }));
   let rows: Array<Record<string, unknown>> = [];
   // This partial fixture skips construction; keep lazily mounted controls by reference.
+  let hpPotions: HpPotionSettings = structuredClone(DEFAULT_HP_POTIONS);
   const mountedInputs = new Map<string, ReturnType<typeof host.querySelector>>();
   Object.assign(view, {
     host, hooks: { settings },
+    hpPotions: { read: () => structuredClone(hpPotions), write: (value: HpPotionSettings) => { hpPotions = structuredClone(value); } },
     settingInputs: { get: (path: string) => {
       if (!mountedInputs.has(path)) mountedInputs.set(path, host.querySelector(`[data-setting="${path}"]`));
       return mountedInputs.get(path);

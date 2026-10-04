@@ -734,6 +734,18 @@ describe('persistent recovery and transaction regressions', () => {
     controller.engine.player!.hp = 100; controller.stop();
     expect(controller.runRequested).toBe(false);
   });
+  it.each([false,true])('retains the shared HP potion cooldown after a late receipt with advanced rule=%s', advanced => {
+    const { controller, receive, sent, packet, step, advance } = setup(); const automation = policy();
+    automation.hpPotions = { mode: 'selected', itemIds: advanced ? [504] : [501, 504], belowPercent: 60, minStock: 0, cooldownSeconds: 10 };
+    if(advanced)automation.items=[{itemId:501,resource:'hp',belowPercent:60,minStock:0,cooldownSeconds:1}];
+    receive({ type: 'stats', level: 7, hp: 55, maxHp: 100 },
+      { type: 'inventory', items: [{ bagId: 501, itemId: 501, type: 1, count: 1 }, { bagId: 504, itemId: 504, type: 1, count: 4 }], equipment: [], ammoId: -1 });
+    controller.start({ ...settings, automation }); step(); controller.pause('Manual input', 2000);
+    advance(7000); expect(sent.filter(action => action.type === 'useItem')).toEqual([{ type: 'useItem', itemId: 501 }]);
+    packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(10).bool(false));
+    advance(9000); expect(sent.filter(action => action.type === 'useItem')).toHaveLength(1);
+    advance(2000); expect(sent.filter(action => action.type === 'useItem')).toEqual([{ type: 'useItem', itemId: 501 }, { type: 'useItem', itemId: 504 }]);
+  });
   it('does not reopen an unresolved NPC request just because ten seconds elapsed', () => {
     const { controller, advance, packet } = setup(); controller.world.apply({ type: 'npcFocus', id: 7, focus: true });
     controller.world.apply({ type: 'npcDialog', name: 'NPC', text: 'Hello', big: false });
@@ -1275,9 +1287,10 @@ describe('macro controller supervision',()=>{
     vi.spyOn(f.controller.travel,'snapshot').mockReturnValue({...f.controller.travel.snapshot(),state:'complete',destination:changed==='trip'?'prontera':'prt_fild08'});
     f.step();expect(f.controller.macro.snapshot()).toMatchObject({state:'failed',actionsCompleted:0});expect(f.controller.runRequested).toBe(false);
   });
-  it.each(['recovery','disposition','escape'] as const)('preserves the configured %s consumable reserve',source=>{
+  it.each(['recovery','hpPotions','disposition','escape'] as const)('preserves the configured %s consumable reserve',source=>{
     const f=fixture(),automation=policy(),itemId=source==='escape'?601:501;
     if(source==='recovery')automation.items=[{itemId,resource:'hp',belowPercent:90,minStock:5,cooldownSeconds:1}];
+    else if(source==='hpPotions')automation.hpPotions={mode:'selected',itemIds:[501],belowPercent:60,minStock:5,cooldownSeconds:5};
     else if(source==='escape')automation.escape={...DEFAULT_ESCAPE,enabled:true,minStock:5};
     else automation.disposition={maxSpend:0,rules:[{itemId,keep:5,minimum:5,desired:5,maximum:5,store:false,cart:false,sell:false,restock:'off',allowUnique:false}]};
     f.controller.engine.receive([{type:'inventory',items:[{bagId:itemId,itemId,type:1,count:5}],equipment:Array(10).fill(0),ammoId:-1}]);

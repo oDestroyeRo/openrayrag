@@ -1,3 +1,4 @@
+import { recoveryItemCooldown } from './hp-potions';
 import { PartyFollowRuntime, type PartyFollowContext, type PartyFollowSnapshot } from './party-follow';
 import { PartyHealPolicy, partyHealCandidates, partyHpCondition, type PartyHealSnapshot } from './party-heal';
 import { deathLimitGuidance, farmingDestination, deathCycle, deathGuard, validateDeathRecoveryGuard, type DeathRecoveryGuard, type DeathCycle } from './death-recovery';
@@ -454,7 +455,7 @@ export class CompanionController {
     if (!confirmed) return;
     if(execution?.type==='skillResult')this.engine.settleConfirmedSkill(execution);
     const policy = automationSettings(this.requestedSettings??this.engine.settings);
-    const seconds = action.type === 'useItem' ? policy.items.find(rule => rule.itemId === action.itemId)?.cooldownSeconds ?? 1
+    const seconds = action.type === 'useItem' ? recoveryItemCooldown(policy, action.itemId)
       : action.type === 'skill' ? policy.skills.find(rule => rule.skillId === action.skillId)?.cooldownSeconds ?? 1 : 0;
     this.blockedReason = ''; this.featureReceipt = null; this.retryAt = this.now() + seconds * 1000;
     this.waitingReason = 'Canceled action was confirmed; waiting for its configured cooldown.';

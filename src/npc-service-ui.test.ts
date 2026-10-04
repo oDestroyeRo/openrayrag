@@ -70,6 +70,7 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
     mounts: { manualTools: panel },
     editors: new Map(),
     dispositionEditor: { lock: () => {} },
+    hpPotions: { lock: () => {} },
     syncFollowMode: () => {}, // This fixture mounts only the service panel.
     social: { lock: () => {} },
     memo: { lock: () => {} },

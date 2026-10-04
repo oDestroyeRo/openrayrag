@@ -4,6 +4,14 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+
+### Flexible automatic HP potions
+
+Issue [#145](https://github.com/oDestroyeRo/openrayrag/issues/145) adds Off/Any/Choose modes, ordered fallback, confirmed shared cooldown and retained settings. On 2026-10-05, `npm run check` passed: 3,581 frontend tests in 116 files, 146 production native tests and 148 CI-feature native tests (two existing opt-in probes ignored in each), both strict Clippy configurations, formatting, frontend/release type checks, script checks and eight Python release tests.
+
+Regressions cover shared TypeScript/Rust schema cases; local save/load, profiles and current forms; inventory readiness, reserves, fallback and exact consumption; advanced-rule conditions and late-receipt cooldown; supply/macro stock floor deduplication; potion-before-sit recovery and the HP safety stop. Both game-client and Bot-only adapters dispatch the same potion opcode in controlled fixtures. Browser preview checks confirm startup, multiple selections and preference reordering. Browser QA caught and corrected input/change ordering and placement in the active stylesheet. These local checks do not establish live server healing amounts or new live potion consumption in either mode.
+
+
 ### Client rendering performance
 
 Issue [#117](https://github.com/oDestroyeRo/openrayrag/issues/117) records the renderer comparison. The real-main offline Chromium benchmark preserved text, 322 control states, HP/SP bars and map pixels across six workloads; repeated status/HP/movement replay used 60–66% less time, and unchanged statuses created 86% fewer elements. All 140 focused tests and full local checks passed: 3,525 frontend tests, 137 native tests with one optional public probe ignored, build/typechecking, Clippy and formatting, 83 Node helper tests with one Linux-specific skip, and eight Python release tests. Independent review found no blocking findings. See [client rendering performance](CLIENT_PERFORMANCE.md) for repeatable commands, source-bound measurements and memory/native/live proof limits.

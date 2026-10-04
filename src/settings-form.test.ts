@@ -1,3 +1,4 @@
+import { DEFAULT_HP_POTIONS, type HpPotionSettings } from './hp-potions';
 import { describe, expect, it, vi } from 'vitest';
 import { CurrentForm, type FormDocument } from './current-form';
 import { FeatureUi } from './feature-ui';
@@ -80,9 +81,11 @@ function setup() {
   let disposition: Array<Record<string, unknown>> = [];
   // This adapter omits the full FeatureUi constructor, so mount permanent
   // controls lazily and retain their references just as the real constructor does.
+  let hpPotions: HpPotionSettings = structuredClone(DEFAULT_HP_POTIONS);
   const mountedInputs = new Map<string, Element>();
   Object.assign(editor, {
     host, hooks: { settings: recursiveSettings },
+    hpPotions: { read: () => structuredClone(hpPotions), write: (value: HpPotionSettings) => { hpPotions = structuredClone(value); } },
     settingInputs: { get: (path: string) => {
       if (!mountedInputs.has(path)) mountedInputs.set(path, host.querySelector(`[data-setting="${path}"]`)!);
       return mountedInputs.get(path);
@@ -266,6 +269,15 @@ describe('settings form interface', () => {
     f.field('radius').value = '13'; f.field('radius').emit('input');
     expect(f.form.snapshot().settings.radius).toBe(13);
     expect(f.field('radius-value').textContent).toBe('13 cells');
+    expect(f.recursiveSettings).not.toHaveBeenCalled();
+  });
+
+  it('retains ordered HP potion settings on restore and profile apply while legacy absence stays disabled', () => {
+    const f = setup(), value = settings();
+    value.automation!.hpPotions = { mode: 'selected', itemIds: [504, 501], belowPercent: 70, minStock: 2, cooldownSeconds: 8 };
+    f.form.restore(document(value)); expect(f.form.snapshot().settings.automation?.hpPotions).toEqual(value.automation!.hpPotions);
+    f.observe(); f.form.applyProfile(value); expect(f.form.snapshot().settings.automation?.hpPotions).toEqual(value.automation!.hpPotions);
+    f.form.applyProfile(settings()); expect(f.form.snapshot().settings.automation).not.toHaveProperty('hpPotions');
     expect(f.recursiveSettings).not.toHaveBeenCalled();
   });
 

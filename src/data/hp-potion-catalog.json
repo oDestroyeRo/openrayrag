@@ -1,0 +1,15 @@
+{
+  "ids": [
+    569,
+    501,
+    545,
+    502,
+    503,
+    546,
+    504,
+    547
+  ],
+  "clientItemsSha256": "639e12130c2883337539265793de646430e760b30294f3252f8241d4027e6fca",
+  "classificationSource": "https://raw.githubusercontent.com/rathena/rathena/master/db/pre-re/item_db_usable.yml",
+  "classificationSha256": "ba3b8f1fe394a6826ca2d93e34f5eac481fdfc9c250c6a12b59b2a0f1f641b5f"
+}

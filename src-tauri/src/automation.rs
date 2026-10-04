@@ -105,6 +105,12 @@ struct AutomationSettings {
     recovery: Recovery,
     #[serde(default, skip_serializing_if = "Escape::is_default")]
     escape: Escape,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_hp_potions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    hp_potions: Option<HpPotionSettings>,
     items: Vec<ItemRule>,
     skills: Vec<SkillRule>,
     equipment: Vec<EquipmentRule>,
@@ -753,6 +759,68 @@ struct ItemRule {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HpPotionSettings {
+    mode: HpPotionMode,
+    item_ids: Vec<u32>,
+    below_percent: u8,
+    min_stock: u16,
+    cooldown_seconds: u16,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum HpPotionMode {
+    Off,
+    Any,
+    Selected,
+}
+
+impl<'de> Deserialize<'de> for HpPotionMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "off" => Ok(Self::Off),
+            "any" => Ok(Self::Any),
+            "selected" => Ok(Self::Selected),
+            _ => Err(serde::de::Error::custom("Invalid HP potion mode.")),
+        }
+    }
+}
+
+fn deserialize_hp_potions<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<HpPotionSettings>, D::Error> {
+    HpPotionSettings::deserialize(deserializer).map(Some)
+}
+
+fn hp_potion_ids() -> &'static [u32] {
+    #[derive(Deserialize)]
+    struct Catalog {
+        ids: Vec<u32>,
+    }
+    static CATALOG: std::sync::OnceLock<Catalog> = std::sync::OnceLock::new();
+    &CATALOG
+        .get_or_init(|| {
+            serde_json::from_str(include_str!("../../src/data/hp-potion-catalog.json"))
+                .expect("The bundled HP potion catalog must be valid.")
+        })
+        .ids
+}
+
+impl HpPotionSettings {
+    fn valid(&self) -> bool {
+        let known_ids = hp_potion_ids();
+        (1..=100).contains(&self.below_percent)
+            && self.min_stock <= 9999
+            && (1..=3600).contains(&self.cooldown_seconds)
+            && self.item_ids.len() <= known_ids.len()
+            && unique_by(&self.item_ids, |id| *id)
+            && self.item_ids.iter().all(|id| known_ids.contains(id))
+            && (!matches!(self.mode, HpPotionMode::Selected) || !self.item_ids.is_empty())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Resource {
     Hp,
@@ -1050,6 +1118,10 @@ impl AutomationSettings {
             && (1..=95).contains(&self.escape.hp_below_percent)
             && self.escape.min_stock <= 9999
             && (1..=3600).contains(&self.escape.cooldown_seconds)
+            && self
+                .hp_potions
+                .as_ref()
+                .map_or(true, HpPotionSettings::valid)
             && self.items.len() <= 32
             && unique_by(&self.items, |r| r.item_id)
             && self.items.iter().all(|r| {
@@ -1309,6 +1381,111 @@ mod tests {
                 let parsed: Settings = serde_json::from_value(value.clone()).unwrap();
                 assert_eq!(serde_json::to_value(parsed).unwrap(), value);
             }
+        }
+    }
+
+    #[test]
+    fn hp_potion_shared_schema_matches_settings_and_current_form() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../src/data/hp-potion-cases.json")).unwrap();
+        for case in cases {
+            let mut value = settings();
+            value["automation"] = automation();
+            if case["absent"] != json!(true) {
+                value["automation"]["hpPotions"] = case["policy"].clone();
+            }
+            let expected = case["valid"] == json!(true);
+            assert_eq!(valid(value.clone()), expected, "{}", case["name"]);
+            if expected {
+                let parsed: Settings = serde_json::from_value(value.clone()).unwrap();
+                assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+            }
+
+            value["map"] = json!("");
+            value["targets"] = json!([]);
+            let document_value = json!({
+                "version": 1, "revision": 1, "selectedProfileId": "potion-profile", "settings": value
+            });
+            let document =
+                serde_json::from_value::<crate::current_form::FormDocument>(document_value.clone());
+            assert_eq!(
+                document
+                    .as_ref()
+                    .is_ok_and(|document| document.validate().is_ok()),
+                expected,
+                "current form: {}",
+                case["name"]
+            );
+            if expected {
+                assert_eq!(
+                    serde_json::to_value(document.unwrap()).unwrap(),
+                    document_value
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hp_potion_policy_requires_every_field_and_string_modes() {
+        let mut value = settings();
+        value["automation"] = automation();
+        value["automation"]["hpPotions"] = json!({
+            "mode": "selected", "itemIds": [501, 504], "belowPercent": 1,
+            "minStock": 9999, "cooldownSeconds": 3600
+        });
+        assert!(valid(value.clone()));
+        for field in [
+            "mode",
+            "itemIds",
+            "belowPercent",
+            "minStock",
+            "cooldownSeconds",
+        ] {
+            let mut missing = value.clone();
+            missing["automation"]["hpPotions"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(!valid(missing), "missing {field}");
+            let mut null = value.clone();
+            null["automation"]["hpPotions"][field] = Value::Null;
+            assert!(!valid(null), "null {field}");
+        }
+        for mode in [json!({"off": null}), json!({"any": null}), json!(false)] {
+            let mut invalid = value.clone();
+            invalid["automation"]["hpPotions"]["mode"] = mode;
+            assert!(!valid(invalid));
+        }
+    }
+
+    #[test]
+    fn hp_potion_policy_persists_selected_order_and_legacy_absence() {
+        for policy in [
+            None,
+            Some(json!({
+                "mode": "selected", "itemIds": [504, 501], "belowPercent": 70,
+                "minStock": 3, "cooldownSeconds": 2
+            })),
+            Some(json!({
+                "mode": "any", "itemIds": [], "belowPercent": 70,
+                "minStock": 3, "cooldownSeconds": 2
+            })),
+        ] {
+            let mut value = settings();
+            value["automation"] = automation();
+            if let Some(policy) = policy {
+                value["automation"]["hpPotions"] = policy;
+            }
+            let document_value = json!({
+                "version": 1, "revision": 1, "selectedProfileId": null, "settings": value
+            });
+            let document: crate::current_form::FormDocument =
+                serde_json::from_value(document_value.clone()).unwrap();
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().canonicalize().unwrap();
+            crate::current_form::save(path.clone(), &document).unwrap();
+            let restored = crate::current_form::load(path).unwrap().unwrap();
+            assert_eq!(serde_json::to_value(restored).unwrap(), document_value);
         }
     }
 
