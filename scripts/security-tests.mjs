@@ -6,6 +6,7 @@ import { parse } from 'yaml';
 
 const readYaml = async path => parse(await readFile(new URL(path, import.meta.url), 'utf8'));
 const desktop = await readYaml('../.github/workflows/release.yml');
+const release = await readYaml('../.github/workflows/release-publish.yml');
 const security = await readYaml('../.github/workflows/security.yml');
 const dependabot = await readYaml('../.github/dependabot.yml');
 
@@ -47,6 +48,8 @@ test('dependency review covers development, runtime and unknown packages on PRs 
   assert.equal(review.with['fail-on-severity'], 'high');
   assert.equal(review.with['fail-on-scopes'], 'runtime,development,unknown');
   assert.equal(review.with['comment-summary-in-pr'], 'never');
+  assert.equal(review.with['allow-ghsas'], 'GHSA-vfj7-8cjw-p6xm');
+  assert.equal(review.with['allow-dependencies'], undefined);
   assert.notEqual(review.with['warn-only'], true);
   assert.notEqual(review.with['vulnerability-check'], false);
 });
@@ -72,7 +75,7 @@ test('required gates reject failed, cancelled, skipped or missing applicable sec
 });
 
 test('versioned actions and scan permissions preserve the release trust boundary', () => {
-  for (const workflow of [desktop, security]) {
+  for (const workflow of [desktop, release, security]) {
     assert.deepEqual(workflow.permissions, { contents: 'read' });
     for (const job of Object.values(workflow.jobs)) {
       assert.ok(job.uses || job['timeout-minutes'] > 0);
@@ -100,7 +103,7 @@ test('versioned actions and scan permissions preserve the release trust boundary
 test('Dependabot checks all shipped ecosystems every calendar day without bypassing CI', () => {
   assert.equal(dependabot.version, 2);
   assert.deepEqual(dependabot.updates.map(update => [update['package-ecosystem'], update.directory]), [
-    ['npm', '/'], ['cargo', '/src-tauri'], ['github-actions', '/'],
+    ['npm', '/'], ['npm', '/tools/release'], ['cargo', '/src-tauri'], ['github-actions', '/'],
   ]);
   for (const update of dependabot.updates) {
     assert.deepEqual(update.schedule, { interval: 'cron', cronjob: '17 9 * * *', timezone: 'Asia/Bangkok' });
@@ -111,4 +114,41 @@ test('Dependabot checks all shipped ecosystems every calendar day without bypass
       assert.deepEqual(group['update-types'], ['minor', 'patch']);
     }
   }
+  const tools = dependabot.updates.find(update => update.directory === '/tools/release');
+  assert.deepEqual(tools['commit-message'], { prefix: 'chore', 'prefix-development': 'chore', include: 'scope' });
+  const actions = dependabot.updates.find(update => update['package-ecosystem'] === 'github-actions');
+  assert.deepEqual(actions['commit-message'], { prefix: 'ci', include: 'scope' });
+});
+
+test('the braces advisory exception cannot reach the desktop dependency graph or publisher plugins', async () => {
+  const root = JSON.parse(await readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  for (const path of Object.keys(root.packages)) {
+    assert.doesNotMatch(path, /(?:^|\/)node_modules\/(?:braces|micromatch)(?:\/|$)/, path);
+    assert.doesNotMatch(path, /(?:^|\/)node_modules\/@semantic-release\//, path);
+  }
+  const manifest = JSON.parse(await readFile(new URL('../tools/release/package.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.dependencies, undefined);
+  assert.deepEqual(Object.keys(manifest.devDependencies).sort(), [
+    '@semantic-release/commit-analyzer', '@semantic-release/release-notes-generator',
+    'conventional-changelog-conventionalcommits', 'semver',
+  ]);
+  assert.equal(manifest.overrides['conventional-changelog-writer'], '9.2.1');
+  const lock = JSON.parse(await readFile(new URL('../tools/release/package-lock.json', import.meta.url), 'utf8'));
+  for (const path of Object.keys(lock.packages)) {
+    assert.doesNotMatch(path, /(?:^|\/)node_modules\/(?:semantic-release|@semantic-release\/(?:npm|github|git))(?:\/|$)/, path);
+  }
+  const npmrc = (await readFile(new URL('../tools/release/.npmrc', import.meta.url), 'utf8'))
+    .split(/\r?\n/).map(line => line.trim()).filter(line => line && !/^[#;]/.test(line));
+  assert.deepEqual(npmrc, ['legacy-peer-deps=true']);
+});
+
+test('required quality checks execute the installed official-engine zero-braces guard', async () => {
+  const guard = await readFile(new URL('./semantic-release-plan-tests.mjs', import.meta.url), 'utf8');
+  assert.ok(guard.includes('official engines never call vulnerable braces walkers and use only trusted matcher patterns'));
+  const quality = desktop.jobs.quality.steps.map(step => step.run ?? '').join('\n');
+  const install = quality.indexOf('npm ci --prefix tools/release');
+  const tests = quality.indexOf('node --test scripts/*-tests.mjs');
+  assert.ok(install >= 0 && tests > install);
+  assert.deepEqual(desktop.jobs.verify.needs, ['quality', 'security']);
+  assert.equal(desktop.jobs.release.needs, 'verify');
 });

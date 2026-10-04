@@ -5,6 +5,20 @@ const repository = 'oDestroyeRo/openrayrag';
 const workflowPath = '.github/workflows/release.yml';
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+function mergeTitle(pr) {
+  const ecosystem = /^dependabot\/(npm_and_yarn|cargo|github_actions)\//.exec(pr.head?.ref ?? '')?.[1];
+  const title = pr.title;
+  if (!ecosystem || typeof title !== 'string' || title.length > 256 ||
+      /[\u0000-\u001f\u007f]/.test(title) || title !== title.trim()) return undefined;
+  const conventional = /^(chore|ci)\((deps|deps-dev)\): (\S.*)$/.exec(title);
+  if (!conventional) return undefined;
+  const [, type, scope] = conventional;
+  if (ecosystem === 'github_actions') return type === 'ci' && scope === 'deps' ? title : undefined;
+  if (type !== 'chore') return undefined;
+  if (pr.head.ref.startsWith('dependabot/npm_and_yarn/tools/release/') && scope !== 'deps-dev') return undefined;
+  return title;
+}
+
 function rejectionReason(pr, testedHead) {
   if (pr.user?.login !== 'dependabot[bot]' || pr.user?.type !== 'Bot' ||
       pr.base?.ref !== 'main' || pr.base?.repo?.full_name !== repository ||
@@ -13,6 +27,7 @@ function rejectionReason(pr, testedHead) {
   }
   if (pr.head.sha !== testedHead) return 'PR changed after the tested commit';
   if (pr.draft || (pr.state !== 'open' && !pr.merged)) return 'PR is draft or closed';
+  if (!mergeTitle(pr)) return 'Dependabot title or ecosystem does not match dependency policy';
 }
 
 // All inputs are API metadata. No PR code, artifacts or package hooks execute here.
@@ -61,7 +76,7 @@ export async function mergeDependabotUpdate({ request, runId, dryRun = false, pa
     const merged = await request('PUT', `${root}/pulls/${number}/merge`, {
       sha: run.head_sha,
       merge_method: 'merge',
-      commit_title: `chore(deps): merge Dependabot PR #${number}`,
+      commit_title: mergeTitle(pr),
     });
     if (merged.merged !== true) throw new Error(`GitHub did not merge Dependabot PR #${number}`);
     mergeSha = merged.sha;

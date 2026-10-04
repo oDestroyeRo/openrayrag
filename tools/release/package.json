@@ -1,0 +1,15 @@
+{
+  "name": "rayrag-release-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/release-notes-generator": "14.1.1",
+    "conventional-changelog-conventionalcommits": "10.4.0",
+    "semver": "7.8.5"
+  },
+  "overrides": {
+    "conventional-changelog-writer": "9.2.1"
+  }
+}

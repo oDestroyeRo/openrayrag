@@ -1,5 +1,12 @@
 // Release contracts and state transitions. All network/native effects are injected.
 import { createHash, createPublicKey, verify } from "node:crypto";
+import {
+  stableVersion,
+  compareVersions,
+  validatePlan,
+  planSha256,
+} from "./semantic-release-plan.mjs";
+import migration from "../release-migration.json" with { type: "json" };
 export const REPOSITORY = "oDestroyeRo/openrayrag";
 export const TARGET = "aarch64-apple-darwin";
 export const WINDOWS_TARGET = "x86_64-pc-windows-msvc";
@@ -10,9 +17,10 @@ export const PLATFORM_CHECKS = [
   "package-contents",
 ];
 export const MAX_RELEASE_ASSET = 256 * 1024 * 1024;
-export const MAX_RELEASE_BUNDLE = 9 * MAX_RELEASE_ASSET;
+export const MAX_RELEASE_BUNDLE = 10 * MAX_RELEASE_ASSET;
 export const IDENTIFIER = "com.rayrag.companion";
 // Match the installed client's download and signature limits before publishing.
+export const MAX_UPDATER_METADATA = 64_000;
 export const MAX_UPDATER_ARCHIVE = 128 * 1024 * 1024;
 export const NODE_VERSION = "26.10.0",
   RUST_VERSION = "1.98.1";
@@ -72,7 +80,7 @@ export function identity(history, sha, pubDate) {
   };
 }
 export function assetNames(version) {
-  countOf(version);
+  stableVersion(version);
   const base = `Rayrag_Companion_${version}_aarch64`;
   return {
     archive: `${base}.app.tar.gz`,
@@ -84,16 +92,20 @@ export function assetNames(version) {
   };
 }
 export function expectedNames(version, schemaVersion = 2) {
-  requireValue([1, 2].includes(schemaVersion), "Unsupported release schema.");
+  requireValue(
+    [1, 2, 3].includes(schemaVersion),
+    "Unsupported release schema.",
+  );
   const n = assetNames(version);
   return [
     n.archive,
     n.signature,
     n.dmg,
-    ...(schemaVersion === 2 ? [n.windows, n.deb, n.appimage] : []),
+    ...(schemaVersion >= 2 ? [n.windows, n.deb, n.appimage] : []),
     "provenance.json",
     "SHA256SUMS",
     "latest.json",
+    ...(schemaVersion === 3 ? ["latest-semver.json"] : []),
   ];
 }
 function base64(text, maxBytes) {
@@ -128,7 +140,7 @@ export function verifyUpdaterSignature(data, signature, publicKey, version) {
     typeof signature === "string" && signature.trim().length <= 4096,
     "Updater signature exceeds the client bound.",
   );
-  countOf(version);
+  stableVersion(version);
   const keyLines = textBox(publicKey.trim(), 4096),
     sigLines = textBox(signature.trim(), 8192);
   requireValue(
@@ -398,7 +410,13 @@ export function createBundle(id, payload, build, publicKey) {
   const names = assetNames(id.version);
   const schemaVersion = build.schemaVersion ?? 2;
   const payloadNames = expectedNames(id.version, schemaVersion).filter(
-    (n) => !["provenance.json", "SHA256SUMS", "latest.json"].includes(n),
+    (n) =>
+      ![
+        "provenance.json",
+        "SHA256SUMS",
+        "latest.json",
+        "latest-semver.json",
+      ].includes(n),
   );
   requireValue(
     payload.size === payloadNames.length &&
@@ -414,10 +432,13 @@ export function createBundle(id, payload, build, publicKey) {
     id.version,
   );
   files.set(
-    "latest.json",
+    schemaVersion === 3 ? "latest-semver.json" : "latest.json",
     jsonBuffer({
       version: id.version,
-      notes: `Source ${id.sourceSha}. Install automatically only when fully stopped.`,
+      notes:
+        schemaVersion === 3
+          ? validatePlan(id.releasePlan).notes
+          : `Source ${id.sourceSha}. Install automatically only when fully stopped.`,
       pub_date: id.pubDate,
       platforms: {
         "darwin-aarch64": {
@@ -427,13 +448,15 @@ export function createBundle(id, payload, build, publicKey) {
       },
     }),
   );
+  if (schemaVersion === 3) files.set("latest.json", legacyFeed());
   files.set(
     "provenance.json",
     jsonBuffer({
       schemaVersion,
       repository: REPOSITORY,
       sourceSha: id.sourceSha,
-      firstParentCount: countOf(id.version),
+      firstParentCount:
+        schemaVersion === 3 ? sourceCount(id) : countOf(id.version),
       version: id.version,
       target: TARGET,
       identifier: IDENTIFIER,
@@ -441,13 +464,16 @@ export function createBundle(id, payload, build, publicKey) {
       runAttempt: build.runAttempt,
       artifactName: build.artifactName,
       toolchain: { node: NODE_VERSION, rust: RUST_VERSION },
-      ...(schemaVersion === 2
+      ...(schemaVersion >= 2
         ? {
             platforms: [
               platformReceipt(payload, id, build, TARGET),
               ...(build.platforms ?? []),
             ].sort((a, b) => compareNames(a.target, b.target)),
           }
+        : {}),
+      ...(schemaVersion === 3
+        ? { releasePlan: validatePlan(id.releasePlan) }
         : {}),
       files: [...files]
         .map(([name, bytes]) => fileRecord(name, bytes))
@@ -474,7 +500,35 @@ export function validateBundle(files, id, publicKey) {
         bytes.length <= MAX_RELEASE_ASSET,
       "Release asset is empty or exceeds the limit.",
     );
-  const latest = parseJson(files.get("latest.json"), "latest.json");
+  for (const name of [
+    "latest.json",
+    ...(p.schemaVersion === 3 ? ["latest-semver.json"] : []),
+  ])
+    requireValue(
+      Buffer.isBuffer(files.get(name)) &&
+        files.get(name).length <= MAX_UPDATER_METADATA,
+      "Updater metadata exceeds the installed client bound.",
+    );
+  const latest = parseJson(
+    files.get(p.schemaVersion === 3 ? "latest-semver.json" : "latest.json"),
+    "updater feed",
+  );
+  if (p.schemaVersion === 3) {
+    requireValue(
+      files.get("latest.json").equals(legacyFeed()),
+      "Legacy bridge feed changed.",
+    );
+    validatePlan(p.releasePlan);
+    requireValue(
+      p.releasePlan.sourceSha === id.sourceSha &&
+        p.releasePlan.version === id.version &&
+        p.releasePlan.pubDate === id.pubDate &&
+        p.releasePlan.firstParentCount === id.firstParentCount &&
+        (!id.releasePlan ||
+          planSha256(p.releasePlan) === planSha256(id.releasePlan)),
+      "Bundle plan differs from its reserved source/version.",
+    );
+  }
   exactKeys(
     latest,
     ["version", "notes", "pub_date", "platforms"],
@@ -487,7 +541,9 @@ export function validateBundle(files, id, publicKey) {
     latest.version === id.version &&
       latest.pub_date === id.pubDate &&
       latest.notes ===
-        `Source ${id.sourceSha}. Install automatically only when fully stopped.`,
+        (p.schemaVersion === 3
+          ? p.releasePlan.notes
+          : `Source ${id.sourceSha}. Install automatically only when fully stopped.`),
     "Release metadata differs from the exact source.",
   );
   requireValue(
@@ -520,15 +576,17 @@ export function validateBundle(files, id, publicKey) {
       "artifactName",
       "toolchain",
       "files",
-      ...(p.schemaVersion === 2 ? ["platforms"] : []),
+      ...(p.schemaVersion >= 2 ? ["platforms"] : []),
+      ...(p.schemaVersion === 3 ? ["releasePlan"] : []),
     ],
     "provenance",
   );
   requireValue(
-    [1, 2].includes(p.schemaVersion) &&
+    [1, 2, 3].includes(p.schemaVersion) &&
       p.repository === REPOSITORY &&
       p.sourceSha === id.sourceSha &&
-      p.firstParentCount === countOf(id.version) &&
+      p.firstParentCount ===
+        (p.schemaVersion === 3 ? sourceCount(id) : countOf(id.version)) &&
       p.version === id.version &&
       p.target === TARGET &&
       p.identifier === IDENTIFIER,
@@ -553,7 +611,7 @@ export function validateBundle(files, id, publicKey) {
     JSON.stringify(p.files) === JSON.stringify(expected),
     "Provenance asset hashes or sizes differ.",
   );
-  if (p.schemaVersion === 2) {
+  if (p.schemaVersion >= 2) {
     requireValue(
       Array.isArray(p.platforms) &&
         p.platforms.length === 3 &&
@@ -583,16 +641,19 @@ export function validateBundle(files, id, publicKey) {
 }
 export function releaseBody(id, artifact, schemaVersion = 2) {
   validateArtifact(artifact);
-  requireValue([1, 2].includes(schemaVersion), "Unsupported release schema.");
+  requireValue(
+    [1, 2, 3].includes(schemaVersion),
+    "Unsupported release schema.",
+  );
   const platforms =
-    schemaVersion === 2
+    schemaVersion >= 2
       ? "Apple Silicon macOS, Windows x64 and Linux x86_64"
       : "Apple Silicon (ARM64)";
   const installers =
-    schemaVersion === 2
+    schemaVersion >= 2
       ? " Download the Windows NSIS installer, Linux DEB or AppImage for those systems; their updater remains disabled."
       : "";
-  return `Rayrag Companion ${id.version} for ${platforms}.\n\nBootstrap: download the DMG for macOS.${installers} Existing updater-enabled macOS clients use the signed archive. Apple signing is ad-hoc; this build is not notarized.\n\nSource: ${id.sourceSha}\n\n<!-- rayrag-release:${JSON.stringify({ schemaVersion, version: id.version, sourceSha: id.sourceSha, artifact })} -->`;
+  return `Rayrag Companion ${id.version} for ${platforms}.\n\nBootstrap: download the DMG for macOS.${installers} Existing updater-enabled macOS clients use the signed archive. Apple signing is ad-hoc; this build is not notarized.\n\n${schemaVersion === 3 ? validatePlan(id.releasePlan).notes + "\n\n" : ""}Source: ${id.sourceSha}\n\n<!-- rayrag-release:${JSON.stringify({ schemaVersion, version: id.version, sourceSha: id.sourceSha, artifact, ...(schemaVersion === 3 ? { firstParentCount: sourceCount(id), planSha256: planSha256(id.releasePlan) } : {}) })} -->`;
 }
 export function releaseMetadata(release) {
   requireValue(
@@ -621,22 +682,38 @@ export function releaseMetadata(release) {
   }
   exactKeys(
     meta,
-    ["schemaVersion", "version", "sourceSha", "artifact"],
+    [
+      "schemaVersion",
+      "version",
+      "sourceSha",
+      "artifact",
+      ...(meta.schemaVersion === 3 ? ["firstParentCount", "planSha256"] : []),
+    ],
     "release provenance",
   );
   requireValue(
-    [1, 2].includes(meta.schemaVersion) &&
+    [1, 2, 3].includes(meta.schemaVersion) &&
       release.tag_name === `v${meta.version}`,
     "Release tag/metadata conflict.",
   );
-  countOf(meta.version);
+  if (meta.schemaVersion === 3) {
+    stableVersion(meta.version);
+    requireValue(
+      Number.isSafeInteger(meta.firstParentCount) &&
+        meta.firstParentCount > 0 &&
+        typeof meta.planSha256 === "string" &&
+        /^[a-f0-9]{64}$/.test(meta.planSha256),
+      "Invalid release plan marker.",
+    );
+  } else countOf(meta.version);
   validSha(meta.sourceSha);
   validateArtifact(meta.artifact);
   return meta;
 }
 async function assertRelease(ctx, release) {
   const meta = releaseMetadata(release),
-    n = countOf(meta.version);
+    n =
+      meta.schemaVersion === 3 ? meta.firstParentCount : countOf(meta.version);
   requireValue(
     ctx.history[n - 1] === meta.sourceSha,
     "Published history was rewritten or version/tag ancestry conflicts.",
@@ -647,13 +724,22 @@ async function assertRelease(ctx, release) {
   );
   return meta;
 }
-async function verifiedRelease(ctx, release) {
+export async function verifiedRelease(ctx, release) {
   const meta = await assertRelease(ctx, release),
-    id = identity(
-      ctx.history,
-      meta.sourceSha,
-      await ctx.dateFor(meta.sourceSha),
-    );
+    id =
+      meta.schemaVersion === 3
+        ? {
+            sourceSha: meta.sourceSha,
+            firstParentCount: meta.firstParentCount,
+            version: meta.version,
+            tag: `v${meta.version}`,
+            pubDate: await ctx.dateFor(meta.sourceSha),
+          }
+        : identity(
+            ctx.history,
+            meta.sourceSha,
+            await ctx.dateFor(meta.sourceSha),
+          );
   const files = await ctx.api.downloadRelease(
     release,
     expectedNames(id.version, meta.schemaVersion),
@@ -663,6 +749,15 @@ async function verifiedRelease(ctx, release) {
     p.runId === meta.artifact.runId && p.schemaVersion === meta.schemaVersion,
     "Release and build run provenance differ.",
   );
+  if (meta.schemaVersion === 3) {
+    requireValue(
+      typeof ctx.verifyPlan === "function" &&
+        planSha256(p.releasePlan) === meta.planSha256,
+      "Published release is missing its exact reserved plan.",
+    );
+    await ctx.verifyPlan(p.releasePlan);
+    id.releasePlan = p.releasePlan;
+  }
   await ctx.verifyNative(files, id);
   return { meta, id, files };
 }
@@ -677,7 +772,13 @@ export async function preflight(ctx) {
     return { state: "build" };
   }
   const meta = await assertRelease(ctx, release);
-  requireValue(meta.sourceSha === ctx.id.sourceSha, "Release source conflict.");
+  requireValue(
+    meta.sourceSha === ctx.id.sourceSha &&
+      (!ctx.id.releasePlan ||
+        (meta.schemaVersion === 3 &&
+          meta.planSha256 === planSha256(ctx.id.releasePlan))),
+    "Release source or plan conflict.",
+  );
   if (!release.draft) {
     await verifiedRelease(ctx, release);
     return { state: "published", artifact: meta.artifact };
@@ -689,11 +790,16 @@ async function latestState(ctx) {
   if (!latest) return null;
   requireValue(!latest.draft, "Latest release cannot be a draft.");
   const { meta } = await verifiedRelease(ctx, latest);
-  return { release: latest, count: countOf(meta.version) };
+  return {
+    release: latest,
+    count:
+      meta.schemaVersion === 3 ? meta.firstParentCount : countOf(meta.version),
+    version: meta.version,
+  };
 }
 export async function publishRelease(ctx) {
   requireValue(
-    ctx.history[countOf(ctx.id.version) - 1] === ctx.id.sourceSha,
+    ctx.history[sourceCount(ctx.id) - 1] === ctx.id.sourceSha,
     "Candidate is not the current main first-parent version.",
   );
   let latest = await latestState(ctx),
@@ -704,15 +810,22 @@ export async function publishRelease(ctx) {
       releaseMetadata(release).sourceSha === ctx.id.sourceSha,
       "Published source conflict.",
     );
-    if (!latest || latest.count < countOf(ctx.id.version))
-      await promote(ctx, release, true, latest?.count ?? 0);
+    if (!latest || isNewer(ctx.id, latest))
+      await promote(ctx, release, true, latest);
     return "already-published";
   }
   requireValue(
     ctx.files instanceof Map,
     "Original complete signed bundle is required to resume a draft.",
   );
-  validateBundle(ctx.files, ctx.id, ctx.publicKey);
+  const candidate = validateBundle(ctx.files, ctx.id, ctx.publicKey);
+  if (candidate.schemaVersion === 3) {
+    requireValue(
+      typeof ctx.verifyPlan === "function",
+      "Release plan verification is required.",
+    );
+    await ctx.verifyPlan(candidate.releasePlan);
+  }
   await ctx.verifyNative(ctx.files, ctx.id);
   validateArtifact(ctx.artifact);
   const provenance = parseJson(ctx.files.get("provenance.json"), "provenance");
@@ -756,6 +869,8 @@ export async function publishRelease(ctx) {
     release.draft &&
       meta.sourceSha === ctx.id.sourceSha &&
       meta.schemaVersion === provenance.schemaVersion &&
+      (meta.schemaVersion !== 3 ||
+        meta.planSha256 === planSha256(provenance.releasePlan)) &&
       JSON.stringify(meta.artifact) === JSON.stringify(ctx.artifact),
     "Draft belongs to another build. Reuse its original artifact; never mix rebuilds.",
   );
@@ -792,8 +907,8 @@ export async function publishRelease(ctx) {
   requireValue(release?.draft, "Draft changed while staging.");
   await verifiedRelease(ctx, release);
   latest = await latestState(ctx);
-  const makeLatest = !latest || countOf(ctx.id.version) > latest.count;
-  await promote(ctx, release, makeLatest, latest?.count ?? 0);
+  const makeLatest = !latest || isNewer(ctx.id, latest);
+  await promote(ctx, release, makeLatest, latest);
   return makeLatest ? "published-latest" : "published-older";
 }
 async function promote(ctx, release, makeLatest, minimumLatest) {
@@ -815,8 +930,54 @@ async function promote(ctx, release, makeLatest, minimumLatest) {
   const latest = await latestState(ctx);
   requireValue(
     latest &&
-      latest.count >=
-        Math.max(minimumLatest, makeLatest ? countOf(ctx.id.version) : 0),
+      (!minimumLatest ||
+        (latest.count >= minimumLatest.count &&
+          compareVersions(latest.version, minimumLatest.version) >= 0)) &&
+      (!makeLatest ||
+        (latest.count >= sourceCount(ctx.id) &&
+          compareVersions(latest.version, ctx.id.version) >= 0)),
     "Latest promotion was not confirmed or moved backwards.",
   );
+}
+
+export function sourceCount(id) {
+  if (!id.releasePlan && id.firstParentCount === undefined)
+    return countOf(id.version);
+  requireValue(
+    Number.isSafeInteger(id.firstParentCount) && id.firstParentCount > 0,
+    "Invalid release source ordinal.",
+  );
+  return id.firstParentCount;
+}
+function isNewer(id, latest) {
+  const order = Math.sign(sourceCount(id) - latest.count),
+    semantic = Math.sign(compareVersions(id.version, latest.version));
+  requireValue(
+    order === semantic,
+    "Release source and semantic version order conflict.",
+  );
+  return order > 0;
+}
+export const migrationBridge = Object.freeze(
+  Object.fromEntries(
+    ["sourceSha", "firstParentCount", "version", "tag"].map((key) => [
+      key,
+      migration.bridge[key],
+    ]),
+  ),
+);
+export function legacyFeed() {
+  const bytes = jsonBuffer(migration.legacyFeed);
+  const bridge = migrationBridge;
+  requireValue(
+    bridge.tag === `v${bridge.version}` &&
+      countOf(bridge.version) === bridge.firstParentCount &&
+      sha256(bytes) === migration.bridge.feedSha256 &&
+      migration.legacyFeed.version === bridge.version &&
+      migration.legacyFeed.platforms?.["darwin-aarch64"]?.url ===
+        `https://github.com/${REPOSITORY}/releases/download/${bridge.tag}/${assetNames(bridge.version).archive}`,
+    "Invalid frozen bridge feed.",
+  );
+  validSha(bridge.sourceSha);
+  return bytes;
 }

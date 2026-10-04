@@ -67,6 +67,8 @@ jobs:
           head-ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           fail-on-severity: high
           fail-on-scopes: runtime,development,unknown
+          # Isolated release-tool graph only; required tests trap braces calls.
+          allow-ghsas: GHSA-vfj7-8cjw-p6xm
           comment-summary-in-pr: never
           license-check: false
 

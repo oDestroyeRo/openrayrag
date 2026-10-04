@@ -230,89 +230,320 @@ pub(crate) fn install(bytes: &[u8], version: &str) -> Result<(), String> {
                 .ancestors()
                 .find(|p| p.extension().is_some_and(|x| x == "app"))
                 .ok_or_else(invalid)?;
-            if current
-                .file_name()
-                .map_or(true, |n| n != "Rayrag Companion.app")
-                || fs::symlink_metadata(current)?.file_type().is_symlink()
-            {
-                return Err(invalid());
-            }
-            let parent = current.parent().ok_or_else(invalid)?;
-            let cache = parent.join(".rayrag-update-recovery");
-            let created = match fs::create_dir(&cache) {
-                Ok(()) => true,
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => false,
-                Err(e) => return Err(e),
-            };
-            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-            let cache_fd = fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-                .open(&cache)?;
-            if created {
-                cache_fd.set_permissions(fs::Permissions::from_mode(0o700))?;
-                crate::login::local_store::access_list::clear(&cache_fd)?;
-            }
-            crate::login::local_store::verify_private(&cache_fd, true)?;
-            fs::File::open(parent)?.sync_all()?;
-            let _transaction_lock = lock_cache(&cache)?;
-            // Another instance may have replaced the on-disk app since this
-            // process started. Compare under the interprocess lock, not only
-            // against the running binary's build-time version.
-            if !newer_than_installed(current, version) {
-                return Err(invalid());
-            }
-            // A private staging directory in this parent is also the writeability probe.
-            // No admin prompt or alternative elevated path exists.
-            let staging = tempfile::Builder::new()
-                .prefix(".rayrag-update-")
-                .tempdir_in(&cache)?;
-            let dir = fs::File::open(staging.path())?;
-            crate::login::local_store::access_list::clear(&dir).map_err(|_| invalid())?;
-            extract(bytes, staging.path())?;
-            let staged = staging.path().join("Rayrag Companion.app");
-            if !bundle_matches(&staged, version) || !launchable(&staged) {
-                return Err(invalid());
-            }
-            let result = Command::new("/usr/bin/codesign")
-                .args(["--verify", "--deep", "--strict"])
-                .arg(&staged)
-                .output()?;
-            if !result.status.success() {
-                return Err(invalid());
-            }
-            // Verify ARM64 Mach-O, not just the feed's platform label.
-            let mut binary = [0; 8];
-            fs::File::open(staged.join("Contents/MacOS/rayrag-companion"))?
-                .read_exact(&mut binary)?;
-            if binary[..4] != [0xcf, 0xfa, 0xed, 0xfe]
-                || u32::from_le_bytes(binary[4..8].try_into().map_err(|_| invalid())?) != 0x0100000c
-            {
-                return Err(invalid());
-            }
-            sync_tree(staging.path())?;
-            // At most one previous bundle is retained. The fixed private cache
-            // is unrelated to credential/settings storage and never follows links.
-            let backup = cache.join("previous.app");
-            if let Ok(meta) = fs::symlink_metadata(&backup) {
-                if !meta.is_dir() || meta.file_type().is_symlink() {
-                    return Err(invalid());
-                }
-                fs::remove_dir_all(&backup)?;
-            }
-            fs::rename(&staged, &backup)?;
-            sync_tree(&cache)?;
-            replace(current, &backup, exchange, || {
-                cache_fd.sync_all()?;
-                fs::File::open(parent)?.sync_all()
-            })
+            install_at(bytes, version, current)
         };
         perform().map_err(|_| ERROR.into())
     }
 }
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn install_at(bytes: &[u8], version: &str, current: &Path) -> io::Result<()> {
+    if current
+        .file_name()
+        .map_or(true, |n| n != "Rayrag Companion.app")
+        || fs::symlink_metadata(current)?.file_type().is_symlink()
+    {
+        return Err(invalid());
+    }
+    let parent = current.parent().ok_or_else(invalid)?;
+    let cache = parent.join(".rayrag-update-recovery");
+    let created = match fs::create_dir(&cache) {
+        Ok(()) => true,
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => false,
+        Err(e) => return Err(e),
+    };
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let cache_fd = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(&cache)?;
+    if created {
+        cache_fd.set_permissions(fs::Permissions::from_mode(0o700))?;
+        crate::login::local_store::access_list::clear(&cache_fd)?;
+    }
+    crate::login::local_store::verify_private(&cache_fd, true)?;
+    fs::File::open(parent)?.sync_all()?;
+    let _transaction_lock = lock_cache(&cache)?;
+    // Another instance may have replaced the on-disk app since this
+    // process started. Compare under the interprocess lock, not only
+    // against the running binary's build-time version.
+    if !newer_than_installed(current, version) {
+        return Err(invalid());
+    }
+    // A private staging directory in this parent is also the writeability probe.
+    // No admin prompt or alternative elevated path exists.
+    let staging = tempfile::Builder::new()
+        .prefix(".rayrag-update-")
+        .tempdir_in(&cache)?;
+    let dir = fs::File::open(staging.path())?;
+    crate::login::local_store::access_list::clear(&dir).map_err(|_| invalid())?;
+    extract(bytes, staging.path())?;
+    let staged = staging.path().join("Rayrag Companion.app");
+    if !bundle_matches(&staged, version) || !launchable(&staged) {
+        return Err(invalid());
+    }
+    let result = Command::new("/usr/bin/codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(&staged)
+        .output()?;
+    if !result.status.success() {
+        return Err(invalid());
+    }
+    // Verify ARM64 Mach-O, not just the feed's platform label.
+    let mut binary = [0; 8];
+    fs::File::open(staged.join("Contents/MacOS/rayrag-companion"))?.read_exact(&mut binary)?;
+    if binary[..4] != [0xcf, 0xfa, 0xed, 0xfe]
+        || u32::from_le_bytes(binary[4..8].try_into().map_err(|_| invalid())?) != 0x0100000c
+    {
+        return Err(invalid());
+    }
+    sync_tree(staging.path())?;
+    // At most one previous bundle is retained. The fixed private cache
+    // is unrelated to credential/settings storage and never follows links.
+    let backup = cache.join("previous.app");
+    if let Ok(meta) = fs::symlink_metadata(&backup) {
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return Err(invalid());
+        }
+        fs::remove_dir_all(&backup)?;
+    }
+    fs::rename(&staged, &backup)?;
+    sync_tree(&cache)?;
+    replace(current, &backup, exchange, || {
+        cache_fd.sync_all()?;
+        fs::File::open(parent)?.sync_all()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    mod public_fixtures {
+        use super::*;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        use std::path::PathBuf;
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Manifest {
+            public_key: String,
+            entries: Vec<Fixture>,
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Fixture {
+            version: String,
+            archive_path: PathBuf,
+            signature_path: PathBuf,
+            sha256: Option<String>,
+        }
+
+        struct VerifiedFixture {
+            version: String,
+            bytes: Vec<u8>,
+            binary_sha256: String,
+        }
+
+        fn fixture_bytes(path: &Path, directory: &Path, limit: usize) -> Vec<u8> {
+            assert!(path.is_absolute(), "fixture paths must be absolute");
+            assert!(
+                fs::symlink_metadata(path).unwrap().is_file(),
+                "fixture must be a regular file, not a symlink"
+            );
+            let path = path.canonicalize().unwrap();
+            assert!(
+                path.starts_with(directory),
+                "fixtures must remain inside the owned manifest directory"
+            );
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(path)
+                .unwrap();
+            let metadata = file.metadata().unwrap();
+            // SAFETY: geteuid has no arguments and cannot access Rust memory.
+            assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+            assert!(metadata.is_file() && metadata.nlink() == 1);
+            assert!(metadata.len() > 0 && metadata.len() <= limit as u64);
+            let mut bytes = Vec::new();
+            file.take(limit as u64 + 1).read_to_end(&mut bytes).unwrap();
+            assert!(!bytes.is_empty() && bytes.len() <= limit);
+            bytes
+        }
+
+        fn sha256(path: &Path) -> String {
+            let result = Command::new("/usr/bin/shasum")
+                .args(["-a", "256"])
+                .arg(path)
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "fixture SHA-256 failed");
+            let output = String::from_utf8(result.stdout).unwrap();
+            let hash = output.split_whitespace().next().unwrap();
+            assert!(hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()));
+            hash.to_owned()
+        }
+
+        fn assert_bundle(bundle: &Path, fixture: &VerifiedFixture) {
+            assert!(bundle_matches(bundle, &fixture.version));
+            assert!(launchable(bundle));
+            let signed = Command::new("/usr/bin/codesign")
+                .args(["--verify", "--deep", "--strict"])
+                .arg(bundle)
+                .output()
+                .unwrap();
+            assert!(signed.status.success(), "fixture code signature failed");
+            assert_eq!(
+                sha256(&bundle.join("Contents/MacOS/rayrag-companion")),
+                fixture.binary_sha256
+            );
+        }
+
+        fn snapshot(directory: &Path) -> Vec<(PathBuf, String)> {
+            fn visit(root: &Path, path: &Path, files: &mut Vec<(PathBuf, String)>) {
+                let metadata = fs::symlink_metadata(path).unwrap();
+                assert!(!metadata.file_type().is_symlink());
+                let relative = path.strip_prefix(root).unwrap().to_owned();
+                if metadata.is_dir() {
+                    files.push((relative, String::new()));
+                    for entry in fs::read_dir(path).unwrap() {
+                        visit(root, &entry.unwrap().path(), files);
+                    }
+                } else {
+                    assert!(metadata.is_file());
+                    files.push((relative, sha256(path)));
+                }
+            }
+            let mut files = Vec::new();
+            visit(directory, directory, &mut files);
+            files.sort();
+            files
+        }
+
+        fn assert_recovery(cache: &Path, previous: &VerifiedFixture) {
+            crate::login::local_store::verify_private(&fs::File::open(cache).unwrap(), true)
+                .unwrap();
+            let mut names: Vec<_> = fs::read_dir(cache)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            assert_eq!(names, ["previous.app", "transaction.lock"]);
+            assert_bundle(&cache.join("previous.app"), previous);
+        }
+
+        /// Opt-in public artifact proof, without launching an app or opening app data.
+        /// Set RAYRAG_UPDATE_FIXTURE_MANIFEST to an absolute JSON file in a private
+        /// owned temporary directory. All archive/signature files must be under it:
+        /// {"publicKey":"<committed tauri.conf.json updater key>","entries":[
+        ///   {"version":"0.2.63","archivePath":"/tmp/owned/old.tar.gz",
+        ///    "signaturePath":"/tmp/owned/old.tar.gz.sig","sha256":"<optional hex>"},
+        ///   {"version":"0.2.64","archivePath":"/tmp/owned/bridge.tar.gz",
+        ///    "signaturePath":"/tmp/owned/bridge.tar.gz.sig"},
+        ///   {"version":"0.3.0","archivePath":"/tmp/owned/semantic.tar.gz",
+        ///    "signaturePath":"/tmp/owned/semantic.tar.gz.sig"}]}
+        /// Entries are old 0.2.63, a stable 0.2.N bridge with N >= 64, and the
+        /// newer stable semantic release. Signatures are the public base64 .sig files.
+        #[test]
+        #[ignore = "requires RAYRAG_UPDATE_FIXTURE_MANIFEST with public signed release fixtures"]
+        fn public_signed_update_chain() {
+            let manifest_path = PathBuf::from(
+                std::env::var_os("RAYRAG_UPDATE_FIXTURE_MANIFEST")
+                    .expect("set RAYRAG_UPDATE_FIXTURE_MANIFEST to opt into public artifact proof"),
+            );
+            assert!(manifest_path.is_absolute());
+            let directory = manifest_path.parent().unwrap().canonicalize().unwrap();
+            let temporary_roots = [std::env::temp_dir(), PathBuf::from("/tmp")];
+            assert!(temporary_roots.iter().any(|root| {
+                let root = root.canonicalize().unwrap();
+                directory != root && directory.starts_with(root)
+            }));
+            crate::login::local_store::verify_private(&fs::File::open(&directory).unwrap(), true)
+                .expect("the fixture manifest directory must be owned, private, and ACL-free");
+            let manifest: Manifest =
+                serde_json::from_slice(&fixture_bytes(&manifest_path, &directory, 64_000)).unwrap();
+            let config: serde_json::Value =
+                serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+            assert_eq!(manifest.public_key, config["plugins"]["updater"]["pubkey"]);
+            assert_eq!(manifest.entries.len(), 3);
+            let versions: Vec<_> = manifest
+                .entries
+                .iter()
+                .map(|entry| semver::Version::parse(&entry.version).unwrap())
+                .collect();
+            assert_eq!(versions[0], semver::Version::new(0, 2, 63));
+            assert!(versions[1].major == 0 && versions[1].minor == 2 && versions[1].patch >= 64);
+            assert!(versions[2] > versions[1]);
+            assert!(versions
+                .iter()
+                .all(|v| v.pre.is_empty() && v.build.is_empty()));
+
+            // Every write and replacement below stays in this freshly owned tree.
+            // No current_exe lookup, Tauri app context, HOME override, or GUI launch.
+            let run = tempfile::Builder::new()
+                .prefix("rayrag-public-update-chain-")
+                .tempdir()
+                .unwrap();
+            let fixtures: Vec<_> = manifest
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    let bytes = fixture_bytes(&entry.archive_path, &directory, MAX_ARCHIVE);
+                    let signature =
+                        String::from_utf8(fixture_bytes(&entry.signature_path, &directory, 4096))
+                            .unwrap();
+                    verify(
+                        &bytes,
+                        signature.trim(),
+                        &manifest.public_key,
+                        &entry.version,
+                    )
+                    .unwrap();
+                    if let Some(expected) = entry.sha256 {
+                        assert_eq!(sha256(&entry.archive_path), expected);
+                    }
+                    let reference = tempfile::tempdir_in(run.path()).unwrap();
+                    extract(&bytes, reference.path()).unwrap();
+                    let bundle = reference.path().join("Rayrag Companion.app");
+                    let fixture = VerifiedFixture {
+                        version: entry.version,
+                        bytes,
+                        binary_sha256: sha256(&bundle.join("Contents/MacOS/rayrag-companion")),
+                    };
+                    assert_bundle(&bundle, &fixture);
+                    fixture
+                })
+                .collect();
+            let installation = run.path().join("installation");
+            fs::create_dir(&installation).unwrap();
+            extract(&fixtures[0].bytes, &installation).unwrap();
+            let current = installation.join("Rayrag Companion.app");
+            let cache = installation.join(".rayrag-update-recovery");
+            assert_bundle(&current, &fixtures[0]);
+
+            install_at(&fixtures[1].bytes, &fixtures[1].version, &current).unwrap();
+            assert_bundle(&current, &fixtures[1]);
+            assert_recovery(&cache, &fixtures[0]);
+            let before = snapshot(&installation);
+            let lock = lock_cache(&cache).unwrap();
+            assert!(install_at(&fixtures[2].bytes, &fixtures[2].version, &current).is_err());
+            assert_eq!(snapshot(&installation), before);
+            drop(lock);
+
+            install_at(&fixtures[2].bytes, &fixtures[2].version, &current).unwrap();
+            assert_bundle(&current, &fixtures[2]);
+            assert_recovery(&cache, &fixtures[1]);
+            for fixture in &fixtures {
+                let before = snapshot(&installation);
+                assert!(install_at(&fixture.bytes, &fixture.version, &current).is_err());
+                assert_eq!(snapshot(&installation), before);
+                assert_bundle(&current, &fixtures[2]);
+                assert_recovery(&cache, &fixtures[1]);
+            }
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn atomic_replacement_and_sync_failure_preserve_a_launchable_app() {

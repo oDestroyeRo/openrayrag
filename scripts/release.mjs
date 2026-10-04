@@ -25,16 +25,17 @@ import {
   MAX_RELEASE_BUNDLE,
   sha256,
   requireValue,
-  identity,
   assetNames,
   expectedNames,
   createBundle,
   validateBundle,
   validateArtifact,
   validatePlatformBuild,
-  preflight,
   publishRelease,
 } from "./release-core.mjs";
+import { stableVersion, serializePlan } from "./semantic-release-plan.mjs";
+import { planProduction, loadProductionPlan } from "./release-planning.mjs";
+import { PLAN_REF_PREFIX, MAX_RESERVATIONS } from "./release-reservations.mjs";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const exec = (file, args, cwd = repositoryRoot) =>
   execFileSync(file, args, {
@@ -43,7 +44,7 @@ const exec = (file, args, cwd = repositoryRoot) =>
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 export async function stampVersions(root, version) {
-  requireValue(/^0\.2\.[1-9]\d*$/.test(version), "Invalid stamp version.");
+  stableVersion(version);
   const paths = [
     "package.json",
     "package-lock.json",
@@ -136,7 +137,7 @@ async function readConfig() {
 async function filesAt(folder, version) {
   const names = await readdir(folder);
   requireValue(
-    names.includes("provenance.json") && names.length <= 9,
+    names.includes("provenance.json") && names.length <= 10,
     "Invalid release bundle directory.",
   );
   const schemaVersion = JSON.parse(
@@ -210,6 +211,14 @@ function trustedContext() {
     "origin",
     "refs/heads/main:refs/remotes/origin/main",
   ]);
+  // Fetch only the reservation namespace into this disposable CI checkout.
+  // Existing refs are never forced; a divergent remote tag fails closed.
+  exec("git", [
+    "fetch",
+    "--no-tags",
+    "origin",
+    `${PLAN_REF_PREFIX}*:${PLAN_REF_PREFIX}*`,
+  ]);
   const history = exec("git", [
     "rev-list",
     "--first-parent",
@@ -218,15 +227,81 @@ function trustedContext() {
   ]).split("\n");
   const dateFor = async (commit) =>
     new Date(exec("git", ["show", "-s", "--format=%cI", commit])).toISOString();
-  return { history, sha, dateFor };
+  return {
+    history,
+    sha,
+    dateFor,
+    readTagObject: (objectSha) => readLocalTagObject(repositoryRoot, objectSha),
+  };
+}
+export function readLocalTagObject(root, sha) {
+  requireValue(/^[a-f0-9]{40}$/.test(sha), "Invalid annotated tag SHA.");
+  const output = execFileSync("git", ["cat-file", "--batch"], {
+    cwd: root,
+    input: `${sha}\n`,
+    maxBuffer: 256 * 1024,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const end = output.indexOf(10);
+  requireValue(end >= 0, "Malformed Git object response.");
+  const response = output.subarray(0, end).toString("ascii");
+  if (response === `${sha} missing`) return null;
+  const match = response.match(/^([a-f0-9]{40}) tag ([1-9]\d*)$/);
+  requireValue(
+    match && match[1] === sha,
+    "Reservation is not an annotated Git tag.",
+  );
+  const size = Number(match[2]);
+  requireValue(
+    Number.isSafeInteger(size) &&
+      size <= 130 * 1024 &&
+      output.length === end + 1 + size + 1 &&
+      output.at(-1) === 10,
+    "Invalid annotated Git object size.",
+  );
+  const bytes = output.subarray(end + 1, end + 1 + size);
+  requireValue(
+    execFileSync("git", ["hash-object", "-t", "tag", "--stdin"], {
+      cwd: root,
+      input: bytes,
+      encoding: "utf8",
+      maxBuffer: 1024,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim() === sha,
+    "Annotated Git object checksum differs.",
+  );
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    split = text.indexOf("\n\n");
+  requireValue(split >= 0, "Annotated Git object headers are missing.");
+  const headers = new Map();
+  for (const line of text.slice(0, split).split("\n")) {
+    const space = line.indexOf(" ");
+    requireValue(
+      space > 0 && !headers.has(line.slice(0, space)),
+      "Invalid annotated Git object headers.",
+    );
+    headers.set(line.slice(0, space), line.slice(space + 1));
+  }
+  requireValue(
+    [...headers.keys()].sort().join("|") === "object|tag|tagger|type",
+    "Unexpected annotated Git object headers.",
+  );
+  return {
+    sha,
+    tag: headers.get("tag"),
+    message: text.slice(split + 2),
+    object: { type: headers.get("type"), sha: headers.get("object") },
+  };
 }
 export class GitHubReleaseApi {
-  constructor(token) {
+  constructor(token, readTagObject = null) {
     requireValue(
       typeof token === "string" && token.length > 0,
       "GitHub job token is missing.",
     );
     this.token = token;
+    this.tagObjects = new Map();
+    this.readTagObject = readTagObject;
   }
   async request(
     method,
@@ -285,7 +360,11 @@ export class GitHubReleaseApi {
       response.ok,
       `GitHub ${method} request failed (${response.status}); no response body or credentials logged.`,
     );
-    return bytes ? boundedBytes(response) : response.json();
+    return bytes
+      ? boundedBytes(response)
+      : JSON.parse(
+          (await boundedBytes(response, 8 * 1024 * 1024)).toString("utf8"),
+        );
   }
   async release(tag) {
     // The tag endpoint promises published releases only. Authenticated release
@@ -326,6 +405,64 @@ export class GitHubReleaseApi {
     );
     return obj.sha;
   }
+  async planRefs() {
+    const refs = await this.request(
+      "GET",
+      `git/matching-refs/${PLAN_REF_PREFIX.slice("refs/")}`,
+    );
+    requireValue(
+      Array.isArray(refs) && refs.length < MAX_RESERVATIONS,
+      "Invalid or oversized reservation listing.",
+    );
+    return refs;
+  }
+  planRef(ref) {
+    requireValue(
+      ref.startsWith(PLAN_REF_PREFIX),
+      "Unexpected reservation ref.",
+    );
+    return this.request("GET", `git/ref/${ref.slice("refs/".length)}`);
+  }
+  async tagObject(sha) {
+    requireValue(/^[a-f0-9]{40}$/.test(sha), "Invalid annotated tag SHA.");
+    // Git objects are immutable by SHA. Refs are always read afresh.
+    if (!this.tagObjects.has(sha))
+      this.tagObjects.set(
+        sha,
+        this.readTagObject?.(sha) ??
+          (await this.request("GET", `git/tags/${sha}`)),
+      );
+    return this.tagObjects.get(sha);
+  }
+  createPlanTag(tag, message, sourceSha, pubDate) {
+    requireValue(
+      tag.startsWith(PLAN_REF_PREFIX.slice("refs/tags/".length)),
+      "Unexpected reservation tag.",
+    );
+    requireValue(
+      typeof pubDate === "string" &&
+        new Date(pubDate).toISOString() === pubDate,
+      "Invalid reservation tagger date.",
+    );
+    return this.request("POST", "git/tags", {
+      tag,
+      message,
+      object: sourceSha,
+      type: "commit",
+      tagger: {
+        name: "github-actions[bot]",
+        email: "41898282+github-actions[bot]@users.noreply.github.com",
+        date: pubDate,
+      },
+    });
+  }
+  createPlanRef(ref, sha) {
+    requireValue(
+      ref.startsWith(PLAN_REF_PREFIX),
+      "Unexpected reservation ref.",
+    );
+    return this.request("POST", "git/refs", { ref, sha });
+  }
   createTag(tag, sha) {
     return this.request("POST", "git/refs", { ref: `refs/tags/${tag}`, sha });
   }
@@ -349,7 +486,7 @@ export class GitHubReleaseApi {
       `releases/${id}/assets?per_page=100`,
     );
     requireValue(
-      Array.isArray(assets) && assets.length <= 9,
+      Array.isArray(assets) && assets.length <= 10,
       "Unexpected release asset list.",
     );
     return assets;
@@ -446,6 +583,7 @@ export class GitHubReleaseApi {
           JSON.stringify([
             expectedNames(id.version, 1),
             expectedNames(id.version, 2),
+            expectedNames(id.version, 3),
           ]),
         ],
         { stdio: "inherit" },
@@ -455,15 +593,15 @@ export class GitHubReleaseApi {
     }
   }
 }
-async function boundedBytes(response) {
+async function boundedBytes(
+  response,
+  limit = MAX_RELEASE_BUNDLE + 1024 * 1024,
+) {
   const chunks = [];
   let size = 0;
   for await (const chunk of response.body) {
     size += chunk.length;
-    requireValue(
-      size <= MAX_RELEASE_BUNDLE + 1024 * 1024,
-      "Download exceeds release size bound.",
-    );
+    requireValue(size <= limit, "Download exceeds release size bound.");
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -489,27 +627,62 @@ function artifactFromEnv() {
 async function main() {
   const command = process.argv[2],
     source = trustedContext(),
-    id = identity(source.history, source.sha, await source.dateFor(source.sha)),
     config = await readConfig(),
     publicKey = config.plugins.updater.pubkey;
-  const context = {
+  let context = {
     ...source,
-    id,
     publicKey,
     verifyNative,
-    api: new GitHubReleaseApi(process.env.GITHUB_TOKEN),
+    commitsBetween: async (base, head) => {
+      requireValue(
+        source.history.includes(base) &&
+          source.history.includes(head) &&
+          source.history.indexOf(base) < source.history.indexOf(head),
+        "Invalid introduced commit range.",
+      );
+      const output = execFileSync(
+        "git",
+        ["log", "--format=%H%x00%B%x00", `${base}..${head}`],
+        { cwd: repositoryRoot, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 },
+      );
+      const fields = output.split("\0");
+      requireValue(
+        fields.at(-1).trim() === "" && fields.length % 2 === 1,
+        "Invalid Git commit range output.",
+      );
+      return Array.from({ length: (fields.length - 1) / 2 }, (_, i) => ({
+        hash: fields[2 * i].trim(),
+        message: fields[2 * i + 1].trimEnd(),
+      }));
+    },
+    api: new GitHubReleaseApi(process.env.GITHUB_TOKEN, source.readTagObject),
   };
   if (command === "preflight") {
-    const result = await preflight(context);
+    const result = await planProduction(context);
+    if (result.plan)
+      await writeFile(
+        join(repositoryRoot, "release-plan.json"),
+        serializePlan(result.plan),
+        { flag: "wx" },
+      );
     await outputs({
       state: result.state,
-      version: id.version,
+      version: result.id?.version ?? "",
       "artifact-id": result.artifact?.id ?? "",
       "artifact-run-id": result.artifact?.runId ?? "",
       "artifact-digest": result.artifact?.digest ?? "",
     });
-    console.log(`Release ${id.version}: ${result.state}.`);
-  } else if (command === "stamp") {
+    console.log(
+      `Release ${result.id?.version ?? "none"}: ${result.state}${result.reason ? ` (${result.reason})` : ""}.`,
+    );
+    return;
+  }
+  context = await loadProductionPlan(
+    context,
+    await readFile(join(repositoryRoot, "release-plan.json")),
+  );
+  const { id } = context;
+  if (command === "stamp") {
     await stampVersions(repositoryRoot, id.version);
     exec(
       "cargo",
@@ -557,7 +730,7 @@ async function main() {
     const runId = process.env.GITHUB_RUN_ID,
       runAttempt = process.env.GITHUB_RUN_ATTEMPT,
       artifactName = `release-${id.sourceSha}-${runId}-${runAttempt}`;
-    const build = { runId, runAttempt, artifactName },
+    const build = { runId, runAttempt, artifactName, schemaVersion: 3 },
       platforms = [];
     for (const [platform, target] of [
       ["windows", WINDOWS_TARGET],

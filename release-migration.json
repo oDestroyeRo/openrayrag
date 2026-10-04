@@ -1,0 +1,20 @@
+{
+  "bridge": {
+    "sourceSha": "edcd744d35b8f213d7c7eec5c54a8596ae4307fd",
+    "version": "0.2.66",
+    "tag": "v0.2.66",
+    "firstParentCount": 66,
+    "feedSha256": "686a8b9ed5d13cb54edd3c470dcece2932358e934f40f1a1d153df63de09edc2"
+  },
+  "legacyFeed": {
+    "version": "0.2.66",
+    "notes": "Source edcd744d35b8f213d7c7eec5c54a8596ae4307fd. Install automatically only when fully stopped.",
+    "pub_date": "2026-10-04T13:58:13.000Z",
+    "platforms": {
+      "darwin-aarch64": {
+        "url": "https://github.com/oDestroyeRo/openrayrag/releases/download/v0.2.66/Rayrag_Companion_0.2.66_aarch64.app.tar.gz",
+        "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNk52K0xROHY0SlFoV0NWUEZlYVBMWjF3ZlUyWnhaOXduSFlRS0NJaURMbyt0Um1VZFBBRU4yYVpUUnJZODk0MEROajJLeGJUNTdUczNNbGVrb2ZxUmQ3enFtREVwUkE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMTIzMDc2CWZpbGU6UmF5cmFnIENvbXBhbmlvbi5hcHAudGFyLmd6CXZlcnNpb246MC4yLjY2Cm9qMFJhMDlmVEJVUS93ZDM1Q1pCUXpoUzJWNGlxemlFUm5DSXhNcno2c2JKQUNrMzgrYUNudW1yZzVZQXpEZ08yQzZmYytWaVIyU2wwdjd3Mm1JY0RnPT0K"
+      }
+    }
+  }
+}
