@@ -1180,10 +1180,10 @@ mod tests {
         let mut gate = Gate::default();
         gate.initialized = true;
         gate.form_revision = Some(3);
-        let old_nonce = "0123456789abcdef0123456789abcdef";
-        gate.reserve(old_nonce.into(), 3, false).unwrap();
-        gate.commit(old_nonce).unwrap();
-        let owner = gate.begin_retirement(old_nonce, false).unwrap();
+        let old_nonce = uuid::Uuid::new_v4().simple().to_string();
+        gate.reserve(old_nonce.clone(), 3, false).unwrap();
+        gate.commit(&old_nonce).unwrap();
+        let owner = gate.begin_retirement(&old_nonce, false).unwrap();
         let mut state = ContinuationState {
             available: Some(disk().continuation),
             ..Default::default()

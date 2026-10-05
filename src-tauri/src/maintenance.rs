@@ -404,16 +404,18 @@ mod tests {
     #[test]
     fn cancellation_preserves_uncommitted_transport_owner_and_committed_retirement() {
         let mut g = gate();
-        g.reserve("pending".into(), 3, false).unwrap();
-        assert_eq!(g.cancel_update().as_deref(), Some("pending"));
+        let pending = uuid::Uuid::new_v4().simple().to_string();
+        g.reserve(pending.clone(), 3, false).unwrap();
+        assert_eq!(g.cancel_update().as_deref(), Some(pending.as_str()));
         assert!(g.lease.as_ref().unwrap().invalidated);
         assert!(g.lease.is_some());
-        assert!(g.commit("pending").is_err());
+        assert!(g.commit(&pending).is_err());
         assert!(g.admit().is_err());
         let mut g = gate();
-        g.reserve("committed".into(), 3, false).unwrap();
-        g.commit("committed").unwrap();
-        let owner = g.begin_retirement("committed", false).unwrap();
+        let committed = uuid::Uuid::new_v4().simple().to_string();
+        g.reserve(committed.clone(), 3, false).unwrap();
+        g.commit(&committed).unwrap();
+        let owner = g.begin_retirement(&committed, false).unwrap();
         g.transport_retired(&owner).unwrap();
         assert!(g.cancel_update().is_none());
         assert!(!g.lease.as_ref().unwrap().invalidated);
