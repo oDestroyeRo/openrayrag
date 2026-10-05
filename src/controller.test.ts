@@ -786,6 +786,21 @@ describe('persistent recovery and transaction regressions', () => {
     advance(9000); expect(sent.filter(action => action.type === 'useItem')).toHaveLength(1);
     advance(2000); expect(sent.filter(action => action.type === 'useItem')).toEqual([{ type: 'useItem', itemId: 501 }, { type: 'useItem', itemId: 504 }]);
   });
+  it.each(['hp','sp'].flatMap(short=>[false,true].map(advanced=>({short,advanced}))))(
+    'holds every field action after mixed HP/SP late readback with short=$short and advanced=$advanced',({short,advanced})=>{
+    const {controller,receive,sent,packet,step,advance}=setup(),automation=policy();
+    automation.hpPotions={mode:'selected',itemIds:advanced?[512]:[518,512],belowPercent:60,minStock:0,cooldownSeconds:short==='hp'?5:30};
+    automation.spPotions={mode:'selected',itemIds:advanced?[514]:[518,514],belowPercent:60,minStock:0,cooldownSeconds:short==='sp'?5:30};
+    if(advanced)automation.items=[{itemId:518,resource:'hp',belowPercent:60,minStock:0,cooldownSeconds:1}];
+    receive({type:'stats',level:7,hp:55,maxHp:100,sp:55,maxSp:100},{type:'inventory',items:
+      [{bagId:518,itemId:518,type:1,count:1},{bagId:512,itemId:512,type:1,count:4},{bagId:514,itemId:514,type:1,count:4}],equipment:[],ammoId:-1});
+    controller.start({...settings,automation});step();controller.pause('Manual input',2000);advance(7000);
+    packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(518).i16(1).i32(10).bool(false));
+    const commands=sent.slice();
+    for(let i=0;i<2;i++){advance(10000);packet(new BitWriter().u8(FEATURE_OP.sp).i32(55).i32(100));}
+    advance(9900);expect(sent).toEqual(commands);expect(controller.engine.running).toBe(false);
+    step(100);step();expect(sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:518},{type:'useItem',itemId:512}]);
+  });
   it('does not reopen an unresolved NPC request just because ten seconds elapsed', () => {
     const { controller, advance, packet } = setup(); controller.world.apply({ type: 'npcFocus', id: 7, focus: true });
     controller.world.apply({ type: 'npcDialog', name: 'NPC', text: 'Hello', big: false });

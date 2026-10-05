@@ -51,6 +51,56 @@ describe('character state and schedule boundaries',()=>{
  it('does not confirm an item from an unrelated inventory change',()=>{let now=1000;const state=new CharacterState();state.apply({type:'inventory',items:[{bagId:501,itemId:501,count:4,type:1},{bagId:502,itemId:502,count:4,type:1}],equipment:[],ammoId:-1},1);const scheduler=new AutomationScheduler(()=>{},()=>now);scheduler.submit({type:'useItem',itemId:501},state);const event:FeatureEvent={type:'inventoryDelta',add:false,bagId:502,change:1,weight:10};state.apply(event,1);expect(scheduler.observe(event,state,1).confirmed).toBe(false);now+=6000;expect(scheduler.timeout()).toContain('No server confirmation');});
 });
 
+describe('captured action receipts',()=>{
+ function inventory(count=4):FeatureEvent{return {type:'inventory',items:[{bagId:501,itemId:501,count,type:1}],equipment:[],ammoId:-1};}
+ it('captures before transport reentry and keeps the original baseline after cancellation',()=>{
+  let now=1000;const state=new CharacterState();state.apply(inventory(),1);
+  const scheduler=new AutomationScheduler(()=>{
+   expect(scheduler.receipt).toEqual({sequence:1,action:{type:'useItem',itemId:501}});
+   state.apply(inventory(3),1);scheduler.reset();
+  },()=>now);
+  scheduler.submit({type:'useItem',itemId:501},state);
+  expect(scheduler.reconcileReceipt([],state,1,DEFAULT_AUTOMATION)).toBe(1);
+  expect(scheduler.receipt).toBeNull();expect(scheduler.result.status).toBe('failed');
+  expect(scheduler.busy).toBe(true);now+=6000;expect(scheduler.busy).toBe(false);
+ });
+ it('requires active item event evidence but accepts complete late inventory readback',()=>{
+  let now=1000;const state=new CharacterState();state.apply(inventory(),1);
+  const scheduler=new AutomationScheduler(()=>{},()=>now);scheduler.submit({type:'useItem',itemId:501},state);
+  const readback=inventory(3);state.apply(readback,1);
+  expect(scheduler.observe(readback,state,1).confirmed).toBe(false);
+  expect(scheduler.reconcileReceipt([readback],state,1,DEFAULT_AUTOMATION)).toBeNull();
+  now+=6000;expect(scheduler.timeout()).toContain('No server confirmation');
+  expect(scheduler.retireReceipt(true)).toBe('uncertain');
+  expect(scheduler.reconcileReceipt([readback],state,1,DEFAULT_AUTOMATION)).toBe(1);
+  expect(scheduler.result.status).toBe('failed');
+ });
+ it('retains transmitted resource uncertainty when sending throws',()=>{
+  const state=new CharacterState();state.apply(inventory(),1);
+  const scheduler=new AutomationScheduler(()=>{throw new Error('Socket write failed.');},()=>1000);
+  expect(()=>scheduler.submit({type:'useItem',itemId:501},state)).toThrow('Socket write failed');
+  expect(scheduler.retireReceipt(true)).toBe('uncertain');state.apply(inventory(3),1);
+  expect(scheduler.reconcileReceipt([],state,1,DEFAULT_AUTOMATION)).toBe(1);
+ });
+ it('keeps late skill identity, exact execution, motion and the canceled deadline',()=>{
+  let now=1000,identity={world:'field',selfId:0,selfIncarnation:1,targetId:2,targetIncarnation:1};
+  const state=new CharacterState(),scheduler=new AutomationScheduler(()=>{},()=>now,()=>identity);
+  scheduler.submit({type:'skill',mode:'target',skillId:3,level:1,target:2},state,undefined,1);scheduler.reset();
+  const response:SkillResult={type:'skillResult',mode:'target',source:0,target:2,skillId:3,level:1,motionSeconds:2,position:{x:100,y:100},indirect:false};
+  identity={...identity,targetIncarnation:2};expect(scheduler.reconcileReceipt([response],state,0,DEFAULT_AUTOMATION)).toBeNull();
+  identity={...identity,targetIncarnation:1};expect(scheduler.reconcileReceipt([{...response,target:3}],state,0,DEFAULT_AUTOMATION)).toBeNull();
+  expect(scheduler.reconcileReceipt([response],state,0,DEFAULT_AUTOMATION)).toBe(1);
+  expect(scheduler.result.status).toBe('failed');now+=29999;expect(scheduler.busy).toBe(true);now++;expect(scheduler.busy).toBe(false);
+ });
+ it('applies configured late after-cast motion even when an active rule used the default',()=>{
+  let now=1000;const state=new CharacterState(),scheduler=new AutomationScheduler(()=>{},()=>now);
+  scheduler.submit({type:'skill',mode:'ground',skillId:19,level:1,position:{x:100,y:100}},state);scheduler.reset();now+=30000;
+  const response:SkillResult={type:'skillResult',mode:'ground',source:1,skillId:19,level:1,motionSeconds:0,position:{x:100,y:100},targetPosition:{x:100,y:100},indirect:false};
+  expect(scheduler.reconcileReceipt([response],state,1,DEFAULT_AUTOMATION)).toBe(1);
+  now+=1499;expect(scheduler.busy).toBe(true);now++;expect(scheduler.busy).toBe(false);
+ });
+});
+
 describe('self cast server response correlation',()=>{
  it.each([41,42,44])('confirms direct targeted-on-self response for support skill %i',skillId=>{
   let now=1000;

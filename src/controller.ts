@@ -1,4 +1,3 @@
-import { recoveryItemCooldown } from './hp-potions';
 import { PartyFollowRuntime, type PartyFollowContext, type PartyFollowSnapshot } from './party-follow';
 import { PartyHealPolicy, partyHealCandidates, partyHpCondition, type PartyHealSnapshot } from './party-heal';
 import { deathLimitGuidance, farmingDestination, deathCycle, deathGuard, validateDeathRecoveryGuard, type DeathRecoveryGuard, type DeathCycle } from './death-recovery';
@@ -10,7 +9,6 @@ import { warpCastReadiness, CAST_PREREQUISITES, BLIND_CONDITION } from './cast-p
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { ManualSocket, type SocketContext, type SocketSnapshot } from './socket';
 import { socketStockFloors, validateSocketEnvelope, type SocketAction } from './socket-protocol';
-import { matchesSkillExecution } from './skill-execution';
 import { validateManualTargetRequest } from './manual-target';
 import { insideLockArea, lockEntry, mapAllowed, mapPolicy } from './map-policy';
 import type { ActorPredicate } from './actor-observations';
@@ -150,7 +148,8 @@ export class CompanionController {
   private runKills = 0;
   private runPickups = 0;
   private characterName: string | null = null;
-  private featureReceipt: { sequence:number; identity:ActionIdentity|null; action: ExpandedAction; count: number; stats: number; skills: number; attributes: number[] | null; level: number; macroOwned?:boolean } | null = null;
+  private featureMacroSequence:number|null=null;
+  private get featureReceipt(){return this.engine.actionReceipts.receipt;}
   private unresolvedWorld: Pending | null = null;
   private workflowOutstanding: Pending | null = null;
   private updateSuspended=false;
@@ -418,52 +417,31 @@ export class CompanionController {
     if (!healthy && this.executing&&!this.updateSuspended) this.pause('Waiting for the client connection.');
   }
   private captureActionFailure(): void {
-    const result = this.engine.actionResult; const action = this.engine.pendingFeatureAction;
+    const result = this.engine.actionResult;
     if(this.partyHeal.owns(result.sequence)){
       if(result.status==='failed')this.partyHeal.cancel(result.reason);
       this.seenActionKey=`${result.sequence}:${result.status}`;return;
     }
-    if (action && this.featureReceipt?.sequence!==result.sequence) {
-      this.featureReceipt = { sequence:result.sequence,identity:this.engine.pendingActionIdentity,action, count: action.type === 'useItem' ? this.engine.character.count(action.itemId) : 0,
-        stats: this.engine.character.statsRevision, skills: this.engine.character.skillsRevision,
-        attributes: this.engine.character.stats?.attributes?.slice() ?? null,
-        level: action.type === 'allocateSkill' ? this.engine.character.learned.get(action.skillId) ?? 0 : 0,
-        ...(this.macro.active||this.macroBase?{macroOwned:true}:{}) };
-    }
+    if(this.featureReceipt&&(this.macro.active||this.macroBase))this.featureMacroSequence=this.featureReceipt.sequence;
     const key = `${result.sequence}:${result.status}`;
     if (key === this.seenActionKey) return;
     this.seenActionKey = key;
-    if (result.status === 'confirmed') { this.featureReceipt = null; return; }
     if (result.status !== 'failed') return;
-    const type = this.featureReceipt?.action.type;
-    if (!this.runRequested) {
-      // Ended posture/revival actions have no resource receipt to reconcile.
-      // The engine still owns their confirmation fence; keep uncertain resource actions.
-      if (type === 'sit' || type === 'respawn') this.featureReceipt = null;
-      return;
-    }
-    if (result.reason.startsWith('Server rejected')) {
-      this.featureReceipt = null; this.retryAt = this.now() + 5_000; this.waitingReason = result.reason;
-    } else if (type && ['useItem','allocateStats','allocateSkill','skill'].includes(type)) {
+    const receipt=this.engine.actionReceipts.retireReceipt(this.runRequested);
+    if(!this.runRequested)return;
+    if(receipt==='rejected'){
+      this.retryAt = this.now() + 5_000; this.waitingReason = result.reason;
+    } else if(receipt==='uncertain'){
       this.blockedReason = `${result.reason} Waiting for a confirmed result; Stop and Start after checking to override.`;
-    } else { this.featureReceipt = null; this.retryAt = this.now() + 250; }
+    } else { this.retryAt = this.now() + 250; }
   }
   private reconcileFeature(events: ReturnType<typeof decode>): void {
     const receipt = this.featureReceipt;
-    if ((!this.blockedReason&&!receipt?.macroOwned) || !receipt || !sameActionIdentity(receipt.identity,this.engine.actionIdentity(receipt.action))) return;
-    const action = receipt.action; const state = this.engine.character;
-    const execution=action.type==='skill'?events.find(event=>matchesSkillExecution(action,event,this.engine.player?.id??null)):undefined;
-    const confirmed = action.type === 'useItem' ? state.inventoryKnown && state.count(action.itemId) < receipt.count
-      : action.type === 'allocateSkill' ? state.skillsRevision > receipt.skills && (state.learned.get(action.skillId) ?? 0) > receipt.level
-      : action.type === 'allocateStats' ? state.statsRevision > receipt.stats && !!receipt.attributes && !!state.stats?.attributes
-        && action.attributes.every((count, i) => state.stats!.attributes![i]! >= receipt.attributes![i]! + count)
-      : action.type === 'skill' && execution!==undefined;
-    if (!confirmed) return;
-    if(execution?.type==='skillResult')this.engine.settleConfirmedSkill(execution);
+    if(!receipt||!this.blockedReason&&this.featureMacroSequence!==receipt.sequence)return;
     const policy = automationSettings(this.requestedSettings??this.engine.settings);
-    const seconds = action.type === 'useItem' ? recoveryItemCooldown(policy, action.itemId)
-      : action.type === 'skill' ? policy.skills.find(rule => rule.skillId === action.skillId)?.cooldownSeconds ?? 1 : 0;
-    this.blockedReason = ''; this.featureReceipt = null; this.retryAt = this.now() + seconds * 1000;
+    const seconds=this.engine.actionReceipts.reconcileReceipt(events,this.engine.character,this.engine.player?.id??null,policy);
+    if(seconds===null)return;
+    this.blockedReason = ''; this.featureMacroSequence=null;this.retryAt = this.now() + seconds * 1000;
     this.waitingReason = 'Canceled action was confirmed; waiting for its configured cooldown.';
   }
   private requireReady(): void {
@@ -581,7 +559,7 @@ export class CompanionController {
     else if(this.deathCycle&&!this.deathCycle.guard.uncertain&&!this.deathCycle.posture)this.deathCycle=null;
     this.returnSettings=automationSettings(settings).travel.returnToLockMap?{...structuredClone(settings),map:farmingDestination(settings)}:null;
     this.returning=!!this.deathCycle;
-    this.requestedSettings = settings; this.characterName = this.engine.player?.name ?? null; this.featureReceipt = null;
+    this.requestedSettings = settings; this.characterName = this.engine.player?.name ?? null; this.engine.actionReceipts.discardReceipt();this.featureMacroSequence=null;
     this.started = this.now(); this.lastTick = this.now(); this.retryAt = 0; this.retries = 0;
     this.blockedReason = ''; this.waitingReason = 'Preparing the requested run.';
     this.seenActionKey = `${this.engine.actionResult.sequence}:${this.engine.actionResult.status}`;
