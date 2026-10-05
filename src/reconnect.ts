@@ -334,7 +334,9 @@ export class PersistentFieldRun {
       || status.player.name !== this.character || !/^[a-zA-Z0-9_-]{1,64}$/.test(status.map)
       || !sessionIdentity(status.sessionId) || status.sessionId === this.session || status.sessionId === this.pendingSession) return null;
     const settledUpdate = options.settledUpdate === true && this.settledUpdateSession === this.session;
-    this.settledUpdateSession = '';
+    // A known rejection before activation can retry the same settled boundary.
+    // Choosing ordinary reconnect forfeits that provenance immediately.
+    if (!settledUpdate) this.settledUpdateSession = '';
     this.pendingSession = status.sessionId;
     const settings = validateSettings({ ...this.desired, map: this.desired.automation?.respawn.enabled||this.desired.automation?.travel.returnToLockMap||this.desired.automation?.mapPolicy?.lockArea ? farmingDestination(this.desired) : status.map });
     if (settings.automation) {
@@ -383,7 +385,7 @@ export class PersistentFieldRun {
     if (request.generation !== this.generation || request.sessionId !== this.pendingSession || !this.desired) return false;
     if(request.supplyGuard&&validateSupplyResumeGuard(request.supplyGuard).character!==this.character)return false;
     this.pendingSession = '';
-    if (success) {this.session = request.sessionId;
+    if (success) {this.settledUpdateSession = '';this.session = request.sessionId;
       if(request.supplyGuard)this.completeSupplyStart(request.supplyGuard.character,request.sessionId,request.supplyGuard);
       if(request.deathRecoveryGuard)this.completeDeathStart(this.character,request.sessionId,request.deathRecoveryGuard);
     }

@@ -285,6 +285,40 @@ describe('field run updater checkpoints', () => {
     expect(next.deathRecoveryGuard?.uncertain).toBe(true);
   });
 
+  it.each([false, true])('keeps clean allowances after a known failed activation with retained episodes=%s', retained => {
+    const f = fixture(), source = retained ? f.run : new PersistentFieldRun(f.now);
+    if (!retained) source.begin(settings(), 'Test', 'old');
+    const restored = new PersistentFieldRun(f.now); restored.restore(roundtrip(source.checkpoint()!));
+    const first = restored.resumeFor(ready('new'), { settledUpdate: true })!;
+    expect(restored.resumeFor(ready('new'), { settledUpdate: true })).toBeNull();
+    expect(restored.completeResume(first, false)).toBe(true);
+    f.advance(1_000);
+    const retry = restored.resumeFor(ready('new'), { settledUpdate: true })!;
+    expect(retry.supplyGuard).toEqual({ ...first.supplyGuard!,
+      intervalSeconds: Math.max(0, first.supplyGuard!.intervalSeconds - 1),
+      deadlineSeconds: Math.max(0, first.supplyGuard!.deadlineSeconds - 1) });
+    expect(retry.supplyGuard).toMatchObject({ remainingTrips: retained ? 2 : 3, uncertain: false });
+    expect(retry.deathRecoveryGuard).toEqual(first.deathRecoveryGuard);
+    expect(retry.escapeGuard).toEqual(first.escapeGuard ? {
+      ...first.escapeGuard, cooldownSeconds: first.escapeGuard.cooldownSeconds - 1,
+    } : undefined);
+    expect(restored.completeResume(retry, true)).toBe(true);
+    const later = restored.resumeFor(ready('third'), { settledUpdate: true })!;
+    expect(later.supplyGuard).toMatchObject({ remainingTrips: retained ? 1 : 2, interrupted: true, uncertain: true });
+    expect(later.deathRecoveryGuard?.uncertain).toBe(true);
+    expect(later.escapeGuard?.latched).toBe(true);
+  });
+
+  it('forfeits clean provenance when an ordinary reconnect attempt is chosen', () => {
+    const f = fixture(), restored = new PersistentFieldRun(f.now); restored.restore(roundtrip(f.run.checkpoint()!));
+    const ordinary = restored.resumeFor(ready('new'))!;
+    expect(ordinary.supplyGuard).toMatchObject({ remainingTrips: 1, uncertain: true });
+    expect(restored.completeResume(ordinary, false)).toBe(true);
+    const retry = restored.resumeFor(ready('new'), { settledUpdate: true })!;
+    expect(retry.supplyGuard).toMatchObject({ remainingTrips: 1, uncertain: true });
+    expect(retry.deathRecoveryGuard?.uncertain).toBe(true);
+  });
+
   it('allows a fresh settled character with no death episode to retain its normal next respawn', () => {
     let now = 100_000;
     const value = settings(); value.automation.supply!.enabled = false;
@@ -335,7 +369,7 @@ describe('field run updater checkpoints', () => {
     expect(f.run.completeResume(pending, true)).toBe(false);
     const request = f.run.resumeFor(ready('new'), { settledUpdate: true })!;
     expect(f.run.completeResume(request, false)).toBe(true);
-    expect(f.run.resumeFor(ready('new'), { settledUpdate: true })?.supplyGuard?.uncertain).toBe(true);
+    expect(f.run.resumeFor(ready('new'), { settledUpdate: true })?.supplyGuard?.uncertain).toBe(false);
   });
 
   it('waits for compatible same-character readiness without consuming the settled provenance', () => {
