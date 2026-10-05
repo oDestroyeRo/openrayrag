@@ -638,6 +638,7 @@ pub(crate) async fn update_install(
             } else if gate.lease.as_ref().is_some_and(|l| l.nonce == nonce) {
                 gate.lease = None;
             }
+            crate::update_continuation::finish_failure(&app, &gate);
         }
         if let Ok(mut u) = app.state::<SharedUpdate>().lock() {
             u.status.phase = "error".into();

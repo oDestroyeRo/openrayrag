@@ -88,9 +88,26 @@ pub(crate) struct ContinuationState {
 }
 pub(crate) type SharedContinuation = Mutex<ContinuationState>;
 impl ContinuationState {
+    fn begin_prepare(&mut self, prepared: Prepared) -> Result<(), String> {
+        if self.prepared.is_some() || self.reserved.is_some() {
+            return invalid();
+        }
+        // Normal admission excludes a still-settling transaction. This request
+        // belongs to the user's fresh run intent, not an earlier stopped update.
+        self.stop_restart = false;
+        self.prepared = Some(prepared);
+        Ok(())
+    }
     fn cancel(&mut self, committed: bool, stop: bool) -> Option<String> {
         self.stop_restart |= committed && stop;
         self.revoke()
+    }
+    fn finish_failure(&mut self, gate: &Gate) {
+        // The caller still owns admission: a later transaction cannot begin
+        // between releasing this failed lease and clearing its Stop marker.
+        if gate.lease.is_none() {
+            self.stop_restart = false;
+        }
     }
     fn acknowledge_restore(
         &mut self,
@@ -660,14 +677,14 @@ pub(crate) fn update_prepare(
         return invalid();
     }
     clear_disk(crate::app_data(&app).map_err(|_| ERROR)?)?;
-    state.prepared = Some(Prepared {
+    state.begin_prepare(Prepared {
         request_id: request_id.clone(),
         account,
         identity,
         generation,
         until: Instant::now() + Duration::from_secs(60),
         checkpoint: None,
-    });
+    })?;
     let result = app
         .get_webview_window("game")
         .ok_or(ERROR)?
@@ -844,6 +861,11 @@ pub(crate) fn failed(app: &tauri::AppHandle, retired: bool) {
         }
     }
 }
+pub(crate) fn finish_failure(app: &tauri::AppHandle, gate: &Gate) {
+    if let Ok(mut state) = app.state::<SharedContinuation>().inner().lock() {
+        state.finish_failure(gate);
+    }
+}
 /// Called only after signed replacement and game retirement. The native UI
 /// closure selects authority immediately before cleanup and process restart.
 pub(crate) async fn restart(app: &tauri::AppHandle, target: &str) -> Result<(), String> {
@@ -893,6 +915,9 @@ pub(crate) fn update_continuation(
     window: WebviewWindow,
 ) -> Result<Option<Continuation>, String> {
     crate::require_window(&window, "main")?;
+    if crate::ci_smoke::active() {
+        return Ok(None);
+    }
     let mut state = app
         .state::<SharedContinuation>()
         .inner()
@@ -913,6 +938,9 @@ pub(crate) fn update_startup_stopped(
     window: WebviewWindow,
 ) -> Result<bool, String> {
     crate::require_window(&window, "main")?;
+    if crate::ci_smoke::active() {
+        return Ok(false);
+    }
     // This launch-only opt-out grants no run authority and changes no saved preference.
     Ok(startup_stopped(&app.env().args_os))
 }
@@ -1136,6 +1164,125 @@ mod tests {
             "Companion".into(),
             format!("{LAUNCH_PREFIX}0123456789abcdef0123456789abcdef").into(),
         ]
+    }
+    fn prepared(request_id: &str, checkpoint: Value) -> Prepared {
+        Prepared {
+            request_id: request_id.into(),
+            account: disk().continuation.account,
+            identity: runtime_identity(&checkpoint).unwrap(),
+            generation: 2,
+            until: Instant::now() + Duration::from_secs(60),
+            checkpoint: Some(checkpoint),
+        }
+    }
+    #[test]
+    fn failed_committed_update_keeps_stop_until_release_then_a_fresh_run_can_resume() {
+        let mut gate = Gate::default();
+        gate.initialized = true;
+        gate.form_revision = Some(3);
+        let old_nonce = "0123456789abcdef0123456789abcdef";
+        gate.reserve(old_nonce.into(), 3, false).unwrap();
+        gate.commit(old_nonce).unwrap();
+        let owner = gate.begin_retirement(old_nonce, false).unwrap();
+        let mut state = ContinuationState {
+            available: Some(disk().continuation),
+            ..Default::default()
+        };
+        state.cancel(true, true);
+        assert!(state.stop_restart);
+        assert!(gate.admit().is_err());
+        state.finish_failure(&gate); // Failure has not released its owned lease yet.
+        assert!(state.stop_restart);
+        state.cancel(true, true); // A late Stop while failure cleanup is waiting.
+        assert!(gate.cancel_update().is_none());
+        gate.release_retirement(&owner);
+        state.finish_failure(&gate); // Called with admission still held in production.
+        assert!(!state.stop_restart);
+        assert!(state.available.is_none());
+        assert!(state.claimed.is_none());
+
+        gate.admit().unwrap(); // The user explicitly starts a fresh run.
+        let field = field_checkpoint();
+        let mut checkpoint = runtime();
+        checkpoint["frozenAt"] = 1000.into();
+        checkpoint["status"]["runRequested"] = true.into();
+        checkpoint["settings"] = field["desired"].clone();
+        checkpoint["run"] = json!({"startedAt":100,"kills":5,"pickups":2,"deaths":0});
+        state
+            .begin_prepare(prepared(
+                "fedcba9876543210fedcba9876543210",
+                checkpoint.clone(),
+            ))
+            .unwrap();
+        state.reserved = Some(Reserved {
+            prepared: state.prepared.take().unwrap(),
+            nonce: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            form: form(3),
+            field: field.clone(),
+            runtime: Some(checkpoint.clone()),
+        });
+        let (_dir, path) = root();
+        let mut record = disk();
+        record.continuation = envelope(state.reserved.as_ref().unwrap()).unwrap();
+        let mut args = arguments();
+        args.push(STOPPED_FLAG.into()); // Inherited arguments do not poison the new update.
+        restart_arguments(&mut args, state.stop_restart);
+        assert!(!startup_stopped(&args));
+        write_disk(path.clone(), &record).unwrap();
+        args.push(format!("{LAUNCH_PREFIX}{}", record.launch_token.unwrap()).into());
+        let claimed = consume(path, &args, "1.2.3", 1001).unwrap().unwrap();
+        assert_eq!(claimed.runtime, checkpoint);
+        assert_eq!(claimed.field, field);
+    }
+    #[test]
+    fn only_a_fresh_accepted_preparation_clears_an_earlier_stop_marker() {
+        let mut state = ContinuationState {
+            prepared: Some(prepared("0123456789abcdef0123456789abcdef", runtime())),
+            stop_restart: true,
+            ..Default::default()
+        };
+        assert!(state
+            .begin_prepare(prepared("fedcba9876543210fedcba9876543210", runtime()))
+            .is_err());
+        assert!(state.stop_restart);
+        state.revoke();
+        state
+            .begin_prepare(prepared("fedcba9876543210fedcba9876543210", runtime()))
+            .unwrap();
+        assert!(!state.stop_restart);
+        assert_eq!(
+            state.prepared.as_ref().unwrap().request_id,
+            "fedcba9876543210fedcba9876543210"
+        );
+    }
+    #[test]
+    fn smoke_capability_has_harmless_startup_queries_without_update_or_gameplay_authority() {
+        let capability: Value =
+            serde_json::from_str(include_str!("../capabilities/ci-smoke.json")).unwrap();
+        assert_eq!(capability["windows"], json!(["main"]));
+        let permissions = capability["permissions"].as_array().unwrap();
+        for query in ["allow-update-continuation", "allow-update-startup-stopped"] {
+            assert!(permissions.iter().any(|p| p == query));
+        }
+        for permission in permissions {
+            assert!(matches!(
+                permission.as_str().unwrap(),
+                "core:event:allow-listen"
+                    | "core:event:allow-unlisten"
+                    | "core:window:allow-close"
+                    | "allow-ci-smoke-report"
+                    | "allow-current-form"
+                    | "allow-save-current-form"
+                    | "allow-settings-close-ready"
+                    | "allow-settings-close-cancel"
+                    | "allow-settings-close-complete"
+                    | "allow-saved-login"
+                    | "allow-update-continuation"
+                    | "allow-update-startup-stopped"
+                    | "allow-update-initialized"
+                    | "allow-update-status"
+            ));
+        }
     }
     #[test]
     fn only_explicit_stop_during_a_committed_update_marks_the_restart() {
