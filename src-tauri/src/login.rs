@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{Manager, WebviewWindow};
+use tauri::{Manager, Webview};
 
 #[path = "local_login_store.rs"]
 pub(crate) mod local_store;
@@ -304,8 +304,8 @@ pub(crate) fn saved_account_matches(app_data: std::path::PathBuf, account: &Upda
 }
 
 #[tauri::command]
-pub(crate) async fn saved_login(window: WebviewWindow) -> Result<Option<SavedLogin>, String> {
-    super::require_window(&window, "main")?;
+pub(crate) async fn saved_login(window: Webview) -> Result<Option<SavedLogin>, String> {
+    super::require_view(&window, "main")?;
     Ok(login_store(window.app_handle())?
         .load()?
         .map(|profile| SavedLogin {
@@ -317,8 +317,8 @@ pub(crate) async fn saved_login(window: WebviewWindow) -> Result<Option<SavedLog
 }
 
 #[tauri::command]
-pub(crate) async fn forget_login(window: WebviewWindow) -> Result<(), String> {
-    super::require_window(&window, "main")?;
+pub(crate) async fn forget_login(window: Webview) -> Result<(), String> {
+    super::require_view(&window, "main")?;
     login_store(window.app_handle())?.forget()
 }
 
@@ -360,15 +360,15 @@ fn resolve_profile(
 // gate while waiting for that thread can deadlock its heartbeat command.
 pub(crate) fn login_game(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     request: LoginRequest,
 ) -> Result<(), String> {
-    super::require_window(&window, "main")?;
+    super::require_view(&window, "main")?;
     let mut _permit = crate::maintenance::admit(&app)?;
     let remember = request.remember;
     let profile = resolve_profile(request, || login_store(&app)?.load())?;
-    if let Some(game) = app.get_webview_window("game") {
-        if super::direct::window_mode(&game)? != profile.mode {
+    if let Some(game) = app.get_webview("game") {
+        if super::direct::runtime_mode(&game)? != profile.mode {
             return Err("Disconnect before changing the connection mode.".into());
         }
     }
@@ -411,11 +411,11 @@ fn reopen_game(
     gate: &mut crate::maintenance::Gate,
 ) -> Result<(), String> {
     super::mode_guard::check_app(app, mode)?;
-    if app.get_webview_window("game").is_some() {
+    if app.get_webview("game").is_some() {
         super::mode_guard::prepare(app, mode)?;
     }
     super::direct::cancel_admitted(app, gate);
-    let result = if let Some(game) = app.get_webview_window("game") {
+    let result = if let Some(game) = app.get_webview("game") {
         game.navigate(super::direct::url_for(mode))
             .map_err(|_| "Could not reopen the game.".to_string())
     } else {
@@ -431,12 +431,12 @@ fn reopen_game(
 }
 
 #[tauri::command]
-pub(crate) fn reconnect_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
-    super::require_window(&window, "main")?;
+pub(crate) fn reconnect_game(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
+    super::require_view(&window, "main")?;
     let mut _permit = crate::maintenance::admit(&app)?;
     // Reuse this exact window. A concurrent close must never create a new one.
     let game = app
-        .get_webview_window("game")
+        .get_webview("game")
         .ok_or("Open the game and sign in before reconnecting.")?;
     let state = app.state::<SharedLogin>();
     let (generation, mode) = {
@@ -450,13 +450,13 @@ pub(crate) fn reconnect_game(app: tauri::AppHandle, window: WebviewWindow) -> Re
     };
     {
         let state = state.lock().map_err(|_| "Login state is unavailable.")?;
-        if state.generation != generation || app.get_webview_window("game").is_none() {
+        if state.generation != generation || app.get_webview("game").is_none() {
             return Err("Reconnect was cancelled.".into());
         }
     }
     _permit.ever_game = true;
     _permit.authorize_navigation();
-    if super::direct::window_mode(&game)? != mode {
+    if super::direct::runtime_mode(&game)? != mode {
         return Err("Disconnect before changing the connection mode.".into());
     }
     super::mode_guard::prepare(&app, mode)?;
@@ -478,11 +478,8 @@ pub(crate) fn reconnect_game(app: tauri::AppHandle, window: WebviewWindow) -> Re
 }
 
 #[tauri::command]
-pub(crate) fn cancel_pending_login(
-    app: tauri::AppHandle,
-    window: WebviewWindow,
-) -> Result<(), String> {
-    super::require_window(&window, "game")?;
+pub(crate) fn cancel_pending_login(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
+    super::require_view(&window, "game")?;
     let state = app.state::<SharedLogin>();
     let mut state = state.lock().map_err(|_| "Login state is unavailable.")?;
     state.cancel();
@@ -492,11 +489,11 @@ pub(crate) fn cancel_pending_login(
 #[tauri::command]
 pub(crate) fn take_pending_login(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     build: String,
     session_id: String,
 ) -> Result<PendingLoginResult, String> {
-    super::require_window(&window, "game")?;
+    super::require_view(&window, "game")?;
     let mut _permit = crate::maintenance::admit(&app)?;
     if window
         .url()

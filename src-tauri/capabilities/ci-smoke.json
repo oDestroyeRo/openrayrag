@@ -1,7 +1,7 @@
 {
   "identifier": "ci-smoke",
   "description": "Offline packaged CI checks only; production configurations exclude this capability.",
-  "windows": ["main"],
+  "webviews": ["main"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",

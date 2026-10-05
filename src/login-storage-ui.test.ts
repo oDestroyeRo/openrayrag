@@ -78,7 +78,9 @@ class Element {
     return [];
   }
   setAttribute(name:string,value:string):void{this.attributes.set(name,value);}
-  getBoundingClientRect(){return{height:160};}
+  getBoundingClientRect(){return this.id==='client-game-viewport'
+    ? {x:24,y:220,width:800,height:440,bottom:660}
+    : {x:0,y:0,width:1100,height:160,bottom:160};}
   focus():void{} scrollIntoView():void{}
 
   getContext() { return {
@@ -103,6 +105,7 @@ async function fixture(saved: SavedProfile | null | Promise<SavedProfile|null> =
     querySelectorAll:(selector:string)=>main.querySelectorAll(selector),
     getElementById: (id: string) => elements.get(id), createElement: (tag:string) => new Element(elements,tag),
   });
+  vi.stubGlobal('innerWidth',1100);vi.stubGlobal('innerHeight',880);
   ipc.featureSettled=true;ipc.macroDirty=false;ipc.clearMacro.mockClear();ipc.invoke.mockReset(); ipc.listen.mockClear();
   ipc.invoke.mockImplementation(async (command: string,args?:{document?:{revision:number}}) => {
     if(command==='current_form')return savedForm;
@@ -144,6 +147,41 @@ async function publishStatus(status: GameStatus) {
   await settleMain();
 }
 function closeGame() { ipc.listen.mock.calls.find(call => call[0] === 'game-closed')![1]({ payload: undefined }); }
+
+it('shares the existing login and active run between Game and Bot without reconnecting',async()=>{
+  const f=await fixture({username:'synthetic-user',characterSlot:0,autoLogin:false,mode:'gameClient'});
+  await f.get('signin-form').emit('submit');await settleMain();
+  expect(f.calls('login_game')).toHaveLength(1);
+  expect(f.get('client-page-game').hidden).toBe(false);
+  expect(f.calls('set_game_view')).toEqual([['set_game_view',{bounds:{x:24,y:220,width:800,height:440}}]]);
+  await publishStatus({...readyStatus('shared-session'),connectionMode:'gameClient',runRequested:true,running:true,state:'running'});
+  const commands=f.calls('control_bot').length;
+  for(let index=0;index<3;index++){
+    await f.get('client-tab-session').emit('click');await settleMain();
+    expect(f.get('client-page-session').hidden).toBe(false);expect(f.get('stop').disabled).toBe(false);
+    await f.get('client-tab-game').emit('click');await settleMain();
+    expect(f.get('client-page-game').hidden).toBe(false);expect(f.get('client-game-placeholder').hidden).toBe(true);
+  }
+  expect(f.get('character').textContent).toBe('Synthetic');
+  expect(f.calls('login_game')).toHaveLength(1);expect(f.calls('reconnect_game')).toEqual([]);
+  expect(f.calls('close_game')).toEqual([]);expect(f.calls('control_bot')).toHaveLength(commands);
+  expect(f.calls('set_game_view').slice(1)).toEqual(Array.from({length:3},()=>[
+    ['set_game_view',{bounds:null}],['set_game_view',{bounds:{x:24,y:220,width:800,height:440}}],
+  ]).flat());
+  closeGame();await settleMain();
+  expect(f.calls('set_game_view').at(-1)).toEqual(['set_game_view',{bounds:null}]);
+  expect(f.get('client-game-placeholder').hidden).toBe(false);
+});
+
+it('shows connection guidance in Game without creating a second bot-only connection',async()=>{
+  const f=await fixture();
+  await f.get('client-tab-game').emit('click');await settleMain();
+  expect(f.get('client-game-help').textContent).toContain('With game client');
+  await publishStatus({...readyStatus(),connectionMode:'botOnly'});
+  expect(f.get('client-game-help').textContent).toContain('Disconnect');
+  expect(f.calls('set_game_view')).toEqual([]);expect(f.calls('login_game')).toEqual([]);
+  expect(f.calls('open_game')).toEqual([]);expect(f.calls('reconnect_game')).toEqual([]);
+});
 function continuationFixture():UpdateContinuation {
   const ready=readyStatus(),settings={...DEFAULT_SETTINGS,map:ready.map,targets:[4000]};
   const c=new CompanionController(()=>{});c.connect(true);

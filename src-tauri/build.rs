@@ -26,6 +26,7 @@ fn main() {
             "update_restored",
             "open_game",
             "close_game",
+            "set_game_view",
             "control_bot",
             "bridge_status",
             "direct_connect",

@@ -216,7 +216,7 @@ test('smoke packages support startup queries without gameplay or installation pr
   }
   assert.throws(()=>packageConfig('unknown',false));
   const capability=JSON.parse(await readFile(new URL('../src-tauri/capabilities/ci-smoke.json',import.meta.url),'utf8'));
-  assert.deepEqual(capability.windows,['main']);
+  assert.deepEqual(capability.webviews,['main']);
   assert.deepEqual(capability.permissions.toSorted(),[
     'core:event:allow-listen','core:event:allow-unlisten','core:window:allow-close',
     'allow-ci-smoke-report','allow-current-form','allow-save-current-form',

@@ -14,6 +14,7 @@ import { SettingsForm } from './settings-form';
 import { normalAttackProfile } from './combat';
 import { canStartField } from './field-controls';
 import { mountClientShell } from './client-shell';
+import { EmbeddedGameView, gameViewBounds } from './game-view';
 import { clientStatus, clientSp, clientDeaths, clientDeathCap } from './client-status';
 import { clientDashboard } from './client-dashboard';
 import './client-shell.css';
@@ -54,6 +55,31 @@ let receivedAt = 0;
 let busy = false;
 let heartbeatPending = false;
 let previousSession: string | undefined;
+const gameViewport = element('client-game-viewport');
+const gameView = new EmbeddedGameView({
+  bounds: () => gameViewBounds(gameViewport.getBoundingClientRect(),
+    { width: globalThis.innerWidth, height: globalThis.innerHeight },
+    shell.main.querySelector<HTMLElement>('.client-toolbar')!.getBoundingClientRect().bottom),
+  present: bounds => invoke('set_game_view', { bounds }),
+  changed: shown => { element('client-game-placeholder').hidden = shown; },
+  error: () => message('Could not display Game. Switch to Bot and try Game again.', true),
+});
+function syncGameView(): void {
+  const mode = latest?.connectionMode ?? element<HTMLSelectElement>('connection-mode').value;
+  const available = native && gameOpen && mode === 'gameClient';
+  element('client-game-help').textContent = !native ? 'Open the desktop app to use the Game view.'
+    : gameOpen && mode === 'botOnly' ? 'This connection uses Bot only. Disconnect and choose With game client to use Game and Bot with the same login.'
+    : 'Choose With game client in Account & character to use Game and Bot with the same login.';
+  gameView.setVisible(available && shell.page === 'game' && closeRegistered && !closeBusy && !updateBusy);
+}
+shell.onPageChange(syncGameView);
+globalThis.addEventListener?.('resize', () => gameView.refresh());
+globalThis.addEventListener?.('scroll', () => gameView.refresh(), { passive: true, capture: true });
+if (typeof ResizeObserver !== 'undefined') {
+  const observer = new ResizeObserver(() => gameView.refresh());
+  observer.observe(gameViewport);
+  observer.observe(shell.main.querySelector<HTMLElement>('.client-toolbar')!);
+}
 const reconnect = new ReconnectPolicy();
 const fieldRun = new PersistentFieldRun();
 let sessionLoginAvailable = false;
@@ -264,6 +290,7 @@ function message(text: string, error = false): void {
   element('notice').classList.toggle('error', error);
 }
 function updateButtons(): void {
+  syncGameView();
   const navigation = new Set(shell.main.querySelectorAll<HTMLButtonElement>('button[data-client-page-nav], button[data-client-bot-nav], button[data-client-inspector-nav], button[data-client-navigation], #client-manual-index > button'));
   for (const button of navigation) button.disabled = false;
   let dashboardSettings: Settings | null = null;
@@ -333,6 +360,7 @@ async function signIn(): Promise<void> {
       return;
     }
     gameOpen = true;accountBaseline=accountFields();
+    if (mode === 'gameClient') shell.showPage('game');
     if (remember) showSavedLogin({ username, characterSlot, autoLogin, mode });
     message(mode==='botOnly'?'Opening bot connection for sign-in…':'Loading the game client for sign-in…');
   } finally { updateButtons(); }

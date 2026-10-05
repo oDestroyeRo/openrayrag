@@ -1,7 +1,7 @@
 {
   "identifier": "game-telemetry",
-  "description": "The fixed game window can report status and claim one explicitly queued login. It cannot read the local saved profile or access the filesystem or shell.",
-  "windows": [
+  "description": "The fixed game webview can report status and claim one explicitly queued login. It cannot read the local saved profile or access the filesystem or shell.",
+  "webviews": [
     "game"
   ],
   "local": false,

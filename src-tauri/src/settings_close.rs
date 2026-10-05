@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, WebviewWindow};
+use tauri::{Emitter, Manager, Webview};
 
 const ERROR: &str = "Close was not confirmed by saved current settings. Try closing again.";
 
@@ -179,7 +179,7 @@ pub(crate) fn exit_requested(
     code: Option<i32>,
     api: &tauri::ExitRequestApi,
 ) {
-    if app.get_webview_window("main").is_none() {
+    if app.get_webview("main").is_none() {
         return;
     }
     let request = app
@@ -196,9 +196,9 @@ pub(crate) fn exit_requested(
 #[tauri::command]
 pub(crate) fn settings_close_ready(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
 ) -> Result<Option<Request>, String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     let shared = app.state::<SharedClose>();
     let mut state = shared.lock().map_err(|_| ERROR)?;
     state.ready = true;
@@ -208,10 +208,10 @@ pub(crate) fn settings_close_ready(
 #[tauri::command]
 pub(crate) fn settings_close_cancel(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     token: String,
 ) -> Result<(), String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     app.state::<SharedClose>()
         .lock()
         .map_err(|_| ERROR)?
@@ -222,11 +222,11 @@ pub(crate) fn settings_close_cancel(
 #[tauri::command]
 pub(crate) async fn settings_close_complete(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     token: String,
     revision: u64,
 ) -> Result<(), String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     let intent = {
         // Only the existing validated, private settings writer can prove this
         // revision. Its update/install admission fence still applies to shutdown.
@@ -238,7 +238,7 @@ pub(crate) async fn settings_close_complete(
     };
     match intent {
         Intent::Close => {
-            if window.destroy().is_err() {
+            if window.window().destroy().is_err() {
                 app.state::<SharedClose>()
                     .lock()
                     .map_err(|_| ERROR)?

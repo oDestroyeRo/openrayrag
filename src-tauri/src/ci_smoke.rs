@@ -40,7 +40,7 @@ pub(crate) fn destroyed(app: &tauri::AppHandle, label: &str) {
 #[tauri::command]
 pub(crate) fn ci_smoke_report(
     app: tauri::AppHandle,
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     token: String,
     event: String,
 ) -> Result<bool, String> {
@@ -186,7 +186,7 @@ mod enabled {
         let gate = gate
             .lock()
             .map_err(|_| "CI maintenance state unavailable")?;
-        if app.get_webview_window("game").is_some() || gate.ever_game || gate.identity.is_some() {
+        if app.get_webview("game").is_some() || gate.ever_game || gate.identity.is_some() {
             return Err("CI smoke must remain offline without a game window".into());
         }
         Ok(())
@@ -266,11 +266,11 @@ mod enabled {
 
     pub(super) fn report(
         app: tauri::AppHandle,
-        window: tauri::WebviewWindow,
+        window: tauri::Webview,
         token: String,
         event: String,
     ) -> Result<bool, String> {
-        crate::require_window(&window, "main")?;
+        crate::require_view(&window, "main")?;
         let run = RUN.get().ok_or("CI smoke is not active")?;
         if token != run.token || app.config().identifier != IDENTIFIER {
             return Err("CI smoke request is not authorized".into());
@@ -349,7 +349,7 @@ mod enabled {
             }})();"#
         );
         if app
-            .get_webview_window("main")
+            .get_webview("main")
             .map_or(true, |window| window.eval(script).is_err())
         {
             finish(
