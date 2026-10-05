@@ -315,6 +315,17 @@ impl Gate {
             }
         }
     }
+    /// Cancellation removes future resume authority elsewhere, but must keep
+    /// the lease's transport owner until its existing retirement/expiry gate.
+    pub fn cancel_update(&mut self) -> Option<String> {
+        let lease = self.lease.as_ref()?;
+        if lease.committed {
+            return None;
+        }
+        let nonce = lease.nonce.clone();
+        self.invalidate(&nonce);
+        Some(nonce)
+    }
     pub fn final_ack(&mut self, nonce: &str, identity: &GameIdentity, revision: u64) -> bool {
         self.expire();
         let Some(l) = self.lease.as_mut() else {
@@ -388,6 +399,25 @@ mod tests {
         g.commit("x").unwrap();
         g.lease.as_mut().unwrap().until = Instant::now();
         g.expire();
+        assert!(g.admit().is_err());
+    }
+    #[test]
+    fn cancellation_preserves_uncommitted_transport_owner_and_committed_retirement() {
+        let mut g = gate();
+        g.reserve("pending".into(), 3, false).unwrap();
+        assert_eq!(g.cancel_update().as_deref(), Some("pending"));
+        assert!(g.lease.as_ref().unwrap().invalidated);
+        assert!(g.lease.is_some());
+        assert!(g.commit("pending").is_err());
+        assert!(g.admit().is_err());
+        let mut g = gate();
+        g.reserve("committed".into(), 3, false).unwrap();
+        g.commit("committed").unwrap();
+        let owner = g.begin_retirement("committed", false).unwrap();
+        g.transport_retired(&owner).unwrap();
+        assert!(g.cancel_update().is_none());
+        assert!(!g.lease.as_ref().unwrap().invalidated);
+        assert!(g.replacement_ready(&owner));
         assert!(g.admit().is_err());
     }
     #[test]

@@ -17,6 +17,8 @@
     "allow-update-final-ack",
     "allow-warp-guard-mark",
     "allow-warp-guard-clear",
-    "allow-warp-guard-initialize"
+    "allow-warp-guard-initialize",
+    "allow-update-prepared",
+    "allow-update-restored"
   ]
 }

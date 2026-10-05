@@ -390,6 +390,7 @@ pub(crate) fn update_reserve(
     app: tauri::AppHandle,
     window: WebviewWindow,
     document: FormDocument,
+    continuation: Option<crate::update_continuation::ContinuationBase>,
 ) -> Result<String, String> {
     crate::require_window(&window, "main")?;
     if !AUTOMATIC_SUPPORTED {
@@ -423,6 +424,13 @@ pub(crate) fn update_reserve(
     let game = app.get_webview_window("game");
     let nonce = uuid::Uuid::new_v4().simple().to_string();
     gate.reserve(nonce.clone(), document.revision, game.is_some())?;
+    if let Some(base) = continuation {
+        if let Err(error) = crate::update_continuation::reserve(&app, &gate, &nonce, document, base)
+        {
+            gate.lease = None;
+            return Err(error);
+        }
+    }
     if let Some(game) = game {
         let script = format!(
             "window.__RAYRAG__?.maintenance({},true)",
@@ -539,6 +547,7 @@ pub(crate) async fn update_install(
         g.commit(&nonce)?;
         c
     };
+    let target_version = candidate.version.clone();
     // A committed lease continues blocking commands while window destruction finishes.
     let mut retirement_owner = None;
     let result = async {
@@ -612,7 +621,15 @@ pub(crate) async fn update_install(
         }
     }
     .await;
+    let result = match result {
+        Ok(()) => crate::update_continuation::restart(&app, &target_version).await,
+        Err(error) => Err(error),
+    };
     if let Err(e) = result {
+        crate::update_continuation::failed(
+            &app,
+            app.get_webview_window("game").is_none() && retirement_owner.is_some(),
+        );
         {
             let shared = app.state::<SharedGate>();
             let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
@@ -630,7 +647,7 @@ pub(crate) async fn update_install(
         }
         return Err(e);
     }
-    app.restart();
+    std::future::pending::<Result<bool, String>>().await
 }
 #[cfg(test)]
 mod tests {
@@ -986,6 +1003,7 @@ pub(crate) fn update_final_ack(
     nonce: String,
     identity: GameIdentity,
     revision: u64,
+    checkpoint: Option<serde_json::Value>,
 ) -> Result<bool, String> {
     crate::require_game_runtime(&window)?;
     let shared = app.state::<SharedGate>();
@@ -997,5 +1015,23 @@ pub(crate) fn update_final_ack(
     {
         return Ok(false);
     }
-    Ok(gate.final_ack(&nonce, &identity, revision))
+    if !gate.final_ack(&nonce, &identity, revision) {
+        return Ok(false);
+    }
+    let target = app
+        .state::<SharedUpdate>()
+        .lock()
+        .map_err(|_| "Update state unavailable.")?
+        .candidate
+        .as_ref()
+        .ok_or("No update is ready.")?
+        .version
+        .clone();
+    if let Err(error) =
+        crate::update_continuation::capture(&app, &gate, &nonce, checkpoint, &target)
+    {
+        gate.invalidate(&nonce);
+        return Err(error);
+    }
+    Ok(true)
 }
