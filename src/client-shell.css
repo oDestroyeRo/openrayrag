@@ -50,6 +50,9 @@ body:has(.client-shell) { margin: 0; background: var(--client-bg); }
 .client-icon svg { width: 100%; height: 100%; }
 .client-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .client-shell .client-skip-link { position: absolute; left: 24px; top: -100px; z-index: 20; padding: 12px; background: var(--client-text); color: var(--client-bg); border-radius: 8px; }
+.client-shell[data-client-page="game"] .console-character-bar { display: none; }
+.client-game-viewport { height: calc(100dvh - var(--client-toolbar-offset, 240px) - 40px); min-height: 320px; background: var(--client-field); border: 1px solid var(--client-border); border-radius: 8px; }
+.client-game-placeholder { display: grid; place-content: center; justify-items: center; height: 100%; padding: 24px; text-align: center; }
 .client-skip-link:focus { top: 8px; }
 
 /* The monitor, run reason and primary controls persist across all pages. */

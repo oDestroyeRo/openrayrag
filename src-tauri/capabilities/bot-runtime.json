@@ -1,7 +1,7 @@
 {
   "identifier": "bot-runtime",
   "description": "The bundled bot execution context uses one fixed native transport and reports bounded telemetry. It cannot retrieve credentials or load the official client.",
-  "windows": [
+  "webviews": [
     "game"
   ],
   "local": true,

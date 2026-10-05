@@ -7,7 +7,7 @@ use crate::{
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use std::{collections::VecDeque, sync::Mutex, time::Duration};
-use tauri::{Manager, WebviewWindow};
+use tauri::{Manager, Webview};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::{mpsc, oneshot},
@@ -43,7 +43,7 @@ pub(crate) fn url_for(mode: ConnectionMode) -> tauri::Url {
         ConnectionMode::GameClient => crate::GAME_URL.parse().unwrap(),
     }
 }
-pub(crate) fn window_mode(window: &WebviewWindow) -> Result<ConnectionMode, String> {
+pub(crate) fn runtime_mode(window: &Webview) -> Result<ConnectionMode, String> {
     mode_for_url(&window.url().map_err(|_| "Connection URL unavailable.")?)
 }
 fn mode_for_url(url: &tauri::Url) -> Result<ConnectionMode, String> {
@@ -55,9 +55,9 @@ fn mode_for_url(url: &tauri::Url) -> Result<ConnectionMode, String> {
         Err("Unverified connection runtime.".into())
     }
 }
-fn local_window(window: &WebviewWindow) -> Result<(), String> {
-    crate::require_window(window, "game")?;
-    if window_mode(window)? != ConnectionMode::BotOnly {
+fn local_window(window: &Webview) -> Result<(), String> {
+    crate::require_view(window, "game")?;
+    if runtime_mode(window)? != ConnectionMode::BotOnly {
         return Err("Command requires the bundled bot runtime.".into());
     }
     Ok(())
@@ -650,7 +650,7 @@ async fn run(
 #[tauri::command]
 pub(crate) async fn direct_connect(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     session_id: String,
     connection_id: String,
 ) -> Result<(), String> {
@@ -736,7 +736,7 @@ pub(crate) struct Batch {
 #[tauri::command]
 pub(crate) fn direct_observed(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     session_id: String,
     connection_id: String,
     delivery: u64,
@@ -758,7 +758,7 @@ pub(crate) fn direct_observed(
 #[tauri::command]
 pub(crate) fn direct_poll(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     session_id: String,
     connection_id: String,
 ) -> Result<Batch, String> {
@@ -793,7 +793,7 @@ pub(crate) fn direct_poll(
 #[tauri::command]
 pub(crate) async fn direct_send(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     session_id: String,
     connection_id: String,
     bytes: Vec<u8>,

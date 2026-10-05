@@ -1,6 +1,6 @@
 import { UI_ICONS } from './ui-icons';
 
-export type ClientPage = 'session' | 'bot' | 'manual' | 'settings';
+export type ClientPage = 'session' | 'game' | 'bot' | 'manual' | 'settings';
 export type ConsoleInspector = 'nearby' | 'inventory';
 export type BotSection = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows';
 
@@ -9,13 +9,15 @@ export interface ClientShell {
   readonly sections: Record<BotSection | 'profiles', HTMLElement>;
   readonly manualTools: HTMLElement;
   readonly sessionDetails: HTMLElement;
+  readonly page: ClientPage;
+  onPageChange(listener: (page: ClientPage) => void): void;
   showPage(page: ClientPage): void;
   showBotSection(section: BotSection): void;
   showInspector(inspector: ConsoleInspector): void;
   refreshManualIndex(): void;
 }
 
-const pages: readonly ClientPage[] = ['session', 'bot', 'manual', 'settings'];
+const pages: readonly ClientPage[] = ['session', 'game', 'bot', 'manual', 'settings'];
 const botSections: readonly BotSection[] = ['combat', 'recovery', 'travel', 'inventory', 'workflows'];
 
 /** Mount once before binding the existing controller callbacks and feature forms. */
@@ -27,7 +29,8 @@ export function mountClientShell(root: HTMLElement): ClientShell {
         <div class="client-topbar">
           <div class="client-brand"><h1>rayrag</h1><span>Companion</span></div>
           <nav class="client-page-nav" role="tablist" aria-label="Companion pages">
-            <button id="client-tab-session" type="button" role="tab" data-client-page-nav="session" aria-controls="client-page-session" aria-selected="true">${UI_ICONS.activity}Run</button>
+            <button id="client-tab-session" type="button" role="tab" data-client-page-nav="session" aria-controls="client-page-session" aria-selected="true">${UI_ICONS.activity}Bot</button>
+            <button id="client-tab-game" type="button" role="tab" data-client-page-nav="game" aria-controls="client-page-game" aria-selected="false" tabindex="-1">${UI_ICONS.play}Game</button>
             <button id="client-tab-bot" type="button" role="tab" data-client-page-nav="bot" aria-controls="client-page-bot" aria-selected="false" tabindex="-1">${UI_ICONS.adjustments}Setup</button>
             <button id="client-tab-manual" type="button" role="tab" data-client-page-nav="manual" aria-controls="client-page-manual" aria-selected="false" tabindex="-1">${UI_ICONS.tool}Tools</button>
             <button id="client-tab-settings" type="button" role="tab" data-client-page-nav="settings" aria-controls="client-page-settings" aria-selected="false" tabindex="-1">${UI_ICONS.settings}Settings</button>
@@ -48,6 +51,12 @@ export function mountClientShell(root: HTMLElement): ClientShell {
       </header>
 
       <div class="client-pages">
+        <section id="client-page-game" class="client-page client-game-page" role="tabpanel" aria-labelledby="client-tab-game" hidden>
+          <h2 id="client-page-game-title" class="client-visually-hidden" tabindex="-1">Game client</h2>
+          <div id="client-game-viewport" class="client-game-viewport" aria-label="Official game client">
+            <div id="client-game-placeholder" class="client-game-placeholder"><p id="client-game-help" class="hint" role="status">Choose With game client in Account & character to use Game and Bot with the same login.</p><button type="button" class="secondary" data-client-navigation="account">Connect account</button></div>
+          </div>
+        </section>
         <section id="client-page-session" class="client-page" role="tabpanel" aria-labelledby="client-tab-session">
           <h2 id="client-page-session-title" class="client-visually-hidden" tabindex="-1">Bot console</h2>
           <div class="bot-console-grid">
@@ -141,7 +150,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
                 <label><input id="auto-reconnect" type="checkbox" disabled /> Reconnect after connection loss · this session</label>
                 <button id="forget-login" type="button" class="text-button" hidden>Forget local saved login</button>
               </div>
-              <p class="hint">Bot only uses the companion map and controls. With game client opens the official game window. Disconnect before switching modes.</p>
+              <p class="hint">With game client shares one login between the Game and Bot views. Bot only uses the companion map and controls. Disconnect before changing connection modes.</p>
               <p class="hint">Saved credentials use a local file with user-only access. The app does not encrypt them.</p>
               <p id="reconnect-help" class="hint">A running bot reconnects with this session login and resumes when your character is ready.</p>
               <div class="signin-actions"><p id="login-help" class="hint">Select an existing slot. Sign-in enters the field with combat stopped.</p><button id="signin" type="submit" class="primary">Sign in & enter</button></div>
@@ -173,6 +182,8 @@ export function mountClientShell(root: HTMLElement): ClientShell {
   const inspectors: readonly ConsoleInspector[] = ['nearby', 'inventory'];
   const inspectorPanels = Object.fromEntries(inspectors.map(key => [key, required<HTMLElement>(`#console-panel-${key}`)])) as Record<ConsoleInspector, HTMLElement>;
   const inspectorButtons = Object.fromEntries(inspectors.map(key => [key, required<HTMLButtonElement>(`#console-tab-${key}`)])) as Record<ConsoleInspector, HTMLButtonElement>;
+  let selectedPage: ClientPage = 'session';
+  const pageListeners = new Set<(page: ClientPage) => void>();
 
   function syncToolbarOffset(): void {
     main.style.setProperty('--client-toolbar-offset', `${Math.ceil(toolbar.getBoundingClientRect().height) + 16}px`);
@@ -191,6 +202,8 @@ export function mountClientShell(root: HTMLElement): ClientShell {
   }
 
   function selectPage(page: ClientPage, focus: boolean): void {
+    selectedPage = page;
+    main.setAttribute('data-client-page', page);
     for (const key of pages) {
       const selected = key === page;
       pagePanels[key].hidden = !selected;
@@ -200,6 +213,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
     }
     skipLink.href = `#client-page-${page}-title`;
     if (focus) focusContent(required<HTMLElement>(`#client-page-${page}-title`));
+    for (const listener of pageListeners) listener(page);
   }
 
   function selectBotSection(section: BotSection, focus: boolean): void {
@@ -253,6 +267,8 @@ export function mountClientShell(root: HTMLElement): ClientShell {
 
   return {
     main, sections, manualTools,
+    get page() { return selectedPage; },
+    onPageChange: listener => { pageListeners.add(listener); },
     sessionDetails: required<HTMLElement>('#client-session-details'),
     showPage: page => selectPage(page, true),
     showBotSection: section => selectBotSection(section, true),

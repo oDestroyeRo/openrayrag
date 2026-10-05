@@ -5,12 +5,13 @@ import { validMapInfo, type MapInfo } from './map-data';
 import { validNavigationStatus } from './navigation-status';
 import { validFeatureStatus } from './feature-ui';
 
-export type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean; escape?: EscapeSnapshot; macro?:import('./macros').MacroSnapshot; supplyGuard?:import('./supply-trip').SupplyResumeGuard; deathRecoveryGuard?:import('./death-recovery').DeathRecoveryGuard };
+export type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; connectionMode?: 'botOnly' | 'gameClient'; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean; escape?: EscapeSnapshot; macro?:import('./macros').MacroSnapshot; supplyGuard?:import('./supply-trip').SupplyResumeGuard; deathRecoveryGuard?:import('./death-recovery').DeathRecoveryGuard };
 
 export function validStatus(value: unknown): value is GameStatus {
   if (!value || typeof value !== 'object') return false;
   const s = value as Record<string, unknown>;
   if (typeof s.reconnectAvailable !== 'boolean') return false;
+  if (s.connectionMode !== undefined && s.connectionMode !== 'botOnly' && s.connectionMode !== 'gameClient') return false;
   if (typeof s.sessionId !== 'string' || !s.sessionId || s.sessionId.length > 64) return false;
   const login = s.login as Partial<LoginStatus> | undefined;
   if (!login || typeof login.message !== 'string' || login.message.length > 1024

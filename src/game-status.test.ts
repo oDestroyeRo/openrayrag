@@ -9,6 +9,8 @@ describe('native full status and heartbeat boundary during route planning',()=>{
     const c=new CompanionController(()=>{},()=>100_000);c.connect(true);c.engine.receive([{type:'enter',id:1,map:'prt_fild08'},{type:'spawn',entity:{...player,sp:50,maxSp:100}}]);c.world.reset('prt_fild08');
     const status={...c.snapshot(),sessionId:'offline-resource-fixture',login:{phase:'complete',message:''},reconnectAvailable:false,mapInfo:{code:'prt_fild08',name:'Field',source:'observed',monsters:[]}};
     expect(validStatus(status)).toBe(true);expect(status.actorObservations.actors[0]).toMatchObject({hp:{value:100,max:100,source:'spawn'},sp:{value:50,max:100,source:'spawn'}});
+    for(const connectionMode of ['botOnly','gameClient'])expect(validStatus({...status,connectionMode})).toBe(true);
+    expect(validStatus({...status,connectionMode:'unverified'})).toBe(false);
     expect(status.memo).toBeDefined();expect(status.socket).toBeDefined();expect(status.manualTarget).toBeDefined();
     const malformed=structuredClone(status);malformed.actorObservations.actors[0]!.hp!.max=0;expect(validStatus(malformed)).toBe(false);
     expect(validStatus({...status,memo:{...status.memo,blocked:'invalid'}})).toBe(false);expect(validStatus({...status,socket:{...status.socket,pending:'invalid'}})).toBe(false);

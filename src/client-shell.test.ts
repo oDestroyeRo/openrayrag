@@ -5,7 +5,7 @@ import { DEFAULT_AUTOMATION } from './settings';
 import type { WarpBinding, WarpRequest } from './warp-protocol';
 import type { WarpSnapshot } from './warp';
 
-const pages: ClientPage[] = ['session', 'bot', 'manual', 'settings'];
+const pages: ClientPage[] = ['session', 'game', 'bot', 'manual', 'settings'];
 const sections: BotSection[] = ['combat', 'recovery', 'travel', 'inventory', 'workflows'];
 type NavigationEvent = { key: string; preventDefault(): void };
 
@@ -213,10 +213,10 @@ describe('client shell navigation', () => {
     const f = fixture();
     expect(f.document.activeElement).toBeNull();
     const arrow = f.get('#client-tab-session').emit('keydown', 'ArrowRight'); expect(arrow.preventDefault).toHaveBeenCalledOnce();
-    expect(f.pagePanels.bot.hidden).toBe(false); expect(f.document.activeElement).toBe(f.get('#client-tab-bot'));
+    expect(f.pagePanels.game.hidden).toBe(false); expect(f.document.activeElement).toBe(f.get('#client-tab-game'));
     for (const page of pages) {
-      expect(f.get(`#client-tab-${page}`).tabIndex).toBe(page === 'bot' ? 0 : -1);
-      expect(f.get(`#client-tab-${page}`).attributes.get('aria-selected')).toBe(String(page === 'bot'));
+      expect(f.get(`#client-tab-${page}`).tabIndex).toBe(page === 'game' ? 0 : -1);
+      expect(f.get(`#client-tab-${page}`).attributes.get('aria-selected')).toBe(String(page === 'game'));
     }
     f.get('#client-tab-bot').emit('keydown', 'End'); expect(f.document.activeElement).toBe(f.get('#client-tab-settings'));
     f.get('#client-tab-settings').emit('keydown', 'ArrowRight'); expect(f.document.activeElement).toBe(f.get('#client-tab-session'));

@@ -76,6 +76,32 @@ test('runner requires the child result and bounds a stuck native process', async
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('a failed native child retains its matching diagnostic without accepting stale or passing reports', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rayrag-smoke-failure-test-'));
+  const fixture = join(root, 'failure.mjs'), output = join(root, 'result.json');
+  try {
+    await writeFile(fixture, "import {writeFileSync} from 'node:fs'; writeFileSync(process.env.RAYRAG_CI_RESULT, process.env.FIXTURE_RESULT); process.exit(1);\n");
+    const failure = { protocol: 1, stage: 'save', token, passed: false, message: 'Packaged WebView smoke timed out', milestone: 'main-webview-building' };
+    const run = outcome => runStage(process.execPath, 'save', {
+      root, data: root, result: output, token, prefixArgs: [fixture], env: { ...process.env, FIXTURE_RESULT: JSON.stringify(outcome) },
+    });
+    await assert.rejects(run(failure), error => {
+      assert.match(error.message, /exited with 1/);
+      assert.match(error.message, /Native result: Packaged WebView smoke timed out/);
+      assert.match(error.message, /Milestone: main-webview-building/);
+      assert.ok(!error.message.includes(token));
+      return true;
+    });
+    for (const outcome of [{ ...failure, token: 'another-run' }, { ...failure, stage: 'reopen' }, { ...failure, passed: true }, { ...failure, message: 'x'.repeat(20_000) }]) {
+      await assert.rejects(run(outcome), error => {
+        assert.match(error.message, /exited with 1/);
+        assert.ok(!error.message.includes('Native result:'));
+        return true;
+      });
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('a timed-out DBus session terminates its application before cleanup', {
   skip: process.platform === 'win32' || spawnSync('dbus-run-session', ['--help']).error !== undefined,
 }, async () => {

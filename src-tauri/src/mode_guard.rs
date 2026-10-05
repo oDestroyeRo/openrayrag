@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
     sync::Mutex,
 };
-use tauri::{Manager, WebviewWindow};
+use tauri::{Manager, Webview};
 const ERROR: &str =
     "Warp recovery guard unavailable. Reconnect in the previous mode before switching.";
 #[derive(Serialize, Deserialize)]
@@ -136,12 +136,12 @@ pub(crate) fn prepare(app: &tauri::AppHandle, mode: ConnectionMode) -> Result<()
 #[tauri::command]
 pub(crate) fn warp_guard_initialize(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     legacy_held: bool,
 ) -> Result<Option<String>, String> {
     crate::require_game_runtime(&window)?;
     let gate = crate::maintenance::admit(&app)?;
-    let mode = crate::direct::window_mode(&window)?;
+    let mode = crate::direct::runtime_mode(&window)?;
     let shared = app.state::<SharedGuard>();
     let mut state = shared.0.lock().map_err(|_| ERROR)?;
     state.take_initialization(mode)?;
@@ -170,13 +170,10 @@ pub(crate) fn warp_guard_initialize(
     Ok(Some(id))
 }
 #[tauri::command]
-pub(crate) fn warp_guard_mark(
-    app: tauri::AppHandle,
-    window: WebviewWindow,
-) -> Result<String, String> {
+pub(crate) fn warp_guard_mark(app: tauri::AppHandle, window: Webview) -> Result<String, String> {
     crate::require_game_runtime(&window)?;
     let _gate = crate::maintenance::admit(&app)?;
-    let mode = crate::direct::window_mode(&window)?;
+    let mode = crate::direct::runtime_mode(&window)?;
     mark_admitted(&app, mode)
 }
 pub(crate) fn bind_owner(app: &tauri::AppHandle, generation: u64, identity: &Option<GameIdentity>) {
@@ -193,7 +190,7 @@ pub(crate) fn bind_owner(app: &tauri::AppHandle, generation: u64, identity: &Opt
 #[tauri::command]
 pub(crate) fn warp_guard_clear(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     identity: GameIdentity,
     permit: String,
 ) -> Result<(), String> {
@@ -202,7 +199,7 @@ pub(crate) fn warp_guard_clear(
     if gate.identity.as_ref() != Some(&identity) {
         return Err("Warp initialization identity is stale.".into());
     }
-    let mode = crate::direct::window_mode(&window)?;
+    let mode = crate::direct::runtime_mode(&window)?;
     let shared = app.state::<SharedGuard>();
     let mut state = shared.0.lock().map_err(|_| ERROR)?;
     let proof = state

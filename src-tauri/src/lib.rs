@@ -1,8 +1,9 @@
 use automation::Settings;
 use std::sync::OnceLock;
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{webview::WebviewBuilder, Emitter, Manager, Webview, WebviewUrl};
 mod automation;
 mod ci_smoke;
+mod client_view;
 mod control;
 mod current_form;
 mod direct;
@@ -42,9 +43,9 @@ fn app_data(app: &tauri::AppHandle) -> Result<std::path::PathBuf, tauri::Error> 
     app.path().app_data_dir()
 }
 
-fn require_window(window: &WebviewWindow, label: &str) -> Result<(), String> {
+fn require_view(window: &Webview, label: &str) -> Result<(), String> {
     if window.label() != label {
-        return Err("Command is not available in this window.".into());
+        return Err("Command is not available in this view.".into());
     }
     Ok(())
 }
@@ -52,13 +53,13 @@ fn require_window(window: &WebviewWindow, label: &str) -> Result<(), String> {
 #[tauri::command]
 // Keep admitted window operations on the UI thread: URL/build operations may
 // synchronously dispatch there, while other UI commands need the same gate.
-fn open_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
-    require_window(&window, "main")?;
+fn open_game(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
+    require_view(&window, "main")?;
     let mut permit = maintenance::admit(&app)?;
     permit.ever_game = true;
     permit.game_generation += 1;
     permit.identity = None;
-    if app.get_webview_window("game").is_none() {
+    if app.get_webview("game").is_none() {
         permit.authorize_navigation();
     }
     let result = open_game_window(&app, login::ConnectionMode::GameClient);
@@ -69,21 +70,34 @@ fn open_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String>
 }
 
 #[tauri::command]
-fn close_game(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
-    require_window(&window, "main")?;
+fn close_game(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
+    require_view(&window, "main")?;
     let mut _permit = maintenance::admit(&app)?;
     direct::cancel_admitted(&app, &mut _permit);
-    if let Some(game) = app.get_webview_window("game") {
-        game.destroy()
-            .map_err(|_| "Could not disconnect the game.".to_string())?;
+    close_game_runtime(&app, &mut _permit)
+}
+
+/// Child webview closure has no native WindowEvent::Destroyed. Keep explicit
+/// disconnect and updater retirement on the same completion boundary.
+/// Call on the UI thread: native Close executes synchronously there.
+fn close_game_runtime(app: &tauri::AppHandle, gate: &mut maintenance::Gate) -> Result<(), String> {
+    let Some(game) = app.get_webview("game") else {
+        return Ok(());
+    };
+    game.close()
+        .map_err(|_| "Could not disconnect the game.".to_string())?;
+    app.state::<direct::SharedDirect>().game_destroyed(gate);
+    if let Ok(mut state) = app.state::<login::SharedLogin>().lock() {
+        state.close();
     }
+    let _ = app.emit_to("main", "game-closed", ());
     Ok(())
 }
 
 fn open_game_window(app: &tauri::AppHandle, mode: login::ConnectionMode) -> Result<(), String> {
     mode_guard::check_app(app, mode)?;
-    if let Some(game) = app.get_webview_window("game") {
-        if direct::window_mode(&game)? != mode {
+    if let Some(game) = app.get_webview("game") {
+        if direct::runtime_mode(&game)? != mode {
             return Err("Disconnect before changing the connection mode.".into());
         }
         return Ok(());
@@ -93,12 +107,9 @@ fn open_game_window(app: &tauri::AppHandle, mode: login::ConnectionMode) -> Resu
         login::ConnectionMode::BotOnly => WebviewUrl::App("bot-runtime.html".into()),
         login::ConnectionMode::GameClient => WebviewUrl::External(GAME_URL.parse().unwrap()),
     };
-    WebviewWindowBuilder::new(app, "game", url)
-        .title("Rayrag · Connection")
-        .visible(mode == login::ConnectionMode::GameClient)
-        .inner_size(1360.0, 880.0)
-        .min_inner_size(1000.0, 720.0)
+    let builder = WebviewBuilder::new("game", url)
         .incognito(true)
+        .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .initialization_script(if mode == login::ConnectionMode::GameClient {
             BRIDGE
         } else {
@@ -130,9 +141,24 @@ fn open_game_window(app: &tauri::AppHandle, mode: login::ConnectionMode) -> Resu
                 allowed
             }
         })
-        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-        .build()
-        .map_err(|_| "Could not open the game window.".to_string())?;
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
+    let main = app
+        .get_window("main")
+        .ok_or("The companion window is unavailable.")?;
+    // The local shell supplies the visible bounds only after Game is selected.
+    let size = main
+        .inner_size()
+        .map_err(|_| "Game view size unavailable.")?
+        .to_logical::<f64>(
+            main.scale_factor()
+                .map_err(|_| "Game view scale unavailable.")?,
+        );
+    main.add_child(
+        builder,
+        tauri::LogicalPosition::new(-size.width - 1.0, 0.0),
+        size,
+    )
+    .map_err(|_| "Could not open the game view.".to_string())?;
     Ok(())
 }
 
@@ -140,7 +166,7 @@ fn open_game_window(app: &tauri::AppHandle, mode: login::ConnectionMode) -> Resu
 #[allow(clippy::too_many_arguments)] // Explicit command fields preserve the existing native boundary.
 fn control_bot(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     action: String,
     settings: Option<Settings>,
     request: Option<serde_json::Value>,
@@ -148,7 +174,7 @@ fn control_bot(
     supply_guard: Option<automation::SupplyResumeGuard>,
     death_recovery_guard: Option<automation::DeathRecoveryGuard>,
 ) -> Result<(), String> {
-    require_window(&window, "main")?;
+    require_view(&window, "main")?;
     if let Some(guard) = &death_recovery_guard {
         if action != "start" {
             return Err("Death recovery state is only accepted by start.".into());
@@ -225,12 +251,12 @@ fn control_bot(
             state.cancel();
         }
         if !in_world {
-            if let Some(game) = app.get_webview_window("game") {
-                if direct::window_mode(&game)? == login::ConnectionMode::BotOnly
+            if let Some(game) = app.get_webview("game") {
+                if direct::runtime_mode(&game)? == login::ConnectionMode::BotOnly
                     && !app.state::<direct::SharedDirect>().entered_world()
                 {
                     direct::cancel_admitted(&app, &mut _permit);
-                    game.destroy()
+                    close_game_runtime(&app, &mut _permit)
                         .map_err(|_| "Could not cancel the connection.")?;
                     return Ok(());
                 }
@@ -243,9 +269,7 @@ fn control_bot(
             .ok_or("Combat settings are required.")?
             .validate()?;
     }
-    let game = app
-        .get_webview_window("game")
-        .ok_or("Open the game first.")?;
+    let game = app.get_webview("game").ok_or("Open the game first.")?;
     let script = if matches!(
         action.as_str(),
         "command"
@@ -282,7 +306,7 @@ fn control_bot(
         )
     };
     if action == "warp" {
-        mode_guard::mark_admitted(&app, direct::window_mode(&game)?)?;
+        mode_guard::mark_admitted(&app, direct::runtime_mode(&game)?)?;
     }
     game.eval(script)
         .map_err(|_| "Could not reach the game controller.".into())
@@ -291,7 +315,7 @@ fn control_bot(
 #[tauri::command]
 fn bridge_status(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     mut status: serde_json::Value,
 ) -> Result<(), String> {
     require_game_runtime(&window)?;
@@ -301,12 +325,12 @@ fn bridge_status(
         return Err("Status exceeds its limit.".into());
     }
     if let Ok(mut gate) = app.state::<maintenance::SharedGate>().lock() {
-        if direct::window_mode(&window)? == login::ConnectionMode::BotOnly
+        if direct::runtime_mode(&window)? == login::ConnectionMode::BotOnly
             && !app.state::<direct::SharedDirect>().status_matches(&status)
         {
             return Err("Stale bot runtime status.".into());
         }
-        if direct::window_mode(&window)? == login::ConnectionMode::BotOnly {
+        if direct::runtime_mode(&window)? == login::ConnectionMode::BotOnly {
             app.state::<direct::SharedDirect>().observe_world(&status);
         }
         let identity = if status.get("connected").and_then(|v| v.as_bool()) == Some(true)
@@ -378,9 +402,9 @@ fn bridge_status(
         .map_err(|_| "Controller is unavailable.".into())
 }
 
-fn require_game_runtime(window: &WebviewWindow) -> Result<(), String> {
-    require_window(window, "game")?;
-    direct::window_mode(window)?;
+fn require_game_runtime(window: &Webview) -> Result<(), String> {
+    require_view(window, "game")?;
+    direct::runtime_mode(window)?;
     Ok(())
 }
 
@@ -400,6 +424,7 @@ pub fn run() {
             update_continuation::initialize(app.handle())?;
             #[cfg(target_os = "macos")]
             settings_close::install_macos_quit(app.handle())?;
+            client_view::create_main(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -429,6 +454,7 @@ pub fn run() {
             updater::update_open_release,
             open_game,
             close_game,
+            client_view::set_game_view,
             control_bot,
             bridge_status,
             direct::direct_connect,
@@ -453,36 +479,25 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
+                    ci_smoke::milestone("close-requested");
                     settings_close::close_requested(window.app_handle(), api);
-                } else if window.label() == "game" {
-                    // Native destroy bypasses CloseRequested. A user close must
-                    // invalidate even an updater-authorized retirement.
-                    direct::cancel(window.app_handle());
                 }
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 ci_smoke::destroyed(window.app_handle(), window.label());
                 if window.label() == "main" {
                     direct::cancel(window.app_handle());
-                    if let Some(game) = window.app_handle().get_webview_window("game") {
-                        let _ = game.destroy();
-                    }
-                } else if window.label() == "game" {
                     if let Ok(mut gate) = window
                         .app_handle()
                         .state::<maintenance::SharedGate>()
                         .lock()
                     {
-                        window
-                            .app_handle()
-                            .state::<direct::SharedDirect>()
-                            .game_destroyed(&mut gate);
+                        let _ = close_game_runtime(window.app_handle(), &mut gate);
                     }
                     if let Ok(mut state) = window.app_handle().state::<login::SharedLogin>().lock()
                     {
                         state.close();
                     }
-                    let _ = window.app_handle().emit_to("main", "game-closed", ());
                 }
             }
         })

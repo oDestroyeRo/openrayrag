@@ -14,7 +14,7 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{Emitter, Manager, WebviewWindow};
+use tauri::{Emitter, Manager, Webview};
 
 const ERROR: &str = "Update continuation is unavailable. Sign in and start manually.";
 const CHECKPOINT: &str = "update-continuation.json";
@@ -659,10 +659,10 @@ fn owner(
 #[tauri::command]
 pub(crate) fn update_prepare(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     request_id: String,
 ) -> Result<(), String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     if !self::request_id(&request_id) {
         return invalid();
     }
@@ -686,7 +686,7 @@ pub(crate) fn update_prepare(
         checkpoint: None,
     })?;
     let result = app
-        .get_webview_window("game")
+        .get_webview("game")
         .ok_or(ERROR)?
         .eval(format!(
             "window.__RAYRAG__?.prepareUpdate({})",
@@ -701,7 +701,7 @@ pub(crate) fn update_prepare(
 #[tauri::command]
 pub(crate) fn update_prepared(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     request_id: String,
     checkpoint: Value,
 ) -> Result<bool, String> {
@@ -741,7 +741,7 @@ pub(crate) fn update_prepared(
     }
     let p = state.prepared.as_mut().ok_or(ERROR)?;
     p.checkpoint = Some(checkpoint.clone());
-    app.get_webview_window("main")
+    app.get_webview("main")
         .ok_or(ERROR)?
         .emit(
             "update-prepared",
@@ -912,9 +912,9 @@ pub(crate) async fn restart(app: &tauri::AppHandle, target: &str) -> Result<(), 
 #[tauri::command]
 pub(crate) fn update_continuation(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
 ) -> Result<Option<Continuation>, String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     if crate::ci_smoke::active() {
         return Ok(None);
     }
@@ -935,9 +935,9 @@ pub(crate) fn update_continuation(
 #[tauri::command]
 pub(crate) fn update_startup_stopped(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
 ) -> Result<bool, String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     if crate::ci_smoke::active() {
         return Ok(false);
     }
@@ -947,11 +947,11 @@ pub(crate) fn update_startup_stopped(
 #[tauri::command]
 pub(crate) fn update_cancel(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     request_id: Option<String>,
     stop: Option<bool>,
 ) -> Result<bool, String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     if request_id.as_ref().is_some_and(|id| !self::request_id(id)) {
         return invalid();
     }
@@ -978,7 +978,7 @@ pub(crate) fn update_cancel(
     state.cancel(committed, stop.unwrap_or(false));
     clear_disk(crate::app_data(&app).map_err(|_| ERROR)?)?;
     gate.cancel_update();
-    if let Some(game) = app.get_webview_window("game").filter(|_| !committed) {
+    if let Some(game) = app.get_webview("game").filter(|_| !committed) {
         let id = active.or(request_id);
         game.eval(format!(
             "window.__RAYRAG__?.cancelUpdate({})",
@@ -1009,7 +1009,7 @@ pub(crate) fn stop_while_settling(app: &tauri::AppHandle) -> Result<bool, String
     let active = state.cancel(gate.lease.as_ref().is_some_and(|l| l.committed), true);
     clear_disk(crate::app_data(app).map_err(|_| ERROR)?)?;
     if let Some(nonce) = gate.cancel_update() {
-        if let Some(game) = app.get_webview_window("game") {
+        if let Some(game) = app.get_webview("game") {
             let nonce = serde_json::to_string(&nonce).map_err(|_| ERROR)?;
             let id = serde_json::to_string(&active).map_err(|_| ERROR)?;
             game.eval(format!("window.__RAYRAG__?.maintenance({nonce},false);window.__RAYRAG__?.cancelUpdate({id});window.__RAYRAG__?.control('stop',null,null,null,null)"))
@@ -1027,7 +1027,7 @@ pub(crate) fn stop_while_settling(app: &tauri::AppHandle) -> Result<bool, String
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_restore(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     request_id: String,
     checkpoint: Value,
     settings: Option<Settings>,
@@ -1035,7 +1035,7 @@ pub(crate) fn update_restore(
     supply_guard: Option<SupplyResumeGuard>,
     death_recovery_guard: Option<DeathRecoveryGuard>,
 ) -> Result<(), String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     if !self::request_id(&request_id) {
         return invalid();
     }
@@ -1063,7 +1063,7 @@ pub(crate) fn update_restore(
         return invalid();
     }
     let payload = json!({"requestId":request_id,"checkpoint":checkpoint,"settings":settings,"escapeGuard":escape_guard,"supplyGuard":supply_guard,"deathRecoveryGuard":death_recovery_guard});
-    let game = app.get_webview_window("game").ok_or(ERROR)?;
+    let game = app.get_webview("game").ok_or(ERROR)?;
     state.restore = Some(Restore {
         request_id,
         identity,
@@ -1082,7 +1082,7 @@ pub(crate) fn update_restore(
 #[tauri::command]
 pub(crate) fn update_restored(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     request_id: String,
     success: bool,
 ) -> Result<bool, String> {
@@ -1101,7 +1101,7 @@ pub(crate) fn update_restored(
     if !state.acknowledge_restore(&request_id, success, &account, &identity, generation) {
         return Ok(false);
     }
-    app.get_webview_window("main")
+    app.get_webview("main")
         .ok_or(ERROR)?
         .emit(
             "update-restored",
@@ -1259,7 +1259,8 @@ mod tests {
     fn smoke_capability_has_harmless_startup_queries_without_update_or_gameplay_authority() {
         let capability: Value =
             serde_json::from_str(include_str!("../capabilities/ci-smoke.json")).unwrap();
-        assert_eq!(capability["windows"], json!(["main"]));
+        assert!(capability.get("windows").is_none());
+        assert_eq!(capability["webviews"], json!(["main"]));
         let permissions = capability["permissions"].as_array().unwrap();
         for query in ["allow-update-continuation", "allow-update-startup-stopped"] {
             assert!(permissions.iter().any(|p| p == query));

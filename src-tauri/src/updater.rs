@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tauri::{Manager, WebviewWindow};
+use tauri::{Manager, Webview};
 const FEED: &str =
     "https://github.com/oDestroyeRo/openrayrag/releases/latest/download/latest-semver.json";
 const LEGACY_FEED: &str =
@@ -289,11 +289,8 @@ pub(crate) fn schedule(app: &tauri::AppHandle) {
     tauri::async_runtime::spawn(check(app));
 }
 #[tauri::command]
-pub(crate) fn update_status(
-    app: tauri::AppHandle,
-    window: WebviewWindow,
-) -> Result<Status, String> {
-    crate::require_window(&window, "main")?;
+pub(crate) fn update_status(app: tauri::AppHandle, window: Webview) -> Result<Status, String> {
+    crate::require_view(&window, "main")?;
     schedule(&app);
     let mut status = app
         .state::<SharedUpdate>()
@@ -307,8 +304,8 @@ pub(crate) fn update_status(
     Ok(status)
 }
 #[tauri::command]
-pub(crate) fn update_open_release(window: WebviewWindow) -> Result<(), String> {
-    crate::require_window(&window, "main")?;
+pub(crate) fn update_open_release(window: Webview) -> Result<(), String> {
+    crate::require_view(&window, "main")?;
     // Explicit main-window click; fixed public URL only, no process capability
     // or caller-supplied arguments are exposed to either webview.
     open_release_page().map_err(|_| {
@@ -355,18 +352,18 @@ fn open_release_page() -> std::io::Result<()> {
 #[tauri::command]
 pub(crate) fn current_form(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
 ) -> Result<Option<FormDocument>, String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     current_form::load(crate::app_data(&app).map_err(|_| "Settings storage unavailable.")?)
 }
 #[tauri::command]
 pub(crate) fn save_current_form(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     document: FormDocument,
 ) -> Result<u64, String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     let mut gate = crate::maintenance::admit(&app)?;
     current_form::save(
         crate::app_data(&app).map_err(|_| "Settings storage unavailable.")?,
@@ -376,11 +373,8 @@ pub(crate) fn save_current_form(
     Ok(document.revision)
 }
 #[tauri::command]
-pub(crate) fn update_initialized(
-    app: tauri::AppHandle,
-    window: WebviewWindow,
-) -> Result<(), String> {
-    crate::require_window(&window, "main")?;
+pub(crate) fn update_initialized(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
+    crate::require_view(&window, "main")?;
     let mut gate = crate::maintenance::admit(&app)?;
     gate.initialized = true;
     Ok(())
@@ -388,11 +382,11 @@ pub(crate) fn update_initialized(
 #[tauri::command]
 pub(crate) fn update_reserve(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     document: FormDocument,
     continuation: Option<crate::update_continuation::ContinuationBase>,
 ) -> Result<String, String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     if !AUTOMATIC_SUPPORTED {
         return Err(MANUAL_UPDATE.into());
     }
@@ -421,7 +415,7 @@ pub(crate) fn update_reserve(
     if serde_json::to_vec(&loaded).ok() != serde_json::to_vec(&document).ok() {
         return Err("Current settings changed before update settlement.".into());
     }
-    let game = app.get_webview_window("game");
+    let game = app.get_webview("game");
     let nonce = uuid::Uuid::new_v4().simple().to_string();
     gate.reserve(nonce.clone(), document.revision, game.is_some())?;
     if let Some(base) = continuation {
@@ -446,7 +440,7 @@ pub(crate) fn update_reserve(
 #[tauri::command]
 pub(crate) fn update_ack(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     nonce: String,
     identity: GameIdentity,
     revision: u64,
@@ -457,7 +451,7 @@ pub(crate) fn update_ack(
     }
     let shared = app.state::<SharedGate>();
     let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
-    if crate::direct::window_mode(&window)? == crate::login::ConnectionMode::BotOnly
+    if crate::direct::runtime_mode(&window)? == crate::login::ConnectionMode::BotOnly
         && !app
             .state::<crate::direct::SharedDirect>()
             .settled_for(&identity)
@@ -469,17 +463,17 @@ pub(crate) fn update_ack(
 #[tauri::command]
 pub(crate) fn update_release(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     nonce: String,
 ) -> Result<(), String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     let shared = app.state::<SharedGate>();
     let mut g = shared.lock().map_err(|_| "Update state unavailable.")?;
     if !g.lease.as_ref().is_some_and(|l| l.committed) {
         if g.lease.as_ref().is_some_and(|l| l.nonce == nonce) {
             g.lease = None;
         }
-        if let Some(game) = app.get_webview_window("game") {
+        if let Some(game) = app.get_webview("game") {
             let _ = game.eval(format!(
                 "window.__RAYRAG__?.maintenance({},false)",
                 serde_json::to_string(&nonce).map_err(|_| "Invalid lease.")?
@@ -491,10 +485,10 @@ pub(crate) fn update_release(
 #[tauri::command]
 pub(crate) async fn update_install(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     nonce: String,
 ) -> Result<bool, String> {
-    crate::require_window(&window, "main")?;
+    crate::require_view(&window, "main")?;
     if !AUTOMATIC_SUPPORTED {
         return Err(MANUAL_UPDATE.into());
     }
@@ -523,7 +517,7 @@ pub(crate) async fn update_install(
         {
             return Err("Login settlement changed.".into());
         }
-        if let Some(game) = app.get_webview_window("game") {
+        if let Some(game) = app.get_webview("game") {
             let l = g.lease.as_mut().ok_or("Update settlement changed.")?;
             if !l.final_ack {
                 if !l.final_requested {
@@ -556,9 +550,9 @@ pub(crate) async fn update_install(
             // SharedGate. Capture the mode first; retirement rechecks the lease
             // generation and identity after acquiring the admission lock.
             let mode = app
-                .get_webview_window("game")
+                .get_webview("game")
                 .as_ref()
-                .map(crate::direct::window_mode)
+                .map(crate::direct::runtime_mode)
                 .transpose()?;
             let shared = app.state::<SharedGate>();
             let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
@@ -572,19 +566,32 @@ pub(crate) async fn update_install(
                 app.state::<crate::direct::SharedDirect>().inner(),
             )
             .await?;
-        if let Some(game) = app.get_webview_window("game") {
-            {
-                let shared = app.state::<SharedGate>();
-                let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
-                app.state::<crate::direct::SharedDirect>()
-                    .request_game_close(&mut gate, &owner)?;
-            }
-            game.destroy()
-                .map_err(|_| "Could not close the settled game.")?;
+        if app.get_webview("game").is_some() {
+            // Webview::close queues destruction off-thread. Execute close and
+            // completion accounting together on UI, rechecking retirement there.
+            let close_app = app.clone();
+            let close_owner = owner.clone();
+            let (closed, completion) = tokio::sync::oneshot::channel();
+            app.run_on_main_thread(move || {
+                let result = (|| {
+                    let shared = close_app.state::<SharedGate>();
+                    let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
+                    close_app
+                        .state::<crate::direct::SharedDirect>()
+                        .request_game_close(&mut gate, &close_owner)?;
+                    crate::close_game_runtime(&close_app, &mut gate)
+                        .map_err(|_| "Could not close the settled game.".to_string())
+                })();
+                let _ = closed.send(result);
+            })
+            .map_err(|_| "Could not schedule game retirement.")?;
+            completion
+                .await
+                .map_err(|_| "Game retirement was interrupted.")??;
         }
         for _ in 0..40 {
             let gate = app.state::<SharedGate>();
-            if app.get_webview_window("game").is_none()
+            if app.get_webview("game").is_none()
                 && gate
                     .lock()
                     .map_err(|_| "Update state unavailable.")?
@@ -596,7 +603,7 @@ pub(crate) async fn update_install(
                 .await
                 .map_err(|_| "Window settlement unavailable.")?;
         }
-        if app.get_webview_window("game").is_some() {
+        if app.get_webview("game").is_some() {
             Err("Game window did not close; update deferred.".into())
         } else {
             if let Ok(mut u) = app.state::<SharedUpdate>().lock() {
@@ -607,7 +614,7 @@ pub(crate) async fn update_install(
             tauri::async_runtime::spawn_blocking(move || {
                 let shared = install_app.state::<SharedGate>();
                 let gate = shared.lock().map_err(|_| "Update state unavailable.")?;
-                if install_app.get_webview_window("game").is_some()
+                if install_app.get_webview("game").is_some()
                     || !install_app
                         .state::<crate::direct::SharedDirect>()
                         .replacement_ready(&gate, &owner)
@@ -628,7 +635,7 @@ pub(crate) async fn update_install(
     if let Err(e) = result {
         crate::update_continuation::failed(
             &app,
-            app.get_webview_window("game").is_none() && retirement_owner.is_some(),
+            app.get_webview("game").is_none() && retirement_owner.is_some(),
         );
         {
             let shared = app.state::<SharedGate>();
@@ -969,7 +976,7 @@ mod tests {
 #[tauri::command]
 pub(crate) fn update_lease_alive(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     nonce: String,
 ) -> Result<bool, String> {
     crate::require_game_runtime(&window)?;
@@ -982,7 +989,7 @@ pub(crate) fn update_lease_alive(
 #[tauri::command]
 pub(crate) fn update_invalidate(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     nonce: String,
     kind: String,
 ) -> Result<(), String> {
@@ -1000,7 +1007,7 @@ pub(crate) fn update_invalidate(
 #[tauri::command]
 pub(crate) fn update_final_ack(
     app: tauri::AppHandle,
-    window: WebviewWindow,
+    window: Webview,
     nonce: String,
     identity: GameIdentity,
     revision: u64,
@@ -1009,7 +1016,7 @@ pub(crate) fn update_final_ack(
     crate::require_game_runtime(&window)?;
     let shared = app.state::<SharedGate>();
     let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
-    if crate::direct::window_mode(&window)? == crate::login::ConnectionMode::BotOnly
+    if crate::direct::runtime_mode(&window)? == crate::login::ConnectionMode::BotOnly
         && !app
             .state::<crate::direct::SharedDirect>()
             .settled_for(&identity)
