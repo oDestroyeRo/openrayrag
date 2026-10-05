@@ -10,6 +10,26 @@ const partyMember = (w: BitWriter, online: boolean) => {
 };
 
 describe('world packet decoder', () => {
+  it.each([0, 1, 255])('decodes the deployed one-member party header byte %i before its count', header => {
+    // The deployed WebGL reader consumes an extra byte after PartyName; the
+    // upstream source pin omits it. Leaving it unread shifts count 1 to 256+header.
+    const bytes = partyMember(new BitWriter().u8(101).u8(1).i32(3).string('Helpers').u8(header).i32(1), true).finish();
+    expect(decodeWorld(bytes)).toEqual([{ type: 'partyJoined', partyId: 3, name: 'Helpers', login: true,
+      members: [{ memberId: 5, entityId: 100, level: 9, name: 'Raon', leader: true, map: 'prt_fild08', hp: 70, maxHp: 81, sp: 20, maxSp: 30 }] }]);
+  });
+  it('decodes the observed two-member snapshot with eight opaque trailing bytes', () => {
+    const writer = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').u8(1).i32(2);
+    partyMember(writer, true);
+    writer.i32(6).i32(0).i16(-1).string('Offline').u8(0);
+    writer.take(Uint8Array.of(0, 255, 1, 128, 42, 99, 254, 2));
+    expect(decodeWorld(writer.finish())).toMatchObject([{ type: 'partyJoined', partyId: 3, name: 'Helpers',
+      members: [{ memberId: 5, entityId: 100, map: 'prt_fild08' }, { memberId: 6, entityId: 0, level: -1 }] }]);
+  });
+  it.each([1, 7, 9, 16])('rejects an unverified %i-byte party snapshot trailer', length => {
+    const bytes = partyMember(new BitWriter().u8(101).u8(1).i32(3).string('Helpers').u8(0).i32(1), true)
+      .take(new Uint8Array(length)).finish();
+    expect(() => decodeWorld(bytes)).toThrow('Unknown packet trailer');
+  });
   it('decodes one-bit booleans and ignores pooled-buffer bits outside the payload', () => {
     expect(decodeWorld(Uint8Array.from([77, 0, 123, 0, 0, 0, 1]))).toEqual([{ type: 'npcFocus', id: 123, focus: true }]);
     const bytes = new BitWriter().u8(77).u8(1).string('Kafra').string('Storage?').bool(true).finish();
@@ -55,13 +75,13 @@ describe('world packet decoder', () => {
     expect(decodeWorld(bytes)).toEqual([{ type: 'barterOpened', offers: [{ item: { bagId: 513, itemId: 513, type: 1, count: 1 }, count: 2, zenyCost: 100, required: [{ itemId: 512, count: 3 }] }] }]);
   });
   it.each([true, false])('decodes online=%s party snapshots without guessing omitted fields', online => {
-    const bytes = partyMember(new BitWriter().u8(101).u8(1).i32(3).string('Helpers').i32(1), online).finish();
+    const bytes = partyMember(new BitWriter().u8(101).u8(1).i32(3).string('Helpers').u8(0).i32(1), online).finish();
     const decoded = decodeWorld(bytes)!;
     expect(decoded[0]).toMatchObject({ type: 'partyJoined', partyId: 3, name: 'Helpers', login: true, members: [{ memberId: 5, entityId: online ? 100 : -1, name: 'Raon', leader: true }] });
     if (online) expect(decoded[0]).toMatchObject({ members: [{ map: 'prt_fild08', hp: 70, maxHp: 81, sp: 20, maxSp: 30 }] });
   });
   it('accepts the persisted offline party sentinel entityId0/level-1', () => {
-    const bytes = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').i32(1)
+    const bytes = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').u8(0).i32(1)
       .i32(5).i32(0).i16(-1).string('Offline').u8(0).finish();
     expect(decodeWorld(bytes)).toEqual([{ type: 'partyJoined', partyId: 3, name: 'Helpers', login: true, members: [{ memberId: 5, entityId: 0, level: -1, name: 'Offline', leader: false }] }]);
   });
@@ -71,23 +91,25 @@ describe('world packet decoder', () => {
     const members = Array.from({ length: count }, (_, index) => ({
       memberId: index + 1, entityId: 0, level: -1, name: `Member ${index + 1}`, leader: false,
     }));
-    const writer = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').i32(members.length);
+    const writer = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').u8(0).i32(members.length);
     for (const row of members) writer.i32(row.memberId).i32(row.entityId).i16(row.level).string(row.name).u8(row.leader ? 1 : 0);
     expect(decodeWorld(writer.finish())).toEqual([{ type: 'partyJoined', partyId: 3, name: 'Helpers', login: true, members }]);
   });
   it.each([0, -1, 2_147_483_647])('rejects impossible party count %i before allocating the roster', count => {
-    const bytes = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').i32(count).finish();
+    const bytes = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').u8(0).i32(count).finish();
     expect(() => decodeWorld(bytes)).toThrow('Invalid party count');
   });
   it('rejects missing, duplicate and trailing data in a large party snapshot', () => {
     const packet = (count: number, duplicate = false) => {
-      const writer = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').i32(count);
+      const writer = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').u8(0).i32(count);
       for (let index = 0; index < 33; index++) writer.i32(duplicate && index === 32 ? 1 : index + 1).i32(0).i16(-1).string('').u8(0);
       return writer;
     };
     // Empty names give the minimum 13-byte record, making the count budget exact.
     expect(() => decodeWorld(packet(34).finish())).toThrow('Invalid party count');
     expect(() => decodeWorld(packet(33, true).finish())).toThrow('Duplicate party member');
+    expect(() => decodeWorld(packet(33, true).take(new Uint8Array(8)).finish())).toThrow('Duplicate party member');
+    expect(() => decodeWorld(packet(34).take(new Uint8Array(8)).finish())).toThrow('Invalid party count');
     expect(() => decodeWorld(packet(33).u8(0).finish())).toThrow('Unknown packet trailer');
     expect(() => decodeWorld(packet(33).finish().subarray(0, -1))).toThrow();
   });
@@ -117,7 +139,7 @@ describe('world packet decoder', () => {
   it.each([
     new BitWriter().u8(77).u8(2).i32(33).finish(),
     new BitWriter().u8(83).u8(1).u8(0).i32(601).finish(),
-    new BitWriter().u8(101).u8(0).i32(1).string('P').i32(33).finish(),
+    new BitWriter().u8(101).u8(0).i32(1).string('P').u8(0).i32(33).finish(),
     new BitWriter().u8(89).u8(3).finish(),
     Uint8Array.from([77, 3, 0]),
     Uint8Array.from([77, 0, 1]),

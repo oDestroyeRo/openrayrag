@@ -17,7 +17,7 @@ function spawn(entity: Entity, entryType = 0): Uint8Array {
     .i32(entity.sp ?? 0).i32(entity.maxSp ?? 0).i32(0).u8(0).finish();
   return new BitWriter().u8(OP.spawn).u8(entryType).i32(body.length).take(body).finish();
 }
-const joined = () => new BitWriter().u8(101).u8(0).i32(5).string('Party').i32(1).i32(7).i32(2).i16(20).string('Member')
+const joined = () => new BitWriter().u8(101).u8(0).i32(5).string('Party').u8(0).i32(1).i32(7).i32(2).i16(20).string('Member')
   .u8(0).string(map).i32(40).i32(100).i32(30).i32(100).finish();
 const affiliation = () => new BitWriter().u8(OP.partyAffiliation).i32(2).u8(1).i32(5).string('Party').bool(false).finish();
 const cast = (id: number, skillId = 42, level = 1, target = id, seconds = 10) => new BitWriter().u8(FEATURE_OP.castStart)
@@ -106,7 +106,7 @@ function followFixture(id: number) {
   c.connect(true); c.receive(new BitWriter().u8(OP.enter).i32(id).string(map).finish());
   c.receive(spawn({ ...followOwn, id }, 1)); c.receive(spawn(followLeader));
   c.receive(new BitWriter().u8(OP.partyAffiliation).i32(2).u8(1).i32(5).string('Party').bool(true).finish());
-  const roster = new BitWriter().u8(101).u8(0).i32(5).string('Party').i32(2);
+  const roster = new BitWriter().u8(101).u8(0).i32(5).string('Party').u8(0).i32(2);
   roster.i32(7).i32(2).i16(20).string('Leader').u8(1).string(map).i32(40).i32(100).i32(30).i32(100);
   roster.i32(8).i32(3).i16(20).string('Member').u8(0).string(map).i32(40).i32(100).i32(30).i32(100);
   c.receive(spawn({ ...ally, id: 3, x: 171, y: 370 }));

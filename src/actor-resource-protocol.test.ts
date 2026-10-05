@@ -16,7 +16,7 @@ function player(id=2,partyId=5,partyName:string|null='Party',state=0,classId=0,e
   return packet.finish();
 }
 function joined(map='prontera',partyName='Party'):Uint8Array {
-  return new BitWriter().u8(101).u8(0).i32(5).string(partyName).i32(1).i32(7).i32(2).i16(10).string('Member').u8(0).string(map).i32(100).i32(100).i32(50).i32(100).finish();
+  return new BitWriter().u8(101).u8(0).i32(5).string(partyName).u8(0).i32(1).i32(7).i32(2).i16(10).string('Member').u8(0).string(map).i32(100).i32(100).i32(50).i32(100).finish();
 }
 const health=()=>new BitWriter().u8(102).u8(8).i32(7).i32(80).i32(100).i32(40).i32(100).finish();
 describe('pinned resource identity protocol',()=>{

@@ -13,7 +13,7 @@ import {vi} from 'vitest';
 const own:Entity={id:0,kind:0,classId:3,name:'Acolyte',level:20,hp:100,maxHp:100,sp:100,maxSp:100,x:10,y:10,dead:false,statuses:[],partyId:5,partyName:'Party'};
 const member:Entity={...own,id:2,name:'Member',hp:40,x:11};
 const grid:WalkGrid={width:40,height:40,walkable:()=>true};
-function joined(rows:Entity[]=[member]):Uint8Array {const w=new BitWriter().u8(101).u8(0).i32(5).string('Party').i32(rows.length);for(const p of rows){w.i32(p.id+5).i32(p.id).i16(20).string(p.name).u8(0);if(p.id>0)w.string('prt_fild08').i32(p.hp).i32(p.maxHp).i32(30).i32(100);}return w.finish();}
+function joined(rows:Entity[]=[member]):Uint8Array {const w=new BitWriter().u8(101).u8(0).i32(5).string('Party').u8(0).i32(rows.length);for(const p of rows){w.i32(p.id+5).i32(p.id).i16(20).string(p.name).u8(0);if(p.id>0)w.string('prt_fild08').i32(p.hp).i32(p.maxHp).i32(30).i32(100);}return w.finish();}
 function result(extra:Partial<SkillResult>={}):SkillResult{return {type:'skillResult',source:0,target:2,skillId:41,level:1,mode:'target',result:2,hits:0,damage:-20,indirect:false,motionSeconds:0,position:own,...extra};}
 function resultPacket(e:SkillResult):Uint8Array{return new BitWriter().u8(FEATURE_OP.skill).u8(e.mode==='target'?1:5).i32(e.source).i32(e.attacker??-1).i32(e.target??-1).u8(e.skillId).u8(e.level).u8(0).position(e.position).i32(e.damage??-20).u8(e.result??2).u8(e.hits??0).f32(e.motionSeconds).f32(0).bool(e.indirect??false).finish();}
 function statsPacket(sp:number,full=true):Uint8Array {
