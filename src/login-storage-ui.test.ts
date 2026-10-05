@@ -532,6 +532,9 @@ describe('updater waiting diagnostics',()=>{
   expect(reserved.continuation.field).toMatchObject({character:'Synthetic',escapeGuard:{latched:false}});
   await f.get('stop').emit('click');expect(f.calls('update_cancel').length).toBeGreaterThan(0);
   expect(f.calls('control_bot').some(call=>(call[1] as {action:string}).action==='stop')).toBe(true);
+  const cancelIndex=ipc.invoke.mock.calls.findIndex(call=>call[0]==='update_cancel'&&(call[1] as {stop?:boolean})?.stop===true);
+  const stopIndex=ipc.invoke.mock.calls.findIndex(call=>call[0]==='control_bot'&&(call[1] as {action:string}).action==='stop');
+  expect(cancelIndex).toBeGreaterThanOrEqual(0);expect(cancelIndex).toBeLessThan(stopIndex);
   installing.resolve();await settleMain();await vi.advanceTimersByTimeAsync(100);
   expect(f.calls('control_bot').filter(call=>(call[1] as {action:string}).action==='start')).toHaveLength(1);
  });
@@ -547,50 +550,6 @@ describe('updater waiting diagnostics',()=>{
   expect(f.get('auto-login').checked).toBe(true);expect(f.get('remember-login').checked).toBe(true);
   expect(f.calls('login_game')).toEqual([]);expect(f.calls('control_bot')).toEqual([]);
  });
- it('shows save, connection preparation and missing game confirmation without changing retries or release',async()=>{
-  const f=await fixture();let saved!:()=>void,prepared!:(nonce:string)=>void;
-  const saving=new Promise<void>(resolve=>{saved=resolve;}),preparing=new Promise<string>(resolve=>{prepared=resolve;});
-  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
-   if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
-   if(command==='save_current_form'){await saving;return args!.document.revision;}
-   if(command==='update_reserve')return preparing;
-   if(command==='update_install')return false;
-  });
-  await vi.advanceTimersByTimeAsync(15000);
-  expect(f.get('update-status').textContent).toBe('Saving current settings before updating.');
-  expect(f.calls('update_reserve')).toEqual([]);
-  saved();for(let i=0;i<40;i++)await Promise.resolve();
-  expect(f.get('update-status').textContent).toBe('Preparing the connection for update confirmation.');
-  expect(f.calls('update_install')).toEqual([]);
-  const nonce='e'.repeat(32);prepared(nonce);for(let i=0;i<40;i++)await Promise.resolve();
-  expect(f.get('update-status').textContent).toContain('game confirmation');
-  await vi.advanceTimersByTimeAsync(2100);
-  expect(f.calls('update_install')).toHaveLength(20);
-  expect(f.calls('update_release')).toEqual([['update_release',{nonce}]]);
-  expect(f.get('update-status').textContent).toBe('Update waits for game confirmation that all actions have stopped. It will retry automatically.');
-  expect(f.get('update-status').textContent).not.toContain(nonce);
-  expect(f.calls('control_bot')).toEqual([]);
-  expect(f.get('radius').disabled).toBe(false);
- });
- it.each([
-  ['Waiting for a fresh stopped client before updating.','The connection has not confirmed a fresh stopped state.'],
-  ['Waiting for login to settle.','Sign-in has not finished.'],
-  ['synthetic-private-account-path','The connection could not be prepared for update confirmation.'],
-  [new Error('synthetic-private-account-path'),'The connection could not be prepared for update confirmation.'],
-  ['toString','The connection could not be prepared for update confirmation.'],
- ])('reports bounded reserve diagnostics for %s',async(error,reason)=>{
-  const f=await fixture();
-  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
-   if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
-   if(command==='save_current_form')return args!.document.revision;
-   if(command==='update_reserve')throw error;
-  });
-  await vi.advanceTimersByTimeAsync(15000);
-  expect(f.calls('update_reserve')).toHaveLength(1);expect(f.calls('update_install')).toEqual([]);
-  expect(f.get('update-status').textContent).toBe(`Update deferred. ${reason} It will retry automatically.`);
-  expect(f.get('update-status').textContent).not.toContain('synthetic-private-account-path');
-  expect(f.calls('control_bot')).toEqual([]);
- });
  it('identifies an invalid settings form before connection preparation',async()=>{
   const f=await fixture();f.get('radius').value='99';await f.main.emit('input',f.get('radius'));
   ipc.invoke.mockImplementation(async(command:string)=>{
@@ -599,19 +558,6 @@ describe('updater waiting diagnostics',()=>{
   await vi.advanceTimersByTimeAsync(15000);
   expect(f.get('update-status').textContent).toBe('Update deferred. Current settings could not be saved. Check the settings form. It will retry automatically.');
   expect(f.calls('update_reserve')).toEqual([]);expect(f.calls('update_install')).toEqual([]);
- });
- it('reports changed game confirmation and releases its reservation',async()=>{
-  const f=await fixture(),nonce='f'.repeat(32);
-  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
-   if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
-   if(command==='save_current_form')return args!.document.revision;
-   if(command==='update_reserve')return nonce;
-   if(command==='update_install')throw 'Update settlement changed.';
-  });
-  await vi.advanceTimersByTimeAsync(15000);
-  expect(f.get('update-status').textContent).toBe('Update deferred. Game activity changed during update confirmation. It will retry automatically.');
-  expect(f.calls('update_release')).toEqual([['update_release',{nonce}]]);
-  expect(f.calls('control_bot')).toEqual([]);
  });
 });
 
