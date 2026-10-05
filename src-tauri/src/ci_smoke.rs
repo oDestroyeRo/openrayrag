@@ -29,6 +29,13 @@ pub(crate) fn page_loaded(app: &tauri::AppHandle, label: &str) {
     let _ = (app, label);
 }
 
+pub(crate) fn milestone(stage: &'static str) {
+    #[cfg(feature = "ci-smoke")]
+    enabled::milestone(stage);
+    #[cfg(not(feature = "ci-smoke"))]
+    let _ = stage;
+}
+
 pub(crate) fn destroyed(app: &tauri::AppHandle, label: &str) {
     #[cfg(feature = "ci-smoke")]
     enabled::destroyed(app, label);
@@ -72,6 +79,7 @@ mod enabled {
         token: String,
         stage: Stage,
         baseline: Mutex<Option<Value>>,
+        milestone: Mutex<&'static str>,
         finished: AtomicBool,
     }
 
@@ -160,6 +168,7 @@ mod enabled {
             token,
             stage,
             baseline: Mutex::new(None),
+            milestone: Mutex::new("smoke-installed"),
             finished: AtomicBool::new(false),
         }))
     }
@@ -179,6 +188,14 @@ mod enabled {
             }
         });
         Ok(())
+    }
+
+    pub(super) fn milestone(stage: &'static str) {
+        if let Some(run) = RUN.get() {
+            if let Ok(mut current) = run.milestone.lock() {
+                *current = stage;
+            }
+        }
     }
 
     fn offline(app: &tauri::AppHandle) -> Result<(), String> {
@@ -248,6 +265,7 @@ mod enabled {
             Err(message) => json!({
                 "protocol": 1, "stage": run.stage.name(), "token": run.token,
                 "passed": false, "message": message,
+                "milestone": run.milestone.try_lock().map(|stage| *stage).unwrap_or("unavailable"),
             }),
         };
         let written = (|| -> std::io::Result<()> {
@@ -275,6 +293,9 @@ mod enabled {
         if token != run.token || app.config().identifier != IDENTIFIER {
             return Err("CI smoke request is not authorized".into());
         }
+        if event == "ready" {
+            milestone("controller-ready-ipc");
+        }
         offline(&app)?;
         match event.as_str() {
             "ready" => {
@@ -282,7 +303,11 @@ mod enabled {
                 let gate = gate
                     .lock()
                     .map_err(|_| "CI maintenance state unavailable")?;
-                Ok(gate.initialized && gate.form_revision.is_some())
+                let ready = gate.initialized && gate.form_revision.is_some();
+                if ready {
+                    milestone("controller-ready");
+                }
+                Ok(ready)
             }
             "arm" => {
                 let document = loaded(run)?;
@@ -294,6 +319,7 @@ mod enabled {
                     return Err("CI close check was already armed".into());
                 }
                 *baseline = Some(document);
+                milestone("controller-armed");
                 Ok(true)
             }
             "fail" => {
@@ -306,6 +332,7 @@ mod enabled {
 
     pub(super) fn page_loaded(app: &tauri::AppHandle, label: &str) {
         let Some(run) = RUN.get() else { return };
+        milestone("page-loaded");
         if label != "main" {
             finish(run, Err("Unexpected window opened during CI smoke".into()));
             std::process::exit(1);
@@ -365,6 +392,7 @@ mod enabled {
         if label != "main" {
             return;
         }
+        milestone("window-destroyed");
         let outcome = (|| {
             offline(app)?;
             let baseline = run.baseline.lock().map_err(|_| "CI baseline unavailable")?;

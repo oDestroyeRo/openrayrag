@@ -2,7 +2,7 @@
 /** Launch only a CI-feature package with temporary data; never use a real account. */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -74,6 +74,21 @@ export async function runStage(binary, stage, { root, data, result, token, timeo
       else if (code !== 0) reject(new Error(`Native ${stage} smoke exited with ${signal ?? code}.${output ? `\n${output}` : ''}`));
       else resolveStage();
     });
+  }).catch(async error => {
+    // A failing child may already have recorded the watchdog/assertion cause.
+    // Read only this launch's bounded result before temporary data is removed.
+    let detail = '';
+    try {
+      if ((await stat(result)).size <= 16_384) {
+        const outcome = JSON.parse(await readFile(result, 'utf8'));
+        if (outcome?.protocol === 1 && outcome.stage === stage && outcome.token === token
+            && outcome.passed === false && typeof outcome.message === 'string') {
+          detail = `\nNative result: ${outcome.message.slice(0, 1_000)}`;
+          if (typeof outcome.milestone === 'string') detail += `\nMilestone: ${outcome.milestone.slice(0, 100)}`;
+        }
+      }
+    } catch { /* Preserve the process failure when its result is unavailable. */ }
+    throw detail ? new Error(error.message + detail, { cause: error }) : error;
   });
   const outcome = JSON.parse(await readFile(result, 'utf8'));
   validateResult(outcome, stage, token);
@@ -100,6 +115,10 @@ export async function nativeSmoke(binary, outputFile) {
     await mkdir(dirname(resolve(outputFile)), { recursive: true });
     await writeFile(outputFile, JSON.stringify({ protocol: 1, platform: process.platform, passed: true, stages: outcomes }, null, 2) + '\n');
     console.log(`Packaged ${process.platform} smoke passed: WebView boot, native settings save, immediate close, restore, and offline state.`);
+  } catch (error) {
+    await mkdir(dirname(resolve(outputFile)), { recursive: true });
+    await writeFile(outputFile, JSON.stringify({ protocol: 1, platform: process.platform, passed: false, message: error.message.slice(-16_384) }, null, 2) + '\n');
+    throw error;
   } finally {
     // This root was created by this invocation and contains only synthetic settings.
     await rm(root, { recursive: true, force: true });

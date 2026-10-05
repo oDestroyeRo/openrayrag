@@ -3,6 +3,7 @@ use serde::Deserialize;
 use tauri::{webview::WebviewBuilder, Manager, Webview};
 
 pub(crate) fn create_main(app: &tauri::AppHandle) -> tauri::Result<()> {
+    crate::ci_smoke::milestone("main-window-building");
     let config = app
         .config()
         .app
@@ -11,11 +12,13 @@ pub(crate) fn create_main(app: &tauri::AppHandle) -> tauri::Result<()> {
         .find(|window| window.label == "main")
         .expect("The main window configuration must exist");
     let window = tauri::window::WindowBuilder::from_config(app, config)?.build()?;
+    crate::ci_smoke::milestone("main-webview-building");
     window.add_child(
         WebviewBuilder::from_config(config).auto_resize(),
         tauri::LogicalPosition::new(0, 0),
         window.inner_size()?,
     )?;
+    crate::ci_smoke::milestone("main-webview-built");
     Ok(())
 }
 

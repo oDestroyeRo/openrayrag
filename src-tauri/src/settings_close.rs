@@ -236,6 +236,7 @@ pub(crate) async fn settings_close_complete(
             .map_err(|_| ERROR)?
             .complete(&token, gate.form_revision, revision)?
     };
+    crate::ci_smoke::milestone("close-save-confirmed");
     match intent {
         Intent::Close => {
             if window.window().destroy().is_err() {
