@@ -115,8 +115,9 @@ impl LoginState {
         &self,
         identity: &crate::maintenance::GameIdentity,
     ) -> Option<UpdateAccount> {
+        // Cancellation owns pending login requests. An exact, already-proven
+        // live account remains bound through Stop and a later explicit Start.
         if !self.in_world
-            || self.cancelled
             || self.maintenance_busy()
             || self.profile_session.as_deref() != Some(identity.session_id.as_str())
             || self.profile_connection.as_deref() != Some(identity.connection_id.as_str())
@@ -592,7 +593,49 @@ mod tests {
         state.claim("page-a".into());
         state.observe("page-a", Some("socket-a"), true, true, "complete", "");
         state.cancel();
+        state.observe("page-a", Some("socket-b"), true, true, "complete", "");
         assert!(state.update_account(&identity).is_none());
+    }
+
+    #[test]
+    fn update_account_survives_stop_and_explicit_start_for_the_proven_connected_character() {
+        for mode in [ConnectionMode::BotOnly, ConnectionMode::GameClient] {
+            let mut profile = profile();
+            profile.mode = mode;
+            let mut state = LoginState::default();
+            let identity = crate::maintenance::GameIdentity {
+                session_id: "page-a".into(),
+                connection_id: "socket-a".into(),
+            };
+            state.queue(profile);
+            state.claim(identity.session_id.clone());
+            state.observe("page-a", Some("socket-a"), true, true, "complete", "");
+            let account = state.update_account(&identity).unwrap();
+            let original_generation = state.generation();
+            state.cancel(); // control_bot('stop') cancels login requests, not the proven account.
+            assert!(state.cancelled);
+            // Previous update requests stay stale even though the live owner remains proven.
+            assert_ne!(state.generation(), original_generation);
+            // Explicit field or macro Start does not mutate LoginState; its
+            // subsequent same-owner telemetry must retain update eligibility.
+            state.observe("page-a", Some("socket-a"), true, true, "complete", "");
+            assert_eq!(state.update_account(&identity), Some(account));
+        }
+    }
+
+    #[test]
+    fn update_account_does_not_promote_a_cancelled_pending_login_into_proven_ownership() {
+        let mut state = LoginState::default();
+        let identity = crate::maintenance::GameIdentity {
+            session_id: "page-a".into(),
+            connection_id: "socket-a".into(),
+        };
+        state.queue(profile());
+        state.claim(identity.session_id.clone());
+        state.cancel();
+        state.observe("page-a", Some("socket-a"), true, true, "complete", "");
+        assert!(state.update_account(&identity).is_none());
+        assert!(state.session_profile.is_none());
     }
 
     #[test]

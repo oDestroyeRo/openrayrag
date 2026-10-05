@@ -86,6 +86,31 @@ pub(crate) struct ContinuationState {
 }
 pub(crate) type SharedContinuation = Mutex<ContinuationState>;
 impl ContinuationState {
+    fn acknowledge_restore(
+        &mut self,
+        request_id: &str,
+        success: bool,
+        account: &UpdateAccount,
+        identity: &GameIdentity,
+        generation: u64,
+    ) -> bool {
+        if !self.restore.as_ref().is_some_and(|r| {
+            r.request_id == request_id
+                && r.identity == *identity
+                && r.generation == generation
+                && Instant::now() < r.until
+        }) || !self.claimed.as_ref().is_some_and(|p| p.account == *account)
+        {
+            return false;
+        }
+        self.restore = None;
+        // A known rejection leaves activation untouched and permits a fresh
+        // request for the same claim. A successful activation consumes it.
+        if success {
+            self.claimed = None;
+        }
+        true
+    }
     fn restore_matches(
         &self,
         account: &UpdateAccount,
@@ -387,11 +412,13 @@ fn validate_field(value: &Value) -> Result<(), String> {
         {
             return invalid();
         }
-        serde_json::from_value::<EscapeResumeGuard>(
-            json!({"cooldownSeconds":0,"recovery":escape.get("recovery")}),
-        )
-        .map_err(|_| ERROR)?
-        .validate()?;
+        let mut projected = json!({"cooldownSeconds":0,"latched":escape["latched"]});
+        if let Some(recovery) = escape.get("recovery") {
+            projected["recovery"] = recovery.clone();
+        }
+        serde_json::from_value::<EscapeResumeGuard>(projected)
+            .map_err(|_| ERROR)?
+            .validate()?;
     }
     Ok(())
 }
@@ -1011,17 +1038,9 @@ pub(crate) fn update_restored(
         .inner()
         .lock()
         .map_err(|_| ERROR)?;
-    if !state.restore.as_ref().is_some_and(|r| {
-        r.request_id == request_id
-            && r.identity == identity
-            && r.generation == generation
-            && Instant::now() < r.until
-    }) || !state.claimed.as_ref().is_some_and(|p| p.account == account)
-    {
+    if !state.acknowledge_restore(&request_id, success, &account, &identity, generation) {
         return Ok(false);
     }
-    state.restore = None;
-    state.claimed = None; // A failed or duplicate acknowledgement cannot replay intent.
     app.get_webview_window("main")
         .ok_or(ERROR)?
         .emit(
@@ -1045,6 +1064,20 @@ mod tests {
     fn runtime() -> Value {
         json!({"version":1,"frozenAt":1,"status":{"sessionId":"old-page","connectionId":"old-socket","connected":true,"compatible":true,"runRequested":false,"player":{"name":"Synthetic"}},
             "settings":null,"macro":null,"partyHeal":{"version":1,"attempts":2,"confirmed":1,"cooldownUntil":1000},"run":null})
+    }
+    // Shape emitted by PersistentFieldRun.begin/checkpoint, including the
+    // default-off, unlatched escape owner allocated for every field run.
+    fn field_checkpoint() -> Value {
+        let mut desired = serde_json::to_value(form(3).settings).unwrap();
+        desired["map"] = "prontera".into();
+        desired["targets"] = json!([1002]);
+        json!({"version":1,"desired":desired,"character":"Synthetic","session":"old-page",
+            "generation":2,"startedAt":100,"metricsSession":"old-page",
+            "previous":{"kills":5,"looted":2,"deaths":0,"attacks":15},
+            "totals":{"kills":3,"looted":4,"deaths":1,"attacks":9},
+            "escapeGuard":{"session":"old-page","cooldownUntil":0,"latched":false},
+            "supplyGuard":null,"deathGuard":null,"escapeOverflowUncertain":false,
+            "supplyOverflow":false,"deathOverflow":false})
     }
     fn disk() -> DiskCheckpoint {
         DiskCheckpoint {
@@ -1077,6 +1110,91 @@ mod tests {
         let path = dir.path().canonicalize().unwrap();
         current_form::save(path.clone(), &form(3)).unwrap();
         (dir, path)
+    }
+    #[test]
+    fn field_escape_guard_accepts_default_off_latched_and_optional_recovery() {
+        let mut checkpoint = field_checkpoint();
+        assert!(validate_field(&checkpoint).is_ok());
+        checkpoint["escapeGuard"]["latched"] = true.into();
+        checkpoint["escapeGuard"]["cooldownUntil"] = 1000.into();
+        assert!(validate_field(&checkpoint).is_ok());
+        checkpoint["escapeGuard"]["recovery"] =
+            json!({"hpPercent":80,"threatCount":2,"quietSeconds":5});
+        assert!(validate_field(&checkpoint).is_ok());
+    }
+    #[test]
+    fn field_escape_guard_rejects_malformed_latched_and_present_null_recovery() {
+        for latched in [Value::Null, 0.into(), "false".into()] {
+            let mut checkpoint = field_checkpoint();
+            checkpoint["escapeGuard"]["latched"] = latched;
+            assert!(validate_field(&checkpoint).is_err());
+        }
+        let mut checkpoint = field_checkpoint();
+        checkpoint["escapeGuard"]
+            .as_object_mut()
+            .unwrap()
+            .remove("latched");
+        assert!(validate_field(&checkpoint).is_err());
+        for recovery in [
+            Value::Null,
+            json!({"hpPercent":0,"threatCount":0,"quietSeconds":0}),
+            json!({"hpPercent":80,"threatCount":2,"quietSeconds":5,"extra":true}),
+        ] {
+            let mut checkpoint = field_checkpoint();
+            checkpoint["escapeGuard"]["recovery"] = recovery;
+            assert!(validate_field(&checkpoint).is_err());
+        }
+    }
+    #[test]
+    fn nonnull_field_reservation_and_private_claim_preserve_all_checkpoint_metadata() {
+        for recovery in [
+            None,
+            Some(json!({"hpPercent":80,"threatCount":2,"quietSeconds":5})),
+        ] {
+            let (_dir, path) = root();
+            let mut field = field_checkpoint();
+            if let Some(recovery) = recovery {
+                field["escapeGuard"]["latched"] = true.into();
+                field["escapeGuard"]["cooldownUntil"] = 1000.into();
+                field["escapeGuard"]["recovery"] = recovery;
+            }
+            let base: ContinuationBase =
+                serde_json::from_value(json!({"version":1,"field":field})).unwrap();
+            assert_eq!(base.version, 1);
+            validate_field(&base.field).unwrap(); // The update_reserve field boundary.
+            let mut final_runtime = runtime();
+            final_runtime["frozenAt"] = 1000.into();
+            final_runtime["settings"] = base.field["desired"].clone();
+            final_runtime["status"]["runRequested"] = true.into();
+            final_runtime["run"] = json!({"startedAt":100,"kills":3,"pickups":4,"deaths":1});
+            let reservation = Reserved {
+                prepared: Prepared {
+                    request_id: "0123456789abcdef0123456789abcdef".into(),
+                    account: disk().continuation.account,
+                    identity: runtime_identity(&final_runtime).unwrap(),
+                    generation: 2,
+                    until: Instant::now() + Duration::from_secs(60),
+                    checkpoint: Some(final_runtime.clone()),
+                },
+                nonce: "fedcba9876543210fedcba9876543210".into(),
+                form: form(3),
+                field: base.field,
+                runtime: Some(final_runtime.clone()),
+            };
+            let mut record = disk();
+            record.continuation = envelope(&reservation).unwrap();
+            write_disk(path.clone(), &record).unwrap();
+            let claimed = consume(path.clone(), &arguments(), "1.2.3", 1001)
+                .unwrap()
+                .unwrap();
+            assert_eq!(claimed.field, field);
+            assert_eq!(claimed.runtime, final_runtime);
+            assert_eq!(claimed.account, reservation.prepared.account);
+            assert!(same_form(&claimed.form, &reservation.form));
+            assert!(consume(path, &arguments(), "1.2.3", 1001)
+                .unwrap()
+                .is_none());
+        }
     }
     #[test]
     fn private_checkpoint_is_consumed_once_without_persisting_credentials() {
@@ -1242,6 +1360,76 @@ mod tests {
         assert!(!state.restore_matches(&account, &checkpoint, &identity));
         state.observed_idle = true;
         state.revoke();
+        assert!(!state.restore_matches(&account, &checkpoint, &identity));
+    }
+    #[test]
+    fn rejected_restore_keeps_claim_for_a_fresh_request_and_success_consumes_it() {
+        let account = disk().continuation.account;
+        let checkpoint = runtime();
+        let identity = GameIdentity {
+            session_id: "fresh-page".into(),
+            connection_id: "fresh-socket".into(),
+        };
+        let first = "0123456789abcdef0123456789abcdef";
+        let second = "fedcba9876543210fedcba9876543210";
+        let mut state = ContinuationState {
+            claimed: Some(Claimed {
+                account: account.clone(),
+                runtime: checkpoint.clone(),
+            }),
+            observed_character: Some((identity.clone(), "Synthetic".into())),
+            observed_idle: true,
+            restore: Some(Restore {
+                request_id: first.into(),
+                identity: identity.clone(),
+                generation: 2,
+                until: Instant::now() + Duration::from_secs(10),
+            }),
+            ..Default::default()
+        };
+        assert!(state.acknowledge_restore(first, false, &account, &identity, 2));
+        assert!(state.restore.is_none());
+        assert!(state.restore_matches(&account, &checkpoint, &identity));
+        assert!(!state.acknowledge_restore(first, true, &account, &identity, 2));
+        state.restore = Some(Restore {
+            request_id: second.into(),
+            identity: identity.clone(),
+            generation: 2,
+            until: Instant::now() + Duration::from_secs(10),
+        });
+        assert!(!state.acknowledge_restore(first, true, &account, &identity, 2));
+        assert!(state.acknowledge_restore(second, true, &account, &identity, 2));
+        assert!(state.restore.is_none());
+        assert!(state.claimed.is_none());
+        assert!(!state.restore_matches(&account, &checkpoint, &identity));
+        assert!(!state.acknowledge_restore(second, true, &account, &identity, 2));
+    }
+    #[test]
+    fn unknown_restore_timeout_keeps_activation_blocked() {
+        let account = disk().continuation.account;
+        let checkpoint = runtime();
+        let identity = GameIdentity {
+            session_id: "fresh-page".into(),
+            connection_id: "fresh-socket".into(),
+        };
+        let request = "0123456789abcdef0123456789abcdef";
+        let mut state = ContinuationState {
+            claimed: Some(Claimed {
+                account: account.clone(),
+                runtime: checkpoint.clone(),
+            }),
+            observed_character: Some((identity.clone(), "Synthetic".into())),
+            observed_idle: true,
+            restore: Some(Restore {
+                request_id: request.into(),
+                identity: identity.clone(),
+                generation: 2,
+                until: Instant::now(),
+            }),
+            ..Default::default()
+        };
+        assert!(!state.acknowledge_restore(request, false, &account, &identity, 2));
+        assert!(state.restore.is_some());
         assert!(!state.restore_matches(&account, &checkpoint, &identity));
     }
     #[cfg(unix)]
