@@ -114,3 +114,176 @@ describe('one-shot updater continuation owner',()=>{
     const f=fixture();expect(validateUpdateContinuation(f.continuation).form.selectedProfileId).toBe('fixture');
   });
 });
+
+function pending<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+async function settle() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
+function installationFixture() {
+  const f = fixture();
+  const nonce = 'f'.repeat(32);
+  const adapter = {
+    flush: vi.fn(async () => f.continuation.form),
+    game: vi.fn(() => ({ open: true, status: f.fresh })),
+    interrupted: vi.fn(() => false),
+    status: vi.fn(),
+  };
+  f.invoke.mockImplementation(async command => {
+    if (command === 'update_reserve') return nonce;
+    if (command === 'update_install') return true;
+    if (command === 'update_continuation') return null;
+    return undefined;
+  });
+  const calls = (command: string) => f.invoke.mock.calls.filter(call => call[0] === command);
+  return { ...f, adapter, nonce, calls, install: () => f.owner.install(f.field, adapter) };
+}
+describe('update installation transaction', () => {
+  it('flushes before reservation and bounds unconfirmed installation to 20 retries before release', async () => {
+    vi.useFakeTimers();
+    const f = installationFixture(), saving = pending<typeof f.continuation.form>(), reservation = pending<string>();
+    f.adapter.flush.mockReturnValue(saving.promise);
+    f.invoke.mockImplementation(async command => {
+      if (command === 'update_reserve') return reservation.promise;
+      if (command === 'update_install') return false;
+      return undefined;
+    });
+    const installation = f.install();
+    expect(f.adapter.status).toHaveBeenLastCalledWith('Saving current settings before updating.');
+    expect(f.calls('update_reserve')).toEqual([]);
+    saving.resolve(f.continuation.form); await settle();
+    expect(f.adapter.status).toHaveBeenLastCalledWith('Preparing the connection for update confirmation.');
+    expect(f.calls('update_install')).toEqual([]);
+    reservation.resolve(f.nonce); await settle();
+    await vi.advanceTimersByTimeAsync(2100); await installation;
+    expect(f.calls('update_install')).toHaveLength(20);
+    expect(f.calls('update_release')).toEqual([['update_release', { nonce: f.nonce }]]);
+    expect(f.calls('update_cancel')).toEqual([['update_cancel', { stop: false }]]);
+    expect(f.adapter.status).toHaveBeenLastCalledWith('Update waits for game confirmation that all actions have stopped. It will retry automatically.');
+    expect(JSON.stringify(f.adapter.status.mock.calls)).not.toContain(f.nonce);
+  });
+  it('reserves frozen final counters after preparation without renewing the original field allowances', async () => {
+    const f = installationFixture();
+    f.field.restore(f.continuation.field);
+    f.runtime.status.kills = 2;
+    const installation = f.install(); await settle();
+    expect(f.calls('update_prepare')).toHaveLength(1);
+    expect(f.calls('update_reserve')).toEqual([]);
+    f.owner.prepared({ requestId, checkpoint: f.runtime }); await installation;
+    expect(f.calls('update_reserve')[0]?.[1]).toMatchObject({
+      document: f.continuation.form,
+      continuation: { version: 1, field: { totals: { kills: 2 }, desired: { automation: { limits: { kills: 3 } } } } },
+    });
+    expect(f.calls('update_install')).toHaveLength(1);
+    expect(f.calls('update_release')).toHaveLength(1);
+  });
+  it.each([
+    ['Waiting for a fresh stopped client before updating.', 'The connection has not confirmed a fresh stopped state.'],
+    ['Waiting for login to settle.', 'Sign-in has not finished.'],
+    ['synthetic-private-account-path', 'The connection could not be prepared for update confirmation.'],
+    [new Error('synthetic-private-account-path'), 'The connection could not be prepared for update confirmation.'],
+    ['toString', 'The connection could not be prepared for update confirmation.'],
+  ])('bounds reservation diagnostics for %s', async (error, reason) => {
+    const f = installationFixture();
+    f.invoke.mockImplementation(async command => { if (command === 'update_reserve') throw error; });
+    await f.install();
+    expect(f.calls('update_install')).toEqual([]);
+    expect(f.calls('update_release')).toEqual([]);
+    expect(f.adapter.status).toHaveBeenLastCalledWith(`Update deferred. ${reason} It will retry automatically.`);
+    expect(JSON.stringify(f.adapter.status.mock.calls)).not.toContain('synthetic-private-account-path');
+  });
+  it('releases a changed game confirmation and reports a generic retryable diagnostic', async () => {
+    const f = installationFixture();
+    f.invoke.mockImplementation(async command => {
+      if (command === 'update_reserve') return f.nonce;
+      if (command === 'update_install') throw 'Update settlement changed.';
+      return undefined;
+    });
+    await f.install();
+    expect(f.calls('update_release')).toEqual([['update_release', { nonce: f.nonce }]]);
+    expect(f.adapter.status).toHaveBeenLastCalledWith('Update deferred. Game activity changed during update confirmation. It will retry automatically.');
+  });
+  it('stops before reservation when Close interrupts the pending settings flush', async () => {
+    const f = installationFixture(), saving = pending<typeof f.continuation.form>();
+    f.adapter.flush.mockReturnValue(saving.promise);
+    const installation = f.install(); f.adapter.interrupted.mockReturnValue(true);
+    saving.resolve(f.continuation.form); await installation;
+    expect(f.calls('update_reserve')).toEqual([]);
+    expect(f.calls('update_install')).toEqual([]);
+    expect(f.calls('update_cancel')).toHaveLength(1);
+  });
+  it.each(['settings', 'reserve', 'install', 'release', 'recovery'] as const)('Stop invalidates delayed %s without reviving continuation', async stage => {
+    vi.useFakeTimers();
+    const f = installationFixture(), delayed = pending<unknown>();
+    if (stage === 'settings') f.adapter.flush.mockImplementation(async () => { await delayed.promise; return f.continuation.form; });
+    f.invoke.mockImplementation(async command => {
+      if (command === `update_${stage}`) return delayed.promise;
+      if (command === 'update_reserve') return f.nonce;
+      if (command === 'update_install') return true;
+      if (command === 'update_continuation') return stage === 'recovery' ? delayed.promise : f.continuation;
+      return undefined;
+    });
+    if (stage === 'release' || stage === 'recovery') f.adapter.game.mockReturnValue({ open: false, status: f.fresh });
+    const installation = f.install(); await settle();
+    await f.owner.cancel(true); f.field.stop();
+    expect(f.owner.stopped).toBe(true); expect(f.owner.pending).toBe(false);
+    delayed.resolve(stage === 'reserve' ? f.nonce : stage === 'recovery' ? f.continuation : true);
+    await vi.advanceTimersByTimeAsync(100); const result = await installation;
+    expect(result.continuation).toBeNull(); expect(f.owner.pending).toBe(false); expect(f.field.requested).toBe(false);
+    expect(f.owner.automaticLogin(account)).toBe(false);
+    if (stage === 'settings' || stage === 'reserve') expect(f.calls('update_install')).toEqual([]);
+    else expect(f.calls('update_install')).toHaveLength(1);
+    expect(f.calls('update_release')).toHaveLength(stage === 'settings' ? 0 : 1);
+    if (stage === 'release') expect(f.calls('update_continuation')).toEqual([]);
+  });
+  it('keeps replacement close and resume inside the transaction until same-process recovery is settled', async () => {
+    const f = installationFixture(), recovery = pending<unknown>();
+    f.field.restore(f.continuation.field);
+    f.adapter.game.mockReturnValue({ open: false, status: f.fresh });
+    f.invoke.mockImplementation(async command => {
+      if (command === 'update_reserve') return f.nonce;
+      if (command === 'update_install') return true;
+      if (command === 'update_continuation') return recovery.promise;
+      return undefined;
+    });
+    const installation = f.install(); await settle();
+    expect(f.owner.gameClosed()).toBe(false);
+    await expect(f.install()).rejects.toThrow(/already pending/);
+    recovery.resolve(f.continuation); const result = await installation;
+    expect(result).toMatchObject({ continuation: f.continuation, retired: false, recoveryFailed: false });
+    expect(f.owner.pending).toBe(true); expect(f.field.requested).toBe(true);
+    expect(f.owner.gameClosed()).toBe(false); expect(f.calls('update_cancel')).toEqual([]);
+    const resumed = f.owner.resume(f.fresh, account, f.field);
+    f.owner.restored({ requestId, success: true }); expect(await resumed).toBe(true);
+  });
+  it('releases even when release fails, retires failed recovery and cancels the remaining native ownership', async () => {
+    const f = installationFixture();
+    f.adapter.game.mockReturnValue({ open: false, status: f.fresh });
+    f.invoke.mockImplementation(async command => {
+      if (command === 'update_reserve') return f.nonce;
+      if (command === 'update_install') return true;
+      if (command === 'update_release') throw new Error('synthetic-private-release');
+      if (command === 'update_continuation') throw new Error('synthetic-private-recovery');
+      return undefined;
+    });
+    expect(await f.install()).toEqual({ continuation: null, retired: true, recoveryFailed: true });
+    expect(f.calls('update_release')).toHaveLength(1); expect(f.calls('update_cancel')).toHaveLength(1);
+    expect(f.owner.gameClosed()).toBe(true);
+  });
+  it('preserves Stop that wins while startup suppression metadata is pending', async () => {
+    const f = installationFixture(), metadata = pending<unknown>();
+    f.invoke.mockImplementation(async command => command === 'update_startup_stopped' ? metadata.promise : f.continuation);
+    const startup = f.owner.startup(f.field);
+    await f.owner.cancel(true); metadata.resolve(false);
+    expect(await startup).toBeNull(); expect(f.owner.stopped).toBe(true);
+    expect(f.calls('update_continuation')).toEqual([]);
+  });
+  it('suppresses startup login when native Stop suppression could not be verified', async () => {
+    const f = installationFixture();
+    f.invoke.mockRejectedValue(new Error('synthetic startup failure'));
+    await expect(f.owner.startup(f.field)).rejects.toThrow('synthetic startup failure');
+    expect(f.owner.stopped).toBe(true); expect(f.owner.pending).toBe(false);
+    expect(f.calls('update_continuation')).toEqual([]);
+  });
+});
