@@ -65,6 +65,32 @@ describe('world packet decoder', () => {
       .i32(5).i32(0).i16(-1).string('Offline').u8(0).finish();
     expect(decodeWorld(bytes)).toEqual([{ type: 'partyJoined', partyId: 3, name: 'Helpers', login: true, members: [{ memberId: 5, entityId: 0, level: -1, name: 'Offline', leader: false }] }]);
   });
+  it.each([32, 33, 256])('decodes a server party snapshot with %i members', count => {
+    // Party.SerializePartyInfo writes the entire persisted roster as an int32
+    // count; neither the pinned writer nor AddMember imposes a 32-member cap.
+    const members = Array.from({ length: count }, (_, index) => ({
+      memberId: index + 1, entityId: 0, level: -1, name: `Member ${index + 1}`, leader: false,
+    }));
+    const writer = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').i32(members.length);
+    for (const row of members) writer.i32(row.memberId).i32(row.entityId).i16(row.level).string(row.name).u8(row.leader ? 1 : 0);
+    expect(decodeWorld(writer.finish())).toEqual([{ type: 'partyJoined', partyId: 3, name: 'Helpers', login: true, members }]);
+  });
+  it.each([0, -1, 2_147_483_647])('rejects impossible party count %i before allocating the roster', count => {
+    const bytes = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').i32(count).finish();
+    expect(() => decodeWorld(bytes)).toThrow('Invalid party count');
+  });
+  it('rejects missing, duplicate and trailing data in a large party snapshot', () => {
+    const packet = (count: number, duplicate = false) => {
+      const writer = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').i32(count);
+      for (let index = 0; index < 33; index++) writer.i32(duplicate && index === 32 ? 1 : index + 1).i32(0).i16(-1).string('').u8(0);
+      return writer;
+    };
+    // Empty names give the minimum 13-byte record, making the count budget exact.
+    expect(() => decodeWorld(packet(34).finish())).toThrow('Invalid party count');
+    expect(() => decodeWorld(packet(33, true).finish())).toThrow('Duplicate party member');
+    expect(() => decodeWorld(packet(33).u8(0).finish())).toThrow('Unknown packet trailer');
+    expect(() => decodeWorld(packet(33).finish().subarray(0, -1))).toThrow();
+  });
   it('accepts an unknown map while a live party member finishes logging in', () => {
     const bytes = new BitWriter().u8(102).u8(3).i32(5).i32(100).i16(9).string('Raon').u8(0)
       .string('').i32(70).i32(81).i32(20).i32(30).finish();
