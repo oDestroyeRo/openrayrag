@@ -16,7 +16,7 @@ import { walkDuration, walkPosition } from './movement';
 import { GridNavigator, routeSegment, searchGrid, distance, minimumRouteCost, type NavigationSummary, type WalkGrid } from './navigation';
 
 import { automationSettings, DEFAULT_SETTINGS, validateSettings, type Settings, type AutomationSettings } from './settings';
-import { acceptsMonster, acceptsLoot, inSchedule, monsterRule, lootRule, effectiveSkillLevel, AutomationScheduler, type AutomationTask, type ActionResult } from './automation';
+import { acceptsMonster, acceptsLoot, inSchedule, monsterRule, lootRule, effectiveSkillLevel, AutomationScheduler, type AutomationTask, type ActionResult, type ActionReceipts } from './automation';
 import { CharacterState, type CharacterSnapshot, type StatefulEntity } from './character-state';
 import { validateExpandedAction, type ExpandedAction, type FeatureEvent } from './protocol-feature';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost, skillPrerequisites } from './game-catalog';
@@ -128,6 +128,7 @@ export class BotEngine {
   private readonly strategies=new AttackStrategyPolicy();
   private strategyWait:{id:number;since:number}|null=null;
   private readonly automation: AutomationScheduler;
+  readonly actionReceipts:ActionReceipts;
   private readonly loadout: LoadoutPolicy;
   private stoppedAt = 0;
   private excluded = new Map<number, number>();
@@ -159,12 +160,12 @@ export class BotEngine {
   }
   submitPartyHeal(targetId:number,level:number,reserve:number,reserved:(sequence:number,identity:ActionIdentity)=>void):void {
     const reason=this.partyHealReadiness(targetId,level,reserve);if(reason)throw new Error(reason);
-    this.automation.submit({type:'skill',mode:'target',skillId:41,level,target:targetId},this.character,undefined,1,{receipt:matchesPartyHealExecution,reserved});this.lastAction=this.now();this.reason=this.automation.task().label;
+    this.automation.submit({type:'skill',mode:'target',skillId:41,level,target:targetId},this.character,undefined,1,{receipt:matchesPartyHealExecution,reserved,retainReceipt:false});this.lastAction=this.now();this.reason=this.automation.task().label;
   }
   reconcilePartyHeal(sequence:number,motion:number):void {this.automation.reconcileSkill(sequence,motion,1);}
   constructor(private readonly send: (action: Action) => void, private readonly now = Date.now,
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid,
-    private readonly partyBinding: (entityId: number) => PartyActorBinding | null = () => null) { this.castAvailability=new CastAvailability(this.now);this.automation = new AutomationScheduler(a=>this.send(a),this.now,a=>this.actionIdentity(a)); this.observations=new ActorObservations(this.now);this.loadout=new LoadoutPolicy(this.now); }
+    private readonly partyBinding: (entityId: number) => PartyActorBinding | null = () => null) { this.castAvailability=new CastAvailability(this.now);this.automation = new AutomationScheduler(a=>this.send(a),this.now,a=>this.actionIdentity(a)); this.actionReceipts=this.automation;this.observations=new ActorObservations(this.now);this.loadout=new LoadoutPolicy(this.now); }
   private navigation(settings: Settings = this.settings): GridNavigator | null {
     const policy=mapPolicy(settings), identity=`${this.map}:${policyIdentity(policy)}`;
     if (this.navigationMap !== identity) {
@@ -1357,10 +1358,6 @@ export class BotEngine {
   }
   acknowledgeLoadoutOverride():void {this.loadout.acknowledgeOverride();}
   get pendingFeatureAction(): ExpandedAction | null { return this.automation.pendingAction; }
-  /** The canceled receipt owner calls this only after exact execution matching. */
-  settleConfirmedSkill(event:Extract<FeatureEvent,{type:'skillResult'}>):void {
-    this.automation.settleSkill(event.motionSeconds,skillAfterCastSeconds(event.skillId));
-  }
   /** Emergency escape may preempt walking/combat, but never an unresolved resource or cast. */
   get featureActionsSettled(): boolean { return !this.retreatOwned&&this.resourceActionsSettled; }
   /** Escape may request cancellation first, then await the physical owner. */
