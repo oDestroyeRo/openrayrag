@@ -21,6 +21,7 @@ fn main() {
             "update_prepared",
             "update_cancel",
             "update_continuation",
+            "update_startup_stopped",
             "update_restore",
             "update_restored",
             "open_game",

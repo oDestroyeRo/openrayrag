@@ -28,6 +28,7 @@
     "allow-update-prepare",
     "allow-update-cancel",
     "allow-update-continuation",
+    "allow-update-startup-stopped",
     "allow-update-restore"
   ]
 }

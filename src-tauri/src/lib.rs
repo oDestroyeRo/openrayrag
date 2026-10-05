@@ -423,6 +423,7 @@ pub fn run() {
             update_continuation::update_prepared,
             update_continuation::update_cancel,
             update_continuation::update_continuation,
+            update_continuation::update_startup_stopped,
             update_continuation::update_restore,
             update_continuation::update_restored,
             updater::update_open_release,

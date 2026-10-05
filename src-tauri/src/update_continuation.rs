@@ -20,6 +20,7 @@ const ERROR: &str = "Update continuation is unavailable. Sign in and start manua
 const CHECKPOINT: &str = "update-continuation.json";
 const TEMPORARY: &str = ".update-continuation.tmp";
 const LAUNCH_PREFIX: &str = "--rayrag-update-resume=";
+const STOPPED_FLAG: &str = "--rayrag-update-stopped";
 const MAX_BYTES: u64 = 1_000_000;
 const TTL_MS: u64 = 10 * 60 * 1000;
 const SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -83,9 +84,14 @@ pub(crate) struct ContinuationState {
     restore: Option<Restore>,
     observed_character: Option<(GameIdentity, String)>,
     observed_idle: bool,
+    stop_restart: bool,
 }
 pub(crate) type SharedContinuation = Mutex<ContinuationState>;
 impl ContinuationState {
+    fn cancel(&mut self, committed: bool, stop: bool) -> Option<String> {
+        self.stop_restart |= committed && stop;
+        self.revoke()
+    }
     fn acknowledge_restore(
         &mut self,
         request_id: &str,
@@ -509,6 +515,20 @@ fn launch_token(args: &[OsString]) -> Option<String> {
     }
     Some(matching[0].into())
 }
+fn startup_stopped(args: &[OsString]) -> bool {
+    args.iter()
+        .skip(1)
+        .any(|arg| arg.to_str() == Some(STOPPED_FLAG))
+}
+fn restart_arguments(args: &mut Vec<OsString>, stopped: bool) {
+    args.retain(|arg| {
+        !arg.to_str()
+            .is_some_and(|s| s.starts_with(LAUNCH_PREFIX) || s == STOPPED_FLAG)
+    });
+    if stopped {
+        args.push(STOPPED_FLAG.into());
+    }
+}
 /// Remove the private checkpoint under its directory lock before validating or
 /// exposing it. Even wrong arguments, corrupt contents and crashes consume it.
 fn consume(
@@ -544,6 +564,9 @@ fn consume(
     let Ok(mut disk) = serde_json::from_slice::<DiskCheckpoint>(&bytes) else {
         return Ok(None);
     };
+    if startup_stopped(args) {
+        return Ok(None);
+    }
     let Some(token) = launch_token(args) else {
         return Ok(None);
     };
@@ -829,15 +852,14 @@ pub(crate) async fn restart(app: &tauri::AppHandle, target: &str) -> Result<(), 
     let (failure, failed) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
         let mut env = restart_app.env().clone();
-        env.args_os
-            .retain(|arg| !arg.to_str().is_some_and(|s| s.starts_with(LAUNCH_PREFIX)));
         let result = (|| -> Result<(), String> {
             let mut state = restart_app
                 .state::<SharedContinuation>()
                 .inner()
                 .lock()
                 .map_err(|_| ERROR)?;
-            if let Some(r) = state.reserved.as_ref() {
+            restart_arguments(&mut env.args_os, state.stop_restart);
+            if let Some(r) = state.reserved.as_ref().filter(|_| !state.stop_restart) {
                 let token = uuid::Uuid::new_v4().simple().to_string();
                 write_disk(
                     crate::app_data(&restart_app).map_err(|_| ERROR)?,
@@ -886,10 +908,20 @@ pub(crate) fn update_continuation(
     Ok(available)
 }
 #[tauri::command]
+pub(crate) fn update_startup_stopped(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+) -> Result<bool, String> {
+    crate::require_window(&window, "main")?;
+    // This launch-only opt-out grants no run authority and changes no saved preference.
+    Ok(startup_stopped(&app.env().args_os))
+}
+#[tauri::command]
 pub(crate) fn update_cancel(
     app: tauri::AppHandle,
     window: WebviewWindow,
     request_id: Option<String>,
+    stop: Option<bool>,
 ) -> Result<bool, String> {
     crate::require_window(&window, "main")?;
     if request_id.as_ref().is_some_and(|id| !self::request_id(id)) {
@@ -914,9 +946,9 @@ pub(crate) fn update_cancel(
     if request_id.is_some() && request_id != active {
         return Ok(false);
     }
-    state.revoke();
-    clear_disk(crate::app_data(&app).map_err(|_| ERROR)?)?;
     let committed = gate.lease.as_ref().is_some_and(|l| l.committed);
+    state.cancel(committed, stop.unwrap_or(false));
+    clear_disk(crate::app_data(&app).map_err(|_| ERROR)?)?;
     gate.cancel_update();
     if let Some(game) = app.get_webview_window("game").filter(|_| !committed) {
         let id = active.or(request_id);
@@ -946,7 +978,7 @@ pub(crate) fn stop_while_settling(app: &tauri::AppHandle) -> Result<bool, String
         .inner()
         .lock()
         .map_err(|_| ERROR)?;
-    let active = state.revoke();
+    let active = state.cancel(gate.lease.as_ref().is_some_and(|l| l.committed), true);
     clear_disk(crate::app_data(app).map_err(|_| ERROR)?)?;
     if let Some(nonce) = gate.cancel_update() {
         if let Some(game) = app.get_webview_window("game") {
@@ -1105,11 +1137,104 @@ mod tests {
             format!("{LAUNCH_PREFIX}0123456789abcdef0123456789abcdef").into(),
         ]
     }
+    #[test]
+    fn only_explicit_stop_during_a_committed_update_marks_the_restart() {
+        for (committed, stop) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut state = ContinuationState {
+                available: Some(disk().continuation),
+                ..Default::default()
+            };
+            state.cancel(committed, stop);
+            assert_eq!(state.stop_restart, committed && stop);
+            assert!(state.available.is_none());
+            assert!(state.claimed.is_none());
+            let mut args = arguments();
+            restart_arguments(&mut args, state.stop_restart);
+            assert_eq!(startup_stopped(&args), committed && stop);
+            assert!(launch_token(&args).is_none());
+            state.cancel(committed, false); // Later failure cleanup cannot undo explicit Stop.
+            assert_eq!(state.stop_restart, committed && stop);
+        }
+    }
+    #[test]
+    fn subsequent_updates_strip_inherited_stop_and_resume_arguments() {
+        let mut args = arguments();
+        args.push(STOPPED_FLAG.into());
+        args.push("--unrelated-option".into());
+        restart_arguments(&mut args, false);
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("Companion"),
+                OsString::from("--unrelated-option")
+            ]
+        );
+        assert!(!startup_stopped(&args));
+        assert!(launch_token(&args).is_none());
+        restart_arguments(&mut args, true);
+        assert!(startup_stopped(&args));
+        assert!(launch_token(&args).is_none());
+        restart_arguments(&mut args, true);
+        assert_eq!(
+            args.iter()
+                .filter(|arg| arg.to_str() == Some(STOPPED_FLAG))
+                .count(),
+            1
+        );
+        restart_arguments(&mut args, false);
+        assert!(!startup_stopped(&args));
+    }
+    #[test]
+    fn ordinary_launches_have_no_stop_marker_and_lookalike_flags_are_not_opt_outs() {
+        for args in [
+            vec!["Companion".into()],
+            vec![STOPPED_FLAG.into()],
+            vec!["Companion".into(), "--rayrag-update-stopped=true".into()],
+            vec!["Companion".into(), "--rayrag-update-stopped-other".into()],
+        ] {
+            assert!(!startup_stopped(&args));
+        }
+    }
     fn root() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().canonicalize().unwrap();
         current_form::save(path.clone(), &form(3)).unwrap();
         (dir, path)
+    }
+    #[test]
+    fn stopped_launch_grants_no_resume_authority_and_keeps_saved_login_preferences() {
+        let (_dir, path) = root();
+        write_disk(path.clone(), &disk()).unwrap();
+        let profile = serde_json::to_vec(
+            &json!({"username":"synthetic-account","password":"synthetic-only",
+            "characterSlot":1,"mode":"botOnly","autoLogin":true}),
+        )
+        .unwrap();
+        {
+            let store = file::LocalLoginStore::new(path.clone());
+            let directory = store.open_directory(false).unwrap().unwrap();
+            let mut saved = file::create_private_file(&directory, "profile.json").unwrap();
+            saved.write_all(&profile).unwrap();
+            saved.sync_all().unwrap();
+            file::sync_directory(&directory).unwrap();
+        }
+        let mut args = arguments();
+        args.push(STOPPED_FLAG.into()); // Stop overrides even a matching native launch proof.
+        assert!(startup_stopped(&args));
+        assert!(consume(path.clone(), &args, "1.2.3", 1001)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            std::fs::read(path.join("login/profile.json")).unwrap(),
+            profile
+        );
+        assert!(login::saved_account_matches(
+            path.clone(),
+            &disk().continuation.account
+        ));
+        assert!(consume(path, &arguments(), "1.2.3", 1001)
+            .unwrap()
+            .is_none());
     }
     #[test]
     fn field_escape_guard_accepts_default_off_latched_and_optional_recovery() {
