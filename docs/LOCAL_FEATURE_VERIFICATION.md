@@ -4,6 +4,14 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Unlimited macro duration and counts
+
+Issue [#149](https://github.com/oDestroyeRo/openrayrag/issues/149) adds independent zero limits for macro duration, issued steps and rule runs. On 2026-10-05, `npm run check` passed: 3,710 frontend tests in 117 files, 151 production native tests and 153 CI-feature native tests (two existing opt-in probes ignored in each), both strict Clippy configurations, formatting, frontend/release type checks, 280 passing script checks with two platform skips and eight Python release tests. Independent source review found no blocking findings.
+
+Simulated runtime checks pass after 25 hours, 2,002 ordered steps / 1,001 rule runs, 200,001 unmatched evaluations and a 26-hour sequence whose individual confirmations each arrive within their finite step deadline. Mixed positive/zero limits, cooldowns, spending reservations, actual elapsed comparisons, safe action identities, Stop/stale confirmations and uncertain-result failures remain covered. The shared TypeScript/Rust schema corpus contains 80 cases; all eight new valid zero-limit cases failed against the frontend baseline. Legacy routines still reject zero execution limits.
+
+The actual browser preview loaded and validated the Until stopped example, saved it on an isolated local origin and restored the same zero limits after reload without starting automation. Its initial farm rule runs once; First Aid can repeat and requires the learned skill. Start remains disabled while offline. This is local editor and simulated runtime evidence; no new live-game long-duration run, installed update or operating-system suspension test was performed.
+
 ### Defense against attacking monsters
 
 Issue [#147](https://github.com/oDestroyeRo/openrayrag/issues/147) improves the existing retaliation modes with attacker-first target/skill selection, defense before new loot and current character/monster lifetime evidence. On 2026-10-05, `npm run check` passed: 3,652 frontend tests in 117 files, 146 production native tests and 148 CI-feature native tests (two existing opt-in probes ignored in each), both strict Clippy configurations, formatting, frontend/release type checks, script checks and eight Python release tests.

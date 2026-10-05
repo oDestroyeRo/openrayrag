@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { dryRunRoutine, ROUTINE_LIMITS, RoutineRuntime, validateRoutineSpec,
-  type RoutineCondition, type RoutineObservation, type RoutineRule, type RoutineSpec } from './routines';
+  type RoutineCondition, type RoutineObservation, type RoutineOptions, type RoutineRule, type RoutineSpec } from './routines';
 
 type TestAction = { type: 'heal'; itemId: number } | { type: 'stop' };
 const isAction = (value: unknown): value is TestAction => {
@@ -16,7 +16,7 @@ const rule = (options: Partial<RoutineRule<TestAction>> = {}): RoutineRule<TestA
 const spec = (options: Partial<RoutineSpec<TestAction>> = {}): RoutineSpec<TestAction> => ({
   name: 'Recovery', durationSeconds: 60, maxActions: 5, rules: [rule()], ...options,
 });
-function setup(options: { actionTimeoutSeconds?: number; maxSteps?: number } = {}) {
+function setup(options: RoutineOptions = {}) {
   let time = 1_000;
   const runtime = new RoutineRuntime(isAction, () => time, options);
   return { runtime, advance: (milliseconds: number) => { time += milliseconds; }, setTime: (milliseconds: number) => { time = milliseconds; } };
@@ -97,6 +97,91 @@ describe('routine validation', () => {
     expect(() => new RoutineRuntime(isAction, Date.now, { actionTimeoutSeconds: 121 })).toThrow();
     expect(() => new RoutineRuntime(isAction, Date.now, { actionTimeoutSeconds: 121, actionTimeoutLimitSeconds: 86_400 })).not.toThrow();
     expect(() => new RoutineRuntime(isAction, Date.now, { actionTimeoutLimitSeconds: 86_401 })).toThrow();
+  });
+});
+
+describe('macro selector opt-in', () => {
+  const unlimited = () => spec({ durationSeconds: 0, maxActions: 0, rules: [rule({ maxRuns: 0, cooldownSeconds: 0 })] });
+  const options: RoutineOptions = { allowUnlimitedLimits: true, actionTimeoutSeconds: 0, maxSteps: 0 };
+
+  it('admits zero limits only with explicit opt-in and keeps legacy validation and previews finite', () => {
+    expect(validateRoutineSpec(unlimited(), isAction, options)).toEqual(unlimited());
+    expect(dryRunRoutine(unlimited(), { hpPercent: 40 }, isAction, options).rule).toBe('Heal');
+    for (const allowUnlimitedLimits of [undefined, false]) {
+      expect(() => validateRoutineSpec(unlimited(), isAction, { allowUnlimitedLimits })).toThrow();
+      expect(() => dryRunRoutine(unlimited(), { hpPercent: 40 }, isAction, { allowUnlimitedLimits })).toThrow();
+      expect(() => setup({ allowUnlimitedLimits, actionTimeoutSeconds: 0 })).toThrow();
+      expect(() => setup({ allowUnlimitedLimits, maxSteps: 0 })).toThrow();
+    }
+    expect(() => validateRoutineSpec(spec({ rules: [rule({ conditions: [{ field: 'elapsedSeconds', operator: 'gt', value: 86_401 }] })] }), isAction, options)).toThrow();
+  });
+
+  it('retains positive confirmation and evaluation limits when the selector opts in', () => {
+    const { runtime, advance } = setup({ allowUnlimitedLimits: true, actionTimeoutSeconds: 1, maxSteps: 2 });
+    runtime.start(unlimited());
+    runtime.tick({ hpPercent: 40 });
+    advance(1_000);
+    expect(acknowledge(runtime)).toBe(false);
+    expect(runtime.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 1 });
+    runtime.start(unlimited());
+    runtime.tick({}); runtime.tick({});
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.snapshot()).toMatchObject({ state: 'failed', steps: 2, actionsIssued: 0 });
+  });
+
+  it('keeps an owned sequence pending across a day and rejects stale receipts after Stop', () => {
+    const { runtime, advance } = setup(options);
+    runtime.start(unlimited());
+    runtime.tick({ hpPercent: 40 });
+    const oldId = runtime.snapshot().pendingActionId!;
+    advance(90_000_000);
+    runtime.advance();
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.snapshot()).toMatchObject({ state: 'waiting', pendingActionId: oldId, actionsIssued: 1, elapsedSeconds: 90_000 });
+    expect(acknowledge(runtime)).toBe(true);
+    runtime.tick({ hpPercent: 40 });
+    const stoppedId = runtime.snapshot().pendingActionId!;
+    runtime.cancel();
+    expect(runtime.acknowledge(true, stoppedId)).toBe(false);
+    runtime.start(unlimited()); runtime.tick({ hpPercent: 40 });
+    expect(runtime.acknowledge(true, stoppedId)).toBe(false);
+    expect(runtime.snapshot().pendingActionId).toBeGreaterThan(stoppedId);
+  });
+
+  it('traces actual elapsed time beyond a day without clamping equality or changing legacy previews', () => {
+    const value = spec({ durationSeconds: 0, maxActions: 0, rules: [rule({ maxRuns: 0, conditions: [
+      { field: 'elapsedSeconds', operator: 'eq', value: 86_400 }] })] });
+    const { runtime, advance } = setup(options);
+    runtime.start(value);
+    advance(90_000_000);
+    expect(runtime.tick({ elapsedSeconds: 86_400 })).toBeNull();
+    expect(runtime.trace({ elapsedSeconds: 86_400 }).rules[0]!.state).toBe('unmatched');
+    expect(runtime.snapshot().elapsedSeconds).toBe(90_000);
+    expect(dryRunRoutine(spec({ rules: value.rules.map(rule => ({ ...rule, maxRuns: 1 })) }),
+      { elapsedSeconds: 90_000 }, isAction).rules[0]!.state).toBe('unavailable');
+  });
+
+  it('saturates unlimited evaluation telemetry while preserving dispatch ownership', () => {
+    const { runtime } = setup(options);
+    runtime.start(unlimited());
+    Reflect.set(runtime, 'steps', Number.MAX_SAFE_INTEGER - 1);
+    runtime.tick({}); runtime.tick({});
+    expect(runtime.snapshot()).toMatchObject({ state: 'running', steps: Number.MAX_SAFE_INTEGER, actionsIssued: 0 });
+    expect(runtime.tick({ hpPercent: 40 })).toEqual({ type: 'heal', itemId: 501 });
+    expect(acknowledge(runtime)).toBe(true);
+    expect(runtime.snapshot()).toMatchObject({ state: 'running', steps: Number.MAX_SAFE_INTEGER, actionsCompleted: 1 });
+  });
+
+  it('never overflows selector action identities for unlimited run counts', () => {
+    const { runtime } = setup(options);
+    runtime.start(unlimited());
+    Reflect.set(runtime, 'nextActionId', Number.MAX_SAFE_INTEGER - 1);
+    runtime.tick({ hpPercent: 40 });
+    expect(runtime.snapshot().pendingActionId).toBe(Number.MAX_SAFE_INTEGER);
+    expect(acknowledge(runtime)).toBe(true);
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 1, actionsCompleted: 1 });
+    expect(runtime.snapshot().reason).toMatch(/identity budget/);
   });
 });
 

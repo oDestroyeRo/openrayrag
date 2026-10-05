@@ -1054,6 +1054,33 @@ describe('macro controller supervision',()=>{
   function fixture(){const f=setup();f.controller.engine.receive([{type:'remove',id:2,dead:false},{type:'inventory',items:[{bagId:501,itemId:501,type:1,count:5}],equipment:Array(10).fill(0),ammoId:-1},
     {type:'stats',level:7,jobLevel:3,hp:100,maxHp:100,sp:100,maxSp:100,zeny:1000,weight:50,maxWeight:1000}]);return f;}
   const macro=(f:ReturnType<typeof fixture>,value=script(),input=settings)=>f.controller.perform('macro',{script:value,settings:input});
+  it('starts unlimited field supervision and preserves run counters through manual input until Stop',()=>{
+    const f=fixture();macro(f,{...script(),durationSeconds:0,maxActions:0});
+    f.controller.engine.kills=5;f.controller.engine.looted=4;f.controller.engine.deaths=1;
+    f.controller.manualCommand();f.step();
+    expect(f.controller.snapshot()).toMatchObject({runRequested:true,running:true,kills:5,looted:4,deaths:1,
+      macro:{state:'monitoring',actionsIssued:1,actionsCompleted:1}});
+    f.controller.stop();const count=f.sent.length;f.step(1000);
+    expect(f.controller.snapshot()).toMatchObject({runRequested:false,running:false,macro:{state:'cancelled'}});
+    expect(f.sent).toHaveLength(count);
+  });
+  it('retains configured field kill limits while macro counts are unlimited',()=>{
+    const f=fixture(),automation=policy();automation.limits.kills=2;
+    macro(f,{...script(),durationSeconds:0,maxActions:0},{...settings,automation});
+    f.controller.engine.kills=2;f.step();f.controller.manualCommand();f.step();
+    expect(f.controller.engine.running).toBe(false);
+    expect(f.controller.snapshot()).toMatchObject({runRequested:true,kills:2,
+      macro:{state:'monitoring',actionsIssued:1,actionsCompleted:1}});
+    expect(f.controller.snapshot().reason).toContain('Configured session limit reached');
+  });
+  it('keeps finite uncertain-item deadlines and never replays an unlimited repeating rule',()=>{
+    const f=fixture(),value=script([{type:'useItem',itemId:501,timeoutSeconds:10}]);
+    value.durationSeconds=0;value.maxActions=0;value.rules[0]!.maxRuns=0;macro(f,value);
+    f.advance(11000);
+    expect(f.controller.snapshot()).toMatchObject({runRequested:false,running:false,macro:{state:'failed'}});
+    expect(f.sent.filter(action=>action.type==='useItem')).toEqual([{type:'useItem',itemId:501}]);
+    expect(f.controller.settledForMaintenance()).toBe(false);
+  });
   it('keeps the same macro and run allowances when official gameplay input arrives',()=>{
     const f=fixture();macro(f);f.controller.engine.kills=5;f.controller.engine.looted=4;
     const before=f.controller.macro.snapshot();f.controller.manualCommand();f.step();

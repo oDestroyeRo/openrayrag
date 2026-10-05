@@ -305,3 +305,189 @@ describe('macro field supervision', () => {
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
   });
 });
+
+describe('unlimited macro execution', () => {
+  const unlimited = (options: Partial<MacroScript> = {}): MacroScript => script({ durationSeconds: 0,
+    maxActions: 0, maxSpend: 0, rules: [rule({ maxRuns: 0 })], ...options });
+
+  it('dry-runs explicit unlimited limits using actual elapsed observations beyond a day', () => {
+    const value = unlimited({ rules: [rule({ maxRuns: 0,
+      conditions: [{ field: 'elapsedSeconds', operator: 'gt', value: 86_400 }] })] });
+    expect(dryRunMacro(value, { elapsedSeconds: 90_000 })).toMatchObject({ rule: 'Recover', steps: [item] });
+    value.rules[0]!.conditions = [{ field: 'elapsedSeconds', operator: 'eq', value: 86_400 }];
+    expect(dryRunMacro(value, { elapsedSeconds: 90_000 }).rules[0]!.state).toBe('unmatched');
+    for (const elapsedSeconds of [Number.NaN, Number.POSITIVE_INFINITY, -1, Number.MAX_SAFE_INTEGER]) {
+      expect(dryRunMacro(value, { elapsedSeconds }).rules[0]!.state).toBe('unavailable');
+    }
+  });
+
+  it('uses the real running clock after 25 hours without accepting caller elapsed overrides', () => {
+    const { runtime, advance } = setup();
+    runtime.start(unlimited({ rules: [rule({ name: 'At one day', priority: 20, maxRuns: 0,
+      conditions: [{ field: 'elapsedSeconds', operator: 'eq', value: 86_400 }] }),
+    rule({ name: 'After one day', maxRuns: 0,
+      conditions: [{ field: 'elapsedSeconds', operator: 'gt', value: 86_400 }] })] }));
+    expect(runtime.tick({ elapsedSeconds: 90_000 })).toBeNull();
+    advance(90_000_000);
+    expect(runtime.tick({ elapsedSeconds: 0 })?.ruleIndex).toBe(1);
+    expect(confirm(runtime)).toBe(true);
+    expect(runtime.snapshot()).toMatchObject({ state: 'running', elapsedSeconds: 90_000, actionsCompleted: 1 });
+  });
+
+  it('continues past 1,000 owned steps and rule runs without renewing the run or replaying intents', () => {
+    const { runtime } = setup();
+    runtime.start(unlimited({ rules: [rule({ maxRuns: 0, steps: [item, item] })] }));
+    let lastId = 0;
+    for (let index = 0; index < 1_001; index++) {
+      for (let stepIndex = 0; stepIndex < 2; stepIndex++) {
+        const intent = runtime.tick({ hpPercent: stepIndex ? 90 : 40 })!;
+        expect(intent).toMatchObject({ generation: 1, ruleIndex: 0, stepIndex, step: item });
+        expect(intent.id).toBeGreaterThan(lastId);
+        expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+        expect(runtime.acknowledge(intent.id, true)).toBe(true);
+        expect(runtime.acknowledge(intent.id, true)).toBe(false);
+        lastId = intent.id;
+      }
+    }
+    expect(runtime.snapshot()).toMatchObject({ state: 'running', generation: 1, actionsIssued: 2_002,
+      actionsCompleted: 2_002, sequencesIssued: 1_001, sequencesCompleted: 1_001, spendReserved: 0 });
+  });
+
+  it('waits beyond the old lifetime evaluation budget and dispatches only when a rule matches', () => {
+    const { runtime } = setup();
+    runtime.start(unlimited());
+    for (let index = 0; index <= 200_000; index++) runtime.tick({ hpPercent: 90 });
+    expect(runtime.snapshot()).toMatchObject({ state: 'running', actionsIssued: 0, sequencesIssued: 0 });
+    expect(runtime.tick({ hpPercent: 40 })?.step).toEqual(item);
+    expect(confirm(runtime)).toBe(true);
+    expect(runtime.snapshot()).toMatchObject({ state: 'running', actionsCompleted: 1 });
+  });
+
+  it('allows a sequence to span a day while every individual travel deadline remains finite', () => {
+    const { runtime, advance } = setup();
+    const travel: MacroStep = { type: 'travel', map: 'prontera', timeoutSeconds: 50_000 };
+    runtime.start(unlimited({ maxActions: 2, rules: [rule({ steps: [travel, travel] })] }));
+    for (let index = 0; index < 2; index++) {
+      expect(runtime.tick({ hpPercent: index ? 90 : 40 })?.stepIndex).toBe(index);
+      advance(46_800_000);
+      expect(confirm(runtime)).toBe(true);
+    }
+    expect(runtime.snapshot()).toMatchObject({ state: 'completed', elapsedSeconds: 93_600,
+      actionsCompleted: 2, sequencesCompleted: 1 });
+  });
+
+  it('keeps a finite rule allowance when action count and duration are unlimited', () => {
+    const { runtime } = setup();
+    runtime.start(unlimited({ rules: [rule({ maxRuns: 2, steps: [item, item] })] }));
+    for (let index = 0; index < 4; index++) { runtime.tick({ hpPercent: 40 }); confirm(runtime); }
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.snapshot()).toMatchObject({ state: 'completed', actionsCompleted: 4, sequencesCompleted: 2 });
+  });
+
+  it('keeps a finite step allowance when duration and rule runs are unlimited', () => {
+    const { runtime } = setup();
+    runtime.start(unlimited({ maxActions: 2 }));
+    for (let index = 0; index < 2; index++) { runtime.tick({ hpPercent: 40 }); confirm(runtime); }
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.snapshot()).toMatchObject({ state: 'completed', actionsCompleted: 2, sequencesCompleted: 2 });
+    runtime.start(unlimited({ maxActions: 1, rules: [rule({ maxRuns: 0, steps: [item, item] })] }));
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 0 });
+  });
+
+  it.each([false, true])('keeps a finite duration with unlimited counts and pending work = %s', pending => {
+    const { runtime, advance } = setup();
+    runtime.start(unlimited({ durationSeconds: 1 }));
+    const intent = pending ? runtime.tick({ hpPercent: 40 }) : null;
+    advance(1_000);
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.snapshot().state).toBe(pending ? 'failed' : 'completed');
+    if (intent) expect(runtime.acknowledge(intent.id, true)).toBe(false);
+  });
+
+  it('exhausts finite rules independently while an unlimited lower-priority rule remains eligible', () => {
+    const { runtime } = setup();
+    runtime.start(unlimited({ rules: [rule({ name: 'Once', priority: 20 }), rule({ name: 'Repeat', maxRuns: 0 })] }));
+    expect(runtime.tick({ hpPercent: 40 })?.ruleIndex).toBe(0); confirm(runtime);
+    for (let index = 0; index < 2; index++) {
+      expect(runtime.tick({ hpPercent: 40 })?.ruleIndex).toBe(1); confirm(runtime);
+    }
+    expect(runtime.snapshot()).toMatchObject({ state: 'running', sequencesCompleted: 3 });
+  });
+
+  it('keeps cooldowns active for unlimited rule runs', () => {
+    const { runtime, advance } = setup();
+    runtime.start(unlimited({ rules: [rule({ maxRuns: 0, cooldownSeconds: 5 })] }));
+    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    advance(4_999);
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    advance(1);
+    expect(runtime.tick({ hpPercent: 40 })?.step).toEqual(item);
+    confirm(runtime);
+    expect(runtime.snapshot()).toMatchObject({ state: 'running', actionsCompleted: 2 });
+  });
+
+  it.each([false, true])('retains uncertain-step and exact deadline failures with timeout = %s', timeout => {
+    const { runtime, advance } = setup();
+    runtime.start(unlimited());
+    const intent = runtime.tick({ hpPercent: 40 })!;
+    if (timeout) { advance(10_000); expect(runtime.acknowledge(intent.id, true)).toBe(false); }
+    else expect(runtime.acknowledge(intent.id, false)).toBe(true);
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.acknowledge(intent.id, true)).toBe(false);
+    expect(runtime.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 1, actionsCompleted: 0 });
+  });
+
+  it('does not turn a zero spend cap into unlimited spending', () => {
+    const { runtime } = setup();
+    expect(() => runtime.start(unlimited({ rules: [rule({ maxRuns: 0, steps: [buy(1)] })] }))).toThrow();
+    runtime.start(unlimited({ maxSpend: 100, rules: [rule({ maxRuns: 0, steps: [buy(60)] })] }));
+    expect(runtime.tick({ hpPercent: 40 })?.step).toEqual(buy(60)); confirm(runtime);
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.snapshot()).toMatchObject({ state: 'failed', spendReserved: 60, actionsIssued: 1 });
+    runtime.start(unlimited({ rules: [rule({ maxRuns: 0, steps: [buy(0)] })] }));
+    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    expect(runtime.snapshot()).toMatchObject({ state: 'running', spendReserved: 0 });
+  });
+
+  it('revokes unlimited pending ownership on Stop and cannot acknowledge it into a later run', () => {
+    const { runtime } = setup();
+    runtime.start(unlimited());
+    const old = runtime.tick({ hpPercent: 40 })!;
+    runtime.cancel();
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.acknowledge(old.id, true)).toBe(false);
+    runtime.start(unlimited());
+    const next = runtime.tick({ hpPercent: 40 })!;
+    expect(next.id).toBeGreaterThan(old.id);
+    expect(next.generation).toBeGreaterThan(old.generation);
+    expect(runtime.acknowledge(old.id, true)).toBe(false);
+    expect(runtime.currentIntent?.id).toBe(next.id);
+    confirm(runtime);
+    expect(runtime.snapshot()).toMatchObject({ state: 'running', actionsCompleted: 1 });
+  });
+
+  it('monitors a finite-run field indefinitely without resetting spent allowances', () => {
+    const { runtime, advance } = setup();
+    runtime.start(unlimited({ maxActions: 1, rules: [rule({ steps: [farm] })] }));
+    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    advance(90_000_000);
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.snapshot()).toMatchObject({ state: 'monitoring', elapsedSeconds: 90_000,
+      actionsIssued: 1, actionsCompleted: 1, sequencesCompleted: 1, fieldIntentActive: true });
+    expect(runtime.snapshot().reason).toMatch(/until you stop/);
+    runtime.cancel();
+    expect(runtime.snapshot()).toMatchObject({ state: 'cancelled', fieldIntentActive: false });
+  });
+
+  it('fails safely at the action identity boundary instead of overflowing an unlimited run', () => {
+    const { runtime } = setup();
+    runtime.start(unlimited());
+    Reflect.set(runtime, 'nextId', Number.MAX_SAFE_INTEGER - 1);
+    const last = runtime.tick({ hpPercent: 40 })!;
+    expect(last.id).toBe(Number.MAX_SAFE_INTEGER); confirm(runtime);
+    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+    expect(runtime.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 1, actionsCompleted: 1 });
+    expect(runtime.snapshot().reason).toMatch(/identity budget/);
+  });
+});
