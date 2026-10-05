@@ -36,6 +36,8 @@ export const MACRO_LIMITS = {
   documentBytes: 65_536, maxId: 2_147_483_647, maxSpend: 2_000_000_000, targets: 64,
 } as const;
 const utf8 = new TextEncoder();
+// MacroRuntime owns each finite step deadline; the selector must not cap their whole sequence.
+const selectorOptions = { allowUnlimitedLimits: true, maxSteps: 0, actionTimeoutSeconds: 0 } as const;
 const integer = (v: unknown, min: number, max: number): v is number =>
   typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 const record = (v: unknown): v is Record<string, unknown> => {
@@ -88,14 +90,14 @@ export function validateMacroScript(input: unknown): MacroScript {
   if (!serialized || utf8.encode(serialized).length > MACRO_LIMITS.documentBytes) throw new Error('Macro document is too large.');
   const v: unknown = JSON.parse(serialized);
   if (!record(v) || !keys(v, ['version', 'name', 'durationSeconds', 'maxActions', 'maxSpend', 'rules'])
-    || v.version !== 1 || !name(v.name) || !integer(v.durationSeconds, 1, MACRO_LIMITS.durationSeconds)
-    || !integer(v.maxActions, 1, MACRO_LIMITS.actions) || !integer(v.maxSpend, 0, MACRO_LIMITS.maxSpend)
+    || v.version !== 1 || !name(v.name) || !integer(v.durationSeconds, 0, MACRO_LIMITS.durationSeconds)
+    || !integer(v.maxActions, 0, MACRO_LIMITS.actions) || !integer(v.maxSpend, 0, MACRO_LIMITS.maxSpend)
     || !Array.isArray(v.rules) || v.rules.length < 1 || v.rules.length > MACRO_LIMITS.rules) throw new Error('Invalid macro version, limits, or rules.');
   const maxSpend = v.maxSpend;
   const rules: MacroRule[] = v.rules.map(rule => {
     if (!record(rule) || !keys(rule, ['name', 'priority', 'cooldownSeconds', 'maxRuns', 'conditions', 'steps'])
       || !name(rule.name) || !integer(rule.priority, -1_000, 1_000)
-      || !integer(rule.cooldownSeconds, 0, MACRO_LIMITS.durationSeconds) || !integer(rule.maxRuns, 1, MACRO_LIMITS.actions)
+      || !integer(rule.cooldownSeconds, 0, MACRO_LIMITS.durationSeconds) || !integer(rule.maxRuns, 0, MACRO_LIMITS.actions)
       || !Array.isArray(rule.conditions) || rule.conditions.length < 1 || rule.conditions.length > MACRO_LIMITS.conditions
       || !rule.conditions.every(validRoutineCondition) || !Array.isArray(rule.steps) || rule.steps.length < 1
       || rule.steps.length > MACRO_LIMITS.stepsPerRule || !rule.steps.every(validMacroStep)
@@ -116,7 +118,7 @@ function selectionSpec(script: MacroScript): RoutineSpec<Selection> {
 /** Pure validation and next-rule trace. It neither starts a clock nor reserves any spend. */
 export function dryRunMacro(input: unknown, observation: RoutineObservation): MacroTrace {
   const script = validateMacroScript(input);
-  const trace = dryRunRoutine(selectionSpec(script), observation, validSelection);
+  const trace = dryRunRoutine(selectionSpec(script), observation, validSelection, selectorOptions);
   return { rules: trace.rules.map(({ action, ...rule }) => ({ ...rule, ruleIndex: action.ruleIndex,
     steps: structuredClone(script.rules[action.ruleIndex]!.steps) })), rule: trace.rule,
     ruleIndex: trace.action?.ruleIndex ?? null,
@@ -155,9 +157,7 @@ export class MacroRuntime {
   private spendReserved = 0;
 
   constructor(private readonly now = Date.now) {
-    this.selector = new RoutineRuntime(validSelection, now, {
-      actionTimeoutSeconds: MACRO_LIMITS.durationSeconds, actionTimeoutLimitSeconds: MACRO_LIMITS.durationSeconds,
-    });
+    this.selector = new RoutineRuntime(validSelection, now, selectorOptions);
   }
   get active(): boolean { return this.state === 'running' || this.state === 'waiting' || this.state === 'monitoring'; }
   get currentIntent(): MacroIntent | null { return this.pending ? structuredClone(this.pending.intent) : null; }
@@ -186,7 +186,7 @@ export class MacroRuntime {
       this.finish('failed', 'Macro clock changed or became unavailable.'); return null;
     }
     this.lastTime = now;
-    if (now - this.startedAt >= this.script.durationSeconds * 1_000) {
+    if (this.script.durationSeconds > 0 && now - this.startedAt >= this.script.durationSeconds * 1_000) {
       this.finish(this.pending ? 'failed' : 'completed', this.pending
         ? 'Macro duration reached while a step was unconfirmed. Do not retry automatically.' : 'Macro duration reached.');
       return null;
@@ -200,17 +200,20 @@ export class MacroRuntime {
   }
   private settle(): void {
     if (!this.script || this.sequence) return;
-    const exhausted = this.actionsIssued >= this.script.maxActions || this.selector.snapshot().state === 'completed';
+    const exhausted = (this.script.maxActions > 0 && this.actionsIssued >= this.script.maxActions)
+      || this.selector.snapshot().state === 'completed';
     if (exhausted && !this.retainedField) this.finish('completed', 'Macro action or rule budget reached.');
     else {
       this.state = this.retainedField ? 'monitoring' : 'running';
-      this.reason = exhausted ? 'Monitoring the active field until the macro duration ends.' : 'Waiting for a rule to match.';
+      this.reason = exhausted ? this.script.durationSeconds > 0
+        ? 'Monitoring the active field until the macro duration ends.' : 'Monitoring the active field until you stop the macro.'
+        : 'Waiting for a rule to match.';
     }
   }
   tick(observation: RoutineObservation): MacroIntent | null {
     const now = this.activeTime();
     if (now === null || !this.script || this.pending) return null;
-    if (this.actionsIssued >= this.script.maxActions) {
+    if (this.script.maxActions > 0 && this.actionsIssued >= this.script.maxActions) {
       // Never abandon an already selected sequence and silently resume its field.
       if (this.sequence) this.finish('failed', 'Macro step budget reached before the selected sequence completed.');
       else this.settle();
@@ -225,7 +228,7 @@ export class MacroRuntime {
       }
       this.sequence = { ruleIndex: selected.ruleIndex, stepIndex: 0, selectorId: this.selector.snapshot().pendingActionId! };
       const steps = this.script.rules[selected.ruleIndex]!.steps;
-      if (steps.length > this.script.maxActions - this.actionsIssued) {
+      if (this.script.maxActions > 0 && steps.length > this.script.maxActions - this.actionsIssued) {
         this.finish('failed', 'Selected macro sequence exceeds the remaining step budget.'); return null;
       }
     }
@@ -267,7 +270,8 @@ export class MacroRuntime {
       stepIndex: this.sequence?.stepIndex ?? null, pendingActionId: this.pending?.intent.id ?? null,
       actionsIssued: this.actionsIssued, actionsCompleted: this.actionsCompleted,
       sequencesIssued: selector.actionsIssued, sequencesCompleted: selector.actionsCompleted, spendReserved: this.spendReserved,
-      elapsedSeconds: this.script ? Math.min(this.script.durationSeconds, (this.lastTime - this.startedAt) / 1_000) : 0,
+      elapsedSeconds: this.script ? Math.min(this.script.durationSeconds || Number.MAX_SAFE_INTEGER / 1_000,
+        (this.lastTime - this.startedAt) / 1_000) : 0,
       fieldIntentActive: this.retainedField !== null, fieldSuspended: this.retainedField !== null && this.sequence !== null };
   }
 }

@@ -39,6 +39,8 @@ export interface RoutineOptions {
   actionTimeoutSeconds?: number; maxSteps?: number;
   /** Internal selector owners may raise the ceiling; legacy routines retain 120 seconds. */
   actionTimeoutLimitSeconds?: number;
+  /** Macro selectors opt in to zero execution limits; ordinary routines remain finite. */
+  allowUnlimitedLimits?: boolean;
 }
 
 export const ROUTINE_LIMITS = {
@@ -99,16 +101,18 @@ function cloneAction<Action>(value: unknown, isAction: ActionValidator<Action>):
 }
 
 // The supplied validator is the only extension point: routines cannot load code or add commands.
-export function validateRoutineSpec<Action>(value: unknown, isAction: ActionValidator<Action>): RoutineSpec<Action> {
+export function validateRoutineSpec<Action>(value: unknown, isAction: ActionValidator<Action>,
+  options: Pick<RoutineOptions, 'allowUnlimitedLimits'> = {}): RoutineSpec<Action> {
+  const minimum = options.allowUnlimitedLimits === true ? 0 : 1;
   if (!record(value) || !keys(value, ['name', 'durationSeconds', 'maxActions', 'rules'])
-    || !name(value.name) || !integer(value.durationSeconds, 1, ROUTINE_LIMITS.durationSeconds)
-    || !integer(value.maxActions, 1, ROUTINE_LIMITS.actions) || !Array.isArray(value.rules)
+    || !name(value.name) || !integer(value.durationSeconds, minimum, ROUTINE_LIMITS.durationSeconds)
+    || !integer(value.maxActions, minimum, ROUTINE_LIMITS.actions) || !Array.isArray(value.rules)
     || value.rules.length < 1 || value.rules.length > ROUTINE_LIMITS.rules) throw new Error('Invalid routine limits or rules.');
   const rules: RoutineRule<Action>[] = value.rules.map(rule => {
     if (!record(rule) || !keys(rule, ['name', 'priority', 'cooldownSeconds', 'maxRuns', 'conditions', 'action'])
       || !name(rule.name) || !integer(rule.priority, -1_000, 1_000)
       || !integer(rule.cooldownSeconds, 0, ROUTINE_LIMITS.durationSeconds)
-      || !integer(rule.maxRuns, 1, ROUTINE_LIMITS.actions) || !Array.isArray(rule.conditions)
+      || !integer(rule.maxRuns, minimum, ROUTINE_LIMITS.actions) || !Array.isArray(rule.conditions)
       || rule.conditions.length < 1 || rule.conditions.length > ROUTINE_LIMITS.conditions
       || !rule.conditions.every(validRoutineCondition)) throw new Error('Invalid routine rule or condition.');
     return { name: rule.name, priority: rule.priority, cooldownSeconds: rule.cooldownSeconds, maxRuns: rule.maxRuns,
@@ -130,7 +134,8 @@ function compare(actual: number, operator: NumericOperator, expected: number): b
   }
 }
 
-export function evaluateRoutineCondition(condition: RoutineCondition, observation: RoutineObservation): ConditionTrace {
+export function evaluateRoutineCondition(condition: RoutineCondition, observation: RoutineObservation,
+  allowExtendedElapsed = false): ConditionTrace {
   if (condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent') return evaluateActorPredicate(condition,observation.actors);
   let matched: boolean;
   if (condition.field === 'map') {
@@ -142,7 +147,7 @@ export function evaluateRoutineCondition(condition: RoutineCondition, observatio
       : observation[condition.field];
     const available = condition.field === 'hpPercent' || condition.field === 'spPercent' || condition.field === 'weightPercent' ? finite(actual, 0, 100)
       : condition.field === 'level' || condition.field === 'jobLevel' ? integer(actual, 1, 1_000)
-      : condition.field === 'elapsedSeconds' ? finite(actual, 0, ROUTINE_LIMITS.durationSeconds)
+      : condition.field === 'elapsedSeconds' ? finite(actual, 0, allowExtendedElapsed ? Number.MAX_SAFE_INTEGER / 1_000 : ROUTINE_LIMITS.durationSeconds)
         : integer(actual, 0, MAX_NUMBER);
     if (!available || typeof actual !== 'number') return { condition: { ...condition }, state: 'unavailable',
       reason: condition.field === 'inventory' ? `Count for item ${condition.itemId} is unavailable.` : `${condition.field} is unavailable.` };
@@ -154,15 +159,15 @@ export function evaluateRoutineCondition(condition: RoutineCondition, observatio
 
 interface RuleProgress { runs: number; lastIssued: number | null }
 function traceRules<Action>(spec: RoutineSpec<Action>, observation: RoutineObservation,
-  progress?: RuleProgress[], now = 0): RoutineTrace<Action> {
+  progress?: RuleProgress[], now = 0, allowExtendedElapsed = false): RoutineTrace<Action> {
   const rules = spec.rules.map((rule, index): RuleTrace<Action> => {
-    const conditions = rule.conditions.map(condition => evaluateRoutineCondition(condition, observation));
+    const conditions = rule.conditions.map(condition => evaluateRoutineCondition(condition, observation, allowExtendedElapsed));
     let state: RuleTrace<Action>['state'] = conditions.some(condition => condition.state === 'unmatched') ? 'unmatched'
       : conditions.some(condition => condition.state === 'unavailable') ? 'unavailable' : 'matched';
     let reason = state === 'matched' ? 'All conditions matched.'
       : state === 'unavailable' ? 'Required observation is unavailable.' : 'A condition did not match.';
     const current = progress?.[index];
-    if (current && current.runs >= rule.maxRuns) { state = 'exhausted'; reason = 'Rule run budget reached.'; }
+    if (current && rule.maxRuns > 0 && current.runs >= rule.maxRuns) { state = 'exhausted'; reason = 'Rule run budget reached.'; }
     else if (current?.lastIssued !== null && current?.lastIssued !== undefined
       && now - current.lastIssued < rule.cooldownSeconds * 1_000) { state = 'cooldown'; reason = 'Rule cooldown is active.'; }
     return { name: rule.name, priority: rule.priority, action: structuredClone(rule.action), state, reason, conditions };
@@ -173,8 +178,8 @@ function traceRules<Action>(spec: RoutineSpec<Action>, observation: RoutineObser
 
 // Pure preview: no clock, dispatch, counters, or external resources are touched.
 export function dryRunRoutine<Action>(spec: unknown, observation: RoutineObservation,
-  isAction: ActionValidator<Action>): RoutineTrace<Action> {
-  return traceRules(validateRoutineSpec(spec, isAction), observation);
+  isAction: ActionValidator<Action>, options: Pick<RoutineOptions, 'allowUnlimitedLimits'> = {}): RoutineTrace<Action> {
+  return traceRules(validateRoutineSpec(spec, isAction, options), observation, undefined, 0, options.allowUnlimitedLimits === true);
 }
 
 export class RoutineRuntime<Action> {
@@ -191,19 +196,22 @@ export class RoutineRuntime<Action> {
   private steps = 0;
   private readonly timeoutMs: number;
   private readonly maxSteps: number;
+  private readonly allowUnlimitedLimits: boolean;
 
   constructor(private readonly isAction: ActionValidator<Action>, private readonly now = Date.now, options: RoutineOptions = {}) {
     const timeout = options.actionTimeoutSeconds ?? 10;
     const timeoutLimit = options.actionTimeoutLimitSeconds ?? 120;
     const maxSteps = options.maxSteps ?? ROUTINE_LIMITS.defaultSteps;
-    if (!integer(timeoutLimit, 1, ROUTINE_LIMITS.durationSeconds) || !integer(timeout, 1, timeoutLimit)
-      || !integer(maxSteps, 1, ROUTINE_LIMITS.maxSteps)) throw new Error('Invalid routine runtime limits.');
+    this.allowUnlimitedLimits = options.allowUnlimitedLimits === true;
+    const minimum = this.allowUnlimitedLimits ? 0 : 1;
+    if (!integer(timeoutLimit, 1, ROUTINE_LIMITS.durationSeconds) || !integer(timeout, minimum, timeoutLimit)
+      || !integer(maxSteps, minimum, ROUTINE_LIMITS.maxSteps)) throw new Error('Invalid routine runtime limits.');
     this.timeoutMs = timeout * 1_000; this.maxSteps = maxSteps;
   }
 
   start(value: unknown): void {
     if (this.state === 'running' || this.state === 'waiting') throw new Error('Stop the current routine before starting another.');
-    const spec = validateRoutineSpec(value, this.isAction);
+    const spec = validateRoutineSpec(value, this.isAction, { allowUnlimitedLimits: this.allowUnlimitedLimits });
     const now = this.now();
     if (!integer(now, 0, Number.MAX_SAFE_INTEGER)) throw new Error('Routine clock is unavailable.');
     this.spec = spec; this.progress = spec.rules.map(() => ({ runs: 0, lastIssued: null }));
@@ -219,12 +227,12 @@ export class RoutineRuntime<Action> {
       this.finish('failed', 'Routine clock changed or became unavailable.'); return null;
     }
     this.lastTime = now;
-    if (now - this.startedAt >= this.spec.durationSeconds * 1_000) {
+    if (this.spec.durationSeconds > 0 && now - this.startedAt >= this.spec.durationSeconds * 1_000) {
       this.finish(this.pending ? 'failed' : 'completed', this.pending
         ? 'Routine duration reached while an action was unconfirmed. Do not retry automatically.' : 'Routine duration reached.');
       return null;
     }
-    if (this.pending && now - this.pending.issuedAt >= this.timeoutMs) {
+    if (this.pending && this.timeoutMs > 0 && now - this.pending.issuedAt >= this.timeoutMs) {
       this.finish('failed', 'Action confirmation timed out. Do not retry automatically.'); return null;
     }
     return now;
@@ -233,16 +241,25 @@ export class RoutineRuntime<Action> {
   /** Service deadlines without evaluating or debiting an action. */
   advance(): void { this.activeTime(); }
 
+  private actionBudgetReached(): boolean {
+    return this.spec !== null && ((this.spec.maxActions > 0 && this.actionsIssued >= this.spec.maxActions)
+      || this.progress.every((progress, index) => {
+        const limit = this.spec!.rules[index]!.maxRuns;
+        return limit > 0 && progress.runs >= limit;
+      }));
+  }
+
   tick(observation: RoutineObservation): Action | null {
     const now = this.activeTime();
     if (now === null || !this.spec) return null;
-    if (this.steps >= this.maxSteps) { this.finish('failed', 'Routine evaluation budget reached.'); return null; }
-    this.steps++;
+    if (this.maxSteps > 0 && this.steps >= this.maxSteps) { this.finish('failed', 'Routine evaluation budget reached.'); return null; }
+    // An unlimited selector records evaluations without overflowing or ending the run.
+    if (this.steps < Number.MAX_SAFE_INTEGER) this.steps++;
     if (this.pending) return null;
-    if (this.actionsIssued >= this.spec.maxActions || this.progress.every((progress, index) => progress.runs >= this.spec!.rules[index]!.maxRuns)) {
+    if (this.actionBudgetReached()) {
       this.finish('completed', 'Routine action budget reached.'); return null;
     }
-    const trace = traceRules(this.spec, { ...observation, elapsedSeconds: (now - this.startedAt) / 1_000 }, this.progress, now);
+    const trace = traceRules(this.spec, { ...observation, elapsedSeconds: (now - this.startedAt) / 1_000 }, this.progress, now, this.allowUnlimitedLimits);
     if (trace.rule === null) { this.reason = 'Waiting for a rule to match.'; return null; }
     const ruleIndex = this.spec.rules.findIndex(rule => rule.name === trace.rule);
     const progress = this.progress[ruleIndex]!;
@@ -257,7 +274,7 @@ export class RoutineRuntime<Action> {
     if (actionId !== this.pending.id) return false;
     if (success !== true) { this.finish('failed', 'Action failed or its result is uncertain. Do not retry automatically.'); return true; }
     this.pending = null; this.actionsCompleted++;
-    if (this.actionsIssued >= this.spec.maxActions || this.progress.every((progress, index) => progress.runs >= this.spec!.rules[index]!.maxRuns)) {
+    if (this.actionBudgetReached()) {
       this.finish('completed', 'Routine action budget reached.');
     } else { this.state = 'running'; this.reason = 'Waiting for a rule to match.'; }
     return true;
@@ -272,12 +289,13 @@ export class RoutineRuntime<Action> {
       currentRule: this.pending ? this.spec!.rules[this.pending.ruleIndex]!.name : null,
       pendingActionId: this.pending?.id ?? null,
       actionsIssued: this.actionsIssued, actionsCompleted: this.actionsCompleted, steps: this.steps,
-      elapsedSeconds: this.spec ? Math.min(ROUTINE_LIMITS.durationSeconds, (this.lastTime - this.startedAt) / 1_000) : 0 };
+      elapsedSeconds: this.spec ? Math.min(this.allowUnlimitedLimits ? Number.MAX_SAFE_INTEGER / 1_000 : ROUTINE_LIMITS.durationSeconds,
+        (this.lastTime - this.startedAt) / 1_000) : 0 };
   }
 
   trace(observation: RoutineObservation): RoutineTrace<Action> {
     if (!this.spec) return { rules: [], action: null, rule: null };
-    const trace = traceRules(this.spec, { ...observation, elapsedSeconds: this.snapshot().elapsedSeconds }, this.progress, this.lastTime);
+    const trace = traceRules(this.spec, { ...observation, elapsedSeconds: this.snapshot().elapsedSeconds }, this.progress, this.lastTime, this.allowUnlimitedLimits);
     // A preview cannot claim an action may dispatch while another action is pending or after Stop.
     if (this.state !== 'running') { trace.action = null; trace.rule = null; }
     return trace;

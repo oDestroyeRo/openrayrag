@@ -11,8 +11,8 @@ Every field below is required. Unknown keys, unsupported step types and implicit
 | Document field | Contract |
 | --- | --- |
 | `name` | Nonblank string, at most 64 UTF-16 code units; ASCII control characters and DEL are rejected. |
-| `durationSeconds` | 1–86,400 seconds for the entire macro, including waits and field monitoring. |
-| `maxActions` | 1–1,000 issued macro steps, including `farm` and `travel`. Internal combat attacks, movement legs and transaction messages are governed by their own controller limits. |
+| `durationSeconds` | `0` disables the macro duration limit; positive values allow 1–86,400 seconds for the entire macro, including waits and field monitoring. |
+| `maxActions` | `0` disables the issued-step count limit; positive values allow 1–1,000 macro steps, including `farm` and `travel`. Internal combat attacks, movement legs and transaction messages are governed by their own controller limits. |
 | `maxSpend` | 0–2,000,000,000 zeny reserved across all `buy`/`store` steps. |
 | `rules` | 1–32 rule objects. |
 
@@ -25,11 +25,15 @@ Each rule requires exactly these fields:
 | `name` | Same string bounds as the document name; unique within the script. |
 | `priority` | −1,000–1,000; the highest matching eligible priority wins. Equal priorities preserve document order. |
 | `cooldownSeconds` | 0–86,400, measured from sequence selection. |
-| `maxRuns` | 1–1,000 sequence selections for this rule. A selected attempt consumes an allowance. |
+| `maxRuns` | `0` permits repeated selection without a rule-run count limit; positive values allow 1–1,000 selections. A selected attempt consumes a finite allowance. |
 | `conditions` | 1–16 conditions, combined with AND. Every condition must match known observations. |
 | `steps` | 1–16 ordered steps. The sequence must fit the remaining `maxActions` allowance before dispatch. |
 
 A selected sequence owns execution until it finishes or fails; a later higher-priority rule does not interrupt it. Conditions select the sequence and are not re-evaluated as a prerequisite for each subsequent step. Each step still rechecks its action-specific state, permissions, resources and ownership.
+
+For continuous execution, set `durationSeconds` and `maxActions` to `0`. Set `maxRuns` to `0` only on rules that should repeat; keep a one-time field setup rule at `1` to avoid repeatedly activating the same field. The editor's **Until stopped** example demonstrates a one-time farm followed by repeatable conditional First Aid. Loading, previewing and saving it never start automation.
+
+These zero limits are independent. A positive duration or count still applies even when another limit is zero. Rule conditions and cooldowns still govern repeated selection. Every step's `timeoutSeconds` remains required and positive: an unconfirmed action can fail without being resent. `maxSpend: 0` still means no spending, rather than unlimited spending. Stop, connection/character changes and configured field health, death, schedule and run limits remain authoritative. Unlimited execution keeps the rule/condition/document size limits and does bounded work on each tick; it does not accumulate action history. Action identities retain their safe-integer precision guard.
 
 ## Conditions
 
@@ -220,7 +224,7 @@ First Aid is skill ID **2**, level 1, with a pinned catalog cost of 4 SP. The pe
 
 ## Stop, failures and run limits
 
-Unknown observations leave a rule unmatched/unavailable; they never fabricate HP, SP, inventory, level or actor state. When no eligible rule matches, the macro waits or monitors its retained field within the duration and runtime evaluation budgets. Exhausting all rule/action allowances completes a macro without a retained field; a confirmed retained field can continue in monitoring state until duration or Stop. The internal rule-evaluation guard can also fail execution if exhausted. A backward/unavailable clock fails the macro. Duration expiry completes an idle/monitoring macro, but fails an unconfirmed step. Step timeout, rejection or uncertain result fails execution and never automatically retries that request.
+Unknown observations leave a rule unmatched/unavailable; they never fabricate HP, SP, inventory, level or actor state. When no eligible rule matches, the macro waits or monitors its retained field. Exhausting all finite rule/action allowances completes a macro without a retained field; a confirmed retained field continues in monitoring state until a positive duration expires or Stop. A zero duration can monitor that field indefinitely. Macro selection has no lifetime evaluation-count or whole-sequence acknowledgment deadline; the macro owns its finite per-step deadlines. Legacy routines retain their existing finite guards. A backward/unavailable clock fails the macro. Positive duration expiry completes an idle/monitoring macro, but fails an unconfirmed step. Step timeout, rejection or uncertain result fails execution and never automatically retries that request.
 
 Stop cancels local sequence/field intent and future dispatch. It cannot undo an already transmitted attack, purchase, transfer, item use or skill. Existing movement/resource receipts and uncertainty fences remain owned until appropriate authoritative settlement; delayed replies cannot restart a stopped sequence. Official panels and gameplay preserve the macro. Same-character map/world refreshes retain its field and safe unsent travel/service preparation, using fresh collision data and the original trip, step and duration limits. NPC interactions suspend new dispatch until closed. A transition that interrupts a transmitted resource or service action can still fail the macro without replaying the request. Reconnect, disconnect and character/session replacement terminate execution. Verified macro/service travel, supply, escape and death-recovery transitions retain their existing transition owners.
 

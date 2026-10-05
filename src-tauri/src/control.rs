@@ -801,8 +801,9 @@ fn validate_macro_script(value: &Value) -> Validation {
     )?;
     integer(script, "version", 1, 1)?;
     text(string(script, "name")?, 64)?;
-    integer(script, "durationSeconds", 1, 86_400)?;
-    integer(script, "maxActions", 1, 1000)?;
+    // Zero disables these macro execution caps; step timeouts remain finite.
+    integer(script, "durationSeconds", 0, 86_400)?;
+    integer(script, "maxActions", 0, 1000)?;
     let max_spend = integer(script, "maxSpend", 0, 2_000_000_000)?;
     let rules = array(field(script, "rules")?, 32)?;
     if rules.is_empty() {
@@ -828,7 +829,7 @@ fn validate_macro_script(value: &Value) -> Validation {
         }
         integer(rule, "priority", -1000, 1000)?;
         integer(rule, "cooldownSeconds", 0, 86_400)?;
-        integer(rule, "maxRuns", 1, 1000)?;
+        integer(rule, "maxRuns", 0, 1000)?;
         let conditions = array(field(rule, "conditions")?, 16)?;
         if conditions.is_empty() {
             return Err(invalid());
@@ -1293,6 +1294,143 @@ mod macro_request_tests {
     }
 
     #[test]
+    fn accepts_independent_and_combined_unlimited_macro_limits() {
+        for mask in 0..8 {
+            let mut value = request();
+            for (index, path) in [
+                "/script/durationSeconds",
+                "/script/maxActions",
+                "/script/rules/0/maxRuns",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if mask & (1 << index) != 0 {
+                    *value.pointer_mut(path).unwrap() = json!(0);
+                }
+            }
+            assert!(
+                validate_request("macro", &value).is_ok(),
+                "rejected limit combination {mask}"
+            );
+        }
+    }
+
+    #[test]
+    fn unlimited_macro_limits_remain_required_bounded_integers() {
+        for (path, maximum) in [
+            ("/script/durationSeconds", 86_400),
+            ("/script/maxActions", 1000),
+            ("/script/rules/0/maxRuns", 1000),
+        ] {
+            for invalid in [
+                json!(-1),
+                json!(0.5),
+                json!(null),
+                json!("0"),
+                json!(maximum + 1),
+            ] {
+                let mut value = request();
+                *value.pointer_mut(path).unwrap() = invalid;
+                assert!(
+                    validate_request("macro", &value).is_err(),
+                    "accepted {path} in {value}"
+                );
+            }
+            let mut value = request();
+            let (parent, key) = path.rsplit_once('/').unwrap();
+            value
+                .pointer_mut(parent)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+            assert!(
+                validate_request("macro", &value).is_err(),
+                "accepted missing {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn unlimited_macro_preserves_finite_step_timeouts() {
+        for step in [
+            json!({"type":"farm","map":"prt_fild08","targets":[1],"timeoutSeconds":86400}),
+            json!({"type":"travel","map":"prontera","timeoutSeconds":86400}),
+            json!({"type":"buy","serviceId":"tool-dealer-buy","itemId":501,"quantity":1,"maxSpend":0,"timeoutSeconds":86400}),
+            json!({"type":"store","serviceId":"kafra-south-storage","itemId":501,"quantity":1,"keep":0,"maxSpend":0,"timeoutSeconds":86400}),
+            json!({"type":"useItem","itemId":501,"timeoutSeconds":120}),
+            json!({"type":"skill","skillId":1,"level":1,"mode":"self","timeoutSeconds":120}),
+        ] {
+            let mut value = request();
+            value["script"]["durationSeconds"] = json!(0);
+            value["script"]["maxActions"] = json!(0);
+            value["script"]["rules"][0]["maxRuns"] = json!(0);
+            value["script"]["rules"][0]["steps"] = json!([step]);
+            assert!(validate_request("macro", &value).is_ok());
+            let maximum = value["script"]["rules"][0]["steps"][0]["timeoutSeconds"]
+                .as_i64()
+                .unwrap();
+            for invalid in [
+                json!(0),
+                json!(-1),
+                json!(0.5),
+                json!(null),
+                json!(maximum + 1),
+            ] {
+                let mut invalid_value = value.clone();
+                invalid_value["script"]["rules"][0]["steps"][0]["timeoutSeconds"] = invalid;
+                assert!(
+                    validate_request("macro", &invalid_value).is_err(),
+                    "accepted {invalid_value}"
+                );
+            }
+            value["script"]["rules"][0]["steps"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("timeoutSeconds");
+            assert!(validate_request("macro", &value).is_err());
+        }
+    }
+
+    #[test]
+    fn unlimited_macro_preserves_zero_spending_budget() {
+        let mut value = request();
+        value["script"]["durationSeconds"] = json!(0);
+        value["script"]["maxActions"] = json!(0);
+        value["script"]["maxSpend"] = json!(0);
+        value["script"]["rules"][0]["maxRuns"] = json!(0);
+        value["script"]["rules"][0]["steps"] = json!([{
+            "type":"buy","serviceId":"tool-dealer-buy","itemId":501,
+            "quantity":1,"maxSpend":0,"timeoutSeconds":1
+        }]);
+        assert!(validate_request("macro", &value).is_ok());
+        value["script"]["rules"][0]["steps"][0]["maxSpend"] = json!(1);
+        assert!(validate_request("macro", &value).is_err());
+    }
+
+    #[test]
+    fn legacy_routine_still_requires_finite_execution_limits() {
+        let routine = json!({
+            "name":"Recover", "durationSeconds":86400, "maxActions":1000,
+            "rules":[{
+                "name":"Potion", "priority":0, "cooldownSeconds":0, "maxRuns":1000,
+                "conditions":[{"field":"hpPercent","operator":"lt","value":65}],
+                "action":{"type":"useItem","itemId":501}
+            }]
+        });
+        assert!(validate_request("routine", &routine).is_ok());
+        for path in ["/durationSeconds", "/maxActions", "/rules/0/maxRuns"] {
+            let mut value = routine.clone();
+            *value.pointer_mut(path).unwrap() = json!(0);
+            assert!(
+                validate_request("routine", &value).is_err(),
+                "accepted unlimited legacy {path}"
+            );
+        }
+    }
+
+    #[test]
     fn accepts_typed_steps_and_rejects_extra_or_missing_step_fields() {
         for step in [
             json!({"type":"farm","map":"prt_fild08","targets":[1,2147483647],"timeoutSeconds":86400}),
@@ -1387,7 +1525,7 @@ mod macro_request_tests {
             ("/script/rules", json!([])),
             ("/script/rules/0/priority", json!(-1001)),
             ("/script/rules/0/cooldownSeconds", json!(86401)),
-            ("/script/rules/0/maxRuns", json!(0)),
+            ("/script/rules/0/maxRuns", json!(-1)),
             ("/script/rules/0/conditions", json!([])),
             ("/script/rules/0/steps", json!([])),
             ("/settings", json!(null)),

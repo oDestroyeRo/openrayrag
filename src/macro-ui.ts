@@ -4,7 +4,7 @@ import { automationSettings, validateSettings, type Settings } from './settings'
 
 const STORAGE_KEY = 'rayrag.companion.macro.v1';
 type LocalStore = Pick<Storage, 'getItem' | 'setItem'>;
-type Example = 'leveling' | 'buy' | 'store' | 'item' | 'skill';
+type Example = 'leveling' | 'continuous' | 'buy' | 'store' | 'item' | 'skill';
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 export function macroActive(value: unknown): boolean { const state=record(value).state;return typeof state==='string'&&['running', 'waiting', 'monitoring'].includes(state); }
 /** Script targets can supply an empty field draft; non-field scripts need no combat selection. */
@@ -29,7 +29,7 @@ export function validMacroSnapshot(value: unknown): boolean {
     && counts.every(key => Number.isSafeInteger(state[key]) && Number(state[key]) >= 0)
     && (state.stepIndex === null || Number.isInteger(state.stepIndex) && Number(state.stepIndex) >= 0 && Number(state.stepIndex) < 16)
     && (state.pendingActionId === null || Number.isSafeInteger(state.pendingActionId) && Number(state.pendingActionId) > 0)
-    && typeof state.elapsedSeconds === 'number' && Number.isFinite(state.elapsedSeconds) && state.elapsedSeconds >= 0 && state.elapsedSeconds <= 86400
+    && typeof state.elapsedSeconds === 'number' && Number.isFinite(state.elapsedSeconds) && state.elapsedSeconds >= 0 && state.elapsedSeconds <= Number.MAX_SAFE_INTEGER / 1_000
     && typeof state.fieldIntentActive === 'boolean' && typeof state.fieldSuspended === 'boolean';
 }
 
@@ -40,6 +40,11 @@ export function macroExample(kind: Example, context: { map?: string; targets?: n
   const rules: MacroScript['rules'] = kind === 'leveling' ? [
     { ...common, name: 'First field', conditions: [{ field: 'level', operator: 'lt', value: 20 }], steps: [farm] },
     { ...common, name: 'Next field', conditions: [{ field: 'level', operator: 'gte', value: 20 }], steps: [{ ...farm, map: 'prt_fild07', targets: [4000] }] },
+  ] : kind === 'continuous' ? [
+    { ...common, name: 'Start farming', conditions: [{ field: 'level', operator: 'gte', value: 1 }], steps: [farm] },
+    { ...common, name: 'First Aid', priority: 100, maxRuns: 0,
+      conditions: [{ field: 'hpPercent', operator: 'lt', value: 60 }, { field: 'spPercent', operator: 'gte', value: 30 }],
+      steps: [{ type: 'skill', skillId: 2, level: 1, mode: 'self', timeoutSeconds: 30 }] },
   ] : kind === 'buy' ? [{ ...common, name: 'Restock potions', priority: 50, maxRuns: 2,
     conditions: [{ field: 'inventory', itemId: 501, operator: 'lt', value: 5 }, { field: 'zeny', operator: 'gte', value: 500 }],
     steps: [{ type: 'buy', serviceId: 'tool-dealer-buy', itemId: 501, quantity: 5, maxSpend: 500, timeoutSeconds: 600 }] }]
@@ -52,8 +57,8 @@ export function macroExample(kind: Example, context: { map?: string; targets?: n
         : [{ ...common, name: 'First Aid', priority: 100, maxRuns: 5,
           conditions: [{ field: 'hpPercent', operator: 'lt', value: 60 }, { field: 'spPercent', operator: 'gte', value: 30 }],
           steps: [{ type: 'skill', skillId: 2, level: 1, mode: 'self', timeoutSeconds: 30 }] }];
-  return validateMacroScript({ version: 1, name: kind === 'leveling' ? 'Leveling route' : rules[0]!.name,
-    durationSeconds: 3600, maxActions: 20, maxSpend: kind === 'buy' ? 1000 : kind === 'store' ? 200 : 0, rules });
+  return validateMacroScript({ version: 1, name: kind === 'continuous' ? 'Until stopped' : kind === 'leveling' ? 'Leveling route' : rules[0]!.name,
+    durationSeconds: kind === 'continuous' ? 0 : 3600, maxActions: kind === 'continuous' ? 0 : 20, maxSpend: kind === 'buy' ? 1000 : kind === 'store' ? 200 : 0, rules });
 }
 
 /** This store contains a validated script only: no credentials or active continuation. */
@@ -117,10 +122,10 @@ export class MacroUi {
     this.root.className = 'manual-group macro-panel'; this.root.open = true;
     const title = document.createElement('summary'); title.textContent = 'Macro scripts'; this.root.append(title);
     const help = document.createElement('p'); help.className = 'hint';
-    help.textContent = 'Choose an example, edit its conditions and steps, then preview before starting. Farm activates a field; level or inventory rules can select the next sequence. Existing recovery and death limits stay active.';
+    help.textContent = 'Choose an example, edit its conditions and steps, then preview before starting. Farm activates a field; level or inventory rules can select the next sequence. Until stopped starts farming once and monitors First Aid. Check that your character has the skill. Existing recovery and death limits stay active.';
     const templates = document.createElement('div'); templates.className = 'actions macro-actions';
     const select = document.createElement('select'); select.id = 'macro-example'; select.dataset.config = 'true'; select.setAttribute('aria-label', 'Macro example');
-    for (const [value, label] of [['leveling', 'Leveling route'], ['buy', 'Buy potions'], ['store', 'Store loot'], ['item', 'Use an item'], ['skill', 'Use a skill']]) {
+    for (const [value, label] of [['leveling', 'Leveling route'], ['continuous', 'Until stopped'], ['buy', 'Buy potions'], ['store', 'Store loot'], ['item', 'Use an item'], ['skill', 'Use a skill']]) {
       const option = document.createElement('option'); option.value = value!; option.textContent = label!; select.append(option);
     }
     const example = this.button('Load example', 'config', () => {
@@ -134,7 +139,7 @@ export class MacroUi {
     const reference = document.createElement('p'); reference.className = 'hint';
     reference.textContent = 'Conditions: level, jobLevel, hpPercent, spPercent, weightPercent, zeny, map, inventory and observed actor predicates. All conditions in a rule must match. Steps: farm, travel, buy, store, useItem and skill. Higher priority wins; a selected sequence finishes before another rule runs.';
     const limits = document.createElement('p'); limits.className = 'hint';
-    limits.textContent = 'maxSpend is the whole script allowance. Each buy/store step reserves its declared cap, including NPC fees, without refunds. maxActions counts script steps. Changing map preserves this run’s limits. Saving does not start or resume a script.';
+    limits.textContent = 'Set durationSeconds, maxActions or a rule’s maxRuns to 0 for no limit. maxActions counts script steps; every step still needs a positive timeoutSeconds. Use Stop macro to end an unlimited macro; recovery and death limits stay active. maxSpend is the whole script allowance; maxSpend: 0 permits no spending. Each buy/store step reserves its declared cap, including NPC fees, without refunds. Changing map preserves this run’s limits. Saving does not start or resume a script.';
     const actions = document.createElement('div'); actions.className = 'actions macro-actions';
     actions.append(this.button('Validate & preview', 'config', () => this.preview()), this.button('Save on this computer', 'config', () => {
       try { this.draft.text = this.editor.value; this.draft.save(); this.editor.value = this.draft.text; this.savedState(); hooks.changed(); hooks.notify('Macro saved on this computer.'); }
