@@ -115,6 +115,24 @@ it.each([{resource:'hp',itemId:504},{resource:'hp',itemId:512},{resource:'sp',it
 beforeEach(()=>{vi.useFakeTimers();vi.setSystemTime(100_000);});
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks();captured.controller=null;captured.senders=[];});
 
+it('keeps a verified game connection usable after a deployed party member update',async()=>{
+  const f=await fixture();
+  await f.packet(new BitWriter().u8(101).u8(1).i32(3).string('Party').u8(0).i32(1)
+    .i32(5).i32(100).i16(9).string('Test').u8(0).string('prontera')
+    .i32(70).i32(81).i32(20).i32(30).finish());
+  const update=new BitWriter().u8(102).u8(2).i32(5).i32(100).i16(10).string('Test').u8(0)
+    .string('prontera').i32(75).i32(85).i32(25).i32(35).i32(0x12345678).finish();
+  expect(update).toHaveLength(49);
+  await f.packet(update);
+  expect(f.c.engine.compatible).toBe(true);
+  expect(f.c.world.snapshot().party?.members).toMatchObject([{memberId:5,level:10,hp:75,maxHp:85,sp:25,maxSp:35}]);
+  await f.packet(new BitWriter().u8(OP.heal).i32(0).i32(0).i32(95).i32(100).finish());
+  expect(f.c.engine.player?.hp).toBe(95);
+  f.start({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0});
+  expect(f.c.runRequested).toBe(true);
+  expect(f.c.engine.reason).not.toBe('Waiting for a verified game build and protocol.');
+});
+
 it('continues a macro through real trusted panel listeners and official sends, then loots without restarting',async()=>{
   const f=await fixture(),settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000]};
   f.page.__RAYRAG__!.perform('macro',{settings,script:{version:1,name:'Continue field',durationSeconds:30,maxActions:1,maxSpend:0,

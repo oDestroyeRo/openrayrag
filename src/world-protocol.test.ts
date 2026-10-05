@@ -129,6 +129,30 @@ describe('world packet decoder', () => {
     expect(decodeWorld(new BitWriter().u8(102).u8(8).i32(5).i32(7).i32(10).i32(2).i32(5).finish())).toEqual([{ type: 'partyHealth', memberId: 5, hp: 7, maxHp: 10, sp: 2, maxSp: 5 }]);
     expect(decodeWorld(new BitWriter().u8(102).u8(9).i32(5).string('prontera').finish())).toEqual([{ type: 'partyMap', memberId: 5, map: 'prontera' }]);
   });
+  it.each([true, false])('decodes the deployed member update extension online=%s', online => {
+    const writer = partyMember(new BitWriter().u8(WORLD_OP.partyUpdate).u8(2), online);
+    const legacy = writer.finish();
+    // The deployed V8 reader stops after the member record. Live subtype 2
+    // has four additional bytes, whose meaning is unverified.
+    expect(decodeWorld(writer.i32(0x12345678).finish())).toEqual(decodeWorld(legacy));
+  });
+  it.each([1, 2, 3, 5, 8])('rejects a member update with %i trailing bytes', length => {
+    const bytes = partyMember(new BitWriter().u8(WORLD_OP.partyUpdate).u8(2), true)
+      .take(new Uint8Array(length)).finish();
+    expect(() => decodeWorld(bytes)).toThrow('Unknown packet trailer');
+  });
+  it.each([0, 3, 4])('rejects an unverified four-byte extension on member subtype %i', subtype => {
+    const bytes = partyMember(new BitWriter().u8(WORLD_OP.partyUpdate).u8(subtype), true)
+      .i32(0x12345678).finish();
+    expect(() => decodeWorld(bytes)).toThrow('Unknown packet trailer');
+  });
+  it('validates member fields before accepting the deployed extension', () => {
+    const bytes = new BitWriter().u8(WORLD_OP.partyUpdate).u8(2).i32(5).i32(100).i16(9)
+      .string('Test').u8(0).string('prontera').i32(82).i32(81).i32(20).i32(30)
+      .i32(0x12345678).finish();
+    expect(() => decodeWorld(bytes)).toThrow('Invalid party health');
+    expect(() => decodeWorld(bytes.subarray(0, 20))).toThrow('Truncated packet');
+  });
   it('decodes vending own rows, viewed typed items, sales, and stop', () => {
     expect(decodeWorld(new BitWriter().u8(105).string('Supplies').i32(1).i32(512).i32(2).i32(30).finish())).toEqual([{ type: 'vendingStarted', name: 'Supplies', rows: [{ id: 512, count: 2, price: 30 }] }]);
     const viewed = regular(new BitWriter().u8(107).i32(123).string('Supplies').i32(1).i32(512).u8(1), 512, 2).i32(30).finish();

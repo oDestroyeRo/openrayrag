@@ -33,6 +33,18 @@ function fixture(held=false){
 async function flush(){for(let i=0;i<20;i++)await Promise.resolve();}
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return{promise,resolve};}
 describe('clientless shared-controller runtime',()=>{
+ it('keeps processing frames after a deployed party member update',async()=>{
+  const f=fixture();await f.ready();
+  await f.frame(new BitWriter().u8(101).u8(1).i32(3).string('Party').u8(0).i32(1)
+    .i32(5).i32(100).i16(9).string('Test').u8(0).string('prontera')
+    .i32(70).i32(81).i32(20).i32(30).finish());
+  await f.frame(new BitWriter().u8(102).u8(2).i32(5).i32(100).i16(10).string('Test').u8(0)
+    .string('prontera').i32(75).i32(85).i32(25).i32(35).i32(0x12345678).finish());
+  expect(f.runtime.snapshot()).toMatchObject({connected:true,compatible:true});
+  expect(f.runtime.controller.world.snapshot().party?.members).toMatchObject([{memberId:5,level:10,hp:75}]);
+  await f.frame(new BitWriter().u8(OP.heal).i32(0).i32(0).i32(95).i32(100).finish());
+  expect(f.runtime.snapshot().player?.hp).toBe(95);
+ });
  it('preparation freezes field decisions, cancellation continues intent and final ACK carries a checkpoint',async()=>{
   const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();
   const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0 as const};
