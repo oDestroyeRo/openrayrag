@@ -165,7 +165,10 @@ export function decodeWorld(data: Uint8Array): WorldEvent[] | null {
       event = { type: 'partyInvite', partyId: id(r.i32()), name: r.string(128), sender: r.string(128) }; break;
     case WORLD_OP.partyAccept: {
       const login = r.u8() === 1; const partyId = id(r.i32()); const name = r.string(128);
-      const count = bounded(r.i32(), 1, 32, 'party count'); const members = Array.from({ length: count }, () => member(r));
+      // Party.SerializePartyInfo writes the whole roster without a capacity cap.
+      // Even an offline row needs 13 bytes: two IDs, level, string length, leader.
+      const count = bounded(r.i32(), 1, Math.floor(r.remainingBits / (13 * 8)), 'party count');
+      const members = Array.from({ length: count }, () => member(r));
       if (new Set(members.map(m => m.memberId)).size !== count) throw new Error('Duplicate party member');
       event = { type: 'partyJoined', partyId, name, login, members }; break;
     }
