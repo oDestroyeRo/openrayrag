@@ -229,7 +229,7 @@ export class CompanionController {
     if(!this.partyHeal.available(policy,this.engine.observedOwnCastSettled()))return false;
     const e=this.engine,p=e.player;
     if(!policy||!p||!this.runRequested||!this.heartbeatHealthy||!this.movementSettled()||this.refineBlocksAutomation||this.warp.blocked||this.partyFollow.ownsTravel||this.returning||this.deathCycle||this.pending||this.featureReceipt||this.unresolvedWorld||this.workflowOutstanding||this.travel.active||this.service.active||this.workflow.snapshot().running||['running','waiting'].includes(this.routine.snapshot().state)||this.supply.ownsField||this.supply.uncertain||this.escape.busy||this.memo.blocked||this.socket.busy||this.social.busy||this.now()<this.fencedUntil||this.now()<this.yieldUntil||this.world.npc.id!==null||this.world.npc.mode!=='idle'||this.world.vending){this.partyHeal.wait('Waiting for higher-priority owners or physical movement.');return false;}
-    this.world.partyActors.sync(this.world.party,this.world.map,e.observations,p.id);
+    this.world.refreshPartyActors(e.observations,p.id);
     const bindings=[...(this.world.party?.members.keys()??[])].flatMap(id=>{const binding=this.world.partyActors.get(id);return binding?[binding]:[];});
     const observations=e.actorObservation(bindings.map(binding=>partyHpCondition(binding,policy.hpBelowPercent)));
     if(!this.partyHeal.resourcesReadBack(observations)){this.partyHeal.wait('Waiting for fresh own SP readback after Heal.');return false;}
@@ -884,7 +884,7 @@ export class CompanionController {
       ??this.engine.fieldMovementReceiptOwner(event,this.fieldWalkOwner)]));
     this.warp.observeDeath(events,this.warpContext());
     this.engine.receive(events);
-    this.world.partyActors.sync(this.world.party,this.world.map,this.engine.observations,this.engine.playerId);
+    this.world.refreshPartyActors(this.engine.observations,this.engine.playerId);
     this.engine.partyChanged();
     const readyIdentity=this.engine.actorActionIdentity(),readyPlayer=this.engine.player;
     if(readyIdentity&&readyPlayer&&events.some(event=>event.type==='spawn'&&event.entity.id===readyPlayer.id&&event.entity.kind===0
@@ -966,11 +966,9 @@ export class CompanionController {
       if(event.type==='partyJoined'||event.type==='partyLeft')this.engine.partyMembershipChanged();
       else if(event.type==='partyMember')this.engine.partyMembershipChanged(event.member.memberId);
       else if(event.type==='partyRemove'||event.type==='partyMap')this.engine.partyMembershipChanged(event.memberId);
-      const before=this.world.party?{id:this.world.party.id,name:this.world.party.name,members:new Map([...this.world.party.members].map(([id,member])=>[id,{...member}]))}:null;
       // Enter supplies this ID; ordered map/clear retain it while the own actor loads.
-      this.world.apply(event, this.engine.playerId);
-      this.partyFollow.observeParty(event,before,this.partyFollowContext());
-      this.world.partyActors.observe(event,this.world.party,this.world.map,this.engine.observations,this.engine.playerId);
+      this.world.observe(event,this.engine.observations,this.engine.playerId,
+        before=>this.partyFollow.observeParty(event,before,this.partyFollowContext()));
       this.engine.partyChanged();
       this.observeRefineNpc(event);
       if (event.type === 'cartMoved') this.engine.character.applyCartWeights(event.cartWeight, event.currentWeight);
