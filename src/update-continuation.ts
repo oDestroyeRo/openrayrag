@@ -125,11 +125,11 @@ export class UpdateContinuationOwner {
       throw error;
     } finally { this.restoring = false; }
   }
-  cancel(): Promise<unknown> {
+  cancel(stop = false): Promise<unknown> {
     this.epoch++; this.continuation = null; this.blocked = false;
     if (this.reply) {
       clearTimeout(this.reply.timer); this.reply.reject(new Error('Update continuation cancelled by Stop.')); this.reply = null;
     }
-    return this.invoke('update_cancel', {});
+    return this.invoke('update_cancel', {stop});
   }
 }

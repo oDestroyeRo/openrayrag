@@ -95,7 +95,7 @@ class Element {
   }
 }
 type SavedProfile={username:string;characterSlot:number;autoLogin:boolean;mode?:'botOnly'|'gameClient'};
-async function fixture(saved: SavedProfile | null | Promise<SavedProfile|null> = null, readFails = false, savedForm:unknown=null, continuation:unknown=null) {
+async function fixture(saved: SavedProfile | null | Promise<SavedProfile|null> = null, readFails = false, savedForm:unknown=null, continuation:unknown=null, updateStopped=false) {
   const elements = new Map<string, Element>(), root = new Element(elements), main = new Element(elements,'main');
   elements.set('main',main);elements.set('.client-toolbar',new Element(elements,'header'));elements.set('.client-skip-link',new Element(elements,'a'));
   vi.useFakeTimers(); vi.stubGlobal('document', {
@@ -108,6 +108,7 @@ async function fixture(saved: SavedProfile | null | Promise<SavedProfile|null> =
     if(command==='current_form')return savedForm;
     if(command==='save_current_form')return args?.document?.revision;
     if(command==='update_continuation')return continuation;
+    if(command==='update_startup_stopped')return updateStopped;
     if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'current',message:'Current'};
     if (command === 'saved_login') { if (readFails) throw 'synthetic store failure'; return saved; }
     return undefined;
@@ -502,6 +503,11 @@ describe('updater waiting diagnostics',()=>{
   const f=await fixture(saved,false,continuation.form,continuation);expect(f.get('stop').disabled).toBe(false);
   await f.get('stop').emit('click');reply({username:'synthetic-user',characterSlot:1,autoLogin:true,mode:'botOnly'});await settleMain();
   expect(f.calls('login_game')).toEqual([]);expect(f.calls('update_restore')).toEqual([]);
+ });
+ it('keeps saved auto-login preferences but suppresses sign-in after Stop during committed replacement',async()=>{
+  const f=await fixture({username:'synthetic-user',characterSlot:1,autoLogin:true,mode:'botOnly'},false,null,null,true);
+  expect(f.get('auto-login').checked).toBe(true);expect(f.get('remember-login').checked).toBe(true);
+  expect(f.calls('login_game')).toEqual([]);expect(f.calls('control_bot')).toEqual([]);
  });
  it('shows save, connection preparation and missing game confirmation without changing retries or release',async()=>{
   const f=await fixture();let saved!:()=>void,prepared!:(nonce:string)=>void;

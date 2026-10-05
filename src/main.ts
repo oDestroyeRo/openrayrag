@@ -382,7 +382,7 @@ stopButton.addEventListener('click', () => {
   updateStopped=true;
   // Cancel native restart authority before dispatching Stop through admission.
   // Local ownership retires immediately, even if replacement already started.
-  const cancel=updateContinuation.cancel().catch(()=>{});
+  const cancel=updateContinuation.cancel(true).catch(()=>{});
   const task = dispatches.stop(cancel);
   loginBusy = false; previousSession = undefined;
   updateButtons();
@@ -469,6 +469,7 @@ if (native) {
     try{currentForm.restore(await invoke('current_form'), document => form.restore(document));}
     catch{currentForm.initialized=false;element('update-status').textContent='Current settings could not be restored. Automatic updates are waiting.';}
     if(currentForm.initialized){
+      if(await invoke<boolean>('update_startup_stopped'))updateStopped=true;
       try{await claimUpdateContinuation(invoke('update_continuation'));}
       catch{message('Update settings restored. The run could not be verified; start the bot explicitly.',true);}
       await currentForm.flush().catch(()=>{element('update-status').textContent='Updates are waiting for valid, saved current settings.';});
