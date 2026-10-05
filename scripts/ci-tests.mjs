@@ -207,7 +207,7 @@ test('package smokes overlap, require both successes and finish cleanup before r
     } else assert.equal(error,null);
   }
 });
-test('smoke packages have separate identity and no gameplay or updater privileges',()=>{
+test('smoke packages support startup queries without gameplay or installation privileges',async()=>{
   for(const platform of Object.keys(platforms)){
     const c=packageConfig(platform,true);
     assert.equal(c.identifier,'com.rayrag.companion.ci');
@@ -215,6 +215,15 @@ test('smoke packages have separate identity and no gameplay or updater privilege
     assert.equal(packageConfig(platform,false).identifier,undefined);
   }
   assert.throws(()=>packageConfig('unknown',false));
+  const capability=JSON.parse(await readFile(new URL('../src-tauri/capabilities/ci-smoke.json',import.meta.url),'utf8'));
+  assert.deepEqual(capability.windows,['main']);
+  assert.deepEqual(capability.permissions.toSorted(),[
+    'core:event:allow-listen','core:event:allow-unlisten','core:window:allow-close',
+    'allow-ci-smoke-report','allow-current-form','allow-save-current-form',
+    'allow-settings-close-ready','allow-settings-close-cancel','allow-settings-close-complete',
+    'allow-saved-login','allow-update-initialized','allow-update-status',
+    'allow-update-startup-stopped','allow-update-continuation',
+  ].toSorted());
 });
 test('application payload checks reject wrong architecture and truncated headers',()=>{
   const pe=Buffer.alloc(128);pe.write('MZ');pe.writeUInt32LE(64,60);pe.write('PE\0\0',64);pe.writeUInt16LE(0x8664,68);pe.writeUInt16LE(0x20b,88);
