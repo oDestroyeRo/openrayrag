@@ -40,13 +40,14 @@ function ownPacket(e:Entity,entry:number):BitWriter {
 function policy() { return structuredClone(DEFAULT_AUTOMATION); }
 
 describe('deployed party initialization packets', () => {
-  function roster(duplicate = false, count = 33) {
+  function roster(duplicate = false, count = 33, trailer = false) {
     const writer = new BitWriter().u8(WORLD_OP.partyAccept).u8(1).i32(5).string('Party').u8(0).i32(count);
     // The own online row can precede its spawn and receive an empty map on login.
     writer.i32(1).i32(player.id).i16(player.level).string(player.name).u8(1).string('')
       .i32(player.hp).i32(player.maxHp).i32(0).i32(0);
     for (let index = 1; index < count; index++) writer.i32(duplicate && index === count - 1 ? 1 : index + 1)
       .i32(0).i16(-1).string(`Offline ${index}`).u8(0);
+    if (trailer) writer.take(Uint8Array.of(0, 255, 1, 128, 42, 99, 254, 2));
     return writer.finish();
   }
   it.each([1, 33])('retains the %i-member roster and processes the character spawn after login', count => {
@@ -60,9 +61,9 @@ describe('deployed party initialization packets', () => {
     expect(controller.engine.player).toMatchObject(player);
     expect(sent).toEqual([]);
   });
-  it('accepts a one-member party after the character has already spawned', () => {
+  it.each([false, true])('accepts a one-member party after character spawn with trailer=%s', trailer => {
     const f = setup();
-    f.controller.receive(roster(false, 1));
+    f.controller.receive(roster(false, 1, trailer));
     expect(f.controller.engine.player).toMatchObject(player);
     expect(f.controller.world.snapshot().party?.members).toHaveLength(1);
     expect(f.sent).toEqual([]);

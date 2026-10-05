@@ -17,6 +17,19 @@ describe('world packet decoder', () => {
     expect(decodeWorld(bytes)).toEqual([{ type: 'partyJoined', partyId: 3, name: 'Helpers', login: true,
       members: [{ memberId: 5, entityId: 100, level: 9, name: 'Raon', leader: true, map: 'prt_fild08', hp: 70, maxHp: 81, sp: 20, maxSp: 30 }] }]);
   });
+  it('decodes the observed two-member snapshot with eight opaque trailing bytes', () => {
+    const writer = new BitWriter().u8(101).u8(1).i32(3).string('Helpers').u8(1).i32(2);
+    partyMember(writer, true);
+    writer.i32(6).i32(0).i16(-1).string('Offline').u8(0);
+    writer.take(Uint8Array.of(0, 255, 1, 128, 42, 99, 254, 2));
+    expect(decodeWorld(writer.finish())).toMatchObject([{ type: 'partyJoined', partyId: 3, name: 'Helpers',
+      members: [{ memberId: 5, entityId: 100, map: 'prt_fild08' }, { memberId: 6, entityId: 0, level: -1 }] }]);
+  });
+  it.each([1, 7, 9, 16])('rejects an unverified %i-byte party snapshot trailer', length => {
+    const bytes = partyMember(new BitWriter().u8(101).u8(1).i32(3).string('Helpers').u8(0).i32(1), true)
+      .take(new Uint8Array(length)).finish();
+    expect(() => decodeWorld(bytes)).toThrow('Unknown packet trailer');
+  });
   it('decodes one-bit booleans and ignores pooled-buffer bits outside the payload', () => {
     expect(decodeWorld(Uint8Array.from([77, 0, 123, 0, 0, 0, 1]))).toEqual([{ type: 'npcFocus', id: 123, focus: true }]);
     const bytes = new BitWriter().u8(77).u8(1).string('Kafra').string('Storage?').bool(true).finish();

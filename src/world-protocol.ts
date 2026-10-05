@@ -173,6 +173,10 @@ export function decodeWorld(data: Uint8Array): WorldEvent[] | null {
       const count = bounded(r.i32(), 1, Math.floor(r.remainingBits / (13 * 8)), 'party count');
       const members = Array.from({ length: count }, () => member(r));
       if (new Set(members.map(m => m.memberId)).size !== count) throw new Error('Duplicate party member');
+      // Live deployed snapshots can include eight unread bytes after the roster.
+      // The official V8 reader ignores them; accept only this observed width and
+      // keep their meaning opaque. Other trailers still fail in finish().
+      if (r.remainingBits === 8 * 8) r.take(8);
       event = { type: 'partyJoined', partyId, name, login, members }; break;
     }
     case WORLD_OP.partyUpdate: {
