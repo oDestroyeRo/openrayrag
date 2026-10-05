@@ -183,7 +183,13 @@ export function decodeWorld(data: Uint8Array): WorldEvent[] | null {
       switch (r.u8()) {
         case 0: event = { type: 'partyMember', change: 'add', member: member(r) }; break;
         case 1: event = { type: 'partyRemove', memberId: id(r.i32()) }; break;
-        case 2: event = { type: 'partyMember', change: 'update', member: member(r) }; break;
+        case 2: {
+          const value = member(r);
+          // Deployed V8 subtype 2 can append four bytes that its official
+          // reader ignores. Keep their meaning opaque and other widths strict.
+          if (r.remainingBits === 4 * 8) r.take(4);
+          event = { type: 'partyMember', change: 'update', member: value }; break;
+        }
         case 3: event = { type: 'partyMember', change: 'login', member: member(r) }; break;
         case 4: event = { type: 'partyMember', change: 'logout', member: member(r) }; break;
         case 5: event = { type: 'partyLeader', memberId: id(r.i32()) }; break;
