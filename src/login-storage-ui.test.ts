@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BotEngine } from './engine';
+import { CompanionController } from './controller';
+import { PersistentFieldRun } from './reconnect';
+import { DEFAULT_SETTINGS } from './settings';
+import type { UpdateContinuation } from './update-continuation';
 import type { GameStatus } from './game-status';
 import { searchGrid } from './navigation';
 
@@ -90,7 +94,8 @@ class Element {
     for (let i = 0; i < 12; i++) await Promise.resolve();
   }
 }
-async function fixture(saved: { username: string; characterSlot: number; autoLogin: boolean;mode?:'botOnly'|'gameClient' } | null = null, readFails = false, savedForm:unknown=null) {
+type SavedProfile={username:string;characterSlot:number;autoLogin:boolean;mode?:'botOnly'|'gameClient'};
+async function fixture(saved: SavedProfile | null | Promise<SavedProfile|null> = null, readFails = false, savedForm:unknown=null, continuation:unknown=null) {
   const elements = new Map<string, Element>(), root = new Element(elements), main = new Element(elements,'main');
   elements.set('main',main);elements.set('.client-toolbar',new Element(elements,'header'));elements.set('.client-skip-link',new Element(elements,'a'));
   vi.useFakeTimers(); vi.stubGlobal('document', {
@@ -102,6 +107,7 @@ async function fixture(saved: { username: string; characterSlot: number; autoLog
   ipc.invoke.mockImplementation(async (command: string,args?:{document?:{revision:number}}) => {
     if(command==='current_form')return savedForm;
     if(command==='save_current_form')return args?.document?.revision;
+    if(command==='update_continuation')return continuation;
     if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'current',message:'Current'};
     if (command === 'saved_login') { if (readFails) throw 'synthetic store failure'; return saved; }
     return undefined;
@@ -137,6 +143,17 @@ async function publishStatus(status: GameStatus) {
   await settleMain();
 }
 function closeGame() { ipc.listen.mock.calls.find(call => call[0] === 'game-closed')![1]({ payload: undefined }); }
+function continuationFixture():UpdateContinuation {
+  const ready=readyStatus(),settings={...DEFAULT_SETTINGS,map:ready.map,targets:[4000]};
+  const c=new CompanionController(()=>{});c.connect(true);
+  c.engine.receive([{type:'enter',id:ready.player!.id,map:ready.map},{type:'spawn',entity:ready.player!}]);c.world.reset(ready.map);
+  const status={...c.snapshot(),...ready,runRequested:true,running:false};
+  const field=new PersistentFieldRun();field.begin(settings,ready.player!.name,ready.sessionId);
+  return {version:1,account:{username:'synthetic-user',characterSlot:1,mode:'botOnly'},
+    form:{version:1,revision:5,selectedProfileId:null,settings},field:field.checkpoint()!,savedAccount:true,
+    runtime:{version:1,frozenAt:Date.now(),status,settings,macro:null,partyHeal:{version:1,attempts:0,confirmed:0,cooldownUntil:0},
+      run:{startedAt:Date.now(),kills:0,pickups:0,deaths:0}}};
+}
 
 describe('main run intent dispatch wiring', () => {
   it.each(['start', 'resume', 'reconnect'])('keeps Stop locked until deferred %s settles and the compensating Stop completes', async kind => {
@@ -456,20 +473,35 @@ it('defers the actual main updater for an unsaved macro and permits installation
 });
 
 describe('updater waiting diagnostics',()=>{
- it('explains a running bot without reserving an update or sending Stop',async()=>{
-  const f=await fixture(),base=new BotEngine(()=>{}).snapshot();
-  const publish=ipc.listen.mock.calls.find(call=>call[0]==='game-status')![1];
-  publish({payload:{...base,sessionId:'synthetic-running',running:true,connected:true,compatible:true,
-   login:{phase:'idle',message:''},reconnectAvailable:false,
-   player:{id:0,classId:4,kind:0,name:'Synthetic',level:30,hp:100,maxHp:100,x:1,y:1,dead:false,statuses:[]},
-   mapInfo:{code:'',name:'',source:'observed',monsters:[]}}});
-  ipc.invoke.mockImplementation(async(command:string)=>{
+ it('suspends an active run, keeps Stop available, and preserves intent in the update reservation',async()=>{
+  const f=await fixture();await publishStatus(readyStatus());await f.get('select-targets').emit('click');await f.get('start').emit('click');
+  const installing=pendingNative();
+  ipc.invoke.mockImplementation(async(command:string,args?:{document?:{revision:number}})=>{
    if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
+   if(command==='save_current_form')return args!.document!.revision;
+   if(command==='update_reserve')return 'f'.repeat(32);
+   if(command==='update_install')return installing.promise;
   });
   await vi.advanceTimersByTimeAsync(15000);
-  expect(f.get('update-status').textContent).toBe('Update waits for automation to stop.');
-  expect(f.calls('update_reserve')).toEqual([]);expect(f.calls('update_install')).toEqual([]);
-  expect(f.calls('control_bot').every(call=>(call[1] as {action:string}).action==='heartbeat')).toBe(true);
+  expect(f.calls('update_prepare')).toHaveLength(1);expect(f.calls('update_reserve')).toEqual([]);
+  expect(f.get('stop').disabled).toBe(false);expect(f.get('radius').disabled).toBe(true);
+  const checkpoint=continuationFixture().runtime;
+  const requestId=(f.calls('update_prepare')[0]![1] as {requestId:string}).requestId;
+  ipc.listen.mock.calls.find(call=>call[0]==='update-prepared')![1]({payload:{requestId,checkpoint}});await settleMain();
+  expect(f.calls('update_reserve')).toHaveLength(1);expect(f.calls('update_install')).toHaveLength(1);
+  const reserved=f.calls('update_reserve')[0]![1] as {continuation:{field:{character:string;escapeGuard:{latched:boolean}}}};
+  expect(reserved.continuation.field).toMatchObject({character:'Synthetic',escapeGuard:{latched:false}});
+  await f.get('stop').emit('click');expect(f.calls('update_cancel').length).toBeGreaterThan(0);
+  expect(f.calls('control_bot').some(call=>(call[1] as {action:string}).action==='stop')).toBe(true);
+  installing.resolve();await settleMain();await vi.advanceTimersByTimeAsync(100);
+  expect(f.calls('control_bot').filter(call=>(call[1] as {action:string}).action==='start')).toHaveLength(1);
+ });
+ it('does not auto-login when Stop wins while startup saved-account metadata is pending',async()=>{
+  const continuation=continuationFixture();let reply!:(value:SavedProfile)=>void;
+  const saved=new Promise<SavedProfile>(resolve=>{reply=resolve;});
+  const f=await fixture(saved,false,continuation.form,continuation);expect(f.get('stop').disabled).toBe(false);
+  await f.get('stop').emit('click');reply({username:'synthetic-user',characterSlot:1,autoLogin:true,mode:'botOnly'});await settleMain();
+  expect(f.calls('login_game')).toEqual([]);expect(f.calls('update_restore')).toEqual([]);
  });
  it('shows save, connection preparation and missing game confirmation without changing retries or release',async()=>{
   const f=await fixture();let saved!:()=>void,prepared!:(nonce:string)=>void;

@@ -80,6 +80,7 @@ async function claimUpdateContinuation(load:Promise<unknown>,retired=false):Prom
   const continuation=await updateContinuation.claimFrom(load,fieldRun,retired);if(!continuation||updateStopped||!updateContinuation.pending)return;
   form.restore(continuation.form);selectUpdateAccount();accountBaseline=accountFields();
   message('Update complete. Settings restored. Waiting for the same account and character to continue.');
+  updateButtons();
 }
 function runActive(): boolean { return updateContinuation.pending || fieldRun.requested || !!latest?.runRequested || !!latest?.running || features.active(); }
 function configureReconnect(): void {
@@ -482,11 +483,11 @@ if (native) {
       element<HTMLInputElement>('remember-login').checked = true;
       element<HTMLInputElement>('auto-login').checked = profile.autoLogin;
       element<HTMLSelectElement>('connection-mode').value = profile.mode ?? 'gameClient';
-      if(!updateContinuation.pending){accountBaseline=accountFields();if (profile.autoLogin&&!closeBusy) await signIn();}
+      if(!updateContinuation.pending){accountBaseline=accountFields();if (profile.autoLogin&&!closeBusy&&!updateStopped) await signIn();}
     }
     if(updateContinuation.pending){
       selectUpdateAccount();accountBaseline=accountFields();
-      if(updateContinuation.automaticLogin(profile?{...profile,mode:profile.mode??'gameClient'}:null)&&!closeBusy)await signIn();
+      if(updateContinuation.automaticLogin(profile?{...profile,mode:profile.mode??'gameClient'}:null)&&!closeBusy&&!updateStopped)await signIn();
       else message('Update complete. Settings restored. Sign in to the same account and character to continue.');
     }
   } catch {
