@@ -1,6 +1,8 @@
 import {sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { isRecoveryItem, recoveryItemIds } from './recovery-items';
 import { matchesSkillExecution } from './skill-execution';
+import { recoveryItemCooldown } from './hp-potions';
+import { skillAfterCastSeconds } from './cast-policy';
 import type { AutomationSettings, LootRule, MonsterRule } from './settings';
 import type { Entity } from './protocol';
 import { evaluateActorPredicate, type ActorObservationSnapshot, type ActorPredicate, type PredicateTrace } from './actor-observations';
@@ -36,7 +38,8 @@ import type { CharacterState } from './character-state';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost, skillPrerequisites } from './game-catalog';
 import type { ExpandedAction, FeatureEvent, Attributes } from './protocol-feature';
 export interface AutomationTask { kind: string; label: string; pending: boolean; since: number | null }
-interface PendingFeature { identity?:ActionIdentity; afterCastSeconds:number; action: ExpandedAction; since: number; deadline: number; inventory: number; equipment: number; stats: number; skills: number; count: number; skillLevel: number; attributes: Attributes | null; equipmentReceipt?: (state: CharacterState)=>boolean; skillReceipt?:typeof matchesSkillExecution }
+interface PendingFeature { sequence:number; identity?:ActionIdentity; afterCastSeconds:number; action: ExpandedAction; since: number; deadline: number; inventory: number; equipment: number; stats: number; skills: number; count: number; skillLevel: number; attributes: Attributes | null; equipmentReceipt?: (state: CharacterState)=>boolean; skillReceipt?:typeof matchesSkillExecution }
+export type ActionReceipts = Pick<AutomationScheduler, 'receipt' | 'discardReceipt' | 'retireReceipt' | 'reconcileReceipt'>;
 export interface ActionResult { sequence: number; status: 'idle' | 'pending' | 'confirmed' | 'failed'; reason: string }
 // Pinned player spells include Magnus Exorcismus (12s), Storm Gust and Lord
 // of Vermilion (up to 15s). Allow a bounded cast and response margin. Equipment
@@ -59,6 +62,7 @@ export class AutomationScheduler {
     return this.conditionState(rule,conditions,observations)==='matched';
   }
   private pending: PendingFeature | null = null;
+  private captured: PendingFeature | null = null;
   private sequence = 0;
   private settlingUntil = 0;
   private canceledUntil = 0;
@@ -71,6 +75,42 @@ export class AutomationScheduler {
   get recovering(): boolean { return this.recoverySince !== null; }
   get pendingAction(): ExpandedAction | null { return this.pending?.action ?? null; }
   get pendingIdentity(): ActionIdentity | null { return this.pending?.identity ?? null; }
+  get receipt(): Readonly<{sequence:number;action:ExpandedAction}> | null {
+    return this.captured ? {sequence:this.captured.sequence,action:this.captured.action} : null;
+  }
+  discardReceipt():void { this.captured=null; }
+  /** The caller decides whether intent continues; receipt policy stays here. */
+  retireReceipt(continuing:boolean):'rejected'|'uncertain'|'released'|'retained' {
+    const action=this.captured?.action;
+    if(!continuing){
+      if(action?.type==='sit'||action?.type==='respawn')this.discardReceipt();
+      return this.captured?'retained':'released';
+    }
+    if(this.result.reason.startsWith('Server rejected')){this.discardReceipt();return 'rejected';}
+    if(action&&['useItem','allocateStats','allocateSkill','skill'].includes(action.type))return 'uncertain';
+    this.discardReceipt();return 'released';
+  }
+  /** Late readback drains uncertainty without confirming a retired caller's step.
+   * Unlike active confirmation, item readback may be a complete inventory.
+   * Its caller-wide pause does not stamp the scheduler's active cooldown clocks. */
+  reconcileReceipt(events:ReadonlyArray<FeatureEvent|{type:string}>,state:CharacterState,playerId:number|null,policy:AutomationSettings):number|null {
+    const receipt=this.captured;
+    if(!receipt||this.pending||receipt.identity&&!sameActionIdentity(receipt.identity,this.identity?.(receipt.action)))return null;
+    const action=receipt.action;
+    const execution=action.type==='skill'?events.find((event):event is Extract<FeatureEvent,{type:'skillResult'}>=>matchesSkillExecution(action,event,playerId)):undefined;
+    const confirmed=action.type==='useItem'?state.inventoryKnown&&state.count(action.itemId)<receipt.count
+      :action.type==='allocateSkill'?state.skillsRevision>receipt.skills&&(state.learned.get(action.skillId)??0)>receipt.skillLevel
+      :action.type==='allocateStats'?state.statsRevision>receipt.stats&&!!receipt.attributes&&!!state.stats?.attributes
+        &&action.attributes.every((count,i)=>state.stats!.attributes![i]!>=receipt.attributes![i]!+count)
+      :action.type==='skill'&&execution!==undefined;
+    if(!confirmed)return null;
+    // Ordinary canceled casts retain their original deadline; Party Heal's
+    // specialized owner alone uses reconcileSkill to drain that fence early.
+    if(execution)this.settleSkill(execution.motionSeconds,skillAfterCastSeconds(execution.skillId));
+    const seconds=action.type==='useItem'?recoveryItemCooldown(policy,action.itemId)
+      :action.type==='skill'?policy.skills.find(rule=>rule.skillId===action.skillId)?.cooldownSeconds??1:0;
+    this.discardReceipt();return seconds;
+  }
   settleSkill(motionSeconds:number,afterCastSeconds:number):void {
     this.settlingUntil=Math.max(this.settlingUntil,this.now()+Math.max(0,motionSeconds,afterCastSeconds)*1000);
   }
@@ -85,15 +125,16 @@ export class AutomationScheduler {
       label:this.pending ? `Waiting for ${this.pending.action.type} confirmation.` : this.now()<this.canceledUntil?'Waiting for the canceled action deadline.':this.now()<this.settlingUntil?'Waiting for skill motion to finish.':this.recovering?'Resting until HP and SP recover.':'Ready.',
       pending:this.busy,since:this.pending?.since ?? this.recoverySince };
   }
-  submit(action: ExpandedAction, state: CharacterState, equipmentReceipt?: (state: CharacterState)=>boolean, afterCastSeconds=0, reservation?:{receipt:typeof matchesSkillExecution; reserved:(sequence:number,identity:ActionIdentity)=>void}): void {
+  submit(action: ExpandedAction, state: CharacterState, equipmentReceipt?: (state: CharacterState)=>boolean, afterCastSeconds=0, reservation?:{receipt:typeof matchesSkillExecution; reserved:(sequence:number,identity:ActionIdentity)=>void; retainReceipt?:false}): void {
     if (this.busy) throw new Error('Wait for the current action confirmation.');
     const identity=this.identity?.(action);if(this.identity&&!identity)throw new Error('A current observed own and target identity is required.');
     const count = action.type === 'useItem' ? state.count(action.itemId) : 0;
     const skillLevel = action.type === 'allocateSkill' ? state.learned.get(action.skillId) ?? 0 : 0;
     const since=this.now();
-    this.pending = { ...(identity?{identity}:{}),action,since,equipmentReceipt,skillReceipt:reservation?.receipt,afterCastSeconds,deadline:since+actionConfirmationTimeout(action),inventory:state.inventoryRevision,equipment:state.equipmentRevision,
+    this.pending = { sequence:++this.sequence,...(identity?{identity}:{}),action,since,equipmentReceipt,skillReceipt:reservation?.receipt,afterCastSeconds,deadline:since+actionConfirmationTimeout(action),inventory:state.inventoryRevision,equipment:state.equipmentRevision,
       stats:state.statsRevision,skills:state.skillsRevision,count,skillLevel,attributes:state.stats?.attributes?.slice() as Attributes ?? null };
-    this.result={sequence:++this.sequence,status:'pending',reason:`Waiting for ${action.type} confirmation.`};
+    this.captured=reservation?.retainReceipt===false?null:this.pending;
+    this.result={sequence:this.sequence,status:'pending',reason:`Waiting for ${action.type} confirmation.`};
     try { if(reservation){if(!identity)throw new Error('Observed identity required.');reservation.reserved(this.sequence,identity);} this.send(action); } catch (error) { this.pending = null; this.result={sequence:this.sequence,status:'failed',reason:'Connection failed while sending action.'}; throw error; }
   }
   observe(event: FeatureEvent | {type:'map'|'resurrection'}, state: CharacterState, playerId: number | null, respawnTransition=false): { confirmed: boolean; failure: string | null } {
@@ -123,6 +164,7 @@ export class AutomationScheduler {
     if (confirmed) {
       if(event.type==='skillResult')this.settleSkill(event.motionSeconds,pending.afterCastSeconds);
       this.pending = null; this.result={sequence:this.sequence,status:'confirmed',reason:`${action.type} confirmed by the server.`};
+      this.discardReceipt();
       if (action.type==='sit') { this.resting=action.sitting; if(!action.sitting)this.recoverySince=null; }
       const key = action.type==='useItem'?`item:${action.itemId}`:action.type==='skill'?`skill:${action.skillId}`:action.type;
       this.cooldown.set(key,this.now());
