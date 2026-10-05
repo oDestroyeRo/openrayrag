@@ -29,8 +29,9 @@ import { DEFAULT_SUPPLY } from './supply-trip';
 import { previewSupplyTrip } from './supply-plan';
 import { DEFAULT_DISPOSITION, dispositionPreviewIsCurrent, planDisposition, type DispositionPlan } from './disposition';
 import { dispositionContextFromStatus, dispositionPreviewText, dispositionStockFloors } from './disposition-ui';
-import { HpPotionUi } from './hp-potion-ui';
+import { RecoveryItemUi } from './recovery-item-ui';
 import { DEFAULT_HP_POTIONS } from './hp-potions';
+import { DEFAULT_SP_ITEMS } from './recovery-items';
 
 type FeatureUiMounts = Pick<ClientShell, 'sections' | 'manualTools' | 'sessionDetails'>;
 type Section = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows' | 'profiles';
@@ -246,7 +247,10 @@ export class FeatureUi {
   private partyHealPresent=false;
   private retreatPresent=false;
   private hpPotionsPresent = false;
-  private readonly hpPotions: HpPotionUi;
+  private readonly hpPotions: RecoveryItemUi;
+  private spPotionsPresent = false;
+  private readonly spPotions: RecoveryItemUi;
+  private readonly recoveryResource = document.createElement('select');
   private macroUi!: MacroUi;
   private routePreview: { abort: AbortController; identity: string; settings: string; output: HTMLElement; current?: () => string; evidence?: string } | null = null;
   private previewIdentity(): string {
@@ -294,13 +298,26 @@ export class FeatureUi {
     try { storage = localStorage; } catch { storage = {getItem:()=>null,setItem:()=>{throw new Error('Profile storage is unavailable.');}}; }
     this.profiles = new ProfileStore(storage); this.services = new NpcServiceStore(storage);
     for (const [section, panel] of Object.entries(mounts.sections) as Array<[Section, HTMLElement]>) this.panels.set(section, panel);
-    this.hpPotions = new HpPotionUi(() => this.hooks.changed(), () => {
+    this.hpPotions = new RecoveryItemUi(() => this.hooks.changed(), () => {
       // FeatureUi mounts before SettingsForm exists. Read this independent
       // control so an invalid draft elsewhere cannot interrupt status rendering.
       const input = this.host.querySelector<HTMLInputElement>('#min-hp');
       return input ? Number(input.value) : this.hooks.settings().minHpPercent;
     });
-    this.panel('recovery').append(this.hpPotions.root);
+    this.spPotions = new RecoveryItemUi(() => this.hooks.changed(), () => 0, 'sp');
+    const resourceLabel = document.createElement('label'); resourceLabel.className = 'form-field';
+    const resourceTitle = document.createElement('span'); resourceTitle.textContent = 'Recovery item resource';
+    this.recoveryResource.id = 'recovery-item-resource';
+    for (const [value, name] of [['hp', 'HP'], ['sp', 'SP']] as const) {
+      const option = document.createElement('option'); option.value = value; option.textContent = name; this.recoveryResource.append(option);
+    }
+    this.recoveryResource.value = 'hp'; this.spPotions.root.hidden = true;
+    this.recoveryResource.addEventListener('change', () => {
+      this.hpPotions.root.hidden = this.recoveryResource.value !== 'hp';
+      this.spPotions.root.hidden = this.recoveryResource.value !== 'sp';
+    });
+    resourceLabel.append(resourceTitle, this.recoveryResource);
+    this.panel('recovery').append(resourceLabel, this.hpPotions.root, this.spPotions.root);
     const combat = this.panel('combat');
     for (const [section, definitions] of Object.entries(fields) as Array<[Section,Field[]]>) {
       const grid = document.createElement('div'); grid.className = 'form-grid'; for (const field of definitions) grid.append(fieldElement(field)); this.panels.get(section)!.append(grid);
@@ -466,6 +483,9 @@ export class FeatureUi {
     const hpPotions = this.hpPotions.read();
     if (this.hpPotionsPresent || JSON.stringify(hpPotions) !== JSON.stringify(DEFAULT_HP_POTIONS)) automation.hpPotions = hpPotions;
     else delete automation.hpPotions;
+    const spPotions = this.spPotions.read();
+    if (this.spPotionsPresent || JSON.stringify(spPotions) !== JSON.stringify(DEFAULT_SP_ITEMS)) automation.spPotions = spPotions;
+    else delete automation.spPotions;
     return validateAutomation(automation as unknown as AutomationSettings);
   }
   write(automation: AutomationSettings): void {
@@ -477,6 +497,8 @@ export class FeatureUi {
     this.attackStrategiesPresent=Object.hasOwn(automation,'attackStrategies');
     this.hpPotionsPresent = Object.hasOwn(automation, 'hpPotions');
     this.hpPotions.write(automation.hpPotions ?? DEFAULT_HP_POTIONS);
+    this.spPotionsPresent = Object.hasOwn(automation, 'spPotions');
+    this.spPotions.write(automation.spPotions ?? DEFAULT_SP_ITEMS);
     for (const definitions of Object.values(fields)) for (const field of definitions) {
       const input = this.settingInputs.get(field.path)!;
       const value = getPath(automation,field.path);
@@ -650,6 +672,8 @@ export class FeatureUi {
     for(const editor of this.editors.values())editor.lock(config);
     this.dispositionEditor.lock(config);
     this.hpPotions.lock(config);
+    this.spPotions.lock(config);
+    this.recoveryResource.disabled = false;
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-manual]'))button.disabled=manual;
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-service]'))button.disabled=service;
     this.social.lock(manual);this.refine.lock(manual);
@@ -673,6 +697,7 @@ export class FeatureUi {
   render(value: unknown): void {
     this.status=object(value);this.macroUi.render(this.status.macro,this.observation());if(this.routePreview&&(this.routePreview.identity!==this.previewIdentity()||this.routePreview.evidence!==this.routePreview.current?.()))this.cancelRoutePreview();const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
     this.hpPotions.update(character);
+    this.spPotions.update(character);
     const engagement=object(s.partyEngagement);const reasons=Array.isArray(engagement.reasons)?engagement.reasons.map(text):[];
     this.host.querySelector<HTMLElement>('#party-engagement-state')!.textContent=engagement.enabled===true?`Party exception active · ${number(engagement.accepted)??0} verified engagements · ${number(engagement.blocked)??0} excluded${reasons.length?'\n'+reasons.join('\n'):''}`:'Party exception is off; outside engagements remain excluded.';
     const heal=object(s.partyHeal);this.host.querySelector<HTMLElement>('#party-heal-state')!.textContent=`${text(heal.reason)||'Party Heal is off.'} · ${number(heal.attempts)??0} attempts · ${number(heal.confirmed)??0} executions confirmed${heal.resourceReadback===true?' · fresh resource readback':''}`;

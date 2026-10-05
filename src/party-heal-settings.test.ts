@@ -1,3 +1,4 @@
+import { DEFAULT_SP_ITEMS, type RecoveryItemSettings } from './recovery-items';
 import {DEFAULT_HP_POTIONS,type HpPotionSettings} from './hp-potions';
 import {describe,it,expect,vi} from 'vitest';
 import cases from './data/party-heal-cases.json';
@@ -20,8 +21,9 @@ describe('bounded optional party Heal settings',()=>{
    if(!mountedInputs.has(path))mountedInputs.set(path,host.querySelector(`[data-setting="${path}"]`));
    return mountedInputs.get(path);
   }};
+  let spPotions: RecoveryItemSettings = structuredClone(DEFAULT_SP_ITEMS);
   let hpPotions:HpPotionSettings=structuredClone(DEFAULT_HP_POTIONS);
-  Object.assign(view,{hpPotions:{read:()=>structuredClone(hpPotions),write:(value:HpPotionSettings)=>{hpPotions=structuredClone(value);}},host,settingInputs,hooks:{settings},editors:new Map(),dispositionEditor:{read:()=>[],write:()=>{}}});
+  Object.assign(view,{spPotions:{read:()=>structuredClone(spPotions),write:(value:RecoveryItemSettings)=>{spPotions=structuredClone(value);}},hpPotions:{read:()=>structuredClone(hpPotions),write:(value:HpPotionSettings)=>{hpPotions=structuredClone(value);}},host,settingInputs,hooks:{settings},editors:new Map(),dispositionEditor:{read:()=>[],write:()=>{}}});
   view.write(structuredClone(DEFAULT_AUTOMATION));expect(view.read()).not.toHaveProperty('partyHeal');
   host.querySelector('[data-setting="partyHeal.enabled"]').checked=true;expect(view.read().partyHeal).toEqual({...DEFAULT_PARTY_HEAL,enabled:true});
   view.write({...structuredClone(DEFAULT_AUTOMATION),partyHeal:{...DEFAULT_PARTY_HEAL,enabled:false,level:5}});expect(view.read().partyHeal?.level).toBe(5);

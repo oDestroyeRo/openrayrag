@@ -4,6 +4,16 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Carried HP and SP recovery items
+
+On 2026-10-05, `npm run check` passed: 3,880 frontend tests in 120 files, 178 production native tests and 180 CI-feature native tests (two existing opt-in probes ignored in each), both strict Clippy configurations, formatting, frontend/release type checks, script checks and eight Python release tests. Independent source review found no blocking findings after the mixed-resource cooldown correction.
+
+The recovery picker lists only carried items for the selected HP or SP resource. Shared TypeScript/Rust cases cover independent policies, strict imports and native current-form save/load. Runtime checks cover food and herbs, unknown inventory/SP, selected fallback, exact consumption, reserves, advanced-rule ownership and both transports. Asymmetric mixed-item regressions failed before the correction and passed afterward: the shorter HP or SP timer cannot bypass the longer active timer, while an eligible single-resource item remains available. Combined workflow stock protection retains all recovery, advanced-item, ammo and escape guards.
+
+Browser QA used the actual settings components on an isolated offline origin with synthetic inventory. HP displayed Novice Potion, Apple, Carrot and Red Herb; SP displayed Grape. Green Herb and Fly Wing were excluded. Switching resources retained the separate mode, selection and threshold. Automated UI cases also cover depletion, restocking, unknown inventory, retained preference order and configuration locks. The generated catalogue reproduced byte for byte from the pinned Rebuild source and matching client identities: 69 HP and 25 SP items, with 18 shared.
+
+These are local source, fixture and browser results. The installed Companion was not updated, and no new live-game recovery consumption or server healing amounts were verified. See [HP and SP recovery items](HP_POTIONS.md).
+
 ### Unlimited macro duration and counts
 
 Issue [#149](https://github.com/oDestroyeRo/openrayrag/issues/149) adds independent zero limits for macro duration, issued steps and rule runs. On 2026-10-05, `npm run check` passed: 3,710 frontend tests in 117 files, 151 production native tests and 153 CI-feature native tests (two existing opt-in probes ignored in each), both strict Clippy configurations, formatting, frontend/release type checks, 280 passing script checks with two platform skips and eight Python release tests. Independent source review found no blocking findings.

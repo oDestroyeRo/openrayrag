@@ -319,7 +319,7 @@ fn validate_workflow(value: &Value) -> Validation {
         number(timeout, 1000, 60_000)?;
     }
     let mut ids = HashSet::new();
-    for row in array(field(workflow, "minStock")?, 100)? {
+    for row in array(field(workflow, "minStock")?, 160)? {
         let row = object(row, &["itemId", "count"])?;
         if !ids.insert(integer(row, "itemId", 1, MAX_ID)?) {
             return Err(invalid());
@@ -1917,6 +1917,20 @@ mod automation_request_tests {
                 {"type":"buy","rows":[{"id":501,"count":2}]},{"type":"closeShop"}],
             "timeoutMs":60000
         })
+    }
+
+    #[test]
+    fn workflow_supports_combined_recovery_and_existing_stock_guards() {
+        let mut value = workflow();
+        value["minStock"] = json!((1..=160)
+            .map(|id| json!({"itemId": id, "count": 1}))
+            .collect::<Vec<_>>());
+        assert!(validate_request("workflow", &value).is_ok());
+        value["minStock"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"itemId": 161, "count": 1}));
+        assert!(validate_request("workflow", &value).is_err());
     }
 
     fn routine() -> Value {
