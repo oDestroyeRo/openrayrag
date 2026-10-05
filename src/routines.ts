@@ -27,6 +27,13 @@ export interface RoutineSnapshot {
   pendingActionId: number | null;
   actionsIssued: number; actionsCompleted: number; steps: number; elapsedSeconds: number;
 }
+/** Internal logical selector ledger. It never represents a dispatched game action. */
+export interface RoutineSelectorCheckpoint<Action> {
+  version: 1; spec: RoutineSpec<Action>; progress: { runs: number; lastIssued: number | null }[];
+  pending: { id: number; ruleIndex: number; issuedAt: number } | null;
+  nextActionId: number; state: 'running' | 'waiting' | 'completed'; reason: string;
+  startedAt: number; lastTime: number; actionsIssued: number; actionsCompleted: number; steps: number;
+}
 export interface ConditionTrace {
   condition: RoutineCondition; state: 'matched' | 'unmatched' | 'unavailable'; reason: string;
 }
@@ -158,6 +165,51 @@ export function evaluateRoutineCondition(condition: RoutineCondition, observatio
 }
 
 interface RuleProgress { runs: number; lastIssued: number | null }
+export function validateRoutineSelectorCheckpoint<Action>(input: unknown,
+  isAction: ActionValidator<Action>): RoutineSelectorCheckpoint<Action> {
+  if (!record(input) || !keys(input, ['version', 'spec', 'progress', 'pending', 'nextActionId', 'state', 'reason',
+    'startedAt', 'lastTime', 'actionsIssued', 'actionsCompleted', 'steps']) || input.version !== 1
+    || (input.state !== 'running' && input.state !== 'waiting' && input.state !== 'completed')
+    || typeof input.reason !== 'string' || input.reason.length > 200
+    || !integer(input.startedAt, 0, Number.MAX_SAFE_INTEGER) || !integer(input.lastTime, input.startedAt, Number.MAX_SAFE_INTEGER)
+    || !integer(input.actionsIssued, 0, Number.MAX_SAFE_INTEGER) || !integer(input.actionsCompleted, 0, input.actionsIssued)
+    || !integer(input.nextActionId, input.actionsIssued, Number.MAX_SAFE_INTEGER)
+    || !integer(input.steps, input.actionsIssued, Number.MAX_SAFE_INTEGER)) throw new Error('Invalid selector checkpoint.');
+  const spec = validateRoutineSpec(input.spec, isAction, { allowUnlimitedLimits: true });
+  if (!Array.isArray(input.progress) || input.progress.length !== spec.rules.length) throw new Error('Invalid selector progress.');
+  const startedAt = input.startedAt, lastTime = input.lastTime;
+  const progress = input.progress.map((entry, index): RuleProgress => {
+    if (!record(entry) || !keys(entry, ['runs', 'lastIssued'])
+      || !integer(entry.runs, 0, spec.rules[index]!.maxRuns || Number.MAX_SAFE_INTEGER)
+      || (entry.runs === 0 ? entry.lastIssued !== null : !integer(entry.lastIssued, startedAt, lastTime))) {
+      throw new Error('Invalid selector rule ledger.');
+    }
+    return { runs: entry.runs, lastIssued: entry.lastIssued as number | null };
+  });
+  const issued = progress.reduce((sum, entry) => sum + entry.runs, 0);
+  if (!Number.isSafeInteger(issued) || issued !== input.actionsIssued
+    || (spec.maxActions > 0 && issued > spec.maxActions)) throw new Error('Invalid selector counters.');
+  let pending: RoutineSelectorCheckpoint<Action>['pending'] = null;
+  if (input.pending !== null) {
+    const value = input.pending;
+    if (!record(value) || !keys(value, ['id', 'ruleIndex', 'issuedAt'])
+      || !integer(value.id, 1, input.nextActionId) || !integer(value.ruleIndex, 0, spec.rules.length - 1)
+      || !integer(value.issuedAt, startedAt, lastTime) || progress[value.ruleIndex]!.lastIssued !== value.issuedAt
+      || progress[value.ruleIndex]!.runs === 0) throw new Error('Invalid selector ownership.');
+    pending = { id: value.id, ruleIndex: value.ruleIndex, issuedAt: value.issuedAt };
+  }
+  const exhausted = (spec.maxActions > 0 && issued >= spec.maxActions)
+    || progress.every((entry, index) => spec.rules[index]!.maxRuns > 0 && entry.runs >= spec.rules[index]!.maxRuns);
+  const expired = spec.durationSeconds > 0 && lastTime - startedAt >= spec.durationSeconds * 1_000;
+  if ((input.state === 'waiting') !== (pending !== null) || input.actionsCompleted !== issued - (pending ? 1 : 0)
+    || (input.state === 'running' && (exhausted || expired))
+    || (input.state === 'waiting' && expired) || (input.state === 'completed' && !exhausted && !expired)) {
+    throw new Error('Invalid selector state.');
+  }
+  return { version: 1, spec, progress, pending, nextActionId: input.nextActionId,
+    state: input.state as RoutineSelectorCheckpoint<Action>['state'], reason: input.reason,
+    startedAt, lastTime, actionsIssued: issued, actionsCompleted: input.actionsCompleted, steps: input.steps };
+}
 function traceRules<Action>(spec: RoutineSpec<Action>, observation: RoutineObservation,
   progress?: RuleProgress[], now = 0, allowExtendedElapsed = false): RoutineTrace<Action> {
   const rules = spec.rules.map((rule, index): RuleTrace<Action> => {
@@ -217,6 +269,30 @@ export class RoutineRuntime<Action> {
     this.spec = spec; this.progress = spec.rules.map(() => ({ runs: 0, lastIssued: null }));
     this.pending = null; this.actionsIssued = 0; this.actionsCompleted = 0; this.steps = 0;
     this.startedAt = now; this.lastTime = now; this.state = 'running'; this.reason = 'Waiting for a rule to match.';
+  }
+
+  private get internalSelector(): boolean { return this.allowUnlimitedLimits && this.timeoutMs === 0 && this.maxSteps === 0; }
+
+  /** Only zero-timeout logical selectors may retain their selected sequence owner. */
+  selectorCheckpoint(): RoutineSelectorCheckpoint<Action> | null {
+    if (!this.internalSelector || !this.spec || !['running', 'waiting', 'completed'].includes(this.state)) return null;
+    return structuredClone({ version: 1, spec: this.spec, progress: this.progress, pending: this.pending,
+      nextActionId: this.nextActionId, state: this.state as RoutineSelectorCheckpoint<Action>['state'], reason: this.reason,
+      startedAt: this.startedAt, lastTime: this.lastTime, actionsIssued: this.actionsIssued,
+      actionsCompleted: this.actionsCompleted, steps: this.steps });
+  }
+
+  restoreSelector(input: unknown): void {
+    if (!this.internalSelector) throw new Error('Only an internal logical selector can restore a checkpoint.');
+    if (this.state === 'running' || this.state === 'waiting') throw new Error('Stop the current selector before restoring.');
+    const checkpoint = validateRoutineSelectorCheckpoint(input, this.isAction);
+    if (!integer(this.now(), Math.max(this.lastTime, checkpoint.lastTime), Number.MAX_SAFE_INTEGER)) {
+      throw new Error('Selector checkpoint clock changed or became unavailable.');
+    }
+    this.spec = checkpoint.spec; this.progress = checkpoint.progress; this.pending = checkpoint.pending;
+    this.nextActionId = Math.max(this.nextActionId, checkpoint.nextActionId); this.state = checkpoint.state; this.reason = checkpoint.reason;
+    this.startedAt = checkpoint.startedAt; this.lastTime = checkpoint.lastTime;
+    this.actionsIssued = checkpoint.actionsIssued; this.actionsCompleted = checkpoint.actionsCompleted; this.steps = checkpoint.steps;
   }
 
   private finish(state: RoutineState, reason: string): void { this.state = state; this.reason = reason; this.pending = null; }

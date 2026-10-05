@@ -1,6 +1,6 @@
 import serviceCatalog from './data/npc-services.json';
-import { dryRunRoutine, RoutineRuntime, validRoutineCondition,
-  type RoutineCondition, type RoutineObservation, type RoutineSpec, type RuleTrace } from './routines';
+import { dryRunRoutine, RoutineRuntime, validRoutineCondition, validateRoutineSelectorCheckpoint,
+  type RoutineCondition, type RoutineObservation, type RoutineSelectorCheckpoint, type RoutineSpec, type RuleTrace } from './routines';
 
 export type MacroStep =
   | { type: 'farm'; map: string; targets: number[]; timeoutSeconds: number }
@@ -26,6 +26,14 @@ export interface MacroSnapshot {
   currentRule: string | null; stepIndex: number | null; pendingActionId: number | null;
   actionsIssued: number; actionsCompleted: number; sequencesIssued: number; sequencesCompleted: number;
   spendReserved: number; elapsedSeconds: number; fieldIntentActive: boolean; fieldSuspended: boolean;
+}
+/** A clean continuation boundary: the next step is logical, with no game action in flight. */
+export interface MacroCheckpoint {
+  version: 1; script: MacroScript; selector: RoutineSelectorCheckpoint<{ ruleIndex: number }>;
+  sequence: { ruleIndex: number; stepIndex: number; selectorId: number } | null;
+  retainedField: Extract<MacroStep, { type: 'farm' }> | null; state: 'running' | 'monitoring'; reason: string;
+  generation: number; nextId: number; startedAt: number; lastTime: number;
+  actionsIssued: number; actionsCompleted: number; spendReserved: number;
 }
 interface Selection { ruleIndex: number }
 export interface MacroRuleTrace extends Omit<RuleTrace<Selection>, 'action'> { ruleIndex: number; steps: MacroStep[] }
@@ -115,6 +123,73 @@ function selectionSpec(script: MacroScript): RoutineSpec<Selection> {
     rules: script.rules.map((rule, ruleIndex) => ({ name: rule.name, priority: rule.priority,
       cooldownSeconds: rule.cooldownSeconds, maxRuns: rule.maxRuns, conditions: rule.conditions, action: { ruleIndex } })) };
 }
+/** Validate every cross-ledger invariant before a runtime may change its ownership. */
+export function validateMacroCheckpoint(input: unknown): MacroCheckpoint {
+  if (!record(input) || !keys(input, ['version', 'script', 'selector', 'sequence', 'retainedField', 'state', 'reason',
+    'generation', 'nextId', 'startedAt', 'lastTime', 'actionsIssued', 'actionsCompleted', 'spendReserved'])
+    || input.version !== 1 || (input.state !== 'running' && input.state !== 'monitoring')
+    || typeof input.reason !== 'string' || input.reason.length > 200
+    || !integer(input.generation, 1, Number.MAX_SAFE_INTEGER) || !integer(input.actionsIssued, 0, Number.MAX_SAFE_INTEGER)
+    || input.actionsCompleted !== input.actionsIssued || !integer(input.nextId, input.actionsIssued, Number.MAX_SAFE_INTEGER)
+    || !integer(input.startedAt, 0, Number.MAX_SAFE_INTEGER) || !integer(input.lastTime, input.startedAt, Number.MAX_SAFE_INTEGER)) {
+    throw new Error('Invalid macro checkpoint.');
+  }
+  const script = validateMacroScript(input.script);
+  const selector = validateRoutineSelectorCheckpoint(input.selector, validSelection);
+  const lastTime = input.lastTime;
+  if (JSON.stringify(selector.spec) !== JSON.stringify(selectionSpec(script))
+    || selector.startedAt < input.startedAt
+    || selector.progress.some(entry => entry.lastIssued !== null && entry.lastIssued > lastTime)
+    || (script.durationSeconds > 0 && input.lastTime - input.startedAt >= script.durationSeconds * 1_000)
+    || (script.maxActions > 0 && input.actionsIssued > script.maxActions)
+    || !integer(input.spendReserved, 0, script.maxSpend)) throw new Error('Macro checkpoint limits or script disagree.');
+  let sequence: MacroCheckpoint['sequence'] = null;
+  if (input.sequence !== null) {
+    const value = input.sequence;
+    if (!record(value) || !keys(value, ['ruleIndex', 'stepIndex', 'selectorId'])
+      || !integer(value.ruleIndex, 0, script.rules.length - 1)
+      || !integer(value.stepIndex, 1, script.rules[value.ruleIndex]!.steps.length - 1)
+      || !integer(value.selectorId, 1, selector.nextActionId) || selector.pending?.id !== value.selectorId
+      || selector.pending.ruleIndex !== value.ruleIndex) throw new Error('Macro checkpoint cursor lost its selector owner.');
+    sequence = { ruleIndex: value.ruleIndex, stepIndex: value.stepIndex, selectorId: value.selectorId };
+  } else if (selector.pending !== null) throw new Error('Macro checkpoint has an unowned selection.');
+  let completed = 0, spend = 0;
+  const possibleFieldSteps: MacroStep[] = [];
+  for (const [index, rule] of script.rules.entries()) {
+    const runs = selector.progress[index]!.runs - (sequence?.ruleIndex === index ? 1 : 0);
+    if (runs < 0) throw new Error('Macro checkpoint cursor has no selected rule.');
+    completed += runs * rule.steps.length;
+    spend += runs * rule.steps.reduce((sum, step) => sum + ('maxSpend' in step ? step.maxSpend : 0), 0);
+    const lastField = [...rule.steps].reverse().find(step => step.type === 'farm' || step.type === 'travel');
+    if (runs > 0 && lastField) possibleFieldSteps.push(lastField);
+  }
+  const prefix = sequence ? script.rules[sequence.ruleIndex]!.steps.slice(0, sequence.stepIndex) : [];
+  completed += prefix.length;
+  spend += prefix.reduce((sum, step) => sum + ('maxSpend' in step ? step.maxSpend : 0), 0);
+  if (!Number.isSafeInteger(completed) || completed !== input.actionsCompleted || spend !== input.spendReserved
+    || (sequence && script.maxActions > 0
+      && script.rules[sequence.ruleIndex]!.steps.length - sequence.stepIndex > script.maxActions - completed)) {
+    throw new Error('Macro checkpoint action or spend ledger disagrees with its cursor.');
+  }
+  const retainedField = input.retainedField;
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const lastFieldStep = [...prefix].reverse().find(step => step.type === 'farm' || step.type === 'travel');
+  // A confirmed prefix is newer than every completed sequence; otherwise only each
+  // completed rule's final field effect can still own the field.
+  const possibleFields = lastFieldStep ? [lastFieldStep] : possibleFieldSteps;
+  if (retainedField !== null && (!validMacroStep(retainedField) || retainedField.type !== 'farm'
+    || !possibleFields.some(step => step.type === 'farm' && same(step, retainedField)))) {
+    throw new Error('Macro checkpoint field was never confirmed.');
+  }
+  if ((lastFieldStep && !same(retainedField, lastFieldStep.type === 'farm' ? lastFieldStep : null))
+    || (retainedField === null && possibleFields.length > 0 && !possibleFields.some(step => step.type === 'travel'))
+    || (input.state === 'monitoring') !== (retainedField !== null && sequence === null)
+    || (!sequence && retainedField === null && (selector.state === 'completed'
+      || (script.maxActions > 0 && completed >= script.maxActions)))) throw new Error('Macro checkpoint field or state disagrees.');
+  return { version: 1, script, selector, sequence, retainedField: retainedField === null ? null : structuredClone(retainedField),
+    state: input.state, reason: input.reason, generation: input.generation, nextId: input.nextId,
+    startedAt: input.startedAt, lastTime: input.lastTime, actionsIssued: completed, actionsCompleted: completed, spendReserved: spend };
+}
 /** Pure validation and next-rule trace. It neither starts a clock nor reserves any spend. */
 export function dryRunMacro(input: unknown, observation: RoutineObservation): MacroTrace {
   const script = validateMacroScript(input);
@@ -163,6 +238,32 @@ export class MacroRuntime {
   get currentIntent(): MacroIntent | null { return this.pending ? structuredClone(this.pending.intent) : null; }
   get fieldIntent(): Extract<MacroStep, { type: 'farm' }> | null { return this.retainedField ? structuredClone(this.retainedField) : null; }
   inventoryItemIds(): number[] { return this.script ? macroInventoryItemIds(this.script) : []; }
+
+  checkpoint(): MacroCheckpoint | null {
+    if (!this.active || !this.script || this.pending) return null;
+    const selector = this.selector.selectorCheckpoint();
+    if (!selector) return null;
+    return structuredClone({ version: 1, script: this.script, selector, sequence: this.sequence, retainedField: this.retainedField,
+      state: this.state as MacroCheckpoint['state'], reason: this.reason, generation: this.generation, nextId: this.nextId,
+      startedAt: this.startedAt, lastTime: this.lastTime, actionsIssued: this.actionsIssued,
+      actionsCompleted: this.actionsCompleted, spendReserved: this.spendReserved });
+  }
+
+  /** Restore explicit run intent only; dispatch and field activation remain the adapter's responsibility. */
+  restore(input: unknown): void {
+    if (this.active) throw new Error('Stop the current macro before restoring a checkpoint.');
+    const checkpoint = validateMacroCheckpoint(input);
+    const now = this.now();
+    if (!integer(now, Math.max(checkpoint.lastTime, checkpoint.selector.lastTime, this.lastTime), Number.MAX_SAFE_INTEGER)) {
+      throw new Error('Macro checkpoint clock changed or became unavailable.');
+    }
+    this.selector.restoreSelector(checkpoint.selector);
+    this.script = checkpoint.script; this.sequence = checkpoint.sequence; this.pending = null; this.retainedField = checkpoint.retainedField;
+    this.state = checkpoint.state; this.reason = checkpoint.reason;
+    this.generation = Math.max(this.generation, checkpoint.generation); this.nextId = Math.max(this.nextId, checkpoint.nextId);
+    this.startedAt = checkpoint.startedAt; this.lastTime = checkpoint.lastTime;
+    this.actionsIssued = checkpoint.actionsIssued; this.actionsCompleted = checkpoint.actionsCompleted; this.spendReserved = checkpoint.spendReserved;
+  }
 
   start(input: unknown): void {
     if (this.active) throw new Error('Stop the current macro before starting another.');

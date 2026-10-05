@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dryRunRoutine, ROUTINE_LIMITS, RoutineRuntime, validateRoutineSpec,
+import { dryRunRoutine, ROUTINE_LIMITS, RoutineRuntime, validateRoutineSelectorCheckpoint, validateRoutineSpec,
   type RoutineCondition, type RoutineObservation, type RoutineOptions, type RoutineRule, type RoutineSpec } from './routines';
 
 type TestAction = { type: 'heal'; itemId: number } | { type: 'stop' };
@@ -26,6 +26,88 @@ function acknowledge(runtime: RoutineRuntime<TestAction>, success = true) {
   expect(actionId).not.toBeNull();
   return runtime.acknowledge(success, actionId!);
 }
+
+describe('internal selector continuation ledger', () => {
+  const options: RoutineOptions = { allowUnlimitedLimits: true, actionTimeoutSeconds: 0, maxSteps: 0 };
+
+  it('preserves logical selection ownership, runs, cooldowns, counters and original clocks', () => {
+    const { runtime } = setup(options);
+    runtime.start(spec()); runtime.tick({ hpPercent: 40 });
+    const checkpoint = runtime.selectorCheckpoint()!;
+    expect(validateRoutineSelectorCheckpoint(JSON.parse(JSON.stringify(checkpoint)), isAction)).toEqual(checkpoint);
+    const restored = new RoutineRuntime(isAction, () => 2_000, options);
+    restored.restoreSelector(checkpoint);
+    expect(restored.selectorCheckpoint()).toEqual(checkpoint);
+    expect(restored.tick({ hpPercent: 40 })).toBeNull();
+    expect(restored.acknowledge(true, checkpoint.pending!.id)).toBe(true);
+    expect(restored.trace({ hpPercent: 40 }).rules[0]!.state).toBe('cooldown');
+    checkpoint.progress[0]!.runs = 100;
+    expect(restored.selectorCheckpoint()!.progress[0]!.runs).toBe(1);
+  });
+
+  it('preserves a completed selector for an exhausted macro that still monitors its field', () => {
+    const { runtime } = setup(options);
+    runtime.start(spec({ maxActions: 1 })); runtime.tick({ hpPercent: 40 }); acknowledge(runtime);
+    const checkpoint = runtime.selectorCheckpoint()!;
+    expect(checkpoint.state).toBe('completed');
+    const restored = new RoutineRuntime(isAction, () => 2_000, options);
+    restored.restoreSelector(checkpoint);
+    expect(restored.tick({ hpPercent: 40 })).toBeNull();
+    expect(restored.snapshot()).toMatchObject({ state: 'completed', actionsIssued: 1, actionsCompleted: 1 });
+  });
+
+  it('cannot enable unlimited execution or pending-action restoration on legacy routines', () => {
+    const { runtime } = setup(options);
+    runtime.start(spec({ durationSeconds: 0, maxActions: 0, rules: [rule({ maxRuns: 0 })] }));
+    runtime.tick({ hpPercent: 40 });
+    for (const legacyOptions of [{}, { allowUnlimitedLimits: true },
+      { ...options, actionTimeoutSeconds: 1 }, { ...options, maxSteps: 1 }]) {
+      const { runtime: legacy } = setup(legacyOptions);
+      const before = legacy.snapshot();
+      expect(legacy.selectorCheckpoint()).toBeNull();
+      expect(() => legacy.restoreSelector(runtime.selectorCheckpoint())).toThrow(/internal logical selector/);
+      expect(legacy.snapshot()).toEqual(before);
+      legacy.start(spec()); legacy.tick({ hpPercent: 40 });
+      expect(legacy.selectorCheckpoint()).toBeNull();
+    }
+  });
+
+  it('rejects corrupt and oversized selector ledgers atomically', () => {
+    const { runtime } = setup(options);
+    runtime.start(spec()); runtime.tick({ hpPercent: 40 });
+    const checkpoint = runtime.selectorCheckpoint()!;
+    const bad = [
+      { ...checkpoint, actionsCompleted: 1 }, { ...checkpoint, steps: 0 },
+      { ...checkpoint, progress: [] }, { ...checkpoint, progress: Array(33).fill(checkpoint.progress[0]) },
+      { ...checkpoint, progress: [{ runs: 3, lastIssued: 1_000 }] },
+      { ...checkpoint, progress: [{ runs: 1, lastIssued: 999 }] },
+      { ...checkpoint, progress: [{ runs: 1, lastIssued: 1_001 }] },
+      { ...checkpoint, pending: { ...checkpoint.pending, ruleIndex: 1 } },
+      { ...checkpoint, pending: { ...checkpoint.pending, id: 0 } },
+      { ...checkpoint, pending: { ...checkpoint.pending, issuedAt: 1_001 } },
+      { ...checkpoint, nextActionId: 0 }, { ...checkpoint, version: 2 },
+      { ...checkpoint, spec: { ...checkpoint.spec, command: 'arbitrary' } },
+    ];
+    for (const value of bad) {
+      const { runtime: restored } = setup(options);
+      const before = restored.snapshot();
+      expect(() => restored.restoreSelector(value)).toThrow();
+      expect(restored.snapshot()).toEqual(before);
+    }
+  });
+
+  it('refuses an active selector restore and a reversed clock without losing ownership', () => {
+    const { runtime } = setup(options);
+    runtime.start(spec()); runtime.tick({ hpPercent: 40 });
+    const checkpoint = runtime.selectorCheckpoint()!;
+    const before = runtime.snapshot();
+    expect(() => runtime.restoreSelector(checkpoint)).toThrow(/Stop/);
+    expect(runtime.snapshot()).toEqual(before);
+    const restored = new RoutineRuntime(isAction, () => 999, options);
+    expect(() => restored.restoreSelector(checkpoint)).toThrow(/clock/);
+    expect(restored.snapshot().state).toBe('idle');
+  });
+});
 
 describe('routine validation', () => {
   it('accepts a bounded catalog action and clones conditions/actions', () => {
