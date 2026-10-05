@@ -68,11 +68,11 @@ describe('deployed party initialization packets', () => {
     expect(f.controller.world.snapshot().party?.members).toHaveLength(1);
     expect(f.sent).toEqual([]);
   });
-  it('preserves the previous party when a large replacement packet is malformed', () => {
+  it.each([false, true])('preserves the party on malformed replacement with trailer=%s', trailer => {
     const f = setup();
     f.controller.receive(roster());
     const previous = f.controller.world.snapshot();
-    expect(() => f.controller.receive(roster(true))).toThrow('Duplicate party member');
+    expect(() => f.controller.receive(roster(true, 33, trailer))).toThrow('Duplicate party member');
     expect(f.controller.world.snapshot()).toEqual(previous);
     expect(() => f.controller.receive(roster().subarray(0, -1))).toThrow('Truncated packet');
     expect(f.controller.world.snapshot()).toEqual(previous);

@@ -108,6 +108,8 @@ describe('world packet decoder', () => {
     // Empty names give the minimum 13-byte record, making the count budget exact.
     expect(() => decodeWorld(packet(34).finish())).toThrow('Invalid party count');
     expect(() => decodeWorld(packet(33, true).finish())).toThrow('Duplicate party member');
+    expect(() => decodeWorld(packet(33, true).take(new Uint8Array(8)).finish())).toThrow('Duplicate party member');
+    expect(() => decodeWorld(packet(34).take(new Uint8Array(8)).finish())).toThrow('Invalid party count');
     expect(() => decodeWorld(packet(33).u8(0).finish())).toThrow('Unknown packet trailer');
     expect(() => decodeWorld(packet(33).finish().subarray(0, -1))).toThrow();
   });
