@@ -33,6 +33,27 @@ function fixture(held=false){
 async function flush(){for(let i=0;i<20;i++)await Promise.resolve();}
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return{promise,resolve};}
 describe('clientless shared-controller runtime',()=>{
+ it('preparation freezes field decisions, cancellation continues intent and final ACK carries a checkpoint',async()=>{
+  const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();
+  const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0 as const};
+  f.runtime.control('start',settings);const requestId='a'.repeat(32);f.runtime.prepareUpdate(requestId);await flush();
+  const prepared=f.invoke.mock.calls.find(([name])=>name==='update_prepared');expect(prepared).toBeDefined();
+  expect((prepared![1] as {checkpoint:{status:unknown}}).checkpoint.status).toMatchObject({runRequested:true,sessionId:f.runtime.sessionId,connectionId:f.runtime.connectionId,connectionMode:'botOnly'});
+  const before=f.writes().length;f.runtime.perform('command',{type:'useItem',itemId:717});await flush();expect(f.writes()).toHaveLength(before);
+  f.runtime.cancelUpdate(requestId);expect(f.runtime.snapshot().runRequested).toBe(true);expect(f.runtime.controller.preparingUpdate).toBe(false);
+  f.runtime.prepareUpdate('b'.repeat(32));await flush();const nonce='c'.repeat(32);
+  f.runtime.maintenance(nonce,true);await flush();f.runtime.maintenance(nonce,'commit');await flush();
+  const final=f.invoke.mock.calls.find(([name])=>name==='update_final_ack');expect(final).toBeDefined();
+  expect((final![1] as {checkpoint:{status:unknown}}).checkpoint.status).toMatchObject({runRequested:true,connectionId:f.runtime.connectionId});
+ });
+ it('restore acknowledges only a fresh same-character boundary and Stop revokes suspended intent',async()=>{
+  const f=fixture();await f.ready();f.step(1200);await f.runtime.cycle();f.runtime.control('start',{...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0});
+  const requestId='a'.repeat(32);f.runtime.prepareUpdate(requestId);await flush();const checkpoint=f.runtime.controller.updateCheckpoint()!;
+  f.runtime.control('stop',DEFAULT_SETTINGS);expect(f.runtime.controller.preparingUpdate).toBe(false);expect(f.runtime.snapshot().runRequested).toBe(false);
+  const next=fixture();await next.ready();next.step(1200);await next.runtime.cycle();next.runtime.restoreUpdate({requestId,checkpoint});await flush();
+  expect(next.invoke).toHaveBeenCalledWith('update_restored',{requestId,success:true});expect(next.runtime.snapshot().runRequested).toBe(true);
+  next.runtime.restoreUpdate({requestId:'b'.repeat(32),checkpoint});await flush();expect(next.invoke).toHaveBeenCalledWith('update_restored',{requestId:'b'.repeat(32),success:false});
+ });
  it.each([0,1])('processes real first full resources + memo before Ready, own entry actor %s before guard reset',async actor=>{
   const f=fixture(true);await f.open();await f.frame(enter(actor));expect(f.writes()).toEqual([]);
   await f.frame(resources());expect(f.writes()).toEqual([]);expect(f.marker()).toBe(true);

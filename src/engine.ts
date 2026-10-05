@@ -70,6 +70,9 @@ export class BotEngine {
   connected = false;
   compatible = false;
   running = false;
+  private updateSuspended=false;
+  private updateWasRunning=false;
+  private updatePending:{type:'attack'|'pickup';id:number;actorIdentity?:ActionIdentity|null;dropIdentity?:DropIdentity;entity?:Entity}|null=null;
   reason = 'Open the game and sign in to your character.';
   playerId: number | null = null;
   map = '';
@@ -219,6 +222,7 @@ export class BotEngine {
     return p?.kind===0&&!p.dead&&p.hp>0&&this.actorActionIdentity()?this.manualActorIdentity(p.id):null;
   }
   stop(reason = 'Stopped by you.', sendStop=true): void {
+    this.updateWasRunning=false;
     if(this.retreatTask)this.cancelRetreat(reason,false);
     const wasManual=!!this.manualTask||!!this.manualAttackFence||this.manualWalkFence;
     if(wasManual)this.finishManual('cancelled',reason,false);
@@ -275,7 +279,13 @@ export class BotEngine {
     this.observations.frame();
     const observedAt = this.now();
     for (const event of events) {
+      const updateOwner=this.updatePending;
+      const updateDrop=updateOwner?.type==='pickup'?this.drops.get(updateOwner.id):undefined;
+      const updateConfirmed=!!updateOwner&&this.selfOwnerCurrent(updateOwner.actorIdentity)&&(updateOwner.type==='attack'
+        ? this.entities.get(updateOwner.id)===updateOwner.entity&&(event.type==='death'&&event.id===updateOwner.id||event.type==='remove'&&event.id===updateOwner.id&&event.dead)
+        : !!updateDrop&&event.type==='pickup'&&event.id===updateOwner.id&&event.picker===this.playerId&&sameDrop(updateOwner.dropIdentity,updateDrop));
       this.apply(event);
+      if(updateConfirmed&&this.updatePending===updateOwner)this.updatePending=null;
       this.observeOwnCast(event);
       // Apply in wire order: a later spawn must never lend its lifetime to an earlier attack.
       const own = this.threatOwnIdentity();
@@ -361,6 +371,7 @@ export class BotEngine {
     // packet. Target replacement/departure already discards these owners;
     // the surviving credit must still belong to the current own lifetime.
     const killIdentity=this.pending?.type==='attack'&&this.pending.id===id&&this.selfOwnerCurrent(this.pending.actorIdentity)?this.pending.actorIdentity
+      :this.updatePending?.type==='attack'&&this.updatePending.id===id&&this.entities.get(id)===this.updatePending.entity&&this.selfOwnerCurrent(this.updatePending.actorIdentity)?this.updatePending.actorIdentity
       :skillKill&&skillKill.until>=this.now()&&this.selfOwnerCurrent(skillKill.identity)?skillKill.identity:retreatKill;
     if(this.manualTask?.request.command.type==='attack'&&this.manualTask.request.command.target.id===id)this.finishManual(dead?'complete':'failed',dead?'Selected monster death confirmed.':'Selected monster left view.');
     if(this.strategyWait?.id===id)this.strategyWait=null;
@@ -673,10 +684,11 @@ export class BotEngine {
         this.drops.set(e.drop.id, e.drop); break;
       }
       case 'pickup':
-        if (e.picker === this.playerId && this.pending?.type === 'pickup' && this.pending.id === e.id&&this.selfOwnerCurrent(this.pending.actorIdentity)) {
+        {const owner=this.pending?.type==='pickup'?this.pending:this.updatePending?.type==='pickup'?this.updatePending:null;
+        if (e.picker === this.playerId && owner?.id === e.id&&this.selfOwnerCurrent(owner.actorIdentity)) {
           const drop=this.drops.get(e.id);
-          if(drop&&sameDrop(this.pending.dropIdentity,drop)){this.looted++;this.lootStats.set(drop.itemId,(this.lootStats.get(drop.itemId)??0)+drop.count);this.note('Loot pickup confirmed.');}
-        }
+          if(drop&&sameDrop(owner.dropIdentity,drop)){this.looted++;this.lootStats.set(drop.itemId,(this.lootStats.get(drop.itemId)??0)+drop.count);this.note('Loot pickup confirmed.');}
+        }}
         this.drops.delete(e.id);
         this.dropCreatedAt.delete(e.id);
         if (this.pending?.type === 'pickup' && this.pending.id === e.id) this.pending = null;
@@ -687,12 +699,19 @@ export class BotEngine {
     if (this.running && this.player && !this.player.dead && this.player.hp / this.player.maxHp * 100 <= this.settings.minHpPercent) this.stop('HP reached the stop limit. Recover manually.');
   }
   tick(dispatchDecisions = true): void {
+    if(this.updateSuspended)dispatchDecisions=false;
     const now = this.now();
     this.advanceMovement(); this.loadout.tick(); this.partyChanged();
     this.retreatSettlement();
     const manualSkill = !this.running && this.automation.pendingAction?.type === 'skill';
     const actionTimeout = this.automation.timeout();
     if (actionTimeout) { if (manualSkill && this.connected) this.send({ type: 'stop' }); this.stop(actionTimeout); return; }
+    if(this.updateSuspended){
+      this.lastTick=now;
+      if(this.retreatTask)this.tickRetreat(now,false);
+      if(this.player&&!this.player.dead&&this.route)this.routeTick(this.player,now,true);
+      return;
+    }
     if(this.manualTask){this.tickManual(now,dispatchDecisions);return;}
     if (!this.running) return;
     if (now - this.lastTick > 5000) { this.stop('Mac slept or the game paused. Press Start to resume.'); return; }
@@ -1288,6 +1307,24 @@ export class BotEngine {
     // This does not release movement/resource fences or authorize field actions.
     this.deaths=0;this.runStarted=this.now();this.runKills=this.kills;this.runPickups=this.looted;this.waypointIndex=0;
   }
+  /** Freeze decisions without resetting an admitted resource or movement receipt. */
+  prepareUpdate():void {if(!this.updateSuspended){this.updateWasRunning=this.running;this.updatePending=this.pending?{...this.pending,...(this.pending.type==='attack'?{entity:this.entities.get(this.pending.id)}:{})}:null;this.updateSuspended=true;}}
+  settleUpdate():void {
+    this.advanceMovement();
+    if(!this.updateSuspended||this.updatePending||this.manualTargetOwned||this.retreatOwned||this.pending||this.leg||this.automation.busy
+      ||this.awaitsImplicitWalk()||this.ownMotion()||!this.observedOwnCastSettled()||!this.loadout.equipmentSettled)return;
+    this.route=null;this.running=false;
+  }
+  cancelUpdate():void {
+    if(!this.updateSuspended)return;
+    this.updateSuspended=false;
+    if(this.updateWasRunning&&this.connected&&this.compatible&&!this.running){this.running=true;this.lastTick=this.now();}
+    this.updateWasRunning=false;this.updatePending=null;
+  }
+  restoreRequestedRun(input:Settings,run:{startedAt:number;kills:number;pickups:number;deaths:number}):void {
+    this.prepareRequestedRun(input);
+    this.runStarted=run.startedAt;this.runKills=this.kills-run.kills;this.runPickups=this.looted-run.pickups;this.deaths=run.deaths;
+  }
   /** Resume an already requested run without resetting its finite budgets. */
   resumeRequested(input: Settings = this.settings): void {
     if (this.running || !this.idleForActions()) throw new Error('Wait for movement and actions to finish.');
@@ -1544,7 +1581,7 @@ export class BotEngine {
   }
   idleForActions(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.partySupport?.busy()&&!this.running&&!this.retreatOwned&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&!this.loadout.blocked; }
   /** Installation is gated by sent owners, not HP or an equipment policy fault. */
-  settledForMaintenance(): boolean { this.advanceMovement(); return this.observedOwnCastSettled()&&!this.partySupport?.busy()&&!this.running&&!this.retreatOwned&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled; }
+  settledForMaintenance(): boolean { this.advanceMovement(); return !this.updatePending&&this.observedOwnCastSettled()&&!this.partySupport?.busy()&&!this.running&&!this.retreatOwned&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled; }
   /** Death recovery owns only the existing posture scheduler, never field decisions. */
   recoveryOnly(settings: Settings): { complete: boolean; reason: string } {
     const p=this.player,a=automationSettings(settings);

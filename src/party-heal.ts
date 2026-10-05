@@ -10,6 +10,14 @@ import { matchesPartyHealExecution } from './skill-execution';
 export type HealAction=Extract<ExpandedAction,{type:'skill';mode:'target'}>;
 export interface PartyHealCandidate { binding:PartyActorBinding; hp:number; maxHp:number; hpAt:number }
 export interface PartyHealSnapshot { state:'disabled'|'waiting'|'ready'|'pending'|'uncertain'|'confirmed'; reason:string; attempts:number; confirmed:number; targetMemberId:number|null; sequence:number|null; resourceReadback:boolean }
+export interface PartyHealCheckpoint { version:1; attempts:number; confirmed:number; cooldownUntil:number }
+export function validatePartyHealCheckpoint(value:unknown):PartyHealCheckpoint {
+  const c=value as PartyHealCheckpoint;
+  if(!c||typeof c!=='object'||Array.isArray(c)||Object.keys(c).length!==4||c.version!==1
+    ||!Number.isInteger(c.attempts)||c.attempts<0||c.attempts>100||!Number.isInteger(c.confirmed)||c.confirmed<0||c.confirmed>c.attempts
+    ||!Number.isSafeInteger(c.cooldownUntil)||c.cooldownUntil<0)throw new Error('Invalid party Heal checkpoint.');
+  return structuredClone(c);
+}
 interface Owner { sequence:number; identity:ActionIdentity; action:HealAction; binding:PartyActorBinding; since:number; retired:boolean; hpAt:number; cooldownSeconds:number }
 function sameOwnIdentity(a:ActionIdentity|null,b:ActionIdentity):boolean {
   return !!a&&a.world===b.world&&a.selfId===b.selfId&&a.selfIncarnation===b.selfIncarnation;
@@ -49,6 +57,16 @@ export class PartyHealPolicy {
   constructor(private readonly now:()=>number){}
   get busy():boolean{return this.owner!==null;}
   get awaitingSpReadback():boolean{return this.spReadbackPending;}
+  checkpoint():PartyHealCheckpoint|null {
+    return this.busy||this.awaitingSpReadback?null:{version:1,attempts:this.attempts,confirmed:this.confirmed,cooldownUntil:this.cooldownUntil};
+  }
+  restore(value:unknown):void {
+    const checkpoint=validatePartyHealCheckpoint(value);
+    if(this.busy||this.awaitingSpReadback)throw new Error('Waiting for the previous party Heal receipt.');
+    this.attempts=checkpoint.attempts;this.confirmed=checkpoint.confirmed;this.cooldownUntil=checkpoint.cooldownUntil;
+    this.last=null;this.readback=false;this.state='waiting';this.reason='Waiting for fresh party member and own SP evidence after update.';
+    this.observationSequence=0n;this.confirmationSequence=0n;this.spReadbackSequence=0n;
+  }
   owns(sequence:number):boolean{return this.owner?.sequence===sequence;}
   newRun():void {if(this.busy)throw new Error('Waiting for the previous party Heal receipt.');this.attempts=0;this.confirmed=0;}
   wait(reason:string):void {if(!this.owner){this.state='waiting';this.reason=reason;}}

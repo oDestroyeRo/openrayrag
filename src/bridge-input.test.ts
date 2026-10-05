@@ -11,6 +11,7 @@ import { warpCommand } from './warp-protocol';
 import { socketCommand } from './socket-protocol';
 import { refineCommand } from './refine-protocol';
 import { socialCommand } from './social-protocol';
+import type { ControllerUpdateRestore } from './controller-update';
 
 const captured=vi.hoisted(()=>({controller:null as CompanionController|null,senders:[] as Array<(...args:never[])=>void>}));
 vi.mock('./controller',async original=>{
@@ -38,7 +39,7 @@ function spawn(e:Entity,entryType=0):Uint8Array {
     .u8(e.kind).u8(0).u8(0).i32(e.x).i32(e.y).u8(e.level).i32(e.hp).i32(e.maxHp).i32(e.sp??0).i32(e.maxSp??0).i32(0).u8(0).finish();
   return new BitWriter().u8(OP.spawn).u8(entryType).i32(body.length).take(body).finish();
 }
-type Page={WebSocket:typeof NativeSocket;buildUrl:string;__RAYRAG__?:{control:(action:'start'|'heartbeat',settings?:Settings)=>void;maintenance:(nonce:string,reserve:boolean|'commit')=>void;perform:(action:string,request:unknown)=>void}};
+type Page={WebSocket:typeof NativeSocket;buildUrl:string;__RAYRAG__?:{control:(action:'start'|'stop'|'heartbeat',settings?:Settings)=>void;maintenance:(nonce:string,reserve:boolean|'commit')=>void;perform:(action:string,request:unknown)=>void;prepareUpdate:(requestId:string)=>void;cancelUpdate:(requestId:string)=>void;restoreUpdate:(payload:ControllerUpdateRestore)=>void}};
 async function fixture(ready=true,ownId=0){
   const invoke=vi.fn(async(name:string):Promise<unknown>=>name==='warp_guard_mark'?'11111111-1111-4111-8111-111111111111':name==='update_ack'||name==='update_lease_alive'?true:undefined);
   const page:Page & Pick<Window,'addEventListener'> & {__TAURI_INTERNALS__:{invoke:typeof invoke}}={WebSocket:NativeSocket,buildUrl:VERIFIED_BUILD,addEventListener:()=>{},__TAURI_INTERNALS__:{invoke}},listeners=new Map<string,EventListener>();
@@ -57,6 +58,41 @@ async function fixture(ready=true,ownId=0){
   const input=(type='keydown',trusted=true)=>listeners.get(type)!({isTrusted:trusted} as Event);
   return {page,socket,c,packet,packetOn,input,invoke,start:(settings:Settings)=>page.__RAYRAG__!.control('start',settings),step:async(ms:number)=>vi.advanceTimersByTimeAsync(ms)};
 }
+it('game-client preparation drains a late attack receipt and final ACK carries the same frozen counters',async()=>{
+  const f=await fixture(),requestId='a'.repeat(32),nonce='b'.repeat(32);
+  f.start({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0});await f.step(100);
+  f.page.__RAYRAG__!.prepareUpdate(requestId);await f.step(100);
+  expect(f.invoke.mock.calls.some(([name])=>name==='update_prepared')).toBe(false);
+  const writes=f.socket.writes.length;f.page.__RAYRAG__!.perform('command',{type:'useItem',itemId:501});await f.step(100);
+  expect(f.socket.writes).toHaveLength(writes);
+  await f.packet(new BitWriter().u8(OP.death).i32(2).finish());await f.step(100);
+  const prepared=f.invoke.mock.calls.find(([name])=>name==='update_prepared');
+  expect(prepared).toBeDefined();
+  const preparedArgs=(prepared as unknown as [string,{checkpoint:{status:{kills:number;runRequested:boolean;sessionId:string;connectionId:string;connectionMode:string}}}])[1];
+  expect(preparedArgs.checkpoint.status).toMatchObject({kills:1,runRequested:true,connectionMode:'gameClient'});
+  expect(preparedArgs.checkpoint.status.sessionId).toBeTruthy();expect(preparedArgs.checkpoint.status.connectionId).toBeTruthy();
+  f.page.__RAYRAG__!.maintenance(nonce,true);for(let i=0;i<20;i++)await Promise.resolve();
+  f.page.__RAYRAG__!.maintenance(nonce,'commit');for(let i=0;i<20;i++)await Promise.resolve();
+  const final=f.invoke.mock.calls.find(([name])=>name==='update_final_ack');
+  expect(final).toBeDefined();expect((final as unknown as [string,{checkpoint:{status:{kills:number}}}])[1].checkpoint.status.kills).toBe(1);
+});
+it('game-client Stop cancels preparation and restore acknowledges an incompatible fresh character',async()=>{
+  const f=await fixture(),requestId='a'.repeat(32),automation=structuredClone(DEFAULT_AUTOMATION);automation.combat.mode='off';
+  f.start({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0,automation});f.page.__RAYRAG__!.prepareUpdate(requestId);
+  const checkpoint=f.c.updateCheckpoint()!;f.page.__RAYRAG__!.control('stop');await f.step(100);
+  expect(f.c.preparingUpdate).toBe(false);expect(f.c.runRequested).toBe(false);
+  expect(f.invoke.mock.calls.some(([name])=>name==='update_prepared')).toBe(false);
+  f.page.__RAYRAG__!.restoreUpdate({requestId,checkpoint});
+  expect(f.invoke).toHaveBeenCalledWith('update_restored',{requestId,success:false});
+});
+it('game-client restore accepts a fresh same-character entry without immediate dispatch',async()=>{
+  const f=await fixture(),requestId='a'.repeat(32),automation=structuredClone(DEFAULT_AUTOMATION);automation.combat.mode='off';
+  f.start({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0,automation});f.page.__RAYRAG__!.prepareUpdate(requestId);
+  const checkpoint=f.c.updateCheckpoint()!;
+  const next=await fixture(false);await next.packet(new BitWriter().u8(OP.enter).i32(0).string('prt_fild08').finish());await next.packet(spawn(player,1));
+  next.page.__RAYRAG__!.restoreUpdate({requestId,checkpoint});
+  expect(next.invoke).toHaveBeenCalledWith('update_restored',{requestId,success:true});expect(next.c.runRequested).toBe(true);expect(next.socket.writes).toEqual([]);
+});
 it('dispatches a macro child through the game page API using the shared manual encoder',async()=>{
   const f=await fixture();f.c.engine.receive([{type:'inventory',items:[{bagId:501,itemId:501,type:1,count:3}],equipment:Array(10).fill(0),ammoId:-1}]);
   const before=f.socket.writes.length;

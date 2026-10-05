@@ -35,6 +35,16 @@ function freshConnection(f:ReturnType<typeof setup>):void {
   {type:'inventory',items:[],equipment:Array(10).fill(0),ammoId:-1},{type:'skills',learned:[{skillId:41,level:10}]}]);
  f.c.world.reset('prt_fild08');f.c.receive(joined());f.c.receive(statsPacket(100));f.sp(100);
 }
+
+it('update checkpoint retains Heal allowance and cooldown only after execution and fresh SP',()=>{
+ const f=setup();f.settings.automation!.partyHeal!.cooldownSeconds=3;f.c.start(f.settings);f.step();
+ f.c.prepareUpdate();expect(f.c.partyHeal.checkpoint()).toBeNull();f.c.receive(resultPacket(result()));
+ expect(f.c.partyHeal.checkpoint()).toBeNull();f.sp();f.step();
+ const checkpoint=f.c.partyHeal.checkpoint()!;expect(checkpoint).toEqual({version:1,attempts:1,confirmed:1,cooldownUntil:f.time()-100+3000});
+ const next=setup();next.c.partyHeal.restore(checkpoint);expect(next.c.partyHeal.snapshot()).toMatchObject({attempts:1,confirmed:1,resourceReadback:false});
+ expect(next.c.partyHeal.available(next.settings.automation!.partyHeal,true)).toBe(false);
+ f.c.cancelUpdate();f.step();expect(f.sent.filter(a=>(a as {type:string}).type==='skill')).toHaveLength(1);
+});
 describe('stationary automatic party Heal',()=>{
  it('is absent/default-off and adds no route search or packet',()=>{const f=setup();delete f.settings.automation!.partyHeal;const spy=vi.spyOn(GridNavigator.prototype,'plan');f.c.start(f.settings);f.step();expect(f.sent).toEqual([]);expect(spy).not.toHaveBeenCalled();spy.mockRestore();expect(Object.hasOwn(validateAutomation(DEFAULT_AUTOMATION),'partyHeal')).toBe(false);});
  it('dispatches Heal at owner zero and captures its receipt before a reentrant transport',()=>{let captured=false;const f=setup(grid,[member],c=>{captured=c.partyHeal.snapshot().attempts===1&&c.partyHeal.snapshot().sequence===c.engine.actionResult.sequence;c.receive(resultPacket(result()));});f.c.start(f.settings);f.step();expect(captured).toBe(true);expect(f.sent).toEqual([{type:'skill',mode:'target',target:2,skillId:41,level:1}]);expect(f.c.snapshot().partyHeal).toMatchObject({attempts:1,confirmed:1});});
