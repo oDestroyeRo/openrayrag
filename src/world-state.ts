@@ -1,4 +1,5 @@
 import { PartyActorBindings } from './party-actors';
+import type { ActorObservations } from './actor-observations';
 import type { InventoryItem } from './protocol-feature';
 import type { BarterOffer, PartyMember, PricedRow, ShopEntry, VendingEntry, WorldEvent } from './world-protocol';
 
@@ -65,6 +66,24 @@ export class WorldState {
     if (mode !== 'shop') this.shop = null;
     if (mode !== 'storage') { this.storage.clear(); this.storageReady = false; }
     if (mode !== 'barter') this.barter = [];
+  }
+
+  /** Mutate the roster and its owned actor evidence as one observation. The
+   * roster observer sees detached prior rows and the new roster before bindings
+   * refresh, so follow evidence retains its original packet ordering. */
+  observe(event: WorldEvent, observations: ActorObservations, playerId: number | null = null,
+    observeRoster?: (before: WorldState['party']) => void): void {
+    const before = observeRoster && this.party
+      ? { ...this.party, members: new Map([...this.party.members].map(([id, member]) => [id, { ...member }])) }
+      : null;
+    this.apply(event, playerId);
+    observeRoster?.(before);
+    this.partyActors.observe(event, this.party, this.map, observations, playerId);
+  }
+
+  /** Reconcile retained rows with current actor lifetimes without renewing row evidence. */
+  refreshPartyActors(observations: ActorObservations, playerId: number | null = null): void {
+    this.partyActors.sync(this.party, this.map, observations, playerId);
   }
 
   apply(event: WorldEvent, playerId: number | null = null): void {

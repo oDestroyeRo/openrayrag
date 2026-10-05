@@ -13,8 +13,8 @@ const sp:ActorPredicate={field:'actorSpPercent',actor:{scope:'target'},operator:
 function setup(spawn=true) {
   let at=1000, worldId=0;const observations=new ActorObservations(()=>at,()=>`00000000-0000-0000-0000-${String(++worldId).padStart(12,'0')}`);
   const world=new WorldState();world.reset('prontera');if(spawn)observations.spawn({...entity});observations.frame();
-  const sync=()=>world.partyActors.sync(world.party,world.map,observations,1);
-  const event=(event:WorldEvent)=>{world.apply(event,1);world.partyActors.observe(event,world.party,world.map,observations,1);};
+  const sync=()=>world.refreshPartyActors(observations,1);
+  const event=(event:WorldEvent)=>world.observe(event,observations,1);
   const join=(members=[member])=>event({type:'partyJoined',partyId:5,name:'Party',login:false,members});
   const snapshot=()=>observations.snapshot(1,2,true);
   const trace=(condition:ActorPredicate=hp)=>evaluateActorPredicate(condition,snapshot());

@@ -17,12 +17,11 @@ function fixture() {
  world.reset('prt_fild08');observations.spawn(own,1,1);observations.spawn(leader,1,0);observations.frame();
  const context=():PartyFollowContext=>{const self=observations.partyActor(1);return {party:world.party,bindings:world.partyActors,observations,actors,map:world.map,player,connection,
    own:self?{world:self.world,selfId:1,selfIncarnation:self.incarnation}:null};};
- const event=(event:WorldEvent)=>{const before=world.party?{...world.party,members:new Map([...world.party.members].map(([id,row])=>[id,{...row}]))}:null;
-  world.apply(event,1);runtime.observeParty(event,before,context());world.partyActors.observe(event,world.party,world.map,observations,1);};
+ const event=(event:WorldEvent)=>world.observe(event,observations,1,before=>runtime.observeParty(event,before,context()));
  event({type:'partyJoined',partyId:5,name:'Party',login:false,members:[{...member}]});
  const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[],automation:structuredClone(DEFAULT_AUTOMATION)};
  settings.automation.combat.mode='off';settings.automation.follow={...settings.automation.follow,mode:'partyLeader',rendezvous:true,lostSeconds:20};
- const start=()=>runtime.start(settings,context());const update=()=>{world.partyActors.sync(world.party,world.map,observations,1);runtime.update(context());};
+ const start=()=>runtime.start(settings,context());const update=()=>{world.refreshPartyActors(observations,1);runtime.update(context());};
  const advance=(ms:number)=>{now+=ms;observations.frame();};
  const hide=()=>{actors.delete(2);observations.remove(2);update();};
  const remote=(map='prontera')=>{event({type:'partyMap',memberId:7,map});update();};
