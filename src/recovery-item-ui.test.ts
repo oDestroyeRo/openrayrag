@@ -98,6 +98,7 @@ function featureUi(settingsUnavailable = false) {
     let items: AutomationSettings['items'] = [];
     Reflect.get(this as object, 'editors').set('items', { read: () => items, write: (value: AutomationSettings['items']) => { items = structuredClone(value); }, lock: () => {} });
   });
+  vi.spyOn(prototype, 'setup').mockImplementation(() => {});
   vi.spyOn(prototype, 'workflows').mockImplementation(function (this: unknown) {
     Object.assign(this as object, { macroUi: { render: () => {}, lock: () => {}, dirty: false } });
   });

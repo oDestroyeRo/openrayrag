@@ -25,6 +25,7 @@ import { BUILTIN_SERVICES, previewServiceAsync, validateServiceRequest } from '.
 import type { Entity } from './protocol';
 import { dryRunRoutine, validateRoutineSpec, type RoutineObservation } from './routines';
 import { MacroUi, macroActive, validMacroSnapshot } from './macro-ui';
+import type { BotScriptDocument } from './bot-script';
 import { DEFAULT_SUPPLY } from './supply-trip';
 import { previewSupplyTrip } from './supply-plan';
 import { DEFAULT_DISPOSITION, dispositionPreviewIsCurrent, planDisposition, type DispositionPlan } from './disposition';
@@ -38,6 +39,8 @@ type Section = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows' | 'p
 interface Hooks {
   settings(): Settings; apply(settings: Settings): void; map(): string; character(): string;
   macroSettings?(): Settings;
+  applySetup?(settings: Settings): void;
+  setupChanged?(): void;
   command(action: Record<string, unknown>): Promise<unknown>;
   workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; macro?(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>; social(spec: unknown): Promise<unknown>; memo(spec: unknown): Promise<unknown>; socketPreview?(spec:unknown):Promise<unknown>; socket?(spec:unknown):Promise<unknown>; warp?(spec:unknown):Promise<unknown>;warpPreview?(spec:unknown):Promise<unknown>;warpCancel?():Promise<unknown>;
   refinePreview?(spec: unknown): Promise<unknown>; refine?(spec: unknown): Promise<unknown>; refineAdvance?(promptToken: string): Promise<unknown>;
@@ -332,7 +335,7 @@ export class FeatureUi {
       this.syncFollowMode();this.hooks.changed();
     });
     this.note('combat','Loot all considers observed drops inside your pickup radius and allowed field area. Item ignore rules still apply. The server decides pickup rights and inventory capacity; sending Pickup is not success.');
-    this.rules();const retreatState=document.createElement('p');retreatState.id='retreat-state';retreatState.className='telemetry-summary';retreatState.hidden=true;combat.append(retreatState); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.servicePanel(); this.profilePanel();
+    this.rules();const retreatState=document.createElement('p');retreatState.id='retreat-state';retreatState.className='telemetry-summary';retreatState.hidden=true;combat.append(retreatState); const conditionState=document.createElement('p');conditionState.id='actor-condition-state';conditionState.className='telemetry-summary';conditionState.hidden=true;combat.append(conditionState);this.workflows(); this.setup(); this.servicePanel(); this.profilePanel();
     this.manualTargets=new ManualTargetUi(this.hooks);this.mounts.manualTools.prepend(this.manualTargets.root);
     this.dispositionPanel();this.supplyPanel();this.mapPolicyPanel();
     this.social = new SocialUi(action => this.hooks.social(action), (message, error) => this.hooks.notify(message, error)); this.mounts.manualTools.append(this.social.root);
@@ -533,11 +536,32 @@ export class FeatureUi {
     delete input.dataset.setting; input.id = id; input.value = value; parent.append(field); return input;
   }
   private detail(title: string): HTMLDetailsElement { const details = document.createElement('details'); details.className = 'manual-group'; const summary = document.createElement('summary'); summary.textContent = title; details.append(summary); this.mounts.manualTools.append(details); return details; }
+  private setup(): void {
+    this.macroUi = new MacroUi({ settings: () => this.hooks.macroSettings?.()??this.hooks.settings(), apply: settings => {
+      if (!this.hooks.applySetup) throw new Error('Setup apply is unavailable.');
+      this.hooks.applySetup(settings);
+    }, changed: () => this.hooks.setupChanged?.(), notify: (message, error) => this.hooks.notify(message, error) });
+    const form = this.host.querySelector<HTMLElement>('#setup-form');
+    const script = this.host.querySelector<HTMLElement>('#setup-script');
+    if (!form || !script) throw new Error('Setup view mounts are missing.');
+    form.prepend(this.macroUi.summary); script.append(this.macroUi.root);
+    const formTab = this.host.querySelector<HTMLButtonElement>('#setup-tab-form')!;
+    const scriptTab = this.host.querySelector<HTMLButtonElement>('#setup-tab-script')!;
+    const select = (showScript: boolean): void => {
+      if (!showScript && this.macroUi.dirty) { this.hooks.notify('Apply & save or Discard draft before switching to Form.', true); return; }
+      if (showScript) { try { this.macroUi.syncSettings(this.hooks.macroSettings?.() ?? this.hooks.settings()); } catch (error) { this.hooks.notify(error instanceof Error ? error.message : 'Finish the Form settings before opening Script.', true); return; } }
+      form.hidden = showScript; script.hidden = !showScript;
+      formTab.setAttribute('aria-selected', String(!showScript)); scriptTab.setAttribute('aria-selected', String(showScript));
+      formTab.tabIndex = showScript ? -1 : 0; scriptTab.tabIndex = showScript ? 0 : -1;
+    };
+    formTab.addEventListener('click', () => select(false)); scriptTab.addEventListener('click', () => select(true));
+    for (const tab of [formTab, scriptTab]) tab.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault(); const showScript = event.key === 'End' || event.key !== 'Home' && tab === formTab;
+      select(showScript); (script.hidden ? formTab : scriptTab).focus();
+    });
+  }
   private workflows(): void {
-    this.macroUi = new MacroUi({ settings: () => this.hooks.macroSettings?.()??this.hooks.settings(), start: request => this.hooks.macro?.(request) ?? Promise.reject(new Error('Macro transport unavailable.')),
-      stop: () => this.hooks.stop?.(), changed: () => this.hooks.changed(), notify: (message, error) => this.hooks.notify(message, error) });
-    const heading=this.panel('workflows').querySelector('.panel-title');
-    if(heading)heading.after(this.macroUi.root);else this.panel('workflows').append(this.macroUi.root);
     const npc = this.detail('NPC dialogue'); const npcGrid = document.createElement('div'); npcGrid.className = 'form-grid'; npc.append(npcGrid);
     const npcId = this.input(npcGrid,'npc-id','Visible NPC ID','number','',0); const option = this.input(npcGrid,'npc-option','Option index','number','0',0,31);
     const npcChoiceLabel=document.createElement('label');npcChoiceLabel.className='form-field';npcChoiceLabel.textContent='NPCs in view';const npcChoice=document.createElement('select');npcChoice.id='visible-npcs';const emptyNpc=document.createElement('option');emptyNpc.value='';emptyNpc.textContent='Choose a visible NPC';npcChoice.append(emptyNpc);npcChoiceLabel.append(npcChoice);npcGrid.append(npcChoiceLabel);npcChoice.addEventListener('change',()=>{if(npcChoice.value)npcId.value=npcChoice.value;});
@@ -665,14 +689,15 @@ export class FeatureUi {
     for(const[id,label]of rows){const row=document.createElement('div');const name=document.createElement('span');name.textContent=label;const state=document.createElement('span');state.className='coverage-state';state.textContent=ready.has(id)?'Local implementation':partial.has(id)?'Partial implementation':unverified.has(id)?'No verified game adapter':'Not implemented';row.append(name,state);table.append(row);}
   }
   lock(config: boolean, manual: boolean, service=manual,warp=manual): void {
-    this.macroUi.lock(config, manual);
-    this.locked=config;this.manualLocked=manual;this.serviceLocked=service;
-    for(const input of this.host.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('[data-setting], [data-config], .feature-panel input, .feature-panel select, .feature-panel textarea, .rule-editor button')) input.disabled=config;
+    const formLocked = config || this.macroUi.dirty === true;
+    this.locked=formLocked;this.manualLocked=manual;this.serviceLocked=service;
+    for(const input of this.host.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('[data-setting], [data-config], .feature-panel input, .feature-panel select, .feature-panel textarea, .rule-editor button')) input.disabled=formLocked;
     this.syncFollowMode();
-    for(const editor of this.editors.values())editor.lock(config);
-    this.dispositionEditor.lock(config);
-    this.hpPotions.lock(config);
-    this.spPotions.lock(config);
+    for(const editor of this.editors.values())editor.lock(formLocked);
+    this.dispositionEditor.lock(formLocked);
+    this.hpPotions.lock(formLocked);
+    this.spPotions.lock(formLocked);
+    this.macroUi.lock(config);
     this.recoveryResource.disabled = false;
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-manual]'))button.disabled=manual;
     for(const button of this.host.querySelectorAll<HTMLButtonElement>('[data-service]'))button.disabled=service;
@@ -686,7 +711,10 @@ export class FeatureUi {
   clearMacro(): void { delete this.status.macro; this.macroUi.render(undefined, {}); }
   active(): boolean { return macroActive(this.status.macro) || object(this.status.warp).blocked===true || object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
   warpActivationReady():boolean{return validWarpSnapshot(this.status.warp)&&this.status.warp.activation!==null;}
-  hasUnsavedMacro(): boolean { return this.macroUi.dirty; }
+  hasUnsavedMacro(): boolean { return this.macroUi.unsaved; }
+  setupDraftDirty(): boolean { return this.macroUi.dirty; }
+  setupDocument(): BotScriptDocument { return this.macroUi.configured(); }
+  syncSetup(settings: Settings): void { this.macroUi.syncSettings(settings); }
   private observation(): RoutineObservation {
     const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:text(this.status.map),elapsedSeconds:number(this.status.elapsedSeconds)??0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;

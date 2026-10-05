@@ -347,3 +347,9 @@ body:has(.client-shell) { margin: 0; background: var(--client-bg); }
 .client-shell .hp-potion-stock { color: var(--client-muted); font-size: 12px; }
 .client-shell .hp-potion-row .button-row { margin: 0; }
 .client-shell .hp-potion-panel .notice { margin-top: 10px; }
+
+.client-shell .setup-view-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.client-shell .setup-view-tabs button { min-width: 90px; padding: 10px 18px; border: 1px solid var(--client-border); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+.client-shell .setup-view-tabs button[aria-selected="true"] { background: var(--client-surface); border-color: var(--client-accent); }
+.client-shell .setup-rules-summary { margin-bottom: 16px; }
+.client-shell #setup-script-editor { max-width: 1100px; }

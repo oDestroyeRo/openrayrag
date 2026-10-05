@@ -40,7 +40,9 @@ Configured hours and limits still govern actions. Outside the allowed hours, the
 
 Bot settings save automatically on this computer. Closing the main window or choosing Quit waits for the latest valid settings and selected profile to be written to disk. Reopening restores the same setup, including configured map and target choices, without starting automation. If a save fails, Companion keeps the window open and displays a correction message so edits are not silently discarded.
 
-The six sections keep the common Start and Stop controls available:
+Setup offers **Form** and **Script** views of the same configuration. [Bot scripts](docs/MACROS.md) convert the current settings to readable commands and let you add conditional rules. Apply a valid script before returning to Form; the common Start and Stop controls use that configuration.
+
+These controls keep the common Start and Stop controls available:
 
 | Section | Controls |
 | --- | --- |
@@ -48,7 +50,7 @@ The six sections keep the common Start and Stop controls available:
 | **Recovery** | HP/SP rest thresholds, optional wing/skill escape with stock and cooldown guards, emergency HP threshold, respawn and death allowance. Sitting requires the game's skill prerequisites. |
 | **Travel & follow** | Optional map allow/deny lists and inclusive field lock area; server Database teleport to supported destinations, optional return after respawn or escape, current-map waypoints, repeat route, named-player follow and routing limits. Party rendezvous retains verified portal routes and their optional weighted costs. |
 | **Inventory & skills** | Own-kill or all-drop pickup policy, item filters and priority, recovery consumables with retained quantities, self/enemy skills, conditional equipment and ordered stat/skill allocation. |
-| **Macros & limits** | [Conditional macro scripts](docs/MACROS.md), daily hours and session/kill/pickup/weight limits. NPC workflows, condition routines and social controls are available under **Tools**. |
+| **Run limits** | Daily hours and session/kill/pickup/weight limits. NPC workflows, condition routines and social controls are available under **Tools**. |
 | **Profiles & features** | Save, apply, remove, import and export named settings profiles; view the Companion feature inventory and its implementation limits. |
 
 Recovery, consumables, skills, equipment, allocation, follow, travel, respawn, schedules and limits are opt-in. Missing inventory, SP, learned skills or other required observations prevents the corresponding action. Resource-consuming actions wait for game confirmation. A timeout is uncertain; the client does not automatically repeat that transaction.
@@ -61,7 +63,7 @@ Under **Workflows & social → Reusable NPC services**, choose a verified preset
 
 Condition routines use HP %, SP %, weight %, base/job level, zeny, elapsed time, map and inventory quantities. Rules have priority, cooldown, maximum runs and overall duration/action budgets. **Validate / dry run** explains matching rules without sending commands. An unknown observation never matches. Routines execute only the same validated actions available to the controller; they cannot execute code or send arbitrary packets.
 
-Under **Setup → Macros & limits → Macro scripts**, load an example or edit a version-1 JSON document, select **Validate & preview**, then explicitly **Start macro**. [Conditional macros](docs/MACROS.md) combine observed conditions with ordered farm, travel, buy, store, item-use and skill steps. A confirmed farm keeps field automation active while later level or inventory rules can select another sequence. Captured recovery/run/death limits still apply, and spending caps are reserved before NPC transactions. **Save on this computer** restores only the script draft; Stop, reconnect or reopening never automatically resumes its execution. Scripts are bounded data, not executable code, and local checks do not establish live-game proof.
+Under **Setup → Script**, the current Form settings appear as readable commands. Add optional rules such as `when hp < 60%` and `use item 501 timeout 30s`, select **Validate & preview**, then **Apply & save**. The common **Start bot** and **Stop bot** controls work for both settings-only configurations and [conditional scripts](docs/MACROS.md). Rules combine observed conditions with ordered farm, travel, buy, store, item-use and skill steps. Captured recovery/run/death limits still apply, and spending caps are reserved before NPC transactions. Existing JSON macros can be imported. Saving, reconnecting and reopening never automatically start a script; local checks do not establish live-game proof.
 
 Profiles contain validated settings, a map binding and optional character name. Up to 20 profiles are saved locally; applying one requires the matching map/character and never starts automation. Imports receive fresh IDs and cannot silently overwrite saved profiles. Credentials, login preferences and running state are excluded.
 

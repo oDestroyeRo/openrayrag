@@ -1,8 +1,10 @@
 import { dryRunMacro, macroInventoryItemIds, validateMacroScript, type MacroScript } from './macros';
 import type { RoutineObservation } from './routines';
-import { automationSettings, validateSettings, type Settings } from './settings';
+import { automationSettings, DEFAULT_SETTINGS, validateSettings, type Settings } from './settings';
+import { formatBotScript, parseBotScript, replaceBotScriptSettings, type BotScriptDocument } from './bot-script';
 
-const STORAGE_KEY = 'rayrag.companion.macro.v1';
+const STORAGE_KEY = 'rayrag.companion.setup-script.v1';
+const LEGACY_STORAGE_KEY = 'rayrag.companion.macro.v1';
 type LocalStore = Pick<Storage, 'getItem' | 'setItem'>;
 type Example = 'leveling' | 'continuous' | 'buy' | 'store' | 'item' | 'skill';
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -61,49 +63,92 @@ export function macroExample(kind: Example, context: { map?: string; targets?: n
     durationSeconds: kind === 'continuous' ? 0 : 3600, maxActions: kind === 'continuous' ? 0 : 20, maxSpend: kind === 'buy' ? 1000 : kind === 'store' ? 200 : 0, rules });
 }
 
-/** This store contains a validated script only: no credentials or active continuation. */
+/** Only source is stored here; CurrentForm remains the owner of retained settings.
+ * A clean restore replaces cached set statements with the latest retained form.
+ * Migration is read-only until the user explicitly applies and saves.
+ */
 export class MacroDraft {
   text: string;
+  private appliedText: string;
   private savedText: string;
+  private appliedDocument: BotScriptDocument;
+  private settingsKey: string | null = null;
+  private retainedSettings = structuredClone(DEFAULT_SETTINGS);
   readonly restoreError: string | null;
   constructor(private readonly storage: LocalStore | null) {
-    let script = macroExample('leveling');
+    let source = formatBotScript({ settings: this.retainedSettings, script: null });
     let error: string | null = null;
     try {
       const stored = storage?.getItem(STORAGE_KEY);
-      if (stored) {
-        if (new TextEncoder().encode(stored).length > 66_000) throw new Error('Saved macro is too large.');
-        const value = record(JSON.parse(stored));
-        if (Object.keys(value).length !== 2 || value.version !== 1 || !Object.hasOwn(value, 'script')) throw new Error('Unknown saved macro format.');
-        script = validateMacroScript(value.script);
+      const legacy = stored ? null : storage?.getItem(LEGACY_STORAGE_KEY);
+      if (stored || legacy) {
+        const raw = stored ?? legacy!;
+        if (new TextEncoder().encode(raw).length > 1_000_000) throw new Error('Saved Setup is too large.');
+        const value = record(JSON.parse(raw));
+        if (Object.keys(value).length !== 2 || value.version !== 1) throw new Error('Unknown saved Setup format.');
+        if (stored) {
+          if (typeof value.source !== 'string') throw new Error('Invalid saved Setup source.');
+          parseBotScript(value.source); source = value.source;
+        } else source = formatBotScript({ settings: this.retainedSettings, script: validateMacroScript(value.script) });
       }
-    } catch { error = 'The saved macro could not be loaded. Your saved document has been kept; use a valid script and Save to replace it.'; }
-    this.text = JSON.stringify(script, null, 2); this.savedText = this.text; this.restoreError = error;
+    } catch { error = 'Saved Setup could not be loaded. The saved data has been kept; Apply & save explicitly replaces the script copy.'; }
+    this.text = source; this.appliedText = source; this.savedText = source; this.restoreError = error;
+    this.appliedDocument = parseBotScript(source);
   }
-  get dirty(): boolean { return this.text !== this.savedText; }
-  read(): MacroScript {
-    try { return validateMacroScript(JSON.parse(this.text)); }
-    catch (error) { throw new Error(error instanceof SyntaxError ? `JSON syntax: ${error.message}` : error instanceof Error ? error.message : 'Invalid macro.'); }
+  get dirty(): boolean { return this.text !== this.appliedText; }
+  get unsaved(): boolean { return this.dirty || this.appliedText !== this.savedText; }
+  read(): BotScriptDocument { return parseBotScript(this.text, this.retainedSettings); }
+  configured(): BotScriptDocument {
+    if (this.dirty) throw new Error('Apply or discard your Script draft before Start.');
+    return structuredClone(this.appliedDocument);
   }
-  save(): MacroScript {
-    const script = this.read();
+  syncSettings(settings: Settings): void {
+    const key = JSON.stringify(settings);
+    if (key === this.settingsKey) return;
+    const dirty = this.dirty;
+    const applied = replaceBotScriptSettings(this.appliedText, settings);
+    const saved = this.appliedText === this.savedText ? applied : replaceBotScriptSettings(this.savedText, settings);
+    const document = parseBotScript(applied);
+    this.appliedText = applied; this.savedText = saved;
+    if (!dirty) this.text = this.appliedText;
+    this.retainedSettings = structuredClone(settings); this.appliedDocument = document; this.settingsKey = key;
+  }
+  /** Called only after complete validation and the SettingsForm admission guard. */
+  apply(document: BotScriptDocument): void {
+    this.text = this.text.trimStart().startsWith('{') ? formatBotScript(document) : this.text;
+    this.appliedText = this.text;
+    this.retainedSettings = structuredClone(document.settings); this.appliedDocument = structuredClone(document); this.settingsKey = null;
+  }
+  save(): BotScriptDocument {
+    const document = this.read();
     if (!this.storage) throw new Error('Local script storage is unavailable. Copy your script before closing.');
-    this.storage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, script }));
-    this.text = JSON.stringify(script, null, 2); this.savedText = this.text; return script;
+    const source = this.text.trimStart().startsWith('{') ? formatBotScript(document) : this.text;
+    this.storage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, source }));
+    this.text = source; this.appliedText = source; this.savedText = source;
+    this.retainedSettings = structuredClone(document.settings); this.appliedDocument = structuredClone(document); this.settingsKey = null;
+    return document;
+  }
+  get enabledScript(): MacroScript | null { return structuredClone(this.appliedDocument.script); }
+  discard(): void {
+    if (this.appliedText !== this.savedText) {
+      this.appliedDocument = parseBotScript(this.savedText, this.retainedSettings);
+      this.appliedText = this.savedText; this.settingsKey = null;
+    }
+    this.text = this.appliedText;
   }
 }
 
 interface Hooks {
   settings(): Settings;
-  start(request: { script: MacroScript; settings: Settings }): Promise<unknown>;
-  stop(): void;
+  apply(settings: Settings): void;
   changed(): void;
   notify(message: string, error?: boolean): void;
 }
 
-/** A focused editor around the same protocol admitted by the game controller. */
+/** Form and Script are two views of one Setup; no editor action sends commands. */
 export class MacroUi {
-  readonly root = document.createElement('details');
+  readonly root = document.createElement('section');
+  readonly summary = document.createElement('p');
   private readonly editor = document.createElement('textarea');
   private readonly result = document.createElement('pre');
   private readonly progress = document.createElement('p');
@@ -111,85 +156,131 @@ export class MacroUi {
   private readonly draft: MacroDraft;
   private observation: RoutineObservation = {};
   private observedAt = 0;
-  private busy = false;
   private locked = false;
-  private readonly startButton = document.createElement('button');
-  private readonly stopButton = document.createElement('button');
+  private syncError: string | null = null;
+  private syncKey: string | null = null;
   constructor(private readonly hooks: Hooks, storage?: LocalStore | null) {
     let local = storage ?? null;
-    if (storage === undefined) { try { local = window.localStorage; } catch { /* Report unavailable storage when saving. */ } }
+    if (storage === undefined) { try { local = window.localStorage; } catch { /* Saving reports unavailable storage. */ } }
+    // FeatureUi mounts before SettingsForm; do not read the retained form here.
     this.draft = new MacroDraft(local);
-    this.root.className = 'manual-group macro-panel'; this.root.open = true;
-    const title = document.createElement('summary'); title.textContent = 'Macro scripts'; this.root.append(title);
+    this.root.className = 'panel macro-panel'; this.root.id = 'setup-script-editor';
     const help = document.createElement('p'); help.className = 'hint';
-    help.textContent = 'Choose an example, edit its conditions and steps, then preview before starting. Farm activates a field; level or inventory rules can select the next sequence. Until stopped starts farming once and monitors First Aid. Check that your character has the skill. Existing recovery and death limits stay active.';
+    help.textContent = 'Your current settings are the set lines below. Add optional rules in plain text. Apply & save updates the same Form; Start bot is always explicit. Paste an old JSON macro here to import it with your current settings.';
     const templates = document.createElement('div'); templates.className = 'actions macro-actions';
-    const select = document.createElement('select'); select.id = 'macro-example'; select.dataset.config = 'true'; select.setAttribute('aria-label', 'Macro example');
+    const select = document.createElement('select'); select.id = 'macro-example'; select.dataset.config = 'true'; select.setAttribute('aria-label', 'Example rules');
     for (const [value, label] of [['leveling', 'Leveling route'], ['continuous', 'Until stopped'], ['buy', 'Buy potions'], ['store', 'Store loot'], ['item', 'Use an item'], ['skill', 'Use a skill']]) {
       const option = document.createElement('option'); option.value = value!; option.textContent = label!; select.append(option);
     }
-    const example = this.button('Load example', 'config', () => {
-      const settings = hooks.settings(); this.editor.value = JSON.stringify(macroExample(select.value as Example, settings), null, 2); this.edited();
-      this.result.hidden = true; hooks.notify('Example loaded. Check map, targets, quantities and spending caps before Start.');
-    });
-    templates.append(select, example);
-    const label = document.createElement('label'); label.htmlFor = 'macro-document'; label.textContent = 'Script · JSON version 1';
-    this.editor.id = 'macro-document'; this.editor.rows = 18; this.editor.spellcheck = false; this.editor.dataset.config = 'true';
-    this.editor.value = this.draft.text; this.editor.addEventListener('input', () => this.edited());
+    templates.append(select, this.button('Add example rules', () => this.addExample(select.value as Example)));
+    const label = document.createElement('label'); label.htmlFor = 'macro-document'; label.textContent = 'Setup script';
+    this.editor.id = 'macro-document'; this.editor.rows = 22; this.editor.spellcheck = false; this.editor.dataset.config = 'true';
+    this.editor.value = this.draft.text; this.editor.addEventListener('input', event => { event.stopPropagation(); this.edited(); });
     const reference = document.createElement('p'); reference.className = 'hint';
-    reference.textContent = 'Conditions: level, jobLevel, hpPercent, spPercent, weightPercent, zeny, map, inventory and observed actor predicates. All conditions in a rule must match. Steps: farm, travel, buy, store, useItem and skill. Higher priority wins; a selected sequence finishes before another rule runs.';
+    reference.textContent = 'Example: set radius = 12. A rule starts with rule "Name", checks when hpPercent < 60, adds use item 501 timeout 30s, and ends with end. # begins a comment. All when lines must match; higher priority wins. With no rules, Start bot uses ordinary field automation.';
     const limits = document.createElement('p'); limits.className = 'hint';
-    limits.textContent = 'Set durationSeconds, maxActions or a rule’s maxRuns to 0 for no limit. maxActions counts script steps; every step still needs a positive timeoutSeconds. Use Stop macro to end an unlimited macro; recovery and death limits stay active. maxSpend is the whole script allowance; maxSpend: 0 permits no spending. Each buy/store step reserves its declared cap, including NPC fees, without refunds. Changing map preserves this run’s limits. Saving does not start or resume a script.';
+    limits.textContent = 'duration 1h, actions 20 and runs 5 bound script work. Use unlimited deliberately. spend 0 allows no spending; buy and store reserve their caps, including fees. Run limits and recovery policies in the set lines remain active. Preview, Apply and Save send no game commands.';
     const actions = document.createElement('div'); actions.className = 'actions macro-actions';
-    actions.append(this.button('Validate & preview', 'config', () => this.preview()), this.button('Save on this computer', 'config', () => {
-      try { this.draft.text = this.editor.value; this.draft.save(); this.editor.value = this.draft.text; this.savedState(); hooks.changed(); hooks.notify('Macro saved on this computer.'); }
-      catch (error) { this.error(error); }
-    }));
-    this.startButton.type = 'button'; this.startButton.className = 'primary compact'; this.startButton.textContent = 'Start macro'; this.startButton.dataset.manual = 'true';
-    this.startButton.addEventListener('click', () => void this.start());
-    this.stopButton.type = 'button'; this.stopButton.className = 'danger compact'; this.stopButton.textContent = 'Stop macro';
-    this.stopButton.addEventListener('click', () => hooks.stop()); actions.append(this.startButton, this.stopButton);
+    actions.append(this.button('Validate & preview', () => this.preview()), this.button('Apply & save', () => this.apply()), this.button('Discard draft', () => this.discard()));
     this.result.className = 'telemetry-summary macro-preview'; this.result.id = 'macro-preview'; this.result.hidden = true; this.result.setAttribute('role', 'status');
-    this.progress.className = 'hint'; this.progress.id = 'macro-state'; this.progress.setAttribute('role', 'status'); this.progress.textContent = 'No macro running.';
-    this.saved.className = 'hint'; this.saved.id = 'macro-saved'; this.savedState();
+    this.progress.className = 'hint'; this.progress.id = 'macro-state'; this.progress.setAttribute('role', 'status'); this.progress.textContent = 'No rules running.';
+    this.saved.className = 'hint'; this.saved.id = 'macro-saved';
+    this.summary.className = 'setup-rules-summary notice'; this.summary.id = 'setup-rules-summary'; this.summary.setAttribute('role', 'status');
     this.root.append(help, templates, label, this.editor, reference, limits, actions, this.saved, this.result, this.progress);
-    this.stopButton.disabled = true;
+    this.savedState();
     if (this.draft.restoreError) hooks.notify(this.draft.restoreError, true);
   }
   get dirty(): boolean { return this.draft.dirty; }
-  private button(label: string, kind: 'config', click: () => void): HTMLButtonElement {
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary compact'; button.dataset[kind] = 'true'; button.textContent = label;
-    button.addEventListener('click', () => { if (!button.disabled) { try { click(); } catch (error) { this.error(error); } } }); return button;
+  get unsaved(): boolean { return this.draft.unsaved; }
+  configured(): BotScriptDocument {
+    if (this.syncError) throw new Error(this.syncError);
+    return this.draft.configured();
+  }
+  syncSettings(settings: Settings): void {
+    const key = JSON.stringify(settings);
+    if (key === this.syncKey) return;
+    this.syncKey = key;
+    try {
+      this.draft.syncSettings(settings);
+      if (this.syncError && this.result.textContent === this.syncError) this.result.hidden = true;
+      this.syncError = null;
+      if (!this.draft.dirty) this.editor.value = this.draft.text;
+    } catch (error) {
+      this.syncError = `Setup cannot be converted to Script: ${error instanceof Error ? error.message : 'Reduce the settings or rules.'}`;
+      this.result.hidden = false; this.result.textContent = this.syncError;
+    }
+    this.savedState();
+  }
+  private button(label: string, click: () => void): HTMLButtonElement {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary compact'; button.dataset.config = 'true'; button.textContent = label;
+    button.addEventListener('click', () => { if (!button.disabled && !this.locked) { try { click(); } catch (error) { this.error(error); } } }); return button;
   }
   private edited(): void { this.draft.text = this.editor.value; this.savedState(); this.result.hidden = true; this.hooks.changed(); }
-  private savedState(): void { this.saved.textContent = this.draft.dirty ? 'Unsaved changes · Save or copy your script before closing.' : 'Script ready · Start is always explicit; saving never starts automation.'; }
-  private error(error: unknown): void { const message = (error instanceof Error ? error.message : typeof error === 'string' ? error : 'Invalid macro.').slice(0, 2000); this.result.hidden = false; this.result.textContent = message; this.hooks.notify(message, true); }
+  private savedState(): void {
+    this.saved.textContent = this.syncError ?? (this.draft.dirty ? 'Script draft · Apply & save or Discard draft before using Form or Start.' : this.draft.unsaved ? 'Applied but not saved · Try Apply & save again, or copy the script and Discard draft before closing.' : 'Setup ready · Form and Script share these settings. Start bot is always explicit.');
+    const script = this.draft.enabledScript;
+    this.summary.textContent = script ? `${script.rules.length} script rule${script.rules.length === 1 ? '' : 's'} enabled · ${script.name}. Start bot uses these rules and the Form settings. Edit them in Script.` : 'No script rules enabled · Start bot uses the Form settings.';
+  }
+  private error(error: unknown): void { const message = (error instanceof Error ? error.message : typeof error === 'string' ? error : 'Invalid Setup script.').slice(0, 2000); this.result.hidden = false; this.result.textContent = message; this.hooks.notify(message, true); }
   private preview(): void {
     try {
-      this.draft.text = this.editor.value; const script = this.draft.read();
+      this.draft.text = this.editor.value; const document = this.draft.read();
       const observed = Date.now() - this.observedAt < 7000 ? structuredClone(this.observation) : {};
-      if (observed.inventory) for (const id of macroInventoryItemIds(script)) observed.inventory = { ...observed.inventory, [id]: observed.inventory[id] ?? 0 };
-      const trace = dryRunMacro(script, observed);
-      this.result.hidden = false; this.result.textContent = `${trace.rule ? `Next sequence: ${trace.rule}` : 'No rule currently matches.'}\nPreview sends no commands.\n` + trace.rules.map(rule =>
-        `${rule.name}: ${rule.state}\n${rule.conditions.map(condition => `  ${condition.condition.field}: ${condition.state} · ${condition.reason}`).join('\n')}\n  Steps: ${rule.steps.map(step => step.type).join(' → ')}`).join('\n\n');
-      this.hooks.notify('Valid script. Preview does not confirm routes, prices, storage capacity or learned skills.');
+      this.result.hidden = false;
+      if (!document.script) {
+        this.result.textContent = 'Valid settings-only Setup. Start bot uses ordinary field automation.\nPreview sends no commands.';
+      } else {
+        if (observed.inventory) for (const id of macroInventoryItemIds(document.script)) observed.inventory = { ...observed.inventory, [id]: observed.inventory[id] ?? 0 };
+        const trace = dryRunMacro(document.script, observed);
+        this.result.textContent = `${trace.rule ? `Next sequence: ${trace.rule}` : 'No rule currently matches.'}\nPreview sends no commands.\n` + trace.rules.map(rule =>
+          `${rule.name}: ${rule.state}\n${rule.conditions.map(condition => `  ${condition.condition.field}: ${condition.state} · ${condition.reason}`).join('\n')}\n  Steps: ${rule.steps.map(step => step.type).join(' → ')}`).join('\n\n');
+      }
+      this.hooks.notify('Valid Setup. Preview does not confirm routes, prices, storage capacity or learned skills.');
     } catch (error) { this.error(error); }
   }
-  private async start(): Promise<void> {
-    if (this.busy || this.locked || this.startButton.disabled) return;
+  private apply(): void {
+    if (this.locked) return;
     try {
-      this.draft.text = this.editor.value; const script = this.draft.read(); const settings = macroBaseSettings(this.hooks.settings(),script);
-      this.busy = true; this.startButton.disabled = true; await this.hooks.start({ script, settings });
+      this.draft.text = this.editor.value;
+      const document = this.draft.read(); // Validate every setting and rule before any mutation.
+      this.hooks.apply(document.settings);
+      this.syncError = null; this.syncKey = null;
+      this.draft.apply(document);
+      this.draft.save();
+      this.editor.value = this.draft.text; this.result.hidden = true;
+      this.hooks.notify('Setup applied and script saved on this computer. Start bot remains explicit.');
     } catch (error) { this.error(error); }
-    finally { this.busy = false; this.startButton.disabled = this.locked; }
+    finally { this.savedState(); this.hooks.changed(); }
   }
-  lock(config: boolean, manual: boolean): void {
+  private discard(): void {
+    this.draft.discard(); this.syncKey = null; this.editor.value = this.draft.text; this.result.hidden = true;
+    this.savedState(); this.hooks.changed();
+  }
+  private addExample(kind: Example): void {
+    this.draft.text = this.editor.value;
+    const document = this.draft.read();
+    const source = this.editor.value.trimStart().startsWith('{') ? formatBotScript(document) : this.editor.value;
+    const example = macroExample(kind, document.settings);
+    const names = new Set(document.script?.rules.map(rule => rule.name));
+    for (const rule of example.rules) {
+      const base = rule.name; let suffix = 2;
+      while (names.has(rule.name)) rule.name = `${base.slice(0, 74)} ${suffix++}`;
+      names.add(rule.name);
+    }
+    validateMacroScript({ ...example, ...(document.script ?? {}), rules: [...document.script?.rules ?? [], ...example.rules] });
+    const lines = formatBotScript({ settings: document.settings, script: example }).split('\n');
+    const start = lines.findIndex(line => line.trimStart().startsWith('rule '));
+    const limits = lines.slice(0, start).filter(line => /^(duration|actions|spend)\s/.test(line) && !source.split(/\r?\n/).some(existing => new RegExp(`^\\s*${line.split(' ')[0]}\\s`).test(existing)));
+    this.editor.value = `${source.trimEnd()}\n\n${[...limits, ...lines.slice(start)].join('\n')}\n`;
+    this.editor.focus(); this.editor.setSelectionRange(source.trimEnd().length + 2, source.trimEnd().length + 2); this.editor.scrollTop = this.editor.scrollHeight;
+    this.edited(); this.hooks.notify('Example rules added. Check conditions, targets, run limits and spending caps before Apply & save.');
+  }
+  lock(config: boolean): void {
+    this.locked = config;
     for (const input of this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>('[data-config]')) input.disabled = config;
-    this.locked = manual; this.startButton.disabled = manual || this.busy;
   }
   render(value: unknown, observation: RoutineObservation): void {
     this.observation = structuredClone(observation); this.observedAt = Date.now(); const state = record(value);
-    this.progress.textContent = typeof state.reason === 'string' ? `${state.name || 'Macro'} · ${state.state} · ${state.reason}\n${state.actionsCompleted ?? 0}/${state.actionsIssued ?? 0} steps confirmed · ${state.spendReserved ?? 0} spending allowance reserved${state.currentRule ? ` · ${state.currentRule}` : ''}` : 'No macro running.';
-    this.stopButton.disabled = !macroActive(value);
+    this.progress.textContent = typeof state.reason === 'string' ? `${state.name || 'Rules'} · ${state.state} · ${state.reason}\n${state.actionsCompleted ?? 0}/${state.actionsIssued ?? 0} steps confirmed · ${state.spendReserved ?? 0} spending allowance reserved${state.currentRule ? ` · ${state.currentRule}` : ''}` : 'No rules running.';
   }
 }

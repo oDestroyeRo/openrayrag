@@ -6,6 +6,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { validateSettings, type Settings } from './settings';
 import { FeatureUi } from './feature-ui';
+import { macroBaseSettings } from './macro-ui';
 import { ReconnectPolicy, PersistentFieldRun } from './reconnect';
 import { RunIntentDispatch } from './run-intent-dispatch';
 import { UpdateContinuationOwner, type UpdateAccount, type UpdateContinuation } from './update-continuation';
@@ -129,6 +130,7 @@ function resumeFieldRun(s: GameStatus): void {
 const features = new FeatureUi(shell.main, {
   settings: () => form.runSettings(), apply: value => form.applyProfile(value), map: () => latest?.map ?? '', character: () => latest?.player?.name ?? '',
   macroSettings: () => form.snapshot().settings,
+  applySetup: value => form.applySettings(value), setupChanged: () => updateButtons(),
   command: request => featureRequest('command',request), workflow: request => featureRequest('workflow',request), routine: request => featureRequest('routine',request), macro: request => featureRequest('macro',request), service: request => featureRequest('service',request), social: request => featureRequest('social',request), memo: request => featureRequest('memo',request), socketPreview:request=>featureRequest('socketPreview',request),socket:request=>featureRequest('socket',request), warp:request=>featureRequest('warp',request),warpPreview:request=>featureRequest('warpPreview',request),warpCancel:()=>invoke('control_bot',{action:'warpCancel',request:{}}),
   refinePreview: request => featureRequest('refinePreview',request), refine: request => featureRequest('refine',request), refineAdvance: promptToken => featureRequest('refineAdvance',{promptToken}),
   notify: message,stop:()=>stopButton.click(), changed: () => { formChanged(); updateButtons(); },
@@ -142,7 +144,7 @@ const form = new SettingsForm(shell.main, features, {
     runActive: runActive(),
     controlsLocked: !closeRegistered || closeBusy || updateBusy || busy || dispatches.stopping || loginBusy || runActive(),
     targetsLocked: !closeRegistered || closeBusy || updateBusy || busy || dispatches.stopping || loginBusy || !native || Date.now() - receivedAt >= 7000
-      || !latest?.connected || !latest.compatible || !latest.player || runActive(),
+      || !latest?.connected || !latest.compatible || !latest.player || runActive() || features.setupDraftDirty(),
     retainedTargets: fieldRun.requested ? fieldRun.targetIds : undefined,
   }),
   changed: () => { formChanged(); updateButtons(); },
@@ -155,10 +157,13 @@ const settingsClose=new SettingsClose({
   settled:async()=>{await restoreSettled;await updateSettled;if(!currentForm.initialized)currentForm.restore(await invoke('current_form'),document=>form.restore(document));},
   flush:()=>currentForm.flush(),
   unchanged:document=>JSON.stringify(form.snapshot())===JSON.stringify({settings:document.settings,selectedProfileId:document.selectedProfileId}),
-  complete:(token,revision)=>invoke('settings_close_complete',{token,revision}),
+  complete:async(token,revision)=>{
+    if(features.hasUnsavedMacro())throw new Error('Script changes have not been saved.');
+    await invoke('settings_close_complete',{token,revision});
+  },
   cancel:token=>invoke('settings_close_cancel',{token}),
   lock:locked=>{closeBusy=locked;root.inert=locked||!closeRegistered;if(locked&&saveTimer){clearTimeout(saveTimer);saveTimer=undefined;}updateButtons();},
-  status:status=>{closeStatus=status;element('update-status').textContent=status;message(status,status.startsWith('Close cancelled'));},
+  status:status=>{if(status.startsWith('Close cancelled')&&features.hasUnsavedMacro())status='Close cancelled: your Script changes are not saved. Apply & save, or copy the script and Discard draft, then close again.';closeStatus=status;element('update-status').textContent=status;message(status,status.startsWith('Close cancelled'));},
 });
 function formChanged():void {
   currentForm.touch();
@@ -183,7 +188,7 @@ function mainUpdateWaitReason():string|null {
   if(dispatches.pending.service)return 'Update waits for the pending service action to finish.';
   if(dispatches.pending.manual)return 'Update waits for the pending manual action to finish.';
   if(dispatches.pending.limit)return 'Update waits for automation to stop at its configured limit.';
-  if(features.hasUnsavedMacro())return 'Update waits for your macro draft. Save or clear it first.';
+  if(features.hasUnsavedMacro())return 'Update waits for your Script draft. Apply & save or Discard draft first.';
   if(updateContinuation.pending)return 'The previous update is waiting to continue your run.';
   if(!features.settledForMaintenance(true))return 'Update waits for pending game actions or previews to finish.';
   if(reconnect.waitingUntil)return 'Update waits for the scheduled reconnect to finish.';
@@ -252,7 +257,9 @@ function updateButtons(): void {
   const navigation = new Set(shell.main.querySelectorAll<HTMLButtonElement>('button[data-client-page-nav], button[data-client-bot-nav], button[data-client-inspector-nav], button[data-client-navigation], #client-manual-index > button'));
   for (const button of navigation) button.disabled = false;
   let dashboardSettings: Settings | null = null;
-  try { dashboardSettings = form.snapshot().settings; } catch { /* Keep invalid drafts editable on Setup. */ }
+  let formError: unknown = null;
+  try { dashboardSettings = form.snapshot().settings; } catch (error) { formError = error; /* Keep invalid drafts editable on Setup. */ }
+  if (dashboardSettings) features.syncSetup(dashboardSettings);
   const fresh = Date.now() - receivedAt < 7000;
   const dashboard = clientDashboard(latest, { fieldRequested: fieldRun.requested, held: features.active(), limitReason: fieldRun.limitReason, loginBusy, fresh }, dashboardSettings, latest?.mapInfo);
   element('client-run-title').textContent = dashboard.headline;
@@ -262,12 +269,22 @@ function updateButtons(): void {
   element('death-cap').textContent = dashboardSettings ? clientDeathCap(dashboardSettings.automation?.respawn) : '—';
   if(!closeRegistered||closeBusy||updateBusy){botConsole.lock(true,closeBusy?'Saving current settings before closing.':!closeRegistered?'Preparing saved settings.':'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.lock(true,true,true);if(updateBusy&&!closeBusy)stopButton.disabled=dispatches.stopping||updateContinuation.stopped;return;}
   form.refresh();
+  if (features.setupDraftDirty()) for (const id of ['radius', 'min-hp', 'loot', 'random-walk', 'route-step', 'route-time', 'attack-distance', 'attack-time', 'avoid-walls']) element<HTMLInputElement>(id).disabled = true;
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
   let checked:Settings|null = null;
-  try { checked=validateSettings(form.runSettings()); configHelp.textContent=''; }
-  catch(error) { configHelp.textContent=ready && error instanceof Error ? error.message : ''; }
-  startButton.disabled = !canStartField({native,fresh,busy,stopping:dispatches.stopping,loginBusy,runActive:runActive(),connected:latest?.connected===true,compatible:latest?.compatible===true,
-    map:latest?.map??'',player:latest?.player??null,settings:checked});
+  let scripted = false;
+  try {
+    if (!dashboardSettings) throw formError ?? new Error('Finish valid Form settings before Start.');
+    const document = features.setupDocument(); scripted = document.script !== null;
+    checked=document.script ? macroBaseSettings(document.settings, document.script) : validateSettings(form.runSettings()); configHelp.textContent='';
+  }
+  catch(error) { configHelp.textContent=(ready || !dashboardSettings) && error instanceof Error ? error.message : ''; }
+  // Rules keep the existing macro admission gate; ordinary field runs still
+  // require verified physical ground and projected eligible targets.
+  startButton.disabled = scripted
+    ? !ready || !checked || busy || dispatches.stopping || loginBusy || runActive()
+    : !canStartField({native,fresh,busy,stopping:dispatches.stopping,loginBusy,runActive:runActive(),connected:latest?.connected===true,compatible:latest?.compatible===true,
+      map:latest?.map??'',player:latest?.player??null,settings:checked});
   stopButton.disabled = dispatches.stopping || !gameOpen && !fieldRun.requested && !loginBusy && !updateContinuation.pending;
   openButton.disabled = false;
   element<HTMLButtonElement>('disconnect').disabled = !disconnectReady();
@@ -353,8 +370,11 @@ element('disconnect').addEventListener('click', () => {
 });
 startButton.addEventListener('click', () => void perform(async () => {
   if (!latest?.player || dispatches.stopping) return;
-  const checked = validateSettings(form.runSettings());
-  const task = dispatches.start(checked, latest);
+  features.syncSetup(form.snapshot().settings);
+  const document = features.setupDocument();
+  const task = document.script
+    ? dispatches.feature('macro', { script: document.script, settings: macroBaseSettings(document.settings, document.script) })
+    : dispatches.start(validateSettings(form.runSettings()), latest);
   configureReconnect();
   reconnect.observe(latest.connected, true, latest.login.phase, Date.now(), latest.login.message);
   const result = (await task).outcome;
