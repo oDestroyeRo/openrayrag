@@ -4,6 +4,14 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Defense against attacking monsters
+
+Issue [#147](https://github.com/oDestroyeRo/openrayrag/issues/147) improves the existing retaliation modes with attacker-first target/skill selection, defense before new loot and current character/monster lifetime evidence. On 2026-10-05, `npm run check` passed: 3,652 frontend tests in 117 files, 146 production native tests and 148 CI-feature native tests (two existing opt-in probes ignored in each), both strict Clippy configurations, formatting, frontend/release type checks, script checks and eight Python release tests.
+
+The runtime slice passed 510 focused tests, including 67 defense cases. Three baseline regressions failed before the fix: an ordinary high-priority target outranked an attacker, loot ran before defense and a replacement character inherited attacker evidence. Coverage includes direct damaging monster skills, invalid sources, protocol actor zero, replacement/removal/death/world changes, eligibility and HP/run limits, unreachable fallback, pending pickup/item/skill ownership, official movement, retained walking legs and missing acknowledgment fences. Composed form/profile and dashboard checks retain and display both defense modes. Browser preview checks selected both options in the actual Combat form.
+
+With game client and Bot only use the same combat engine and existing attack encoder. These checks do not establish new live-game retaliation in either mode. Sent attacks/retreat/resource receipts finish under their existing ownership before a new defense selection; immediate active-engagement cancellation is not part of this change. See [self-defense](SELF_DEFENSE.md).
+
 
 ### Flexible automatic HP potions
 

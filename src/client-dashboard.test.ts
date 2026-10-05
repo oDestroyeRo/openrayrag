@@ -6,6 +6,17 @@ const context = { fieldRequested: false, held: false, limitReason: '', loginBusy
 const settings = { ...DEFAULT_SETTINGS, automation: structuredClone(DEFAULT_AUTOMATION) };
 
 describe('Run dashboard presentation', () => {
+  it.each([
+    ['retaliate', [], 'Defend against attackers'],
+    ['both', [1002], '1 selected targets + defense'],
+  ] as const)('shows %s defense in the setup summary without implying an active attack', (mode, targets, summary) => {
+    const configured = { ...settings, targets: [...targets], automation: structuredClone(DEFAULT_AUTOMATION) };
+    configured.automation.combat.mode = mode;
+    expect(clientDashboard(null, context, configured)).toMatchObject({
+      state: 'OFFLINE', headline: 'Connect your character', setup: `${summary} · Own drops · Recovery off`,
+    });
+  });
+
   it('shows offline and unknown state without inventing character or activity evidence', () => {
     expect(clientDashboard(null, context, settings)).toMatchObject({ state: 'OFFLINE', headline: 'Connect your character' });
     expect(clientDashboard({ connected: true, compatible: false }, context, settings).headline).toBe('Choose your character');

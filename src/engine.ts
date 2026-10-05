@@ -106,7 +106,7 @@ export class BotEngine {
   private respawnArrival:{id:number;name:string;entry:1|2}|null=null;
   private skillKills = new Map<number, { until:number; identity:ActionIdentity }>();
   private skillTargets = new Map<number, { skillId: number; until: number; identity:ActionIdentity }>();
-  private aggressors = new Set<number>();
+  private aggressors = new Map<number, ActionIdentity>();
   readonly actors = new Map<number, Entity>();
   private readonly revivableActors=new Map<number,Entity>();
   partyFollowBinding:(()=>PartyActorBinding|null)|undefined;
@@ -383,7 +383,7 @@ export class BotEngine {
     }
     if (this.route?.id === id) {if(this.route.type==='follow')this.followLostAt??=this.now();this.cancelRoute();}
     this.skillKills.delete(id); this.skillTargets.delete(id); this.foreignTargets.delete(id); this.partyEngagements.remove(id); this.aggressors.delete(id); this.actors.delete(id);
-    if(id===this.playerId){this.clearLootEvidence();this.skillKills.clear();this.skillTargets.clear();}
+    if(id===this.playerId){this.clearLootEvidence();this.skillKills.clear();this.skillTargets.clear();this.aggressors.clear();}
     if (id === this.playerId && dead && entity) { const alreadyDead=entity.dead;entity.dead=true;entity.hp=0;if(!alreadyDead)this.onDeath(); }
     else { this.entities.delete(id);if(id===this.playerId)this.stop('Character left the field.',false); }
   }
@@ -418,6 +418,8 @@ export class BotEngine {
             this.skillKills.set(e.target,{until:this.now()+30_000,identity:target.identity});
         }
       }
+      if(e.type==='skillResult'&&e.mode==='target'&&(e.damage??0)>0&&e.indirect===false
+        &&(e.attacker===undefined||e.attacker===-1||e.attacker===e.source))this.observeAggressor(e.source,e.target);
       if(result.confirmed&&pendingSkill?.type==='equip')this.loadout.confirmed(this.character);
       if(loadoutFailure&&(this.running||this.manualTask)&&automationSettings(this.settings).loadout.enabled)this.stop(loadoutFailure);
       if (result.failure) this.stop(result.failure);
@@ -610,7 +612,7 @@ export class BotEngine {
         if(this.retreatTask?.identity.targetId===e.id)this.retreatTask.entry.accepted=false;
         if(this.retreatTask&&(e.id===this.playerId||e.id===this.retreatTask.identity.targetId))this.cancelRetreat('Retreat actor lifetime changed.');
         if(this.manualTask?.request.command.type==='attack'&&this.manualTask.request.command.target.id===e.id)this.finishManual('failed','Selected monster lifetime changed.');
-        if(e.id===this.playerId)this.clearLootEvidence();
+        if(e.id===this.playerId){this.clearLootEvidence();this.aggressors.clear();}
         else this.replaceActorOwnership(e.id);
         this.observations.remove(e.id);if(e.id===this.playerId||this.serverTargetId===e.id)this.serverTargetId=null;
         this.motions.delete(e.id);
@@ -636,7 +638,7 @@ export class BotEngine {
         const manualWalkOwner=e.source===this.playerId&&(this.manualTask?.request.command.type==='walk'||this.manualWalkFence||this.manualRetiredMovement&&this.motions.has(this.playerId)||!!this.retreatTask&&(this.retreatTask.walkPending||this.retreatTask.walkSent&&this.motions.has(this.playerId)));
         if(!manualWalkOwner)this.motions.delete(e.source);
         const entity = this.entities.get(e.source) ?? this.actors.get(e.source); if (entity&&!manualWalkOwner) Object.assign(entity, e.position);
-        if (e.target === this.playerId && this.entities.get(e.source)?.kind === 1) this.aggressors.add(e.source);
+        this.observeAggressor(e.source,e.target);
         if (e.source !== this.playerId && this.entities.get(e.target)?.kind === 1) {
           this.observeForeignEngagement(e.target, this.currentPartyBinding(e.source));
         }
@@ -768,11 +770,28 @@ export class BotEngine {
       this.reason=this.automation.task().label;if(this.automation.recovering||this.automation.busy)return;
     }
     if(this.character.sitting===true) {if(this.retreatTask){this.cancelRetreat('Stopping retreat before changing posture.');return;}if(!this.ownMotion())this.automation.submit({type:'sit',sitting:false},this.character);return;}
+    const defenseEnabled=a.combat.mode==='retaliate'||a.combat.mode==='both';
     let monsterChoice: { target: Entity; cells: Position[]; strategy?:StrategyChoice } | null | undefined;
     const chooseMonster = () => {
-      if (monsterChoice === undefined) {const candidates=[...this.entities.values()].filter(e=>this.eligible(e,now));monsterChoice=a.attackStrategies?.length?this.bestStrategyRoute(p,candidates):this.bestRoute(p,candidates,e=>monsterRule(a,e.classId)?.priority??0,true);}
+      if (monsterChoice === undefined) {
+        const candidates=[...this.entities.values()].filter(e=>this.eligible(e,now));
+        const choose=(targets:Entity[])=>a.attackStrategies?.length?this.bestStrategyRoute(p,targets):this.bestRoute(p,targets,e=>monsterRule(a,e.classId)?.priority??0,true);
+        // Defense is a separate tier; species priority and path cost still
+        // select within each tier, and unreachable attackers do not block farming.
+        monsterChoice=defenseEnabled?choose(candidates.filter(e=>this.defending(e.id)))
+          ??choose(candidates.filter(e=>!this.defending(e.id))):choose(candidates);
+      }
       return monsterChoice;
     };
+    if(defenseEnabled&&!this.pending&&!this.retreatTask&&this.route
+      &&(!['attack','skill'].includes(this.route.type)||!this.defending(this.route.id!))) {
+      const defense=chooseMonster();
+      if(defense&&this.defending(defense.target.id)) {
+        // Replace only unsent intent. pursue keeps the original leg and its
+        // acceptance/deadline; no Stop, cast or attack can cross that owner.
+        this.strategyWait=null;this.pursue('attack',defense.target.id,cell(defense.target),defense.cells);
+      }
+    }
     const needsEnemy = !!a.attackStrategies?.length || a.loadout.enabled || a.skills.some(rule => rule.target === 'enemy') || a.equipment.some(rule => rule.monsterClassId > 0);
     const candidateEnemy=this.retreatTask?this.entities.get(this.retreatTask.identity.targetId!)??null:this.pending?.type==='attack'?this.entities.get(this.pending.id)??null:(this.route?.type==='attack'||this.route?.type==='skill')?this.entities.get(this.route.id!)??null:needsEnemy?chooseMonster()?.target??null:null;
     const enemy=candidateEnemy&&!candidateEnemy.dead&&candidateEnemy.hp>0&&this.observations.context(candidateEnemy.id).incarnation?candidateEnemy:null;
@@ -864,7 +883,8 @@ export class BotEngine {
       }
       this.expirePending(now);return;
     }
-    if (now < this.lootAfter) return;
+    const defenseChoice=defenseEnabled?chooseMonster():null;
+    if (now < this.lootAfter && (!defenseChoice || !this.defending(defenseChoice.target.id))) return;
     // Keep a chosen pursuit stable; a moving target is replanned after the current leg.
     if (this.route && (this.route.type === 'attack' || this.route.type === 'pickup')) {
       const target = this.route.type === 'attack' ? this.entities.get(this.route.id!) : this.drops.get(this.route.id!);
@@ -873,6 +893,9 @@ export class BotEngine {
       this.routeTick(p, now); return;
     }
     if (now - this.lastAction < ACTION_DELAY) return;
+    if(defenseChoice&&this.defending(defenseChoice.target.id)) {
+      this.pursue('attack',defenseChoice.target.id,cell(defenseChoice.target),defenseChoice.cells);this.routeTick(p,now);return;
+    }
     const available = (id: number) => (this.excluded.get(id) ?? 0) <= now;
     if (this.settings.loot) {
       const candidates = [...this.drops.values()].filter(d => this.fieldContains(d) && available(d.id) && distance(p, d) <= this.settings.radius
@@ -880,7 +903,7 @@ export class BotEngine {
       const choice = this.bestRoute(p, candidates, d=>lootRule(a,d.itemId)?.priority ?? 0);
       if (choice) { this.pursue('pickup', choice.target.id, cell(choice.target), choice.cells); this.routeTick(p, now); return; }
     }
-    const choice = chooseMonster();
+    const choice=chooseMonster();
     if (choice) { this.pursue('attack', choice.target.id, cell(choice.target), choice.cells); this.routeTick(p, now); }
     else if (a.follow.name || a.follow.mode==='partyLeader') { this.followTick(p,now); }
     else if (a.travel.waypoints.length) { this.waypointTick(p,now); }
@@ -1006,11 +1029,25 @@ export class BotEngine {
     this.reason = this.partyEngagements.reason(id); this.note(this.reason);
   }
   private fieldContains(p:Position):boolean {const policy=mapPolicy(this.settings);return mapAllowed(policy,this.map)&&insideLockArea(policy,this.map,p);}
+  private observeAggressor(source:number,target:number|undefined):void {
+    if(target!==this.playerId||!this.threatOwnIdentity())return;
+    const identity=this.threatIdentity(source);
+    if(identity)this.aggressors.set(source,identity);
+  }
+  private isAggressor(id:number):boolean {
+    const identity=this.aggressors.get(id);
+    if(identity&&sameActionIdentity(identity,this.threatIdentity(id)))return true;
+    this.aggressors.delete(id);return false;
+  }
+  private defending(id:number):boolean {
+    const mode=automationSettings(this.settings).combat.mode;
+    return (mode==='retaliate'||mode==='both')&&this.isAggressor(id);
+  }
   private eligible(e: Entity, now: number, acquiring = true): boolean {
     const automation=automationSettings(this.settings);const conditions=monsterRule(automation,e.classId)?.conditions;
     const observations=conditions?.length?this.actorObservation(conditions,this.currentTargetId,e.id):undefined;
     if(conditions?.length&&(this.combatConditions.has(e.id)||this.combatConditions.size<32))this.combatConditions.set(e.id,{rule:`Monster ${e.classId} · actor ${e.id}`,conditions:conditions.map(condition=>evaluateActorPredicate(condition,observations))});
-    return this.fieldContains(e) && e.kind === 1 && !e.dead && e.hp > 0 && !!this.observations.context(e.id).incarnation && acceptsMonster(automation,e,this.player!,this.settings.targets,this.aggressors.has(e.id),observations)
+    return this.fieldContains(e) && e.kind === 1 && !e.dead && e.hp > 0 && !!this.observations.context(e.id).incarnation && acceptsMonster(automation,e,this.player!,this.settings.targets,this.isAggressor(e.id),observations)
       && (!acquiring || distance(this.player!, e) <= this.settings.radius) && this.engagementAllowed(e.id)
       && (this.excluded.get(e.id) ?? 0) <= now;
   }
@@ -1112,7 +1149,7 @@ export class BotEngine {
   private replaceActorOwnership(id:number):void {
     this.retreatLedger.remove(id);
     const own=id===this.playerId;
-    if(own)this.clearLootEvidence();
+    if(own){this.clearLootEvidence();this.aggressors.clear();}
     else for(const evidence of this.dropCreatedAt.values())evidence.engagements=evidence.engagements.filter(identity=>identity.targetId!==id);
     const pending=!!this.pending&&(own||this.pending.type==='attack'&&this.pending.id===id);
     const route=!!this.route&&(own||['attack','skill'].includes(this.route.type)&&this.route.id===id);
@@ -1153,7 +1190,7 @@ export class BotEngine {
   private failRoute(): void {
     if(this.manualTask){this.finishManual('failed','Manual walking leg did not receive a verified completion.');return;}
     if (!this.route) return;
-    if(this.route.type==='skill')this.fenceUnacknowledgedLeg();
+    if(this.route.type==='skill'||this.route.type==='attack'&&this.defending(this.route.id!))this.fenceUnacknowledgedLeg();
     if (this.leg) this.navigator?.temporaryBlocked(this.leg.destination, this.now() + 30000);
     this.leg = null; this.route.cells = []; this.routeFailures++;
     this.routeStep = Math.max(1, Math.floor(this.routeStep / 2)); this.lastAction = this.now();
@@ -1269,6 +1306,7 @@ export class BotEngine {
   }
   private onDeath(): void {
     this.clearLootEvidence();
+    this.aggressors.clear();
     this.strategies.cancel();
     this.skillKills.clear();this.skillTargets.clear();
     this.implicitWalk = null; this.loadout.reset(true);
