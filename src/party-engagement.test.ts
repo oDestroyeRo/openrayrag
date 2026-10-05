@@ -18,9 +18,9 @@ function fixture(grid=(p:{x:number;y:number})=>p.x>=0&&p.y>=0) {
  const engine=new BotEngine(a=>sent.push(a),()=>at,()=>({width:200,height:200,walkable:grid}),id=>{
   const rows=[...(world.party?.members.values()??[])].filter(row=>row.entityId===id);return rows.length===1?world.partyActors.get(rows[0]!.memberId):null;
  });
- const sync=()=>{world.partyActors.sync(world.party,map,engine.observations,engine.player?.id??null);engine.partyChanged();};
+ const sync=()=>{world.refreshPartyActors(engine.observations,engine.player?.id??null);engine.partyChanged();};
  const receive=(...events:GameEvent[])=>{engine.receive(events);sync();};
- const event=(e:WorldEvent)=>{if(e.type==='partyJoined'||e.type==='partyLeft')engine.partyMembershipChanged();else if(e.type==='partyMember')engine.partyMembershipChanged(e.member.memberId);else if(e.type==='partyRemove'||e.type==='partyMap')engine.partyMembershipChanged(e.memberId);world.apply(e,engine.player?.id??null);world.partyActors.observe(e,world.party,map,engine.observations,engine.player?.id??null);engine.partyChanged();};
+ const event=(e:WorldEvent)=>{if(e.type==='partyJoined'||e.type==='partyLeft')engine.partyMembershipChanged();else if(e.type==='partyMember')engine.partyMembershipChanged(e.member.memberId);else if(e.type==='partyRemove'||e.type==='partyMap')engine.partyMembershipChanged(e.memberId);world.observe(e,engine.observations,engine.player?.id??null);engine.partyChanged();};
  const join=(members=[member])=>event({type:'partyJoined',partyId:5,name:'Party',login:false,members});
  engine.connect(true);receive({type:'enter',id:1,map},{type:'spawn',entity:{...own}},{type:'spawn',entity:{...monster}},{type:'spawn',entity:{...ally}});join();
  const attack=(source=3,target=2)=>receive({type:'attack',source,target,position:{x:100,y:100}});
