@@ -28,6 +28,7 @@ import { WorldState, type WorldSnapshot } from './world-state';
 import { NpcWorkflow, validateWorkflowSpec, worldActionBlockers, type WorkflowContext, type WorkflowSnapshot, type WorkflowStep, createVendingReceipt, confirmVendingReceipt, type VendingReceipt } from './workflows';
 import { RoutineRuntime, validateRoutineSpec, type RoutineObservation, type RoutineSnapshot, type RoutineSpec } from './routines';
 import { MacroRuntime, validateMacroScript, type MacroIntent, type MacroSnapshot, type MacroStep } from './macros';
+import { validateControllerUpdateCheckpoint, type ControllerUpdateCheckpoint } from './controller-update';
 import { planDisposition } from './disposition';
 import { TravelController, type TravelSnapshot, type DatabaseTravelTransport } from './travel-controller';
 import { DATABASE_TELEPORT_COOLDOWN_MS, databaseTeleportWait } from './database-travel-protocol';
@@ -46,6 +47,7 @@ import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type Es
 
 
 export type ControllerAction = ExpandedAction | WorldAction;
+export type { ControllerUpdateCheckpoint } from './controller-update';
 export interface CompanionSnapshot extends Snapshot {
   runRequested: boolean; state: 'running' | 'waiting' | 'idle';
   world: WorldSnapshot; workflow: WorkflowSnapshot; routine: RoutineSnapshot; macro: MacroSnapshot; travel: TravelSnapshot; service: ServiceSnapshot;
@@ -151,6 +153,8 @@ export class CompanionController {
   private featureReceipt: { sequence:number; identity:ActionIdentity|null; action: ExpandedAction; count: number; stats: number; skills: number; attributes: number[] | null; level: number; macroOwned?:boolean } | null = null;
   private unresolvedWorld: Pending | null = null;
   private workflowOutstanding: Pending | null = null;
+  private updateSuspended=false;
+  get preparingUpdate():boolean{return this.updateSuspended;}
 
   constructor(private readonly transport: (action: Action | WorldAction) => void, private readonly now = Date.now,
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid,
@@ -221,6 +225,7 @@ export class CompanionController {
     this.transport(action);
   }
   private partyHealTick():boolean {
+    if(this.updateSuspended)return false;
     const policy=this.requestedSettings?.automation?.partyHeal;
     if(!this.partyHeal.available(policy,this.engine.observedOwnCastSettled()))return false;
     const e=this.engine,p=e.player;
@@ -326,6 +331,7 @@ export class CompanionController {
 
   }
   stop(reason = 'Stopped by you.'): void {
+    this.engine.cancelUpdate();this.updateSuspended=false;
     this.endMacro(reason);
     this.engine.castAvailability.stop(reason);
     this.supply.stop(reason);this.supplyIntent=null;
@@ -409,7 +415,7 @@ export class CompanionController {
     this.heartbeatHealthy = healthy;
     this.socket.tick(this.socketContext());
     this.refine.tick(this.refineContext());
-    if (!healthy && this.executing) this.pause('Waiting for the client connection.');
+    if (!healthy && this.executing&&!this.updateSuspended) this.pause('Waiting for the client connection.');
   }
   private captureActionFailure(): void {
     const result = this.engine.actionResult; const action = this.engine.pendingFeatureAction;
@@ -470,11 +476,75 @@ export class CompanionController {
     const e=this.engine;
     const stationary=this.movementSettled();
     return !this.refine.maintenanceBlocked&&stationary&&e.connected&&e.compatible&&!!e.actorActionIdentity(undefined,true)
-      &&!this.macro.active&&!this.runRequested&&!this.returning&&!this.pending&&!this.featureReceipt&&!this.workflowOutstanding&&!this.unresolvedWorld
+      &&(!this.macro.active||this.updateSuspended&&this.macro.checkpoint()!==null)&&(!this.runRequested||this.updateSuspended)&&(!this.returning||this.updateSuspended)&&!this.pending&&!this.featureReceipt&&!this.workflowOutstanding&&!this.unresolvedWorld
       &&!this.travel.active&&!this.service.active&&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)
       &&!this.supply.ownsField&&!this.supply.uncertain&&!this.escape.busy&&this.warp.settledForMaintenance()&&!this.memo.blocked&&!this.socket.busy&&!this.social.busy
-      &&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture&&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil
+      &&!this.partyHeal.busy&&!this.partyHeal.awaitingSpReadback&&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture&&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil
       &&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending&&e.settledForMaintenance();
+  }
+  prepareUpdate():void {
+    this.updateSuspended=true;this.engine.prepareUpdate();this.updateTick();
+  }
+  updateCheckpoint():ControllerUpdateCheckpoint|null {
+    if(!this.updateSuspended||!this.settledForMaintenance())return null;
+    const macro=this.macro.active?this.macro.checkpoint():null,partyHeal=this.partyHeal.checkpoint();
+    if(this.macro.active&&!macro||!partyHeal)return null;
+    return {version:1,frozenAt:this.now(),status:structuredClone(this.snapshot()),settings:structuredClone(this.macroBase??this.requestedSettings),macro,partyHeal,
+      run:this.runRequested||this.macro.active?{startedAt:this.started,kills:Math.max(0,this.engine.kills-this.runKills),pickups:Math.max(0,this.engine.looted-this.runPickups),deaths:this.engine.deaths}:null};
+  }
+  cancelUpdate():void {this.updateSuspended=false;this.engine.cancelUpdate();this.lastTick=this.now();}
+  restoreUpdate(value:unknown,remainingSettings?:Settings,escapeGuard?:EscapeResumeGuard,supplyGuard?:SupplyResumeGuard,recoveryGuard?:DeathRecoveryGuard):void {
+    const checkpoint=validateControllerUpdateCheckpoint(value,this.now());
+    this.requireReady();
+    if(this.updateSuspended||this.active||!this.settledForMaintenance()||!this.readyOwn?.initialization
+      ||this.readyOwn.identity!==this.deathIdentity()||checkpoint.status.player?.name!==this.engine.player?.name)
+      throw new Error('Update continuation requires a fresh settled entry of the same character.');
+    const settings=remainingSettings?validateSettings(remainingSettings):checkpoint.settings;
+    if(checkpoint.macro&&settings)for(const rule of checkpoint.macro.script.rules)for(const step of rule.steps)if(step.type==='farm')this.macroFieldSettings(step,settings);
+    const elapsed=Math.max(0,Math.floor((this.now()-checkpoint.frozenAt)/1000));
+    if(!supplyGuard&&checkpoint.status.supplyGuard){const guard=checkpoint.status.supplyGuard;supplyGuard={...guard,intervalSeconds:Math.max(0,guard.intervalSeconds-elapsed),deadlineSeconds:Math.max(0,guard.deadlineSeconds-elapsed)};}
+    if(!escapeGuard&&checkpoint.status.escape&&(checkpoint.status.escape.latched||checkpoint.status.escape.cooldownSeconds>0)){
+      const escape=checkpoint.status.escape;escapeGuard={latched:escape.latched,cooldownSeconds:Math.max(0,escape.cooldownSeconds-elapsed),...(escape.recovery?{recovery:escape.recovery}:{})};
+    }
+    recoveryGuard??=checkpoint.status.deathRecoveryGuard;
+    if(escapeGuard)validateEscapeResumeGuard(escapeGuard);
+    if(supplyGuard){supplyGuard=validateSupplyResumeGuard(supplyGuard);if(supplyGuard.character!==this.engine.player?.name)throw new Error('Supply continuation belongs to a different character.');}
+    if(recoveryGuard){recoveryGuard=validateDeathRecoveryGuard(recoveryGuard);if(!settings||recoveryGuard.character!==this.engine.player?.name||recoveryGuard.destination!==farmingDestination(settings))throw new Error('Death recovery continuation belongs to a different character or destination.');}
+    // Macro.restore checks its retained clock floor before replacing any state.
+    // Run/guard inputs above are already validated before this first mutation.
+    if(checkpoint.macro)this.macro.restore(checkpoint.macro);
+    if(settings&&checkpoint.run){
+      const run=remainingSettings?{...checkpoint.run,startedAt:this.now(),kills:0,pickups:0,deaths:0}:checkpoint.run;
+      this.engine.restoreRequestedRun(settings,run);
+      this.supply.configure(settings,this.supplyContext(),supplyGuard);
+      this.started=run.startedAt;this.runKills=this.engine.kills-run.kills;this.runPickups=this.engine.looted-run.pickups;
+      this.cycleDeaths=this.engine.deaths;this.characterName=this.engine.player!.name;
+      this.requestedSettings=checkpoint.status.runRequested?structuredClone(settings):null;
+      this.returnSettings=automationSettings(settings).travel.returnToLockMap?{...structuredClone(settings),map:farmingDestination(settings)}:null;
+      if(recoveryGuard){this.deathCycle=deathCycle(recoveryGuard,this.now());this.returning=true;}
+      if(escapeGuard)this.escape.restoreOnReconnect(settings,escapeGuard,this.escapeContext());
+      this.engine.castAvailability.allowRun();
+      const followSettings=structuredClone(settings),policy=structuredClone(automationSettings(followSettings));
+      if(policy.follow.mode==='partyLeader')policy.follow.rendezvous=false;
+      followSettings.automation=policy;this.partyFollow.start(followSettings,this.partyFollowContext());
+    }
+    this.partyHeal.restore(checkpoint.partyHeal);
+    if(checkpoint.macro){
+      this.macroBase=structuredClone(settings!);
+      this.macroPredicates=checkpoint.macro.script.rules.flatMap(rule=>rule.conditions.filter((condition):condition is ActorPredicate=>condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent'));
+      const field=this.macro.fieldIntent;if(field)this.requestedSettings=this.macroFieldSettings(field);
+    }
+    this.lastTick=this.now();this.retryAt=0;this.waitingReason='Update continuation accepted; waiting for fresh verified field decisions.';
+  }
+  private updateTick():void {
+    this.lastTick=this.now();
+    this.engine.tick(false);this.captureActionFailure();this.syncWorkflowOwner();
+    this.social.tick();this.memo.tick(this.memoContext());this.warp.tick(this.warpContext());this.socket.tick(this.socketContext());this.refine.tick(this.refineContext());
+    if(this.travel.teleportPending)this.travel.tick(this.engine.map,this.engine.player);
+    this.partyHeal.resourcesReadBack(this.engine.actorObservation([]));
+    if(this.pending?.engineSequence!==undefined){const result=this.engine.actionResult;if(result.sequence===this.pending.engineSequence&&result.status!=='pending')this.completePending(result.status==='confirmed',result.reason);}
+    if(this.pending?.workflow&&!this.workflow.snapshot().running){const state=this.workflow.snapshot();this.completePending(state.state==='complete',state.reason);}
+    this.engine.settleUpdate();
   }
   private requireIdle(): void {
     this.requireReady();
@@ -483,6 +553,7 @@ export class CompanionController {
     if (this.deathCycle?.guard.uncertain || this.deathCycle?.posture || this.warp.blocked || this.socket.busy || this.memo.blocked || this.active || this.escape.busy || this.supply.uncertain || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
   }
   start(input: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard): void {
+    if(this.updateSuspended)throw new Error('Client update is waiting for current actions to settle.');
     const settings = validateSettings(input);
     if(recoveryGuard){recoveryGuard=validateDeathRecoveryGuard(recoveryGuard);
       if(recoveryGuard.character!==this.engine.player?.name||recoveryGuard.destination!==farmingDestination(settings))throw new Error('Death recovery state belongs to a different character or farming destination.');}
@@ -629,6 +700,7 @@ export class CompanionController {
       groundAllowed:target=>castSettled&&readiness.state==='ready'&&this.engine.manualWarpGroundAllowed(target,readiness.profile.range,policy)};
   }
   perform(mode: 'command' | 'workflow' | 'routine' | 'macro' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance' | 'warp' | 'warpPreview' | 'warpCancel', input: unknown): void {
+    if(this.updateSuspended)throw new Error('Client update is waiting for current actions to settle.');
     if(mode==='macro') {
       if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==2
         ||!Object.hasOwn(input,'script')||!Object.hasOwn(input,'settings'))throw new Error('Macro request requires exactly script and settings.');
@@ -1601,6 +1673,7 @@ export class CompanionController {
     }
   }
   tick(): void {
+    if(this.updateSuspended){this.updateTick();return;}
     const now = this.now();
     // Macro duration and step deadlines cannot be renewed by another owner's wait.
     this.pollMacro();
@@ -1804,7 +1877,7 @@ export class CompanionController {
     else if (routine.state === 'running' || routine.state === 'waiting') snapshot.reason = routine.reason;
     else if(this.macro.active)snapshot.reason=macro.reason;
     if(this.macro.active&&this.waitingReason&&!this.engine.running)snapshot.reason=this.blockedReason||this.waitingReason;
-    const executing = this.executing && (this.warp.busy || refine.state==='pending' || this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || this.engine.manualTargetActive || service.active || this.travel.active || workflow.running || !!this.pending
+    const executing = !this.updateSuspended&&this.executing && (this.warp.busy || refine.state==='pending' || this.socket.busy || this.memo.busy || this.social.busy || this.engine.running || this.engine.manualTargetActive || service.active || this.travel.active || workflow.running || !!this.pending
       || this.partyFollow.ownsTravel || this.escape.inFlight || this.macro.active || ['running','waiting'].includes(routine.state));
     if (this.runRequested && !executing) snapshot.reason = this.blockedReason || this.waitingReason || snapshot.reason;
     if(this.runRequested&&this.now()<this.yieldUntil&&!this.blockedReason)snapshot.reason=this.waitingReason;

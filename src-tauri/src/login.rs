@@ -52,6 +52,34 @@ pub(crate) struct SavedLogin {
     auto_login: bool,
 }
 
+/// Proven account metadata only; continuation storage never receives credentials.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct UpdateAccount {
+    pub username: String,
+    pub character_slot: u8,
+    pub mode: ConnectionMode,
+}
+impl UpdateAccount {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.username.trim().is_empty()
+            || self.username.chars().count() > 64
+            || self.username.chars().any(char::is_control)
+            || self.character_slot > 2
+        {
+            return Err("Update account is invalid.".into());
+        }
+        Ok(())
+    }
+    fn from_profile(profile: &LoginProfile) -> Self {
+        Self {
+            username: profile.username.clone(),
+            character_slot: profile.character_slot,
+            mode: profile.mode,
+        }
+    }
+}
+
 pub(crate) struct PendingLogin {
     profile: LoginProfile,
     expires_at: Instant,
@@ -83,6 +111,25 @@ pub(crate) struct PendingLoginResult {
 }
 
 impl LoginState {
+    pub(crate) fn update_account(
+        &self,
+        identity: &crate::maintenance::GameIdentity,
+    ) -> Option<UpdateAccount> {
+        // Cancellation owns pending login requests. An exact, already-proven
+        // live account remains bound through Stop and a later explicit Start.
+        if !self.in_world
+            || self.maintenance_busy()
+            || self.profile_session.as_deref() != Some(identity.session_id.as_str())
+            || self.profile_connection.as_deref() != Some(identity.connection_id.as_str())
+            || self.active_session != self.profile_session
+            || self.active_connection != self.profile_connection
+        {
+            return None;
+        }
+        self.session_profile
+            .as_ref()
+            .map(UpdateAccount::from_profile)
+    }
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }
@@ -246,6 +293,14 @@ pub(crate) type SharedLogin = Mutex<LoginState>;
 fn login_store(app: &tauri::AppHandle) -> Result<local_store::LocalLoginStore, String> {
     let directory = crate::app_data(app).map_err(|_| "Local saved login is unavailable.")?;
     Ok(local_store::LocalLoginStore::new(directory))
+}
+
+pub(crate) fn saved_account_matches(app_data: std::path::PathBuf, account: &UpdateAccount) -> bool {
+    local_store::LocalLoginStore::new(app_data)
+        .load()
+        .ok()
+        .flatten()
+        .is_some_and(|profile| UpdateAccount::from_profile(&profile) == *account)
 }
 
 #[tauri::command]
@@ -508,6 +563,100 @@ mod tests {
         };
         let json = serde_json::to_value(info).unwrap();
         assert!(json.get("password").is_none());
+    }
+
+    #[test]
+    fn update_account_requires_the_exact_proven_live_login_owner() {
+        let mut state = LoginState::default();
+        let identity = crate::maintenance::GameIdentity {
+            session_id: "page-a".into(),
+            connection_id: "socket-a".into(),
+        };
+        state.queue(profile());
+        assert!(state.update_account(&identity).is_none());
+        state.claim(identity.session_id.clone());
+        assert!(state.update_account(&identity).is_none());
+        state.observe("page-a", Some("socket-a"), true, true, "complete", "");
+        let account = state.update_account(&identity).unwrap();
+        assert_eq!(account.username, "test-account");
+        assert_eq!(account.character_slot, 0);
+        assert_eq!(account.mode, ConnectionMode::GameClient);
+        let other = crate::maintenance::GameIdentity {
+            session_id: "page-b".into(),
+            ..identity.clone()
+        };
+        assert!(state.update_account(&other).is_none());
+        state.observe("page-a", Some("socket-b"), true, true, "complete", "");
+        assert!(state.update_account(&identity).is_none());
+        assert!(state.session_profile.is_none());
+        state.queue(profile());
+        state.claim("page-a".into());
+        state.observe("page-a", Some("socket-a"), true, true, "complete", "");
+        state.cancel();
+        state.observe("page-a", Some("socket-b"), true, true, "complete", "");
+        assert!(state.update_account(&identity).is_none());
+    }
+
+    #[test]
+    fn update_account_survives_stop_and_explicit_start_for_the_proven_connected_character() {
+        for mode in [ConnectionMode::BotOnly, ConnectionMode::GameClient] {
+            let mut profile = profile();
+            profile.mode = mode;
+            let mut state = LoginState::default();
+            let identity = crate::maintenance::GameIdentity {
+                session_id: "page-a".into(),
+                connection_id: "socket-a".into(),
+            };
+            state.queue(profile);
+            state.claim(identity.session_id.clone());
+            state.observe("page-a", Some("socket-a"), true, true, "complete", "");
+            let account = state.update_account(&identity).unwrap();
+            let original_generation = state.generation();
+            state.cancel(); // control_bot('stop') cancels login requests, not the proven account.
+            assert!(state.cancelled);
+            // Previous update requests stay stale even though the live owner remains proven.
+            assert_ne!(state.generation(), original_generation);
+            // Explicit field or macro Start does not mutate LoginState; its
+            // subsequent same-owner telemetry must retain update eligibility.
+            state.observe("page-a", Some("socket-a"), true, true, "complete", "");
+            assert_eq!(state.update_account(&identity), Some(account));
+        }
+    }
+
+    #[test]
+    fn update_account_does_not_promote_a_cancelled_pending_login_into_proven_ownership() {
+        let mut state = LoginState::default();
+        let identity = crate::maintenance::GameIdentity {
+            session_id: "page-a".into(),
+            connection_id: "socket-a".into(),
+        };
+        state.queue(profile());
+        state.claim(identity.session_id.clone());
+        state.cancel();
+        state.observe("page-a", Some("socket-a"), true, true, "complete", "");
+        assert!(state.update_account(&identity).is_none());
+        assert!(state.session_profile.is_none());
+    }
+
+    #[test]
+    fn update_saved_account_flag_requires_matching_existing_credential_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().canonicalize().unwrap();
+        let account = UpdateAccount::from_profile(&profile());
+        assert!(!saved_account_matches(path.clone(), &account));
+        local_store::LocalLoginStore::new(path.clone())
+            .save(&profile())
+            .unwrap();
+        assert!(saved_account_matches(path.clone(), &account));
+        for field in ["username", "slot", "mode"] {
+            let mut other = account.clone();
+            match field {
+                "username" => other.username = "other-account".into(),
+                "slot" => other.character_slot = 2,
+                _ => other.mode = ConnectionMode::BotOnly,
+            };
+            assert!(!saved_account_matches(path.clone(), &other));
+        }
     }
 
     #[test]

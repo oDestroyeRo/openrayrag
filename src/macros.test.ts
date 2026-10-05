@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import cases from './data/macro-script-cases.json';
-import { dryRunMacro, MACRO_LIMITS, MacroRuntime, validateMacroScript,
-  type MacroRule, type MacroScript, type MacroStep } from './macros';
+import { dryRunMacro, MACRO_LIMITS, MacroRuntime, validateMacroCheckpoint, validateMacroScript,
+  type MacroCheckpoint, type MacroRule, type MacroScript, type MacroStep } from './macros';
 
 const item: MacroStep = { type: 'useItem', itemId: 501, timeoutSeconds: 10 };
 const farm: MacroStep = { type: 'farm', map: 'prt_fild08', targets: [1002], timeoutSeconds: 120 };
@@ -21,6 +21,205 @@ function confirm(runtime: MacroRuntime, confirmed = true) {
   expect(id).toBeDefined();
   return runtime.acknowledge(id!, confirmed);
 }
+
+describe('macro clean continuation checkpoints', () => {
+  function monitoring() {
+    const fixture = setup();
+    fixture.runtime.start(script({ rules: [rule({ name: 'farm', steps: [farm] }),
+      rule({ name: 'restock', priority: 20, conditions: [{ field: 'level', operator: 'gte', value: 10 }], steps: [buy(50), item, farm] })] }));
+    fixture.runtime.tick({ hpPercent: 40 }); confirm(fixture.runtime);
+    return fixture;
+  }
+
+  it('restores exact farm monitoring and rule exhaustion without reactivating a confirmed farm', () => {
+    const { runtime, advance } = setup();
+    const original = script({ maxActions: 1, rules: [rule({ steps: [farm] })] });
+    runtime.start(original); runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    advance(5_000); runtime.tick({});
+    const checkpoint = runtime.checkpoint()!;
+    expect(validateMacroCheckpoint(JSON.parse(JSON.stringify(checkpoint)))).toEqual(checkpoint);
+    const restored = new MacroRuntime(() => 10_000);
+    restored.restore(checkpoint);
+    expect(restored.checkpoint()).toEqual(checkpoint);
+    expect(restored.snapshot()).toEqual(runtime.snapshot());
+    expect(restored.fieldIntent).toEqual(farm);
+    expect(restored.tick({ hpPercent: 40 })).toBeNull();
+    expect(restored.snapshot()).toMatchObject({ state: 'monitoring', actionsIssued: 1, sequencesIssued: 1, elapsedSeconds: 9 });
+    checkpoint.script.rules[0]!.steps[0] = item;
+    checkpoint.retainedField!.targets.push(999);
+    expect(restored.fieldIntent).toEqual(farm);
+    expect(restored.checkpoint()!.script).toEqual(original);
+  });
+
+  it.each([1, 2])('resumes the next ordered step after %i confirmed economic steps', count => {
+    const { runtime } = monitoring();
+    const first = runtime.tick({ level: 10 })!;
+    expect(first.step.type).toBe('buy'); confirm(runtime);
+    if (count === 2) { expect(runtime.tick({ level: 1 })?.step.type).toBe('useItem'); confirm(runtime); }
+    const checkpoint = runtime.checkpoint()!;
+    expect(checkpoint.sequence?.stepIndex).toBe(count);
+    expect(checkpoint.selector.pending?.id).toBe(checkpoint.sequence?.selectorId);
+    const restored = new MacroRuntime(() => 20_000);
+    restored.restore(JSON.parse(JSON.stringify(checkpoint)));
+    expect(restored.currentIntent).toBeNull();
+    expect(restored.snapshot()).toMatchObject({ fieldSuspended: true, actionsIssued: count + 1, spendReserved: 50 });
+    const next = restored.tick({ level: 1, inventory: { 501: 100 } })!;
+    expect(next).toMatchObject({ stepIndex: count, generation: first.generation, step: { type: count === 1 ? 'useItem' : 'farm' } });
+    expect(next.id).toBeGreaterThan(checkpoint.nextId);
+    expect(restored.acknowledge(first.id, true)).toBe(false);
+    confirm(restored);
+    if (count === 1) { expect(restored.tick({})?.step.type).toBe('farm'); confirm(restored); }
+    expect(restored.snapshot()).toMatchObject({ state: 'monitoring', fieldSuspended: false,
+      sequencesIssued: 2, sequencesCompleted: 2, actionsIssued: 4, actionsCompleted: 4, spendReserved: 50 });
+    expect(restored.tick({ level: 10, hpPercent: 40 })).toBeNull();
+  });
+
+  it('keeps spend reserved after a confirmed buy, including reservations in other rules', () => {
+    const { runtime } = setup();
+    runtime.start(script({ maxSpend: 100, rules: [rule({ name: 'first', steps: [buy(60), item] }),
+      rule({ name: 'second', steps: [buy(60)] })] }));
+    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    const restored = new MacroRuntime(() => 2_000);
+    restored.restore(runtime.checkpoint());
+    expect(restored.tick({})?.step.type).toBe('useItem'); confirm(restored);
+    expect(restored.tick({ hpPercent: 40 })).toBeNull();
+    expect(restored.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 2, spendReserved: 60 });
+    expect(restored.snapshot().reason).toMatch(/spend budget/);
+  });
+
+  it('keeps action limits and rule cooldowns rather than starting a fresh allowance', () => {
+    const { runtime } = setup();
+    runtime.start(script({ maxActions: 3, rules: [rule({ maxRuns: 2, cooldownSeconds: 10, steps: [item, farm] })] }));
+    runtime.tick({ hpPercent: 40 }); confirm(runtime); runtime.tick({}); confirm(runtime);
+    let time = 6_000;
+    const restored = new MacroRuntime(() => time);
+    restored.restore(runtime.checkpoint());
+    expect(restored.tick({ hpPercent: 40 })).toBeNull();
+    time = 11_000;
+    expect(restored.tick({ hpPercent: 40 })).toBeNull();
+    expect(restored.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 2, sequencesIssued: 2 });
+    expect(restored.snapshot().reason).toMatch(/remaining step budget/);
+  });
+
+  it('cannot revive a farm cleared by the final confirmed travel of a completed rule', () => {
+    const { runtime } = setup();
+    runtime.start(script({ rules: [rule({ steps: [farm, { type: 'travel', map: 'prontera', timeoutSeconds: 60 }] }),
+      rule({ name: 'later', conditions: [{ field: 'level', operator: 'gte', value: 10 }] })] }));
+    runtime.tick({ hpPercent: 40 }); confirm(runtime); runtime.tick({}); confirm(runtime);
+    const checkpoint = runtime.checkpoint()!;
+    expect(checkpoint.retainedField).toBeNull();
+    expect(validateMacroCheckpoint(checkpoint)).toEqual(checkpoint);
+    checkpoint.retainedField = farm; checkpoint.state = 'monitoring';
+    expect(() => validateMacroCheckpoint(checkpoint)).toThrow(/field/);
+  });
+
+  it('counts time spent updating in the original duration and elapsed conditions', () => {
+    const { runtime, advance } = setup();
+    runtime.start(script({ durationSeconds: 10, rules: [rule({ steps: [farm] })] }));
+    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    advance(2_000); runtime.tick({});
+    const restored = new MacroRuntime(() => 11_000);
+    restored.restore(runtime.checkpoint());
+    expect(restored.tick({ hpPercent: 40 })).toBeNull();
+    expect(restored.snapshot()).toMatchObject({ state: 'completed', fieldIntentActive: false, actionsIssued: 1, elapsedSeconds: 10 });
+    const waiting = setup().runtime;
+    waiting.start(script({ durationSeconds: 0, maxActions: 0, rules: [rule({ maxRuns: 0,
+      conditions: [{ field: 'elapsedSeconds', operator: 'gte', value: 60 }] })] }));
+    const afterUpdate = new MacroRuntime(() => 90_001_000);
+    afterUpdate.restore(waiting.checkpoint());
+    expect(afterUpdate.tick({ elapsedSeconds: 0 })?.step).toEqual(item);
+    expect(afterUpdate.snapshot().elapsedSeconds).toBe(90_000);
+  });
+
+  it('refuses idle, completed, failed, cancelled and physically pending checkpoints', () => {
+    const { runtime } = setup();
+    expect(runtime.checkpoint()).toBeNull();
+    runtime.start(script());
+    expect(runtime.checkpoint()).not.toBeNull();
+    const intent = runtime.tick({ hpPercent: 40 })!;
+    expect(runtime.checkpoint()).toBeNull();
+    expect(runtime.acknowledge(intent.id, true)).toBe(true);
+    expect(runtime.checkpoint()).toBeNull();
+    runtime.start(script()); runtime.tick({ hpPercent: 40 }); confirm(runtime, false);
+    expect(runtime.checkpoint()).toBeNull();
+    runtime.start(script()); runtime.cancel();
+    expect(runtime.checkpoint()).toBeNull();
+  });
+
+  it('retains id and generation floors when restoring into a previously used runtime', () => {
+    const { runtime } = monitoring();
+    runtime.tick({ level: 10 }); confirm(runtime);
+    const checkpoint = runtime.checkpoint()!;
+    const { runtime: restored } = setup();
+    restored.start(script({ rules: [rule({ maxRuns: 0 })] }));
+    for (let i = 0; i < 5; i++) { restored.tick({ hpPercent: 40 }); confirm(restored); }
+    restored.cancel(); restored.start(script()); restored.cancel();
+    const oldGeneration = restored.snapshot().generation;
+    restored.restore(checkpoint);
+    const next = restored.tick({})!;
+    expect(next.id).toBe(6);
+    expect(next.generation).toBe(oldGeneration);
+    confirm(restored);
+    expect(validateMacroCheckpoint(restored.checkpoint()).nextId).toBe(6);
+  });
+
+  const corruptions: [string, (checkpoint: MacroCheckpoint) => void][] = [
+    ['version', value => { Reflect.set(value, 'version', 2); }],
+    ['unknown property', value => { Reflect.set(value, 'pending', {}); }],
+    ['macro state', value => { Reflect.set(value, 'state', 'waiting'); }],
+    ['script mismatch', value => { value.script.rules[1]!.cooldownSeconds++; }],
+    ['cursor replay', value => { value.sequence!.stepIndex = 0; }],
+    ['cursor skipped step', value => { value.sequence!.stepIndex = 2; }],
+    ['cursor rule', value => { value.sequence!.ruleIndex = 0; }],
+    ['cursor owner', value => { value.sequence!.selectorId++; }],
+    ['missing cursor', value => { value.sequence = null; }],
+    ['missing selector owner', value => { value.selector.pending = null; }],
+    ['wrong completed count', value => { value.actionsCompleted++; }],
+    ['wrong issued count', value => { value.actionsIssued++; }],
+    ['refunded spend', value => { value.spendReserved = 0; }],
+    ['wrong run count', value => { value.selector.progress[0]!.runs = 0; }],
+    ['lost cooldown', value => { value.selector.progress[1]!.lastIssued = null; }],
+    ['wrong selector count', value => { value.selector.actionsIssued++; }],
+    ['wrong selector completed count', value => { value.selector.actionsCompleted++; }],
+    ['wrong selector state', value => { value.selector.state = 'running'; }],
+    ['unknown selector property', value => { Reflect.set(value.selector, 'allowUnlimitedLimits', true); }],
+    ['invalid id', value => { value.nextId = 0; }],
+    ['invalid generation', value => { value.generation = 0; }],
+    ['reversed clock', value => { value.lastTime = 0; }],
+    ['nonfinite clock', value => { value.selector.lastTime = Number.NaN; }],
+    ['selector starts before macro', value => { value.selector.startedAt = 0; }],
+    ['future rule issuance', value => { value.selector.lastTime++; value.selector.progress[0]!.lastIssued!++; }],
+    ['changed field', value => { value.retainedField!.map = 'prontera'; }],
+    ['missing field', value => { value.retainedField = null; }],
+  ];
+  it.each(corruptions)('rejects $0 atomically', (_, corrupt) => {
+    const { runtime } = monitoring();
+    runtime.tick({ level: 10 }); confirm(runtime);
+    const checkpoint = runtime.checkpoint()!;
+    const { runtime: target } = setup();
+    target.start(script()); target.cancel('Previous stopped run.');
+    const before = target.snapshot();
+    corrupt(checkpoint);
+    expect(() => target.restore(checkpoint)).toThrow();
+    expect(target.snapshot()).toEqual(before);
+    expect(target.fieldIntent).toBeNull();
+    expect(target.currentIntent).toBeNull();
+  });
+
+  it('rejects restoring over an active owner and invalid restore clocks without changing it', () => {
+    const { runtime } = monitoring();
+    const checkpoint = runtime.checkpoint()!;
+    const before = runtime.snapshot();
+    expect(() => runtime.restore(checkpoint)).toThrow(/Stop/);
+    expect(runtime.snapshot()).toEqual(before);
+    for (const time of [999, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const restored = new MacroRuntime(() => time);
+      const idle = restored.snapshot();
+      expect(() => restored.restore(checkpoint)).toThrow(/clock/);
+      expect(restored.snapshot()).toEqual(idle);
+    }
+  });
+});
 
 describe('macro protocol validation', () => {
   it.each(cases)('$name matches the shared native validation corpus', ({ script, valid }) => {

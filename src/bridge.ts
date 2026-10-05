@@ -5,6 +5,7 @@ import { type Settings } from './engine';
 import { decode, OP, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
 import { officialWarpSkill, warpInitializationPacket } from './warp-protocol';
 import type { CompanionSnapshot } from './controller';
+import type { ControllerUpdateCheckpoint, ControllerUpdateRestore } from './controller-update';
 import { wireController } from './controller-wire';
 import { LoginController, loginDriver, loginReady, type LoginProfile, type LoginStatus, type UnityClient } from './login';
 import { currentMapInfo, loadMapCatalog, type MapCatalog } from './map-data';
@@ -19,6 +20,9 @@ interface BridgeWindow extends Window {
     control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard) => void;
     perform: (action: 'command' | 'workflow' | 'routine' | 'macro' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance' | 'warp' | 'warpPreview' | 'warpCancel', request: unknown) => void;
     maintenance:(nonce:string,reserve:boolean|'commit')=>void;
+    prepareUpdate:(requestId:string)=>void;
+    cancelUpdate:(requestId:string)=>void;
+    restoreUpdate:(payload:ControllerUpdateRestore)=>void;
     snapshot: () => CompanionSnapshot;
   };
 }
@@ -36,6 +40,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   const officialOwners=new Set<WebSocket>();
   let officialOwnerOverflow=false;
   let leaseRevision:number|null=null;
+  let updateRequest:{id:string;checking:boolean;prepared:boolean}|null=null;
   const mutation=(kind:'frame'|'socket'|'page'='frame')=>{
     maintenance.mutate();
     if(maintenanceNonce)void page.__TAURI_INTERNALS__?.invoke('update_invalidate',{nonce:maintenanceNonce,kind}).catch(()=>{});
@@ -77,13 +82,26 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
     },
   });
   const engine = controller.engine;
+  const runtimeStatus=(status=controller.snapshot())=>({...status,sessionId,connectionId,maintenanceWaiting:officialUncertain,
+    login:login?.status??loginStatus,mapInfo:currentMapInfo(engine.map,engine.entities.values(),catalog,catalogLoading),
+    reconnectAvailable:false,build:page.buildUrl??'',connectionMode:'gameClient'});
+  const checkpoint=():ControllerUpdateCheckpoint|null=>{const value=controller.updateCheckpoint();return value?{...value,status:runtimeStatus(value.status)}:null;};
+  const confirmPrepared=()=>{
+    const request=updateRequest;
+    if(!request||request.checking||request.prepared||maintenance.blocked)return;
+    request.checking=true;
+    void receiveQueue.then(async()=>{
+      if(updateRequest!==request||guardWrites.size>0||officialUncertain||active?.readyState!==NativeSocket.OPEN
+        ||!connectionId||page.buildUrl!==VERIFIED_BUILD||['signingIn','selecting','entering'].includes((login?.status??loginStatus).phase))return;
+      const value=checkpoint();if(!value)return;
+      request.prepared=true;
+      await page.__TAURI_INTERNALS__?.invoke('update_prepared',{requestId:request.id,checkpoint:value});
+    }).catch(()=>{}).finally(()=>{request.checking=false;});
+  };
   const publish = () => {
     if (!page.__TAURI_INTERNALS__ || publishing) return;
     publishing = true;
-    return page.__TAURI_INTERNALS__.invoke('bridge_status', { status: {
-      ...controller.snapshot(), sessionId, connectionId, maintenanceWaiting:officialUncertain, login: login?.status ?? loginStatus,
-      mapInfo: currentMapInfo(engine.map, engine.entities.values(), catalog, catalogLoading),
-    } })
+    return page.__TAURI_INTERNALS__.invoke('bridge_status', { status:runtimeStatus() })
       .then(()=>{}).catch(() => { if (controller.active) controller.heartbeat(false); })
       .finally(() => { publishing = false; });
   };
@@ -295,7 +313,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
     control(action, settings, escapeGuard, supplyGuard, recoveryGuard) {
       maintenance.assertDispatch();mutation();
       if (action === 'heartbeat') { heartbeat = Date.now(); controller.heartbeat(true);retryInitialization();return; }
-      if (action === 'stop') { cancelLogin(); stop('Stopped by you.'); return; }
+      if (action === 'stop') { updateRequest=null;cancelLogin(); stop('Stopped by you.'); return; }
       try {
         if (page.buildUrl !== VERIFIED_BUILD) throw new Error('This game build is not verified.');
         if (!settings) throw new Error('Choose combat settings first.');
@@ -315,7 +333,8 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
       if(reserve==='commit'){
         void receiveQueue.then(async()=>{
           if(maintenanceNonce!==nonce||leaseRevision===null||!maintenance.matches(nonce,leaseRevision)||guardWrites.size>0||!controller.settledForMaintenance()||!connectionId)return;
-          await page.__TAURI_INTERNALS__?.invoke('update_final_ack',{nonce,identity:{sessionId,connectionId},revision:leaseRevision}).catch(()=>{});
+          const finalCheckpoint=checkpoint();
+          await page.__TAURI_INTERNALS__?.invoke('update_final_ack',{nonce,identity:{sessionId,connectionId},revision:leaseRevision,...(finalCheckpoint?{checkpoint:finalCheckpoint}:{})}).catch(()=>{});
         });return;
       }
       if(!reserve){maintenance.release(nonce);if(maintenanceNonce===nonce)maintenanceNonce=null;return;}
@@ -329,6 +348,22 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
         try {const accepted=await page.__TAURI_INTERNALS__?.invoke('update_ack',{nonce,identity:{sessionId,connectionId},revision});if(accepted!==true){maintenance.release(nonce);maintenanceNonce=null;}}
         catch {/* Keep dispatch frozen until native proves this nonce is released. */}
       });
+    },
+    prepareUpdate(requestId){
+      if(!/^[a-f0-9]{32}$/.test(requestId)||maintenance.blocked||updateRequest&&updateRequest.id!==requestId)return;
+      if(!updateRequest){mutation();updateRequest={id:requestId,checking:false,prepared:false};controller.prepareUpdate();}
+      confirmPrepared();publish();
+    },
+    cancelUpdate(requestId){
+      if(updateRequest?.id!==requestId)return;
+      updateRequest=null;controller.cancelUpdate();heartbeat=Date.now();publish();
+    },
+    restoreUpdate(payload){
+      if(!payload||!/^[a-f0-9]{32}$/.test(payload.requestId))return;
+      let success=false;
+      try {maintenance.assertDispatch();mutation();controller.restoreUpdate(payload.checkpoint,payload.settings,payload.escapeGuard,payload.supplyGuard,payload.deathRecoveryGuard);heartbeat=Date.now();success=true;}
+      catch(error){engine.reason=error instanceof Error?error.message:'Update continuation rejected.';}
+      void page.__TAURI_INTERNALS__?.invoke('update_restored',{requestId:payload.requestId,success}).catch(()=>{});publish();
     },
     snapshot: () => controller.snapshot(),
   };
@@ -352,6 +387,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
       login?.tick();
       if (controller.active && Date.now() - heartbeat > 6000) controller.heartbeat(false);
       controller.tick();
+      confirmPrepared();
       retryInitialization();
     } catch { controller.pause('Waiting after a connection error.'); }
     if (Date.now() - lastPublished >= 500) { lastPublished = Date.now(); publish(); }

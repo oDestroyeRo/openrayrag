@@ -37,6 +37,20 @@ const ready = (sessionId = 'old'): RunSession => ({
 async function settle() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
 
 describe('run intent dispatch', () => {
+  it('retires intent immediately but holds Stop until updater cancellation releases admission', async () => {
+    const f = fixture();await f.dispatch.start(settings(),ready());
+    const cancelled=deferred(), stopped=f.dispatch.stop(cancelled.promise);
+    expect(f.field.requested).toBe(false);expect(f.dispatch.stopping).toBe(true);
+    expect(f.actions()).toEqual(['start']);
+    expect((await f.dispatch.start(settings(),ready())).outcome.status).toBe('retired');
+    cancelled.resolve();await stopped;
+    expect(f.actions()).toEqual(['start','stop']);expect(f.dispatch.stopping).toBe(false);
+  });
+  it('still attempts Stop when updater cancellation fails', async () => {
+    const f=fixture(),cancelled=deferred(),stopped=f.dispatch.stop(cancelled.promise);
+    cancelled.reject(new Error('Cancellation unavailable'));await stopped;
+    expect(f.actions()).toEqual(['stop']);expect(f.field.requested).toBe(false);
+  });
   it.each(['login', 'start', 'resume', 'reconnect'] as const)('Stop drains a deferred %s and compensates before releasing controls', async kind => {
     const f = fixture();
     if (kind === 'resume') await f.dispatch.start(settings(), ready());

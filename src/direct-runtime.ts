@@ -1,6 +1,7 @@
 import { wireController } from './controller-wire';
 import type { CompanionController } from './controller';
-import { decode, OP } from './protocol';
+import type { ControllerUpdateCheckpoint, ControllerUpdateRestore } from './controller-update';
+import { decode, OP, VERIFIED_BUILD } from './protocol';
 import { MaintenanceLease } from './maintenance';
 import type { LoginStatus } from './login';
 import { currentMapInfo, type MapCatalog } from './map-data';
@@ -46,6 +47,7 @@ export class DirectRuntime {
   private probing=false;
   private publishing=false;
   private lastPublished=0;
+  private updateRequest:{id:string;checking:boolean;prepared:boolean}|null=null;
   catalog:MapCatalog|null=null;
   catalogLoading=false;
   constructor(private readonly port:RuntimePort,readonly sessionId=crypto.randomUUID(),readonly connectionId=crypto.randomUUID()){
@@ -151,13 +153,13 @@ export class DirectRuntime {
       }
       if(this.now()-this.lastPublished>=500){this.lastPublished=this.now();await this.publish();}
     }catch{this.terminal('Bot connection unavailable. Pending outcomes remain unresolved.',true);}
-    finally{this.polling=false;this.confirmMaintenance();}
+    finally{this.polling=false;this.confirmPrepared();this.confirmMaintenance();}
   }
   control(action:'start'|'stop'|'heartbeat',...args:Parameters<CompanionController['start']>):void{
     this.lease.assertDispatch();this.mutate();
     if(action==='heartbeat'){this.heartbeat=this.now();this.controller.heartbeat(true);return;}
     try{
-      if(action==='stop'){this.controller.stop();}
+      if(action==='stop'){this.updateRequest=null;this.controller.stop();}
       else {this.controller.heartbeat(true);this.controller.start(...args);this.heartbeat=this.now();}
     }catch(error){this.controller.engine.reason=error instanceof Error?error.message:'Command failed.';}
     void this.publish();
@@ -165,6 +167,35 @@ export class DirectRuntime {
   perform(...args:Parameters<CompanionController['perform']>):void{
     try{this.lease.assertDispatch();this.mutate();this.controller.perform(...args);this.heartbeat=this.now();}
     catch(error){this.controller.engine.reason=error instanceof Error?error.message:'Command failed.';}void this.publish();
+  }
+  prepareUpdate(requestId:string):void {
+    if(!/^[a-f0-9]{32}$/.test(requestId)||this.lease.blocked||this.updateRequest&&this.updateRequest.id!==requestId)return;
+    if(!this.updateRequest){this.mutate();this.updateRequest={id:requestId,checking:false,prepared:false};this.controller.prepareUpdate();}
+    this.confirmPrepared();void this.publish();
+  }
+  cancelUpdate(requestId:string):void {
+    if(this.updateRequest?.id!==requestId)return;
+    this.updateRequest=null;this.controller.cancelUpdate();this.heartbeat=this.now();void this.publish();
+  }
+  restoreUpdate(payload:ControllerUpdateRestore):void {
+    if(!payload||!/^[a-f0-9]{32}$/.test(payload.requestId))return;
+    let success=false;
+    try {this.lease.assertDispatch();this.mutate();this.controller.restoreUpdate(payload.checkpoint,payload.settings,payload.escapeGuard,payload.supplyGuard,payload.deathRecoveryGuard);this.heartbeat=this.now();success=true;}
+    catch(error){this.controller.engine.reason=error instanceof Error?error.message:'Update continuation rejected.';}
+    void this.port.invoke('update_restored',{requestId:payload.requestId,success}).catch(()=>{});void this.publish();
+  }
+  private checkpoint():ControllerUpdateCheckpoint|null {
+    const value=this.controller.updateCheckpoint();return value?{...value,status:this.runtimeStatus(value.status)}:null;
+  }
+  private confirmPrepared():void {
+    const request=this.updateRequest;if(!request||request.checking||request.prepared||this.polling||this.lease.blocked)return;
+    request.checking=true;
+    void this.queue.then(async()=>{
+      await Promise.allSettled([...this.writes]);
+      if(this.updateRequest!==request||this.polling||!this.maintenanceReady())return;
+      const value=this.checkpoint();if(!value)return;
+      request.prepared=true;await this.port.invoke('update_prepared',{requestId:request.id,checkpoint:value});
+    }).catch(()=>{}).finally(()=>{request.checking=false;});
   }
   maintenance(nonce:string,reserve:boolean|'commit'):void{
     if(!reserve){
@@ -215,17 +246,20 @@ export class DirectRuntime {
       if(this.polling)return;
       this.pendingMaintenance=null;
       if(!this.maintenanceReady()){if(!commit)this.releaseMaintenance(owner);return;}
-      if(commit){await this.port.invoke('update_final_ack',{nonce,identity:this.args(),revision}).catch(()=>{});return;}
+      if(commit){const checkpoint=this.checkpoint();await this.port.invoke('update_final_ack',{nonce,identity:this.args(),revision,...(checkpoint?{checkpoint}:{})}).catch(()=>{});return;}
       this.lease.hold(nonce,revision);
       try{if(await this.port.invoke('update_ack',{nonce,identity:this.args(),revision})!==true)this.releaseMaintenance(owner);}
       catch{/* Keep frozen until native proves the lease released. */}
     }).catch(()=>{/* Native release remains authoritative after a failed confirmation. */});
   }
   snapshot(){return this.controller.snapshot();}
+  private runtimeStatus(status=this.controller.snapshot()){
+    return {...status,sessionId:this.sessionId,connectionId:this.connectionId,login:this.login,reconnectAvailable:false,
+      build:VERIFIED_BUILD,connectionMode:'botOnly',mapInfo:currentMapInfo(this.controller.engine.map,this.controller.engine.entities.values(),this.catalog,this.catalogLoading)};
+  }
   async publish(){
     if(this.publishing)return;this.publishing=true;
-    try{await this.port.invoke('bridge_status',{status:{...this.controller.snapshot(),sessionId:this.sessionId,connectionId:this.connectionId,login:this.login,
-      mapInfo:currentMapInfo(this.controller.engine.map,this.controller.engine.entities.values(),this.catalog,this.catalogLoading)}});}
+    try{await this.port.invoke('bridge_status',{status:this.runtimeStatus()});}
     catch{if(this.controller.active)this.controller.heartbeat(false);}finally{this.publishing=false;}
   }
 }

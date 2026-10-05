@@ -31,3 +31,7 @@ _Avoid_: Executable code, profile
 **Macro field intent**:
 The field activated by a confirmed farm step and retained while later conditions are monitored. Temporary item, skill or NPC sequences suspend that intent; confirmed travel clears it. Every stage shares the original run allowances and existing action receipts.
 _Avoid_: New run, completed farming
+
+**Update continuation**:
+An updater-owned, one-shot checkpoint of settled run intent and remaining allowances. Only a successful update launch or current-process installation recovery may claim it, and only the same verified account and character may continue. Stop cancels it; ordinary launches restore settings without active automation.
+_Avoid_: Auto-start setting, saved macro draft

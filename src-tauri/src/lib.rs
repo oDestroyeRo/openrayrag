@@ -11,6 +11,7 @@ mod login;
 mod maintenance;
 mod mode_guard;
 mod settings_close;
+mod update_continuation;
 mod update_install;
 mod updater;
 
@@ -148,7 +149,6 @@ fn control_bot(
     death_recovery_guard: Option<automation::DeathRecoveryGuard>,
 ) -> Result<(), String> {
     require_window(&window, "main")?;
-    let mut _permit = maintenance::admit(&app)?;
     if let Some(guard) = &death_recovery_guard {
         if action != "start" {
             return Err("Death recovery state is only accepted by start.".into());
@@ -214,6 +214,10 @@ fn control_bot(
     {
         return Err("Use start to apply automation settings.".into());
     }
+    if action == "stop" && update_continuation::stop_while_settling(&app)? {
+        return Ok(());
+    }
+    let mut _permit = maintenance::admit(&app)?;
     if action == "stop" {
         let mut in_world = false;
         if let Ok(mut state) = app.state::<login::SharedLogin>().lock() {
@@ -364,6 +368,7 @@ fn bridge_status(
     } else {
         status["reconnectAvailable"] = false.into();
     }
+    update_continuation::observe(&app, &status);
     if let Ok(mut update) = app.state::<updater::SharedUpdate>().lock() {
         update.wait_for_official(
             status.get("maintenanceWaiting").and_then(|v| v.as_bool()) == Some(true),
@@ -386,11 +391,13 @@ pub fn run() {
         .manage(maintenance::SharedGate::default())
         .manage(mode_guard::SharedGuard::default())
         .manage(updater::SharedUpdate::default())
+        .manage(update_continuation::SharedContinuation::default())
         .manage(login::SharedLogin::default())
         .manage(direct::SharedDirect::default())
         .manage(settings_close::SharedClose::default())
         .setup(|app| {
             ci_smoke::install(app.handle())?;
+            update_continuation::initialize(app.handle())?;
             #[cfg(target_os = "macos")]
             settings_close::install_macos_quit(app.handle())?;
             Ok(())
@@ -412,6 +419,13 @@ pub fn run() {
             updater::update_lease_alive,
             updater::update_invalidate,
             updater::update_final_ack,
+            update_continuation::update_prepare,
+            update_continuation::update_prepared,
+            update_continuation::update_cancel,
+            update_continuation::update_continuation,
+            update_continuation::update_startup_stopped,
+            update_continuation::update_restore,
+            update_continuation::update_restored,
             updater::update_open_release,
             open_game,
             close_game,
