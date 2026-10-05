@@ -8,6 +8,7 @@ import { validateSettings, type Settings } from './settings';
 import { FeatureUi } from './feature-ui';
 import { ReconnectPolicy, PersistentFieldRun } from './reconnect';
 import { RunIntentDispatch } from './run-intent-dispatch';
+import { UpdateContinuationOwner, type UpdateAccount } from './update-continuation';
 import { validStatus, statusHeartbeatFresh, type GameStatus } from './game-status';
 import { SettingsForm } from './settings-form';
 import { normalAttackProfile } from './combat';
@@ -57,17 +58,41 @@ const reconnect = new ReconnectPolicy();
 const fieldRun = new PersistentFieldRun();
 let sessionLoginAvailable = false;
 const dispatches = new RunIntentDispatch(fieldRun, reconnect, (command, args) => invoke(command, args));
-function runActive(): boolean { return fieldRun.requested || !!latest?.runRequested || !!latest?.running || features.active(); }
+const updateContinuation = new UpdateContinuationOwner((command, args) => invoke(command, args));
+let updateStopped = false;
+function accountSelection(): UpdateAccount {
+  return { username: element<HTMLInputElement>('username').value.trim(),
+    characterSlot: Number(element<HTMLSelectElement>('character-slot').value),
+    mode: element<HTMLSelectElement>('connection-mode').value as UpdateAccount['mode'] };
+}
+function selectUpdateAccount(): void {
+  const account=updateContinuation.account;if(!account)return;
+  element<HTMLInputElement>('username').value=account.username;
+  element<HTMLSelectElement>('character-slot').value=String(account.characterSlot);
+  element<HTMLSelectElement>('connection-mode').value=account.mode;
+  const savedMatches=!!savedLogin&&savedLogin.username===account.username&&savedLogin.characterSlot===account.characterSlot
+    &&(savedLogin.mode??'gameClient')===account.mode;
+  element<HTMLInputElement>('remember-login').checked=savedMatches;
+  element<HTMLInputElement>('auto-login').checked=savedMatches&&savedLogin!.autoLogin;
+}
+async function claimUpdateContinuation(load:Promise<unknown>,retired=false):Promise<void> {
+  if(updateStopped)return;
+  const continuation=await updateContinuation.claimFrom(load,fieldRun,retired);if(!continuation||updateStopped||!updateContinuation.pending)return;
+  form.restore(continuation.form);selectUpdateAccount();accountBaseline=accountFields();
+  message('Update complete. Settings restored. Waiting for the same account and character to continue.');
+}
+function runActive(): boolean { return updateContinuation.pending || fieldRun.requested || !!latest?.runRequested || !!latest?.running || features.active(); }
 function configureReconnect(): void {
   reconnect.configure(fieldRun.requested || element<HTMLInputElement>('auto-reconnect').checked,
     sessionLoginAvailable, fieldRun.requested);
 }
 function holdAtRunLimit(): void {
+  if(updateBusy)return;
   const task = dispatches.holdAtRunLimit(gameOpen);
   if (task) void task.finally(updateButtons);
 }
 function resumeFieldRun(s: GameStatus): void {
-  if (!native || closeBusy || busy || dispatches.stopping || loginBusy || dispatches.pending.resume) return;
+  if (!native || closeBusy || updateBusy || updateContinuation.pending || busy || dispatches.stopping || loginBusy || dispatches.pending.resume) return;
   holdAtRunLimit();
   const task = dispatches.resume(s);
   if (!task) return;
@@ -134,12 +159,12 @@ function mainUpdateWaitReason():string|null {
   if(dispatches.pending.manual)return 'Update waits for the pending manual action to finish.';
   if(dispatches.pending.limit)return 'Update waits for automation to stop at its configured limit.';
   if(features.hasUnsavedMacro())return 'Update waits for your macro draft. Save or clear it first.';
-  if(!features.settledForMaintenance())return 'Update waits for pending game actions or previews to finish.';
-  if(runActive()||fieldRun.requested)return 'Update waits for automation to stop.';
+  if(updateContinuation.pending)return 'The previous update is waiting to continue your run.';
+  if(!features.settledForMaintenance(true))return 'Update waits for pending game actions or previews to finish.';
   if(reconnect.waitingUntil)return 'Update waits for the scheduled reconnect to finish.';
   return null;
 }
-type UpdateStep='settings'|'reserve'|'confirmation';
+type UpdateStep='settings'|'prepare'|'reserve'|'confirmation';
 function updateDeferredReason(step:UpdateStep,error:unknown):string {
   // Only known generic messages may cross this boundary. Unknown errors can
   // contain paths, account details or payloads, so report only their stage.
@@ -156,7 +181,7 @@ function updateDeferredReason(step:UpdateStep,error:unknown):string {
     'Game settlement changed before replacement.':'Game activity changed before installation.',
   };
   const reason=typeof error==='string'&&Object.hasOwn(reasons,error)?reasons[error]:null;
-  const fallback={settings:'Current settings could not be saved. Check the settings form.',reserve:'The connection could not be prepared for update confirmation.',confirmation:'The game could not complete update confirmation.'};
+  const fallback={settings:'Current settings could not be saved. Check the settings form.',prepare:'The current game action has not reached a confirmed boundary.',reserve:'The connection could not be prepared for update confirmation.',confirmation:'The game could not complete update confirmation.'};
   return `Update deferred. ${reason??fallback[step]} It will retry automatically.`;
 }
 async function pollUpdate():Promise<void>{
@@ -166,21 +191,41 @@ async function pollUpdate():Promise<void>{
     element('client-version').textContent=`${({macos:'macOS',windows:'Windows',linux:'Linux'} as Record<string,string>)[state.platform??'']??'Desktop'} · v${state.version}`;if(closeBusy||closeStatus)return;element('update-status').textContent=state.message;
     if(state.phase!=='waiting')return;
     const waiting=mainUpdateWaitReason();if(waiting){element('update-status').textContent=waiting;return;}
-    updateBusy=true;updateSettled=new Promise(resolve=>{updateFinished=resolve;});updateButtons();if(saveTimer){clearTimeout(saveTimer);saveTimer=undefined;}
+    updateBusy=true;updateStopped=false;updateSettled=new Promise(resolve=>{updateFinished=resolve;});updateButtons();if(saveTimer){clearTimeout(saveTimer);saveTimer=undefined;}
     let nonce:string|null=null;
     let step:UpdateStep='settings';
     try{
       element('update-status').textContent='Saving current settings before updating.';
-      const document=await currentForm.flush();if(closeBusy)return;
+      const document=await currentForm.flush();if(closeBusy||updateStopped)return;
+      let active = fieldRun.requested||latest?.runRequested===true
+        ||!!latest?.macro&&['running','waiting','monitoring'].includes(latest.macro.state);
+      if(gameOpen&&active){
+        step='prepare';element('update-status').textContent='Pausing new decisions and waiting for the current action to finish. Stop cancels continuation.';
+        const checkpoint=await updateContinuation.prepare();if(closeBusy||updateStopped)return;
+        if(!validStatus(checkpoint.status))throw new Error('Update handoff is unavailable.');
+        fieldRun.observe(checkpoint.status,checkpoint.frozenAt);
+        active=fieldRun.requested||checkpoint.settings!==null||checkpoint.macro!==null;
+      }
       step='reserve';element('update-status').textContent='Preparing the connection for update confirmation.';
-      nonce=await invoke<string>('update_reserve',{document});if(closeBusy)return;
+      nonce=await invoke<string>('update_reserve',{document,continuation:active?{version:1,field:fieldRun.checkpoint()}:null});if(closeBusy||updateStopped)return;
       step='confirmation';element('update-status').textContent='Update waits for game confirmation that all actions have stopped. It will retry automatically.';
       for(let attempt=0;attempt<20;attempt++){
+        if(updateStopped)return;
         if(await invoke<boolean>('update_install',{nonce}))break;
         await new Promise(resolve=>setTimeout(resolve,100));
       }
     }catch(error){if(!closeStatus)element('update-status').textContent=updateDeferredReason(step,error);}
-    finally{if(nonce)await invoke('update_release',{nonce}).catch(()=>{});updateBusy=false;updateFinished();updateButtons();}
+    finally{
+      if(nonce)await invoke('update_release',{nonce}).catch(()=>{});
+      if(!gameOpen&&!updateStopped){
+        try{await claimUpdateContinuation(invoke('update_continuation'),true);}
+        catch{message('The update could not continue the run. Start the bot explicitly.',true);}
+        if(!updateContinuation.pending)dispatches.gameClosed();
+      }
+      if(!updateContinuation.pending)await updateContinuation.cancel().catch(()=>{});
+      updateBusy=false;updateFinished();updateButtons();
+      if(updateContinuation.pending&&updateContinuation.automaticLogin(savedLogin?{...savedLogin,mode:savedLogin.mode??'gameClient'}:null))void signIn();
+    }
   }catch{element('update-status').textContent='Update check unavailable. It will retry automatically.';}
   finally{updatePolling=false;}
 }
@@ -229,7 +274,7 @@ function updateButtons(): void {
   element('client-account-label').textContent = latest?.connected && latest.compatible && latest.player ? 'Account' : 'Connect account';
   startButton.hidden = dashboard.state === 'RUNNING';
   element('death-cap').textContent = dashboardSettings ? clientDeathCap(dashboardSettings.automation?.respawn) : '—';
-  if(!closeRegistered||closeBusy||updateBusy){botConsole.lock(true,closeBusy?'Saving current settings before closing.':!closeRegistered?'Preparing saved settings.':'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.lock(true,true,true);return;}
+  if(!closeRegistered||closeBusy||updateBusy){botConsole.lock(true,closeBusy?'Saving current settings before closing.':!closeRegistered?'Preparing saved settings.':'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.lock(true,true,true);if(updateBusy&&!closeBusy)stopButton.disabled=dispatches.stopping||updateStopped;return;}
   form.refresh();
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
   let checked:Settings|null = null;
@@ -237,7 +282,7 @@ function updateButtons(): void {
   catch(error) { configHelp.textContent=ready && error instanceof Error ? error.message : ''; }
   startButton.disabled = !canStartField({native,fresh,busy,stopping:dispatches.stopping,loginBusy,runActive:runActive(),connected:latest?.connected===true,compatible:latest?.compatible===true,
     map:latest?.map??'',player:latest?.player??null,settings:checked});
-  stopButton.disabled = dispatches.stopping || !gameOpen && !fieldRun.requested && !loginBusy;
+  stopButton.disabled = dispatches.stopping || !gameOpen && !fieldRun.requested && !loginBusy && !updateContinuation.pending;
   openButton.disabled = false;
   element<HTMLButtonElement>('disconnect').disabled = !disconnectReady();
   botConsole.lock(busy || dispatches.stopping || loginBusy || !ready || runActive() || !features.settledForMaintenance(), !native ? 'Browser preview · native connection required.' : busy || dispatches.stopping || loginBusy ? 'Wait for the current request to finish.' : !ready ? 'Connect a fresh verified character to use manual controls.' : runActive() || !features.settledForMaintenance() ? 'Stop the bot; wait for pending actions before manual control.' : '');
@@ -262,7 +307,7 @@ function showSavedLogin(profile: SavedLogin | null): void {
 }
 
 async function signIn(): Promise<void> {
-  if (!native || !accountReady || busy || dispatches.stopping || loginBusy || latest?.connected && latest.player) return;
+  if (!native || !accountReady || updateBusy || busy || dispatches.stopping || loginBusy || latest?.connected && latest.player) return;
   const username = element<HTMLInputElement>('username').value.trim();
   const password = element<HTMLInputElement>('password');
   const characterSlot = Number(element<HTMLSelectElement>('character-slot').value);
@@ -333,7 +378,11 @@ startButton.addEventListener('click', () => void perform(async () => {
 }));
 stopButton.addEventListener('click', () => {
   if (dispatches.stopping) return;
-  const task = dispatches.stop();
+  updateStopped=true;
+  // Cancel native restart authority before dispatching Stop through admission.
+  // Local ownership retires immediately, even if replacement already started.
+  const cancel=updateContinuation.cancel().catch(()=>{});
+  const task = dispatches.stop(cancel);
   loginBusy = false; previousSession = undefined;
   updateButtons();
   void task.then(receipt => {
@@ -354,6 +403,11 @@ function render(s: GameStatus): void {
   form.refresh();
   features.render(s);
   if (['complete','failed','cancelled'].includes(s.login.phase)) loginBusy = false;
+  if(updateContinuation.pending&&!updateBusy&&!closeBusy&&!loginBusy&&!dispatches.stopping){
+    void updateContinuation.resume(s,accountSelection(),fieldRun).then(resumed=>{
+      if(resumed){configureReconnect();message('Update complete. Continuing with the same settings and remaining limits.');updateButtons();}
+    }).catch(()=>message(updateContinuation.confirmationLost?'The game did not confirm continuation. Press Stop before starting again.':'Update restored your settings. Waiting for verified character data; Stop cancels continuation.',true));
+  }
   if (justSignedIn) element<HTMLDetailsElement>('signin-panel').open = false;
   element('login-help').textContent = s.login.message || 'Select an existing slot. Sign-in enters the field with combat stopped.';
   const { state, reason } = clientStatus(s, { fieldRequested: fieldRun.requested, held: features.active(), limitReason: fieldRun.limitReason, loginBusy });
@@ -391,11 +445,14 @@ if (native) {
     if(pending)void settingsClose.request(pending);
   }catch{element('update-status').textContent='Settings could not be initialized. Reopen the app to edit them safely.';return;}
   await listen<unknown>('game-status', event => { if (validStatus(event.payload)) render(event.payload); });
+  await listen<unknown>('update-prepared', event=>updateContinuation.prepared(event.payload));
+  await listen<unknown>('update-restored', event=>updateContinuation.restored(event.payload));
   await listen('game-closed', () => {
     features.clearSocial();
     features.clearMemo();
     features.clearMacro();
-    dispatches.gameClosed();
+    if(!updateBusy&&!updateContinuation.pending){void updateContinuation.cancel().catch(()=>{});dispatches.gameClosed();}
+    else reconnect.cancel();
     sessionLoginAvailable = false; previousSession = undefined;
     gameOpen = false; latest = null; receivedAt = 0; loginBusy = false;
     form.refresh();
@@ -410,7 +467,11 @@ if (native) {
   try {
     try{currentForm.restore(await invoke('current_form'), document => form.restore(document));}
     catch{currentForm.initialized=false;element('update-status').textContent='Current settings could not be restored. Automatic updates are waiting.';}
-    if(currentForm.initialized)await currentForm.flush().catch(()=>{element('update-status').textContent='Updates are waiting for valid, saved current settings.';});
+    if(currentForm.initialized){
+      try{await claimUpdateContinuation(invoke('update_continuation'));}
+      catch{message('Update settings restored. The run could not be verified; start the bot explicitly.',true);}
+      await currentForm.flush().catch(()=>{element('update-status').textContent='Updates are waiting for valid, saved current settings.';});
+    }
     formRestored();
     const profile = await invoke<SavedLogin | null>('saved_login');
     accountReady = true;
@@ -421,7 +482,12 @@ if (native) {
       element<HTMLInputElement>('remember-login').checked = true;
       element<HTMLInputElement>('auto-login').checked = profile.autoLogin;
       element<HTMLSelectElement>('connection-mode').value = profile.mode ?? 'gameClient';
-      accountBaseline=accountFields();if (profile.autoLogin&&!closeBusy) await signIn();
+      if(!updateContinuation.pending){accountBaseline=accountFields();if (profile.autoLogin&&!closeBusy) await signIn();}
+    }
+    if(updateContinuation.pending){
+      selectUpdateAccount();accountBaseline=accountFields();
+      if(updateContinuation.automaticLogin(profile?{...profile,mode:profile.mode??'gameClient'}:null)&&!closeBusy)await signIn();
+      else message('Update complete. Settings restored. Sign in to the same account and character to continue.');
     }
   } catch {
     element<HTMLButtonElement>('forget-login').hidden = false;

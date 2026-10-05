@@ -139,7 +139,7 @@ export class RunIntentDispatch {
     }, () => owner === this.runOwner);
   }
 
-  stop(): Promise<DispatchReceipt> {
+  stop(beforeDispatch?: Promise<unknown>): Promise<DispatchReceipt> {
     if (this.stopTask) return this.stopTask;
     const owner = ++this.runOwner;
     ++this.loginOwner;
@@ -148,7 +148,9 @@ export class RunIntentDispatch {
     // Limit holds only wait for login/resume, so neither barrier can wait on itself.
     const pending = Object.values(this.work).flatMap(tasks => [...tasks]);
     const current = () => owner === this.runOwner;
-    const task = this.stopFence(pending, current)
+    const barrier = beforeDispatch ? beforeDispatch.catch(() => {}).then(() => this.stopFence(pending, current))
+      : this.stopFence(pending, current);
+    const task = barrier
       .then(outcome => this.receipt(outcome, current))
       .finally(() => { if (this.stopTask === task) this.stopTask = null; });
     this.stopTask = task;

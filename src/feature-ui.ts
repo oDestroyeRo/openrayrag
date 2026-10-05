@@ -655,7 +655,7 @@ export class FeatureUi {
     this.social.lock(manual);this.refine.lock(manual);
     this.memo.lock(manual);this.warp.lock(warp);this.socket.lock(manual);this.manualTargets.lock(manual);
   }
-  settledForMaintenance(): boolean { return !macroActive(this.status.macro) && this.refine.settledForMaintenance(); }
+  settledForMaintenance(allowMacro = false): boolean { return (allowMacro || !macroActive(this.status.macro)) && this.refine.settledForMaintenance(); }
   serviceBlocked(): boolean { return macroActive(this.status.macro) || object(this.status.warp).blocked===true || object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
   clearSocial(): void { delete this.status.social; this.social.clear(); delete this.status.socket; this.socket.clear();delete this.status.refine;this.refine.clear(); }
   clearMemo(): void { delete this.status.memo; this.memo.clear();delete this.status.warp;this.warp.clear(); }
