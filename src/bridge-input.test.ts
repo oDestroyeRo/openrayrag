@@ -104,12 +104,12 @@ it('dispatches a macro child through the game page API using the shared manual e
   await f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false).finish());
   expect(f.c.snapshot().macro).toMatchObject({state:'cancelled',actionsCompleted:0});expect(f.socket.writes).toHaveLength(stopped);
 });
-it('automatically uses any carried HP potion through the game-client transport',async()=>{
-  const f=await fixture();f.c.engine.receive([{type:'heal',id:0,hp:55,maxHp:100},{type:'inventory',items:[{bagId:504,itemId:504,type:1,count:3},{bagId:505,itemId:505,type:1,count:20}],equipment:Array(10).fill(0),ammoId:-1}]);
-  const automation=structuredClone(DEFAULT_AUTOMATION);automation.hpPotions={mode:'any',itemIds:[],belowPercent:60,minStock:0,cooldownSeconds:5};
+it.each([{resource:'hp',itemId:504},{resource:'hp',itemId:512},{resource:'sp',itemId:514}] as const)('automatically uses carried $resource item $itemId through the game-client transport',async({resource,itemId})=>{
+  const f=await fixture();f.c.engine.receive([{type:'heal',id:0,hp:55,maxHp:100},{type:'sp',sp:10,maxSp:100},{type:'inventory',items:[{bagId:itemId,itemId,type:1,count:3}],equipment:Array(10).fill(0),ammoId:-1}]);
+  const automation=structuredClone(DEFAULT_AUTOMATION);automation[resource==='hp'?'hpPotions':'spPotions']={mode:'any',itemIds:[],belowPercent:60,minStock:0,cooldownSeconds:5};
   f.start({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation});await f.step(1000);
   const potionWrites=()=>f.socket.writes.map(value=>[...new Uint8Array(value as ArrayBuffer)]).filter(bytes=>bytes[0]===FEATURE_OP.useItem);
-  expect(potionWrites()).toEqual([[...featureCommand({type:'useItem',itemId:504})]]);
+  expect(potionWrites()).toEqual([[...featureCommand({type:'useItem',itemId})]]);
   f.input();await f.step(1000);expect(potionWrites()).toHaveLength(1);
 });
 beforeEach(()=>{vi.useFakeTimers();vi.setSystemTime(100_000);});

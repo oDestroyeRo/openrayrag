@@ -71,6 +71,8 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
     editors: new Map(),
     dispositionEditor: { lock: () => {} },
     hpPotions: { lock: () => {} },
+    spPotions: { lock: () => {} },
+    recoveryResource: { disabled: false },
     syncFollowMode: () => {}, // This fixture mounts only the service panel.
     social: { lock: () => {} },
     memo: { lock: () => {} },

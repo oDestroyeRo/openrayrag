@@ -1,5 +1,5 @@
 import { itemName } from './game-catalog';
-import { DEFAULT_HP_POTIONS, HP_POTION_IDS, type HpPotionSettings } from './hp-potions';
+import { DEFAULT_RECOVERY_ITEMS, DEFAULT_SP_ITEMS, RECOVERY_ITEM_IDS, type RecoveryItemSettings, type RecoveryResource } from './recovery-items';
 
 interface PotionRow {
   root: HTMLDivElement;
@@ -16,57 +16,67 @@ function setText(element: HTMLElement, text: string): void {
 function inputNumber(input: HTMLInputElement): number { return input.value.trim() === '' ? NaN : Number(input.value); }
 
 /** Edits one policy; inventory updates only refresh labels, never send actions. */
-export class HpPotionUi {
+export class RecoveryItemUi {
   readonly root = document.createElement('section');
   private readonly mode = document.createElement('select');
-  private readonly belowPercent = this.numberInput('belowPercent', 'Use below HP %', 1, 100);
-  private readonly minStock = this.numberInput('minStock', 'Keep quantity of each potion', 0, 9999);
-  private readonly cooldownSeconds = this.numberInput('cooldownSeconds', 'Shared cooldown, seconds', 1, 3600);
+  private readonly belowPercent: HTMLInputElement;
+  private readonly minStock: HTMLInputElement;
+  private readonly cooldownSeconds: HTMLInputElement;
   private readonly list = document.createElement('div');
   private readonly guide = document.createElement('p');
   private readonly stopWarning = document.createElement('p');
+  private readonly inventoryMessage = document.createElement('p');
   private readonly rows = new Map<number, PotionRow>();
+  private readonly ids: readonly number[];
+  private stock: Map<number, number> | null = null;
   private itemIds: number[] = [];
   private locked = false;
 
-  constructor(private readonly changed: () => void, private readonly stopLimit: () => number) {
+  constructor(private readonly changed: () => void, private readonly stopLimit: () => number, private readonly resource: RecoveryResource = 'hp') {
+    const name = resource.toUpperCase();
+    this.ids = RECOVERY_ITEM_IDS[resource];
+    this.belowPercent = this.numberInput('belowPercent', `Use below ${name} %`, 1, 100);
+    this.minStock = this.numberInput('minStock', 'Keep quantity of each item', 0, 9999);
+    this.cooldownSeconds = this.numberInput('cooldownSeconds', 'Shared cooldown, seconds', 1, 3600);
     this.root.className = 'hp-potion-panel manual-group';
-    this.root.id = 'hp-potions';
-    const title = document.createElement('h2'); title.textContent = 'Automatic HP potions';
+    this.root.id = `${resource}-potions`;
+    const title = document.createElement('h2'); title.textContent = `${name} recovery items`;
     const scope = document.createElement('p'); scope.className = 'hint';
-    scope.textContent = 'Supports the eight HP potions below. SP potions, status potions and food are excluded. Advanced recovery item rules keep priority for their configured items.';
+    scope.textContent = `Shows carried potions, food and herbs that restore ${name}. Advanced recovery item rules keep priority for their configured items.`;
     const grid = document.createElement('div'); grid.className = 'form-grid';
-    this.mode.id = 'hp-potion-mode'; this.mode.dataset.config = 'true';
-    for (const [value, text] of [['off', 'Off'], ['any', 'Any carried HP potion'], ['selected', 'Choose potions']] as const) {
+    this.mode.id = `${resource}-potion-mode`; this.mode.dataset.config = 'true';
+    for (const [value, text] of [['off', 'Off'], ['any', `Any carried ${name} item`], ['selected', 'Choose items']] as const) {
       const option = document.createElement('option'); option.value = value; option.textContent = text; this.mode.append(option);
     }
-    grid.append(this.label('HP potion selection', this.mode), ...[this.belowPercent, this.minStock, this.cooldownSeconds].map(input => this.label(input.ariaLabel ?? '', input)));
+    grid.append(this.label(`${name} item selection`, this.mode), ...[this.belowPercent, this.minStock, this.cooldownSeconds].map(input => this.label(input.ariaLabel ?? '', input)));
     this.guide.className = 'hint'; this.guide.ariaLive = 'polite';
     this.stopWarning.className = 'notice error'; this.stopWarning.ariaLive = 'polite';
     this.list.className = 'hp-potion-list';
-    this.root.append(title, scope, grid, this.guide, this.stopWarning, this.list);
-    for (const itemId of HP_POTION_IDS) this.addPotion(itemId);
+    this.inventoryMessage.className = 'hint'; this.inventoryMessage.ariaLive = 'polite';
+    this.root.append(title, scope, grid, this.guide, this.stopWarning, this.inventoryMessage, this.list);
+    for (const itemId of this.ids) this.addPotion(itemId);
     this.mode.addEventListener('change', () => {
       if (this.locked) return;
-      // Choosing the mode is an explicit opt-in. A visible Red Potion choice
-      // keeps the first selection valid; no game command is sent here.
-      if (this.mode.value === 'selected' && this.itemIds.length === 0) this.itemIds = [501];
+      if (this.mode.value === 'selected' && this.itemIds.length === 0) {
+        const first = this.ids.find(id => (this.stock?.get(id) ?? 0) > 0);
+        if (first !== undefined) this.itemIds = [first];
+      }
       this.syncChoices(); this.changed();
     });
     for (const input of [this.belowPercent, this.minStock, this.cooldownSeconds]) input.addEventListener('input', () => {
       if (this.locked) return;
       this.syncGuidance(); this.changed();
     });
-    this.write(DEFAULT_HP_POTIONS);
+    this.write(resource === 'hp' ? DEFAULT_RECOVERY_ITEMS : DEFAULT_SP_ITEMS);
     this.update(undefined);
   }
 
-  read(): HpPotionSettings {
-    return { mode: this.mode.value as HpPotionSettings['mode'], itemIds: [...this.itemIds],
+  read(): RecoveryItemSettings {
+    return { mode: this.mode.value as RecoveryItemSettings['mode'], itemIds: [...this.itemIds],
       belowPercent: inputNumber(this.belowPercent), minStock: inputNumber(this.minStock), cooldownSeconds: inputNumber(this.cooldownSeconds) };
   }
 
-  write(settings: HpPotionSettings): void {
+  write(settings: RecoveryItemSettings): void {
     this.mode.value = settings.mode;
     this.itemIds = [...settings.itemIds];
     for (const key of ['belowPercent', 'minStock', 'cooldownSeconds'] as const) {
@@ -81,7 +91,7 @@ export class HpPotionUi {
   update(character: unknown): void {
     const value = character && typeof character === 'object' ? character as Record<string, unknown> : {};
     let stock: Map<number, number> | null = null;
-    if (value.inventoryKnown === true && Array.isArray(value.inventory)) {
+    if (value.inventoryKnown === true && Array.isArray(value.inventory) && value.inventory.length <= 600) {
       stock = new Map();
       for (const entry of value.inventory) {
         const row = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {};
@@ -90,12 +100,13 @@ export class HpPotionUi {
         stock.set(itemId, (stock.get(itemId) ?? 0) + Number(row.count));
       }
     }
+    this.stock = stock;
     for (const [itemId, row] of this.rows) setText(row.stock, stock === null ? 'Carried: unknown' : `Carried: ${stock.get(itemId) ?? 0}`);
-    this.syncGuidance();
+    this.syncChoices();
   }
 
   private numberInput(key: string, text: string, min: number, max: number): HTMLInputElement {
-    const input = document.createElement('input'); input.type = 'number'; input.id = `hp-potion-${key}`;
+    const input = document.createElement('input'); input.type = 'number'; input.id = `${this.resource}-potion-${key}`;
     input.ariaLabel = text; input.min = String(min); input.max = String(max); input.step = '1'; input.dataset.config = 'true';
     return input;
   }
@@ -127,7 +138,7 @@ export class HpPotionUi {
     };
     const earlier = button(-1), later = button(1); buttons.append(earlier, later); root.append(buttons);
     const select = () => {
-      if (this.locked || this.mode.value !== 'selected') return;
+      if (choice.disabled || this.locked || this.mode.value !== 'selected') return;
       if (choice.checked === this.itemIds.includes(itemId)) return;
       this.itemIds = choice.checked ? [...this.itemIds.filter(id => id !== itemId), itemId] : this.itemIds.filter(id => id !== itemId);
       this.syncChoices(); this.changed();
@@ -140,7 +151,7 @@ export class HpPotionUi {
 
   private syncChoices(): void {
     const selected = this.mode.value === 'selected', any = this.mode.value === 'any';
-    const order = selected ? [...this.itemIds, ...HP_POTION_IDS.filter(id => !this.itemIds.includes(id))] : [...HP_POTION_IDS];
+    const order = selected ? [...this.itemIds, ...this.ids.filter(id => !this.itemIds.includes(id))] : [...this.ids];
     for (let index = 0; index < order.length; index++) {
       const row = this.rows.get(order[index]!)!;
       // Retain row/input identity; move only rows whose preference changed.
@@ -148,25 +159,32 @@ export class HpPotionUi {
     }
     this.mode.disabled = this.locked;
     for (const input of [this.belowPercent, this.minStock, this.cooldownSeconds]) input.disabled = this.locked;
+    const visibleOrder = order.filter(id => (this.stock?.get(id) ?? 0) > 0);
     for (const [itemId, row] of this.rows) {
       const index = this.itemIds.indexOf(itemId);
-      row.choice.checked = any || index >= 0; row.choice.disabled = this.locked || !selected;
+      row.root.hidden = (this.stock?.get(itemId) ?? 0) === 0;
+      row.choice.checked = any || index >= 0; row.choice.disabled = this.locked || !selected || row.root.hidden;
       row.earlier.hidden = row.later.hidden = !selected || index < 0;
       row.earlier.disabled = this.locked || !selected || index <= 0;
       row.later.disabled = this.locked || !selected || index < 0 || index === this.itemIds.length - 1;
-      setText(row.position, selected && index >= 0 ? `${index + 1}.` : any ? `${HP_POTION_IDS.indexOf(itemId) + 1}.` : '');
+      setText(row.position, !row.root.hidden && (any || selected && index >= 0) ? `${visibleOrder.indexOf(itemId) + 1}.` : '');
     }
     this.syncGuidance();
   }
 
   private syncGuidance(): void {
-    setText(this.guide, this.mode.value === 'off' ? 'Automatic HP potions are off. Your choices are retained.' : this.mode.value === 'selected' && this.itemIds.length === 0
-      ? 'Choose at least one HP potion before saving or starting the bot.'
-      : 'Earlier available potions are used first. Each keeps the configured reserve, and all share one cooldown. Your choices are retained when you switch modes.');
-    if (this.mode.value === 'off') { this.stopWarning.hidden = true; setText(this.stopWarning, ''); return; }
+    const name = this.resource.toUpperCase();
+    setText(this.guide, this.mode.value === 'off' ? `Automatic ${name} items are off. Your choices are retained.` : this.mode.value === 'selected' && this.itemIds.length === 0
+      ? `Choose at least one carried ${name} recovery item before saving or starting the bot.`
+      : 'Earlier available items are used first. Each keeps the configured reserve, and all share one cooldown. Your choices are retained when you switch modes.');
+    const carried = this.ids.some(id => (this.stock?.get(id) ?? 0) > 0);
+    const missing = this.stock === null ? 0 : this.itemIds.filter(id => (this.stock?.get(id) ?? 0) === 0).length;
+    setText(this.inventoryMessage, this.stock === null ? 'Waiting for current inventory.' : `${carried ? '' : `No carried ${name} recovery items.`}${missing ? ` ${missing} saved selection${missing === 1 ? ' is' : 's are'} out of stock; choices are kept for restocking.` : ''}`.trim());
+    this.inventoryMessage.hidden = this.inventoryMessage.textContent === '';
+    if (this.mode.value === 'off' || this.resource !== 'hp') { this.stopWarning.hidden = true; setText(this.stopWarning, ''); return; }
     const stop = this.stopLimit(), threshold = inputNumber(this.belowPercent);
     const warn = Number.isFinite(stop) && Number.isFinite(threshold) && threshold <= stop;
     this.stopWarning.hidden = !warn;
-    setText(this.stopWarning, warn ? `The bot stops at ${stop}% HP before using potions. Set “Use below HP %” above ${stop}% to heal before that limit. The stop limit remains unchanged.` : '');
+    setText(this.stopWarning, warn ? `The bot stops at ${stop}% HP before using recovery items. Set “Use below HP %” above ${stop}% to heal before that limit. The stop limit remains unchanged.` : '');
   }
 }

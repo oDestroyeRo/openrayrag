@@ -1,4 +1,5 @@
 import { hpPotionIds } from './hp-potions';
+import { recoveryItemIds } from './recovery-items';
 import { ITEM_CATALOG, itemName } from './game-catalog';
 import type { InventoryItem } from './protocol-feature';
 import { WorldState } from './world-state';
@@ -44,6 +45,7 @@ const compatibleAmmoIds = Object.entries(AMMO_CATALOG).filter(([, info]) => info
 export function dispositionStockFloors(settings: AutomationSettings): { itemId: number; count: number }[] {
   const floors = settings.items.map(row => ({ itemId: row.itemId, count: row.minStock }));
   floors.push(...hpPotionIds(settings.hpPotions).map(itemId => ({ itemId, count: settings.hpPotions!.minStock })));
+  floors.push(...recoveryItemIds(settings.spPotions,'sp').map(itemId => ({ itemId, count: settings.spPotions!.minStock })));
   const escape = settings.escape;
   if (escape?.enabled && escape.method === 'item') floors.push({ itemId: escape.mode === 'random' ? 601 : 602, count: escape.minStock });
   if (settings.loadout.enabled && settings.loadout.minAmmoStock > 0)

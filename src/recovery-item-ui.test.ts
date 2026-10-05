@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HpPotionUi } from './hp-potion-ui';
+import { RecoveryItemUi } from './recovery-item-ui';
+import { DEFAULT_SP_ITEMS, type RecoveryResource } from './recovery-items';
 import { DEFAULT_HP_POTIONS, HP_POTION_IDS, validateHpPotions } from './hp-potions';
 import { FeatureUi } from './feature-ui';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, type AutomationSettings } from './settings';
-import { itemName } from './game-catalog';
 
 vi.mock('./social-ui', () => ({ SocialUi: class { root = document.createElement('div'); lock() {} render() {} }, validSocialSnapshot: () => true }));
 vi.mock('./memo-ui', () => ({ MemoUi: class { root = document.createElement('div'); lock() {} render() {} }, validMemoSnapshot: () => true }));
@@ -70,11 +70,12 @@ function setupDom() {
   return createElement;
 }
 
-function widget() {
+function widget(resource: RecoveryResource = 'hp') {
   const createElement = setupDom(), changed = vi.fn();
   const settings = { minHpPercent: 45 };
-  const ui = new HpPotionUi(changed, () => settings.minHpPercent), root = ui.root as unknown as Element;
-  const field = (id: string) => root.querySelector(`#hp-potion-${id}`)!;
+  const ui = new RecoveryItemUi(changed, () => settings.minHpPercent, resource), root = ui.root as unknown as Element;
+  ui.update({ inventoryKnown: true, inventory: [501,502,504,547,569,512,514,505].map(itemId => ({itemId,count:3})) });
+  const field = (id: string) => root.querySelector(`#${resource}-potion-${id}`)!;
   const mode = (value: string) => { field('mode').value = value; field('mode').emit('change'); };
   const row = (itemId: number) => root.querySelector(`[data-item-id="${itemId}"]`)!;
   const select = (itemId: number, checked = true) => { const choice = row(itemId).querySelector('input')!; choice.checked = checked; choice.emit('change'); };
@@ -118,21 +119,43 @@ function featureUi(settingsUnavailable = false) {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('HP potion selection', () => {
-  it('starts off and names only the eight recognized HP potions', () => {
+  it('filters each resource by current carried stock and preserves depleted selections for restocking', () => {
+    const f=widget();
+    f.ui.write({...DEFAULT_HP_POTIONS,mode:'selected',itemIds:[512,501]});
+    f.ui.update({inventoryKnown:true,inventory:[{itemId:512,count:4},{itemId:514,count:8},{itemId:601,count:3}]});
+    expect(f.root.querySelectorAll('.hp-potion-row').filter(row=>!row.hidden).map(row=>Number(row.dataset.itemId))).toEqual([512]);
+    expect(f.ui.read().itemIds).toEqual([512,501]);expect(f.row(501).hidden).toBe(true);
+    f.ui.update({inventoryKnown:true,inventory:[]});expect(f.row(512).hidden).toBe(true);
+    expect(f.root.all().some(node=>node.textContent.includes('No carried HP recovery items'))).toBe(true);
+    f.ui.update({inventoryKnown:true,inventory:[{itemId:501,count:3},{itemId:512,count:2}]});
+    expect(f.root.querySelectorAll('.hp-potion-row').filter(row=>!row.hidden).map(row=>Number(row.dataset.itemId))).toEqual([512,501]);
+    f.ui.update({inventoryKnown:false,inventory:[]});
+    expect(f.root.querySelectorAll('.hp-potion-row').every(row=>row.hidden)).toBe(true);
+    expect(f.root.all().some(node=>node.textContent==='Waiting for current inventory.')).toBe(true);
+    expect(f.ui.read().itemIds).toEqual([512,501]);expect(f.changed).not.toHaveBeenCalled();
+  });
+  it('lists carried SP foods and potions and uses a separate SP threshold without an HP stop warning', () => {
+    const f=widget('sp');expect(f.ui.read()).toEqual(DEFAULT_SP_ITEMS);
+    expect(f.root.querySelectorAll('.hp-potion-row').filter(row=>!row.hidden).map(row=>Number(row.dataset.itemId))).toEqual([514,505]);
+    f.mode('selected');expect(f.ui.read().itemIds).toEqual([514]);
+    expect(f.root.querySelector('.notice')!.hidden).toBe(true);
+    expect(f.field('belowPercent').ariaLabel).toBe('Use below SP %');
+  });
+  it('starts off and displays only carried items that restore HP', () => {
     const f = widget(); expect(f.ui.read()).toEqual(DEFAULT_HP_POTIONS);
-    expect(f.root.querySelectorAll('.hp-potion-choice').map(label => label.children[1]!.textContent)).toEqual(HP_POTION_IDS.map(itemName));
+    expect(f.root.querySelectorAll('.hp-potion-row').filter(row => !row.hidden).map(row => Number(row.dataset.itemId))).toEqual(HP_POTION_IDS.filter(id => [501,502,504,547,569,512].includes(id)));
     expect(f.root.all().some(node => /Blue Potion|Green Potion/.test(node.textContent))).toBe(false);
-    expect(f.field('mode').children.map(option => [option.value, option.textContent])).toEqual([['off', 'Off'], ['any', 'Any carried HP potion'], ['selected', 'Choose potions']]);
+    expect(f.field('mode').children.map(option => [option.value, option.textContent])).toEqual([['off', 'Off'], ['any', 'Any carried HP item'], ['selected', 'Choose items']]);
     expect(f.changed).not.toHaveBeenCalled();
   });
 
   it('does not read a not-yet-constructed settings owner while Off', () => {
     setupDom(); const stopLimit = vi.fn(() => { throw new Error('Settings not ready.'); });
-    expect(() => new HpPotionUi(() => {}, stopLimit)).not.toThrow(); expect(stopLimit).not.toHaveBeenCalled();
+    expect(() => new RecoveryItemUi(() => {}, stopLimit)).not.toThrow(); expect(stopLimit).not.toHaveBeenCalled();
   });
 
-  it('defaults an explicit first Choose opt-in to Red Potion, retains choices across Off/Any and keeps preference order', () => {
-    const f = widget(); f.mode('selected'); expect(f.ui.read().itemIds).toEqual([501]);
+  it('defaults an explicit first Choose opt-in to a carried item and retains preference order across modes', () => {
+    const f = widget(); f.ui.update({inventoryKnown:true,inventory:[501,502,504].map(itemId=>({itemId,count:3}))}); f.mode('selected'); expect(f.ui.read().itemIds).toEqual([501]);
     f.select(504); f.select(502);
     f.row(502).querySelectorAll('button')[0]!.emit('click'); expect(f.ui.read().itemIds).toEqual([501, 502, 504]);
     expect(f.root.querySelectorAll('.hp-potion-row').slice(0, 3).map(row => Number(row.dataset.itemId))).toEqual([501, 502, 504]);
@@ -143,7 +166,7 @@ describe('HP potion selection', () => {
   });
 
   it('commits checkbox input before a bubbling form refresh and not again on change', () => {
-    const f = widget(); f.mode('selected'); f.changed.mockClear();
+    const f = widget(); f.ui.write({...DEFAULT_HP_POTIONS,mode:'selected',itemIds:[501]}); f.changed.mockClear();
     const choice = f.row(504).querySelector('input')!;
     choice.checked = true; choice.emit('input');
     f.ui.lock(false); choice.emit('change');
@@ -161,10 +184,10 @@ describe('HP potion selection', () => {
   });
 
   it('makes an empty Choose list visible and invalid without choosing a replacement automatically', () => {
-    const f = widget(); f.mode('selected'); f.select(501, false);
+    const f = widget(); f.ui.write({...DEFAULT_HP_POTIONS,mode:'selected',itemIds:[501]}); f.select(501, false);
     expect(f.ui.read()).toMatchObject({ mode: 'selected', itemIds: [] });
     expect(() => validateHpPotions(f.ui.read())).toThrow();
-    expect(f.root.all().some(node => node.textContent.includes('Choose at least one HP potion'))).toBe(true);
+    expect(f.root.all().some(node => node.textContent.includes('Choose at least one carried HP recovery item'))).toBe(true);
     f.select(504); expect(validateHpPotions(f.ui.read()).itemIds).toEqual([504]);
   });
 
@@ -182,7 +205,7 @@ describe('HP potion selection', () => {
     const input = f.field('belowPercent'); input.focus(); input.value = '77';
     const status = { inventoryKnown: true, inventory: [{ itemId: 501, count: 3 }, { itemId: 501, count: 4 }, { itemId: 504, count: 2 }] };
     const stock = f.row(501).querySelector('.hp-potion-stock')!;
-    expect(stock.textContent).toBe('Carried: unknown'); f.ui.update(status);
+    expect(stock.textContent).toBe('Carried: 3'); f.ui.update(status);
     expect(stock.textContent).toBe('Carried: 7'); expect(f.row(502).querySelector('.hp-potion-stock')!.textContent).toBe('Carried: 0');
     const creations = f.createElement.mock.calls.length, writes = stock.textWrites;
     const list = f.root.querySelector('.hp-potion-list')!, move = vi.spyOn(list, 'insertBefore');
@@ -195,7 +218,7 @@ describe('HP potion selection', () => {
   it('warns when the potion threshold cannot precede the HP stop guard and never alters either setting', () => {
     const f = widget(); f.mode('any'); const warning = f.root.querySelector('.notice')!;
     expect(warning.hidden).toBe(true); f.field('belowPercent').value = '45'; f.field('belowPercent').emit('input');
-    expect(warning.hidden).toBe(false); expect(warning.textContent).toContain('stops at 45% HP before using potions');
+    expect(warning.hidden).toBe(false); expect(warning.textContent).toContain('stops at 45% HP before using recovery items');
     expect(f.ui.read().belowPercent).toBe(45); expect(f.settings.minHpPercent).toBe(45);
     f.settings.minHpPercent = 40; f.ui.update(undefined); expect(warning.hidden).toBe(true);
     f.mode('off'); f.settings.minHpPercent = 80; f.ui.update(undefined); expect(warning.hidden).toBe(true);
@@ -209,8 +232,24 @@ describe('HP potion selection', () => {
 });
 
 describe('FeatureUi HP potion policy integration', () => {
+  it('switches inventory lists between HP and SP while retaining both policies and avoiding game commands',()=>{
+    const f=featureUi();
+    const automation=structuredClone(DEFAULT_AUTOMATION);
+    automation.hpPotions={...DEFAULT_HP_POTIONS,mode:'selected',itemIds:[512],belowPercent:70};
+    automation.spPotions={...DEFAULT_SP_ITEMS,mode:'selected',itemIds:[514,505],belowPercent:25,minStock:2};
+    f.ui.write(automation);f.ui.render({character:{inventoryKnown:true,inventory:[512,514,505].map(itemId=>({itemId,count:4}))}});
+    const resource=f.host.querySelector('#recovery-item-resource')!;
+    resource.value='sp';resource.emit('change');
+    expect(f.host.querySelector('#hp-potions')!.hidden).toBe(true);expect(f.host.querySelector('#sp-potions')!.hidden).toBe(false);
+    expect(f.ui.read().hpPotions).toEqual(automation.hpPotions);expect(f.ui.read().spPotions).toEqual(automation.spPotions);
+    f.ui.lock(true,true);expect(resource.disabled).toBe(false);
+    resource.value='hp';resource.emit('change');expect(f.host.querySelector('#hp-potions')!.hidden).toBe(false);
+    expect(f.hooks.changed).not.toHaveBeenCalled();expect(f.hooks.command).not.toHaveBeenCalled();
+    f.ui.write(DEFAULT_AUTOMATION);expect(f.ui.read()).not.toHaveProperty('spPotions');
+  });
   it('uses the independently mounted HP stop limit before form initialization and during invalid drafts', () => {
     const f = featureUi(true), mode = f.host.querySelector('#hp-potion-mode')!;
+    f.ui.render({character:{inventoryKnown:true,inventory:[{itemId:501,count:3}]}});
     mode.value = 'selected'; expect(() => mode.emit('change')).not.toThrow();
     const threshold = f.host.querySelector('#hp-potion-belowPercent')!; threshold.value = '40'; expect(() => threshold.emit('input')).not.toThrow();
     expect(f.host.querySelector('.notice')!.hidden).toBe(false);
@@ -220,7 +259,7 @@ describe('FeatureUi HP potion policy integration', () => {
     expect(() => f.ui.render({ character: { inventoryKnown: true, inventory: [] } })).not.toThrow();
   });
   it('mounts once in Recovery and preserves default omission plus advanced recovery rules', () => {
-    const f = featureUi(); expect(f.sections.recovery.querySelectorAll('#hp-potions')).toHaveLength(1); expect(f.sections.recovery.children[0]!.id).toBe('hp-potions');
+    const f = featureUi(); expect(f.sections.recovery.querySelectorAll('#hp-potions')).toHaveLength(1); expect(f.sections.recovery.querySelectorAll('#sp-potions')).toHaveLength(1);
     expect(f.ui.read()).not.toHaveProperty('hpPotions');
     const automation = structuredClone(DEFAULT_AUTOMATION); automation.items = [{ itemId: 501, resource: 'hp', belowPercent: 65, minStock: 1, cooldownSeconds: 7 }];
     automation.hpPotions = { ...DEFAULT_HP_POTIONS, mode: 'selected', itemIds: [504, 501], minStock: 2 };
@@ -230,12 +269,14 @@ describe('FeatureUi HP potion policy integration', () => {
   });
 
   it('notifies autosave on mode/choice/reorder/number edits while full policy locking preserves values', () => {
-    const f = featureUi(), mode = f.host.querySelector('#hp-potion-mode')!; mode.value = 'selected'; mode.emit('change');
+    const f = featureUi(), mode = f.host.querySelector('#hp-potion-mode')!;
+    f.ui.render({character:{inventoryKnown:true,inventory:[501,504].map(itemId=>({itemId,count:3}))}});
+    mode.value = 'selected'; mode.emit('change');
     const white = f.host.querySelector('[data-potion="504"]')!; white.checked = true; white.emit('change');
     const row = f.host.querySelector('[data-item-id="504"]')!; row.querySelectorAll('button')[0]!.emit('click');
     const threshold = f.host.querySelector('#hp-potion-belowPercent')!; threshold.value = '75'; threshold.emit('input');
     expect(f.hooks.changed).toHaveBeenCalledTimes(4); expect(f.ui.read().hpPotions).toMatchObject({ itemIds: [504, 501], belowPercent: 75 });
-    f.ui.lock(true, true); expect(f.sections.recovery.querySelectorAll('input,select,button').every(control => control.disabled)).toBe(true);
+    f.ui.lock(true, true); expect(f.sections.recovery.querySelectorAll('input,select,button').filter(control=>control.id!=='recovery-item-resource').every(control => control.disabled)).toBe(true);
     expect(f.ui.read().hpPotions?.itemIds).toEqual([504, 501]); expect(f.hooks.command).not.toHaveBeenCalled();
   });
 
