@@ -25,7 +25,9 @@ export function clientDashboard(value: unknown, context: Parameters<typeof clien
   const names = settings.map === mapInfo?.code ? settings.targets.map(id => mapInfo.monsters.find(monster => monster.classId === id)?.name) : [];
   const targets = !settings.targets.length ? 'No targets selected' : names.length && names.every(Boolean) && names.length <= 2
     ? names.join(', ') : `${settings.targets.length} selected targets`;
+  const mode = settings.automation?.combat.mode;
+  const targeting = mode === 'retaliate' ? 'Defend against attackers' : mode === 'both' ? `${targets} + defense` : targets;
   const loot = !settings.loot ? 'Pickup off' : settings.automation?.loot.ownership === 'all' ? 'All drops' : 'Own drops';
   const recovery = settings.automation?.recovery.enabled ? 'Recovery on' : 'Recovery off';
-  return { ...status, headline, setup: `${targets} · ${loot} · ${recovery}` };
+  return { ...status, headline, setup: `${targeting} · ${loot} · ${recovery}` };
 }

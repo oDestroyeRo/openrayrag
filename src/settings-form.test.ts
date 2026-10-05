@@ -240,6 +240,21 @@ describe('settings form interface', () => {
     expect(f.changed).not.toHaveBeenCalled();
   });
 
+  it.each(['retaliate', 'both'] as const)('retains %s defense mode across form restoration and profiles', mode => {
+    const f = setup(), value = settings();
+    value.automation!.combat.mode = mode;
+    if (mode === 'retaliate') value.targets = [];
+    f.form.restore(document(value));
+    f.observe();
+    expect(validateSettings(f.form.runSettings()).automation?.combat.mode).toBe(mode);
+    const saved = f.form.snapshot();
+    const reopened = setup(); reopened.form.restore(document(saved.settings, saved.selectedProfileId)); reopened.observe();
+    expect(validateSettings(reopened.form.runSettings()).automation?.combat.mode).toBe(mode);
+    expect(reopened.form.snapshot().settings.targets).toEqual(value.targets);
+    reopened.form.applyProfile(value);
+    expect(reopened.form.snapshot().settings.automation?.combat.mode).toBe(mode);
+  });
+
   it('preserves the saved death cap of one and recovery OFF across restoration and profile application', () => {
     const f = setup(), value = settings();
     value.automation!.recovery.enabled = false;

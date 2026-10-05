@@ -67,7 +67,7 @@ export function chooseFollowMode(follow:AutomationSettings['follow'],mode:'name'
 }
 const fields: Record<Section, Field[]> = {
   combat: [
-    { path:'combat.mode', label:'Combat mode', options:[['selected','Selected monsters'],['retaliate','Retaliate only'],['both','Selected + retaliation'],['off','Combat off']] },
+    { path:'combat.mode', label:'Attack monsters', options:[['selected','Only selected monsters'],['retaliate','Only monsters attacking me'],['both','Selected monsters + monsters attacking me'],['off','Combat off']] },
     { path:'combat.partyEngagement',label:'Join monsters engaged by verified visible party members',kind:'checkbox' },
     { path:'combat.levelDifference', label:'Maximum levels above you', min:-100, max:100 },
     {path:'retreat.enabled',label:'Retreat during verified ranged normal attacks',kind:'checkbox'},
@@ -398,6 +398,7 @@ export class FeatureUi {
     const editor = new RuleEditor(title,columns,initial,max,this.hooks.changed,['combat.rules','items','skills','equipment','attackStrategies'].includes(path)?()=>actorSnapshotAt(this.status.actorObservations):undefined,path==='combat.rules'); this.editors.set(path,editor); this.panel(section).append(editor.root); return editor;
   }
   private rules(): void {
+    this.note('combat','Choose “Only monsters attacking me” to defend without selecting species, or “Selected monsters + monsters attacking me” to defend while farming. The bot must observe a monster attack your character; nearby monsters and monsters attacking other players do not qualify. Eligible attackers take priority over ordinary targets and new loot. The current attack engagement, retreat, movement and actions awaiting confirmation settle first. Ignore rules, level limits, field boundaries and engagement exclusions still apply.');
     this.editor('combat','combat.rules','Monster policies & priority',[idColumn('classId','Monster class ID'),{key:'action',label:'Action',options:[['attack','Attack'],['ignore','Ignore']]},priority],{classId:1002,action:'attack',priority:0},64);
     this.note('combat','Ignore rules apply when their conditions match; known-false ignores fall back to selected combat. Unknown conditions block that class. Attack conditions also guard selected species. Higher priority wins among eligible targets.');
     this.note('combat','Party engagement is off by default. It requires a current, living, visible party member with verified affiliation on this map. Offline, duplicate, missing or stale membership, indirect damage, outside attackers and revoked claims remain excluded. Party participation does not grant your kill or drop credit.');
