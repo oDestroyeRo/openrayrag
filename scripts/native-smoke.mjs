@@ -2,7 +2,7 @@
 /** Launch only a CI-feature package with temporary data; never use a real account. */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -79,14 +79,19 @@ export async function runStage(binary, stage, { root, data, result, token, timeo
     // Read only this launch's bounded result before temporary data is removed.
     let detail = '';
     try {
-      if ((await stat(result)).size <= 16_384) {
-        const outcome = JSON.parse(await readFile(result, 'utf8'));
-        if (outcome?.protocol === 1 && outcome.stage === stage && outcome.token === token
-            && outcome.passed === false && typeof outcome.message === 'string') {
-          detail = `\nNative result: ${outcome.message.slice(0, 1_000)}`;
-          if (typeof outcome.milestone === 'string') detail += `\nMilestone: ${outcome.milestone.slice(0, 100)}`;
+      const file = await open(result, 'r');
+      try {
+        const buffer = Buffer.alloc(16_385);
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+        if (bytesRead <= 16_384) {
+          const outcome = JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
+          if (outcome?.protocol === 1 && outcome.stage === stage && outcome.token === token
+              && outcome.passed === false && typeof outcome.message === 'string') {
+            detail = `\nNative result: ${outcome.message.slice(0, 1_000)}`;
+            if (typeof outcome.milestone === 'string') detail += `\nMilestone: ${outcome.milestone.slice(0, 100)}`;
+          }
         }
-      }
+      } finally { await file.close(); }
     } catch { /* Preserve the process failure when its result is unavailable. */ }
     throw detail ? new Error(error.message + detail, { cause: error }) : error;
   });
