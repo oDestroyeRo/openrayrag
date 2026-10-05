@@ -39,6 +39,38 @@ function ownPacket(e:Entity,entry:number):BitWriter {
 }
 function policy() { return structuredClone(DEFAULT_AUTOMATION); }
 
+describe('large party initialization packets', () => {
+  function roster(duplicate = false) {
+    const writer = new BitWriter().u8(WORLD_OP.partyAccept).u8(1).i32(5).string('Party').i32(33);
+    // The own online row can precede its spawn and receive an empty map on login.
+    writer.i32(1).i32(player.id).i16(player.level).string(player.name).u8(1).string('')
+      .i32(player.hp).i32(player.maxHp).i32(0).i32(0);
+    for (let index = 1; index < 33; index++) writer.i32(duplicate && index === 32 ? 1 : index + 1)
+      .i32(0).i16(-1).string(`Offline ${index}`).u8(0);
+    return writer.finish();
+  }
+  it('retains the full roster and processes the character spawn after login', () => {
+    const sent: Array<Action | ControllerAction> = [];
+    const controller = new CompanionController(action => sent.push(action), () => 100_000, () => grid);
+    controller.connect(true);
+    controller.receive(new BitWriter().u8(OP.enter).i32(player.id).string('prt_fild08').finish());
+    controller.receive(roster());
+    expect(controller.world.snapshot().party?.members).toHaveLength(33);
+    controller.receive(ownPacket(player, 1).finish());
+    expect(controller.engine.player).toMatchObject(player);
+    expect(sent).toEqual([]);
+  });
+  it('preserves the previous party when a large replacement packet is malformed', () => {
+    const f = setup();
+    f.controller.receive(roster());
+    const previous = f.controller.world.snapshot();
+    expect(() => f.controller.receive(roster(true))).toThrow('Duplicate party member');
+    expect(f.controller.world.snapshot()).toEqual(previous);
+    expect(() => f.controller.receive(roster().subarray(0, -1))).toThrow('Truncated packet');
+    expect(f.controller.world.snapshot()).toEqual(previous);
+  });
+});
+
 describe('normal ranged retreat controller ownership',()=>{
   function retreat() {
     const f=setup(),automation=policy();automation.retreat={...DEFAULT_RETREAT,enabled:true};
