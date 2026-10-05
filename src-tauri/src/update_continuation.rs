@@ -1477,6 +1477,9 @@ mod tests {
         file::verify_private(&directory, true).unwrap();
         let checkpoint = file::private_file(&directory, CHECKPOINT).unwrap().unwrap();
         file::verify_private(&checkpoint, false).unwrap();
+        // NTFS completes deletion after the last file handle closes. Release
+        // this inspection handle before exercising one-shot consumption.
+        drop(checkpoint);
         drop(directory);
         let claimed = consume(path.clone(), &arguments(), "1.2.3", 1001)
             .unwrap()
