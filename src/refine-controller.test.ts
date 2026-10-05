@@ -196,7 +196,7 @@ describe('refining with merged party owners',()=>{
   const f=fixture(id,true);f.receive(new BitWriter().u8(77).u8(3));
   const ally:Entity={...f.own,id:3,name:'Member',x:11,hp:40};f.receive(ownSpawn(ally,0));
   f.receive(new BitWriter().u8(103).i32(3).u8(1).i32(5).string('Party').bool(false));
-  f.receive(new BitWriter().u8(101).u8(0).i32(5).string('Party').i32(1).i32(7).i32(3).i16(7).string('Member').u8(0).string('prt_in').i32(40).i32(100).i32(30).i32(30));
+  f.receive(new BitWriter().u8(101).u8(0).i32(5).string('Party').u8(0).i32(1).i32(7).i32(3).i16(7).string('Member').u8(0).string('prt_in').i32(40).i32(100).i32(30).i32(30));
   f.controller.engine.receive([{type:'skills',learned:[{skillId:41,level:1}]}]);
   const automation=structuredClone(DEFAULT_AUTOMATION);automation.combat.mode='off';automation.partyHeal={...DEFAULT_PARTY_HEAL,enabled:true,level:1,spReserve:0,cooldownSeconds:1,maxAttempts:1};
   f.controller.start({...DEFAULT_SETTINGS,map:'prt_in',targets:[],loot:false,automation});f.advance(100);
@@ -215,7 +215,7 @@ describe('refining with merged party owners',()=>{
   const own={...player,id,x:170,y:370},leader={...own,id:2,name:'Leader',x:174};
   c.connect(true);c.receive(new BitWriter().u8(3).i32(id).string('prt_fild08').finish());c.receive(ownSpawn(own).finish());c.receive(ownSpawn(leader,0).finish());
   c.receive(new BitWriter().u8(103).i32(2).u8(1).i32(5).string('Party').bool(true).finish());
-  c.receive(new BitWriter().u8(101).u8(0).i32(5).string('Party').i32(1).i32(7).i32(2).i16(7).string('Leader').u8(1).string('prt_fild08').i32(100).i32(100).i32(30).i32(30).finish());
+  c.receive(new BitWriter().u8(101).u8(0).i32(5).string('Party').u8(0).i32(1).i32(7).i32(2).i16(7).string('Leader').u8(1).string('prt_fild08').i32(100).i32(100).i32(30).i32(30).finish());
   c.receive(full().finish());const automation=structuredClone(DEFAULT_AUTOMATION);automation.combat.mode='off';automation.follow={...automation.follow,mode:'partyLeader',rendezvous:true,lostSeconds:2};
   c.start({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[],loot:false,automation});c.engine.deaths=1;c.engine.kills=7;
   c.receive(new BitWriter().u8(102).u8(9).i32(7).string('prontera').finish());expect(c.partyFollow.ownsTravel).toBe(true);

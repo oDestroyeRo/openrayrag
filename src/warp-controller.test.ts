@@ -116,7 +116,7 @@ describe('Warp with merged party Heal and rendezvous owners',()=>{
  function party(t:ReturnType<typeof fixture>,id:number,leader=false,position={x:11,y:10}):void {
   t.packet(spawn({...own,id:2,name:leader?'Leader':'Member',hp:40,...position}));
   t.packet(new BitWriter().u8(103).i32(2).u8(1).i32(5).string('Party').bool(leader));
-  const w=new BitWriter().u8(101).u8(0).i32(5).string('Party').i32(id===0?2:1)
+  const w=new BitWriter().u8(101).u8(0).i32(5).string('Party').u8(0).i32(id===0?2:1)
    .i32(7).i32(2).i16(20).string(leader?'Leader':'Member').u8(leader?1:0).string(map).i32(40).i32(100).i32(30).i32(100);
   if(id===0)w.i32(8).i32(0).i16(30).string(own.name).u8(0);
   t.packet(w);

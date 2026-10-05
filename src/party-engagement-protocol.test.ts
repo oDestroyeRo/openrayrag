@@ -17,7 +17,7 @@ function spawn(entity:Entity,party=false,entryType=0):Uint8Array {
  if(party){const a=new BitWriter().u8(13).u8(1).i32(7).u8(2).u8(3).u8(4);for(let i=0;i<5;i++)a.i32(0);a.i32(5);memoryString(a,'Party');a.i32(64);const appearance=a.finish();w.i32(appearance.length).take(appearance);}
  return w.finish();
 }
-const joined=(entityId=3)=>new BitWriter().u8(101).u8(0).i32(5).string('Party').i32(1).i32(7).i32(entityId).i16(10).string('Ally').u8(0).string(map).i32(100).i32(100).i32(50).i32(100).finish();
+const joined=(entityId=3)=>new BitWriter().u8(101).u8(0).i32(5).string('Party').u8(0).i32(1).i32(7).i32(entityId).i16(10).string('Ally').u8(0).string(map).i32(100).i32(100).i32(50).i32(100).finish();
 const attack=(source=3,target=2)=>new BitWriter().u8(OP.attack).i32(source).i32(target).i32(0).position({x:100,y:100}).finish();
 const skill=(attacker=-1,indirect=false,source=3)=>new BitWriter().u8(OP.skill).u8(1).i32(source).i32(attacker).i32(2).u8(11).u8(1).u8(0).position({x:100,y:100}).i32(1).u8(0).u8(1).f32(0.1).f32(0).bool(indirect).finish();
 function fixture() {
@@ -65,7 +65,7 @@ describe('party engagement wire/controller ownership',()=>{
  });
  it('clears all bindings on raw own-zero kick and rejects old and new party claims until a full rejoin',()=>{
   const f=fixture();f.c.receive(new BitWriter().u8(OP.enter).i32(0).string(map).finish());f.c.receive(spawn({...own,id:0}));f.c.receive(spawn(monster));f.c.receive(spawn({...own,id:3,name:'Ally'},true));
-  const roster=()=>new BitWriter().u8(101).u8(0).i32(5).string('Party').i32(2).i32(7).i32(3).i16(10).string('Ally').u8(0).string(map).i32(100).i32(100).i32(50).i32(100).i32(8).i32(0).i16(10).string('Own').u8(1).finish();
+  const roster=()=>new BitWriter().u8(101).u8(0).i32(5).string('Party').u8(0).i32(2).i32(7).i32(3).i16(10).string('Ally').u8(0).string(map).i32(100).i32(100).i32(50).i32(100).i32(8).i32(0).i16(10).string('Own').u8(1).finish();
   f.c.receive(roster());f.c.receive(attack());f.c.receive(new BitWriter().u8(102).u8(1).i32(8).finish());expect(f.c.world.party).toBeNull();expect(f.c.world.partyActors.get(7)).toBeNull();
   f.c.receive(spawn({...monster,id:8,classId:4002}));f.c.receive(attack(3,8));f.start([4000,4002]);f.step();expect(actions(f)).toHaveLength(0);
   f.c.receive(roster());f.c.receive(attack());f.c.receive(attack(3,8));f.step();expect(actions(f)).toHaveLength(0);

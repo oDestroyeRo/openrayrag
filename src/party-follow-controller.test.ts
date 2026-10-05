@@ -38,7 +38,7 @@ function fixture(ownId=1) {
  const affiliation=(partyId=5)=>controller.receive(new BitWriter().u8(OP.partyAffiliation).i32(2).u8(1).i32(partyId).string(partyId===5?'Party':'Other').bool(true).finish());
  affiliation();
  const join=(extra=false)=>{
-  const writer=new BitWriter().u8(WORLD_OP.partyAccept).u8(0).i32(5).string('Party').i32(extra?2:1);
+  const writer=new BitWriter().u8(WORLD_OP.partyAccept).u8(0).i32(5).string('Party').u8(0).i32(extra?2:1);
   const row=(id:number,entityId:number,name:string,lead:boolean)=>{writer.i32(id).i32(entityId).i16(10).string(name).u8(lead?1:0);if(entityId>0)writer.string('prt_fild08').i32(100).i32(100).i32(50).i32(100);};
   row(7,2,'Leader',true);if(extra)row(8,ownId,'Self',false);controller.receive(writer.finish());
  };
@@ -487,7 +487,7 @@ describe('raw retired travel and observed leader availability',()=>{
  it.each(['replace','remove','party-change','stale-positive'] as const)('partial HP recovery cannot borrow %s destination evidence',kind=>{
   const f=fixture();f.settings.automation.follow.lostSeconds=20;f.controller.start(f.settings);f.map();f.arrive();f.spawn({...leader,x:158,y:26});f.controller.receive(leaderHealth(0));f.affiliation();
   if(kind==='replace')f.spawn({...leader,x:158,y:26});else if(kind==='remove')f.controller.receive(new BitWriter().u8(WORLD_OP.partyUpdate).u8(1).i32(7).finish());
-  else if(kind==='party-change')f.controller.receive(new BitWriter().u8(WORLD_OP.partyAccept).u8(0).i32(6).string('Other').i32(1).i32(7).i32(2).i16(10).string('Leader').u8(1).string('prontera').i32(100).i32(100).i32(50).i32(100).finish());
+  else if(kind==='party-change')f.controller.receive(new BitWriter().u8(WORLD_OP.partyAccept).u8(0).i32(6).string('Other').u8(0).i32(1).i32(7).i32(2).i16(10).string('Leader').u8(1).string('prontera').i32(100).i32(100).i32(50).i32(100).finish());
   else f.advance(16000);
   f.controller.receive(leaderHealth(100));expect(f.controller.engine.running).toBe(false);expect(f.controller.snapshot().partyFollow.state).toBe(kind==='stale-positive'?'awaitingLeader':'cancelled');
   if(kind==='stale-positive'){

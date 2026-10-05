@@ -39,26 +39,33 @@ function ownPacket(e:Entity,entry:number):BitWriter {
 }
 function policy() { return structuredClone(DEFAULT_AUTOMATION); }
 
-describe('large party initialization packets', () => {
-  function roster(duplicate = false) {
-    const writer = new BitWriter().u8(WORLD_OP.partyAccept).u8(1).i32(5).string('Party').i32(33);
+describe('deployed party initialization packets', () => {
+  function roster(duplicate = false, count = 33) {
+    const writer = new BitWriter().u8(WORLD_OP.partyAccept).u8(1).i32(5).string('Party').u8(0).i32(count);
     // The own online row can precede its spawn and receive an empty map on login.
     writer.i32(1).i32(player.id).i16(player.level).string(player.name).u8(1).string('')
       .i32(player.hp).i32(player.maxHp).i32(0).i32(0);
-    for (let index = 1; index < 33; index++) writer.i32(duplicate && index === 32 ? 1 : index + 1)
+    for (let index = 1; index < count; index++) writer.i32(duplicate && index === count - 1 ? 1 : index + 1)
       .i32(0).i16(-1).string(`Offline ${index}`).u8(0);
     return writer.finish();
   }
-  it('retains the full roster and processes the character spawn after login', () => {
+  it.each([1, 33])('retains the %i-member roster and processes the character spawn after login', count => {
     const sent: Array<Action | ControllerAction> = [];
     const controller = new CompanionController(action => sent.push(action), () => 100_000, () => grid);
     controller.connect(true);
     controller.receive(new BitWriter().u8(OP.enter).i32(player.id).string('prt_fild08').finish());
-    controller.receive(roster());
-    expect(controller.world.snapshot().party?.members).toHaveLength(33);
+    controller.receive(roster(false, count));
+    expect(controller.world.snapshot().party?.members).toHaveLength(count);
     controller.receive(ownPacket(player, 1).finish());
     expect(controller.engine.player).toMatchObject(player);
     expect(sent).toEqual([]);
+  });
+  it('accepts a one-member party after the character has already spawned', () => {
+    const f = setup();
+    f.controller.receive(roster(false, 1));
+    expect(f.controller.engine.player).toMatchObject(player);
+    expect(f.controller.world.snapshot().party?.members).toHaveLength(1);
+    expect(f.sent).toEqual([]);
   });
   it('preserves the previous party when a large replacement packet is malformed', () => {
     const f = setup();
@@ -132,7 +139,7 @@ describe('retreat ownership with stationary availability',()=>{
   function party(f:ReturnType<typeof fixture>,hp=100) {
     const ally={...f.own,id:3,name:'Member',x:f.own.x+1,hp};
     f.packet(ownPacket(ally,0));f.packet(new BitWriter().u8(OP.partyAffiliation).i32(3).u8(1).i32(5).string('Party').bool(true));
-    f.packet(new BitWriter().u8(WORLD_OP.partyAccept).u8(0).i32(5).string('Party').i32(1).i32(7).i32(3).i16(20).string('Member')
+    f.packet(new BitWriter().u8(WORLD_OP.partyAccept).u8(0).i32(5).string('Party').u8(0).i32(1).i32(7).i32(3).i16(20).string('Member')
       .u8(1).string('prt_fild08').i32(hp).i32(100).i32(200).i32(200));
     f.c.engine.receive([{type:'skills',learned:[{skillId:1,level:2},{skillId:29,level:5},{skillId:42,level:1},{skillId:41,level:10}]}]);
     f.settings.automation.partyHeal={...DEFAULT_PARTY_HEAL,enabled:true,cooldownSeconds:1};

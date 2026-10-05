@@ -1,5 +1,5 @@
 import {actorId} from './actor-identity';
-// Source: Rayrag Rebuild pin 4099e2c000c3c550516760b9c1241595aac9aceb.
+// Source: Rebuild pin 4099e2c000c3c550516760b9c1241595aac9aceb plus deployed V8 evidence in docs/PROTOCOL.md.
 // Normal player actions only. Inventory and combat packets have separate owners.
 import { BitReader, BitWriter } from './binary';
 import { readInventory, readItem, type InventoryItem } from './protocol-feature';
@@ -165,6 +165,9 @@ export function decodeWorld(data: Uint8Array): WorldEvent[] | null {
       event = { type: 'partyInvite', partyId: id(r.i32()), name: r.string(128), sender: r.string(128) }; break;
     case WORLD_OP.partyAccept: {
       const login = r.u8() === 1; const partyId = id(r.i32()); const name = r.string(128);
+      // The deployed V8 client reads an additional byte after PartyName. Its
+      // meaning is unverified; consume it without assigning settings semantics.
+      r.u8();
       // Party.SerializePartyInfo writes the whole roster without a capacity cap.
       // Even an offline row needs 13 bytes: two IDs, level, string length, leader.
       const count = bounded(r.i32(), 1, Math.floor(r.remainingBits / (13 * 8)), 'party count');
