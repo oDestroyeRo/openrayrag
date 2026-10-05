@@ -50,7 +50,8 @@ export function validateWorkflowSpec(input: unknown): WorkflowSpec {
   const name = text(value.name, 64); const map = text(value.map, 64);
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(map)) throw new Error('Invalid workflow map');
   const npcId = integer(value.npcId, 0, 2_147_483_647); const maxSpend = integer(value.maxSpend, 0, 2_000_000_000);
-  if (!Array.isArray(value.minStock) || value.minStock.length > 100) throw new Error('Invalid stock rules');
+  // Both recovery catalogs, advanced item rules, ammo and escape reserves fit.
+  if (!Array.isArray(value.minStock) || value.minStock.length > 160) throw new Error('Invalid stock rules');
   const minStock = value.minStock.map(item => {
     const row = record(item, ['itemId', 'count']);
     return { itemId: integer(row.itemId, 1, 2_147_483_647), count: integer(row.count, 0, 32767) };

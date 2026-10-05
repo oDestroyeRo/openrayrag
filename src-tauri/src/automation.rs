@@ -107,10 +107,16 @@ struct AutomationSettings {
     escape: Escape,
     #[serde(
         default,
-        deserialize_with = "deserialize_hp_potions",
+        deserialize_with = "deserialize_recovery_items",
         skip_serializing_if = "Option::is_none"
     )]
-    hp_potions: Option<HpPotionSettings>,
+    hp_potions: Option<RecoveryItemSettings>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_recovery_items",
+        skip_serializing_if = "Option::is_none"
+    )]
+    sp_potions: Option<RecoveryItemSettings>,
     items: Vec<ItemRule>,
     skills: Vec<SkillRule>,
     equipment: Vec<EquipmentRule>,
@@ -760,8 +766,8 @@ struct ItemRule {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct HpPotionSettings {
-    mode: HpPotionMode,
+struct RecoveryItemSettings {
+    mode: RecoveryItemMode,
     item_ids: Vec<u32>,
     below_percent: u8,
     min_stock: u16,
@@ -770,53 +776,57 @@ struct HpPotionSettings {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum HpPotionMode {
+enum RecoveryItemMode {
     Off,
     Any,
     Selected,
 }
 
-impl<'de> Deserialize<'de> for HpPotionMode {
+impl<'de> Deserialize<'de> for RecoveryItemMode {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         match String::deserialize(deserializer)?.as_str() {
             "off" => Ok(Self::Off),
             "any" => Ok(Self::Any),
             "selected" => Ok(Self::Selected),
-            _ => Err(serde::de::Error::custom("Invalid HP potion mode.")),
+            _ => Err(serde::de::Error::custom("Invalid recovery item mode.")),
         }
     }
 }
 
-fn deserialize_hp_potions<'de, D: serde::Deserializer<'de>>(
+fn deserialize_recovery_items<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<Option<HpPotionSettings>, D::Error> {
-    HpPotionSettings::deserialize(deserializer).map(Some)
+) -> Result<Option<RecoveryItemSettings>, D::Error> {
+    RecoveryItemSettings::deserialize(deserializer).map(Some)
 }
 
-fn hp_potion_ids() -> &'static [u32] {
+fn recovery_item_ids(resource: Resource) -> &'static [u32] {
     #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct Catalog {
-        ids: Vec<u32>,
+        hp_ids: Vec<u32>,
+        sp_ids: Vec<u32>,
     }
     static CATALOG: std::sync::OnceLock<Catalog> = std::sync::OnceLock::new();
-    &CATALOG
-        .get_or_init(|| {
-            serde_json::from_str(include_str!("../../src/data/hp-potion-catalog.json"))
-                .expect("The bundled HP potion catalog must be valid.")
-        })
-        .ids
+    let catalog = CATALOG.get_or_init(|| {
+        serde_json::from_str(include_str!("../../src/data/recovery-item-catalog.json"))
+            .expect("The bundled recovery item catalog must be valid.")
+    });
+    match resource {
+        Resource::Hp => &catalog.hp_ids,
+        Resource::Sp => &catalog.sp_ids,
+    }
 }
 
-impl HpPotionSettings {
-    fn valid(&self) -> bool {
-        let known_ids = hp_potion_ids();
+impl RecoveryItemSettings {
+    fn valid(&self, resource: Resource) -> bool {
+        let known_ids = recovery_item_ids(resource);
         (1..=100).contains(&self.below_percent)
             && self.min_stock <= 9999
             && (1..=3600).contains(&self.cooldown_seconds)
             && self.item_ids.len() <= known_ids.len()
             && unique_by(&self.item_ids, |id| *id)
             && self.item_ids.iter().all(|id| known_ids.contains(id))
-            && (!matches!(self.mode, HpPotionMode::Selected) || !self.item_ids.is_empty())
+            && (!matches!(self.mode, RecoveryItemMode::Selected) || !self.item_ids.is_empty())
     }
 }
 
@@ -1121,7 +1131,11 @@ impl AutomationSettings {
             && self
                 .hp_potions
                 .as_ref()
-                .map_or(true, HpPotionSettings::valid)
+                .map_or(true, |policy| policy.valid(Resource::Hp))
+            && self
+                .sp_potions
+                .as_ref()
+                .map_or(true, |policy| policy.valid(Resource::Sp))
             && self.items.len() <= 32
             && unique_by(&self.items, |r| r.item_id)
             && self.items.iter().all(|r| {
@@ -1380,6 +1394,46 @@ mod tests {
             if case["valid"] == json!(true) {
                 let parsed: Settings = serde_json::from_value(value.clone()).unwrap();
                 assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_item_shared_schema_matches_settings_and_current_form() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../src/data/recovery-item-cases.json")).unwrap();
+        for case in cases {
+            let mut value = settings();
+            value["automation"] = automation();
+            let field = if case["resource"] == json!("hp") {
+                "hpPotions"
+            } else {
+                "spPotions"
+            };
+            if case["absent"] != json!(true) {
+                value["automation"][field] = case["policy"].clone();
+            }
+            let expected = case["valid"] == json!(true);
+            assert_eq!(valid(value.clone()), expected, "{}", case["name"]);
+            let document_value = json!({
+                "version": 1, "revision": 1, "selectedProfileId": null, "settings": value
+            });
+            let document =
+                serde_json::from_value::<crate::current_form::FormDocument>(document_value.clone());
+            assert_eq!(
+                document
+                    .as_ref()
+                    .is_ok_and(|document| document.validate().is_ok()),
+                expected,
+                "{}",
+                case["name"]
+            );
+            if expected {
+                let directory = tempfile::tempdir().unwrap();
+                let path = directory.path().canonicalize().unwrap();
+                crate::current_form::save(path.clone(), &document.unwrap()).unwrap();
+                let restored = crate::current_form::load(path).unwrap().unwrap();
+                assert_eq!(serde_json::to_value(restored).unwrap(), document_value);
             }
         }
     }

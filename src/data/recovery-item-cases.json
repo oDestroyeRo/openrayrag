@@ -1,0 +1,22 @@
+[
+  {"name":"legacy SP absence","resource":"sp","absent":true,"valid":true},
+  {"name":"HP food and herbs","resource":"hp","valid":true,"policy":{"mode":"selected","itemIds":[512,507,515],"belowPercent":60,"minStock":0,"cooldownSeconds":5}},
+  {"name":"SP food and potion order","resource":"sp","valid":true,"policy":{"mode":"selected","itemIds":[514,505],"belowPercent":30,"minStock":2,"cooldownSeconds":10}},
+  {"name":"SP any retains preference","resource":"sp","valid":true,"policy":{"mode":"any","itemIds":[505,514],"belowPercent":30,"minStock":0,"cooldownSeconds":5}},
+  {"name":"SP off retains preference","resource":"sp","valid":true,"policy":{"mode":"off","itemIds":[514],"belowPercent":30,"minStock":0,"cooldownSeconds":5}},
+  {"name":"shared HP item","resource":"hp","valid":true,"policy":{"mode":"selected","itemIds":[518],"belowPercent":60,"minStock":0,"cooldownSeconds":5}},
+  {"name":"shared SP item","resource":"sp","valid":true,"policy":{"mode":"selected","itemIds":[518],"belowPercent":30,"minStock":0,"cooldownSeconds":5}},
+  {"name":"HP rejects SP-only item","resource":"hp","valid":false,"policy":{"mode":"selected","itemIds":[505],"belowPercent":60,"minStock":0,"cooldownSeconds":5}},
+  {"name":"SP rejects HP-only item","resource":"sp","valid":false,"policy":{"mode":"selected","itemIds":[512],"belowPercent":30,"minStock":0,"cooldownSeconds":5}},
+  {"name":"SP rejects status item","resource":"sp","valid":false,"policy":{"mode":"selected","itemIds":[506],"belowPercent":30,"minStock":0,"cooldownSeconds":5}},
+  {"name":"SP rejects teleport item","resource":"sp","valid":false,"policy":{"mode":"selected","itemIds":[601],"belowPercent":30,"minStock":0,"cooldownSeconds":5}},
+  {"name":"SP rejects unknown item","resource":"sp","valid":false,"policy":{"mode":"selected","itemIds":[2147483647],"belowPercent":30,"minStock":0,"cooldownSeconds":5}},
+  {"name":"SP requires a selection","resource":"sp","valid":false,"policy":{"mode":"selected","itemIds":[],"belowPercent":30,"minStock":0,"cooldownSeconds":5}},
+  {"name":"SP rejects duplicate IDs","resource":"sp","valid":false,"policy":{"mode":"selected","itemIds":[514,514],"belowPercent":30,"minStock":0,"cooldownSeconds":5}},
+  {"name":"SP rejects null","resource":"sp","valid":false,"policy":null},
+  {"name":"SP requires cooldown","resource":"sp","valid":false,"policy":{"mode":"any","itemIds":[],"belowPercent":30,"minStock":0}},
+  {"name":"SP rejects zero cooldown","resource":"sp","valid":false,"policy":{"mode":"any","itemIds":[],"belowPercent":30,"minStock":0,"cooldownSeconds":0}},
+  {"name":"SP rejects fractional threshold","resource":"sp","valid":false,"policy":{"mode":"any","itemIds":[],"belowPercent":30.5,"minStock":0,"cooldownSeconds":5}},
+  {"name":"SP rejects excessive reserve","resource":"sp","valid":false,"policy":{"mode":"any","itemIds":[],"belowPercent":30,"minStock":10000,"cooldownSeconds":5}},
+  {"name":"SP rejects unknown fields","resource":"sp","valid":false,"policy":{"mode":"any","itemIds":[],"belowPercent":30,"minStock":0,"cooldownSeconds":5,"extra":true}}
+]

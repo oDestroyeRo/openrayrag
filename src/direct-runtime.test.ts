@@ -94,13 +94,13 @@ describe('clientless shared-controller runtime',()=>{
   await f.frame(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false).finish());await flush();
   expect(f.runtime.snapshot().macro).toMatchObject({state:'cancelled',actionsCompleted:0});expect(f.writes()).toHaveLength(stopped);
  });
- it('automatically uses the selected carried HP potion through the direct transport',async()=>{
+ it.each([{resource:'hp',itemId:504},{resource:'hp',itemId:512},{resource:'sp',itemId:514}] as const)('automatically uses selected $resource item $itemId through the direct transport',async({resource,itemId})=>{
   const f=fixture();await f.ready(0,{...player,x:124,y:90,hp:55});f.step(1200);await f.runtime.cycle();
-  f.runtime.controller.engine.receive([{type:'heal',id:0,hp:55,maxHp:100},{type:'inventory',items:[{bagId:504,itemId:504,type:1,count:3},{bagId:505,itemId:505,type:1,count:20}],equipment:Array(10).fill(0),ammoId:-1}]);
-  const automation=structuredClone(DEFAULT_AUTOMATION);automation.hpPotions={mode:'selected',itemIds:[501,504],belowPercent:60,minStock:0,cooldownSeconds:5};
+  f.runtime.controller.engine.receive([{type:'heal',id:0,hp:55,maxHp:100},{type:'sp',sp:10,maxSp:100},{type:'inventory',items:[{bagId:itemId,itemId,type:1,count:3}],equipment:Array(10).fill(0),ammoId:-1}]);
+  const automation=structuredClone(DEFAULT_AUTOMATION);automation[resource==='hp'?'hpPotions':'spPotions']={mode:'selected',itemIds:[itemId],belowPercent:60,minStock:0,cooldownSeconds:5};
   f.runtime.control('start',{...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0,automation});
   f.step(1000);await f.runtime.cycle();await flush();
-  expect(f.writes().filter(bytes=>bytes[0]===FEATURE_OP.useItem),f.runtime.snapshot().reason).toEqual([[...featureCommand({type:'useItem',itemId:504})]]);
+  expect(f.writes().filter(bytes=>bytes[0]===FEATURE_OP.useItem),f.runtime.snapshot().reason).toEqual([[...featureCommand({type:'useItem',itemId})]]);
   f.step(1000);await f.runtime.cycle();await flush();expect(f.writes().filter(bytes=>bytes[0]===FEATURE_OP.useItem)).toHaveLength(1);
  });
  it.each(['ordered','missing','early'])('Database macro travel requires ordered native Ready flush evidence: %s',async ready=>{

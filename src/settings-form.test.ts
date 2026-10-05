@@ -1,3 +1,4 @@
+import { DEFAULT_SP_ITEMS, type RecoveryItemSettings } from './recovery-items';
 import { DEFAULT_HP_POTIONS, type HpPotionSettings } from './hp-potions';
 import { describe, expect, it, vi } from 'vitest';
 import { CurrentForm, type FormDocument } from './current-form';
@@ -81,10 +82,12 @@ function setup() {
   let disposition: Array<Record<string, unknown>> = [];
   // This adapter omits the full FeatureUi constructor, so mount permanent
   // controls lazily and retain their references just as the real constructor does.
+  let spPotions: RecoveryItemSettings = structuredClone(DEFAULT_SP_ITEMS);
   let hpPotions: HpPotionSettings = structuredClone(DEFAULT_HP_POTIONS);
   const mountedInputs = new Map<string, Element>();
   Object.assign(editor, {
     host, hooks: { settings: recursiveSettings },
+    spPotions: { read: () => structuredClone(spPotions), write: (value: RecoveryItemSettings) => { spPotions = structuredClone(value); } },
     hpPotions: { read: () => structuredClone(hpPotions), write: (value: HpPotionSettings) => { hpPotions = structuredClone(value); } },
     settingInputs: { get: (path: string) => {
       if (!mountedInputs.has(path)) mountedInputs.set(path, host.querySelector(`[data-setting="${path}"]`)!);

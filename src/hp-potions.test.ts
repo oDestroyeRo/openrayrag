@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import cases from './data/hp-potion-cases.json';
-import catalog from './data/hp-potion-catalog.json';
+import catalog from './data/recovery-item-catalog.json';
 import gameCatalog from './data/game-catalog.json';
 import { DEFAULT_HP_POTIONS, HP_POTION_IDS, hpPotionIds, recoveryItemCooldown, validateHpPotions, type HpPotionSettings } from './hp-potions';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateSettings, type AutomationSettings } from './settings';
@@ -41,8 +41,8 @@ describe('HP potion settings contract', () => {
       if (!row.absent) expect(validateHpPotions(row.policy)).toEqual(row.policy);
     } else expect(check).toThrow();
   });
-  it('uses only classified untargeted HP potions from the pinned client', () => {
-    expect(new Set(HP_POTION_IDS).size).toBe(8);
+  it('uses classified untargeted HP recovery items from the pinned client', () => {
+    expect(new Set(HP_POTION_IDS).size).toBe(69);
     expect(catalog.clientItemsSha256).toBe(gameCatalog.sources.items.sha256);
     for (const id of HP_POTION_IDS) expect(ITEM_CATALOG[id]).toMatchObject({ itemClass: 1, useType: 1 });
     for (const id of [505, 506, 601, 645, 656, 657, 12016]) expect(HP_POTION_IDS).not.toContain(id);
