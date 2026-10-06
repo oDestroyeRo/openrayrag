@@ -46,6 +46,25 @@ Moving overlays still draw 100 times. Changed logs still format and display the 
 
 The first final baseline is retained at `/tmp/rayrag-client-rendering-baseline-final.json`, and the candidate report at `/tmp/rayrag-client-rendering-candidate.json`. Their loaded-source hashes are `0a5b0df236c3d611cac86efdff32e805afdb48af00c2cd42f22f48e0dc2f6faa` and `136b088a20080eed908a511bfb3be6f3d90e7bc7f35adbba3f71c0d1edad1411`. Both use harness/dependency hash `50889d48b7868dc87feebbd233dd25030c11604e4cdd051dceef81e95ae28122`.
 
+## Settings projection comparison, 2026-10-06
+
+Issue [#170](https://github.com/oDestroyeRo/openrayrag/issues/170) concentrates display parsing in SettingsForm. Each synchronous status or control-lock pass creates a projection that refreshes observations once and shares one current DOM read between retained settings, eligible field settings and FeatureUi display consumers. The projection is discarded after that pass. Standalone command and CurrentForm reads remain fresh, and admission still validates settings. Invalid drafts remain editable; programmatic writes and restores require no input event to be observed by the next pass.
+
+The baseline is clean commit `641f81b55febe988bcaf8530a7021691f0225f28`. The candidate includes the integrated changes for issues #170–#173. Both reports use the existing unchanged harness, five timed samples and 100 iterations (ten reconnect cycles), on the Apple M5 Pro machine above with Bun 1.4.2 and Chrome 154.0.8037.98. All six visible outcomes match and all five real-main behavior probes pass.
+
+| Workload | Baseline replay ms | Candidate replay ms | FeatureUi reads, baseline → candidate | SettingsForm refreshes, baseline → candidate |
+| --- | ---: | ---: | ---: | ---: |
+| 100 unchanged statuses | 106.9 | 92.5 | 600 → 100 | 200 → 100 |
+| 100 HP/counter updates | 106.6 | 90.9 | 600 → 100 | 200 → 100 |
+| 100 actor/drop/route updates | 107.5 | 89.3 | 600 → 100 | 200 → 100 |
+| 100 appended/edited log updates | 192.0 | 178.5 | 600 → 100 | 200 → 100 |
+| 100 periodic refresh callbacks | 69.6 | 62.9 | 300 → 100 | 100 → 100 |
+| 10 disconnect/reconnect cycles | 62.9 | 55.2 | 120 → 50 | 40 → 20 |
+
+Times are measured whole-renderer medians, not settings-only costs or timing gates. The baseline report is `/var/folders/wj/st7vb06d6yl1k22r6c80wd200000gn/T/rayrag-client-rendering-report-iPBb0T/report.json`; the candidate is `/var/folders/wj/st7vb06d6yl1k22r6c80wd200000gn/T/rayrag-client-rendering-report-S6IlxO/report.json`. Their loaded-source hashes are `3a35664c6a2053c7be2e0dd7240c619a789a3e3762f462af1ee3f59b28806b61` and `77dde43acb69afdaceb86607c2bb2d063220230aca27e5ff206d931760e9eaf6`, with harness/dependency hash `dfdb3fbeebe424006ff77d8ce1bda235560551d0009e4ce2cfa736f932942dc6`.
+
+The integrated `bun run check` passed: build/typechecking, 4,231 frontend tests, 182 default and 184 ci-smoke native tests (two ignored in each configuration), Clippy in both configurations, formatting, 243 helper tests (two platform skips), and eight Python release tests. Independent standards and specification reviews found no blocking findings. These checks do not establish deployed or live-game performance.
+
 ## Correctness and proof limits
 
 The focused 140-test run covers bounded log append/rollover, same-length text/timestamp edits, literal text safety, in-place and fractional actor/drop coordinates, route/leg/goal changes, metadata-only updates, unchanged and reordered drops, immediate locks, context restoration, unsupported maps and disconnect/reconnect. Collision pixels are checked against the previous GridNavigator painter on full catalog maps and portal/blocked boundary fixtures. The real-main browser probes also check focus, item selection, coordinate drafts, programmatic settings writes/restoration, invalid settings drafts, bar widths and control state. Full local verification passed: build/typechecking, 3,525 frontend tests, 137 native tests (one optional public probe ignored), Clippy, formatting, 83 Node helper tests (one Linux-specific skip), and eight Python release tests. Independent review found no blocking findings.
