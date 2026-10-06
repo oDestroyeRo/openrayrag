@@ -219,6 +219,7 @@
   "src/run-intent-dispatch.ts": "orchestration",
   "src/runtime-initialization-policy.ts": "logic",
   "src/runtime-panel-policy.ts": "logic",
+  "src/settings-close-logic.ts": "logic",
   "src/settings-close.ts": "orchestration",
   "src/settings-form-logic.ts": "logic",
   "src/settings-form.ts": "orchestration",
