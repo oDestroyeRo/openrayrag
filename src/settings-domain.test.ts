@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { seconds, type ItemId, type Percentage, type Seconds, type SkillId } from './domain-values';
+import { percentage, seconds, type ItemId, type Percentage, type Seconds, type SkillId } from './domain-values';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, automationDraft, automationSettings, settingsDraft,
   validateAutomation, validateFormSettings, validateSettings, type AutomationSettings, type RunSettings,
   type Settings, type AutomationSettingsInput, type ValidatedAutomationSettings, type ValidatedFormSettings } from './settings';
@@ -59,6 +59,10 @@ function typeContracts(raw: Settings, rawAutomation: AutomationSettings, form: V
   // @ts-expect-error A stopped form can lack the fields required for a run.
   acceptsRun(form);
   acceptsForm(run);
+  // @ts-expect-error A spread removes aggregate admission even if branded scalar fields are unchanged.
+  acceptsForm({...form});
+  // @ts-expect-error A cross-field invalid edit must pass the aggregate parser again.
+  acceptsAutomation({...automation,recovery:{...automation.recovery,hpStart:percentage(90),hpEnd:percentage(50)}});
   // @ts-expect-error Scalar structure alone does not establish automation admission.
   acceptsAutomation(rawAutomation);
   const structural: AutomationSettingsInput = automation;

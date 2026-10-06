@@ -96,15 +96,17 @@ type DomainAutomation = Omit<AutomationSettings, 'loadout' | 'combat' | 'loot' |
   partyHeal?: Omit<PartyHealSettings, 'hpBelowPercent' | 'spReserve' | 'cooldownSeconds' | 'maxAttempts'>
     & { hpBelowPercent: Percentage; spReserve: Quantity; cooldownSeconds: Seconds; maxAttempts: Quantity };
 };
-declare const automationAdmission: unique symbol;
-export type ValidatedAutomationSettings = ReadonlyData<DomainAutomation> & { readonly [automationAdmission]: true };
+// Erased private fields disappear from object spreads, so an edited structural
+// copy must pass aggregate admission again without changing the JSON model.
+declare class AutomationAdmission { private readonly automationAdmission: void }
+export type ValidatedAutomationSettings = ReadonlyData<DomainAutomation> & AutomationAdmission;
 type DomainSettings = Omit<Settings, 'map' | 'targets' | 'minHpPercent' | 'route_randomWalk_maxRouteTime' | 'attackMaxRouteTime' | 'automation'>
   & { map: MapCode | ''; targets: SpeciesId[]; minHpPercent: Percentage;
     route_randomWalk_maxRouteTime: Seconds; attackMaxRouteTime: Seconds; automation?: ValidatedAutomationSettings };
-declare const formAdmission: unique symbol;
-declare const runAdmission: unique symbol;
-export type ValidatedFormSettings = ReadonlyData<DomainSettings> & { readonly [formAdmission]: true };
-export type RunSettings = ValidatedFormSettings & { readonly [runAdmission]: true };
+declare class FormAdmission { private readonly formAdmission: void }
+declare class RunAdmission { private readonly runAdmission: void }
+export type ValidatedFormSettings = ReadonlyData<DomainSettings> & FormAdmission;
+export type RunSettings = ValidatedFormSettings & RunAdmission;
 
 /** Mutable editor projections are detached; admitted models remain read-only. */
 export function settingsDraft(value: SettingsInput): Settings { return structuredClone(value) as Settings; }
