@@ -17,6 +17,7 @@ env:
   CARGO_TERM_COLOR: always
   PYTHONDONTWRITEBYTECODE: "1"
   RUSTUP_TOOLCHAIN: "1.98.1"
+  BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/../rayrag-bun-cache
 
 jobs:
   reconcile:
@@ -42,6 +43,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version-file: .bun-version
+      - name: Restore Bun package downloads
+        id: bun-cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: ${{ env.BUN_INSTALL_CACHE_DIR }}
+          key: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-${{ hashFiles('bun.lock', 'tools/release/bun.lock') }}
+          restore-keys: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-
       - name: Install locked tooling runtime dependencies
         run: bun install --production --frozen-lockfile --ignore-scripts
       - name: Reserve or restore the exact-source semantic release plan
@@ -89,6 +97,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version-file: .bun-version
+      - name: Restore Bun package downloads
+        id: bun-cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: ${{ env.BUN_INSTALL_CACHE_DIR }}
+          key: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-${{ hashFiles('bun.lock', 'tools/release/bun.lock') }}
+          restore-keys: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-
       - name: Install locked tooling runtime dependencies
         run: bun install --production --frozen-lockfile --ignore-scripts
       - name: Install isolated release policy dependencies
@@ -106,7 +121,7 @@ jobs:
         with:
           workspaces: src-tauri
           save-if: ${{ github.repository == 'oDestroyeRo/openrayrag' && github.ref == 'refs/heads/main' }}
-          key: aarch64-apple-darwin
+          shared-key: desktop-aarch64-apple-darwin-${{ hashFiles('vendor/glib/**') }}
       - name: Stamp only this exact CI checkout
         if: needs.reconcile.outputs.state == 'build'
         env:
@@ -166,6 +181,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version-file: .bun-version
+      - name: Restore Bun package downloads
+        id: bun-cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: ${{ env.BUN_INSTALL_CACHE_DIR }}
+          key: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-${{ hashFiles('bun.lock', 'tools/release/bun.lock') }}
+          restore-keys: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-
       - name: Install locked tooling runtime dependencies
         run: bun install --production --frozen-lockfile --ignore-scripts
       - name: Install isolated release policy dependencies
@@ -183,7 +205,15 @@ jobs:
         with:
           workspaces: src-tauri
           save-if: ${{ github.repository == 'oDestroyeRo/openrayrag' && github.ref == 'refs/heads/main' }}
-          key: ${{ matrix.target }}
+          shared-key: desktop-${{ matrix.target }}-${{ hashFiles('vendor/glib/**') }}
+      - name: Restore Tauri packaging tools
+        id: tauri-cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: |
+            ~/.cache/tauri
+            ~/AppData/Local/tauri
+          key: tauri-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'src-tauri/Cargo.lock') }}
       - name: Install Linux package dependencies
         if: needs.reconcile.outputs.state == 'build' && matrix.platform == 'linux'
         run: |
@@ -233,6 +263,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version-file: .bun-version
+      - name: Restore Bun package downloads
+        id: bun-cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: ${{ env.BUN_INSTALL_CACHE_DIR }}
+          key: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-${{ hashFiles('bun.lock', 'tools/release/bun.lock') }}
+          restore-keys: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-
       - name: Install locked tooling runtime dependencies
         run: bun install --production --frozen-lockfile --ignore-scripts
       - name: Install isolated release policy dependencies
@@ -308,6 +345,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version-file: .bun-version
+      - name: Restore Bun package downloads
+        id: bun-cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: ${{ env.BUN_INSTALL_CACHE_DIR }}
+          key: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-${{ hashFiles('bun.lock', 'tools/release/bun.lock') }}
+          restore-keys: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-
       - name: Install locked tooling runtime dependencies
         run: bun install --production --frozen-lockfile --ignore-scripts
       - name: Install isolated release policy dependencies

@@ -97,6 +97,80 @@ test('main PRs and merge queue always run all native platform lanes',()=>{
   for(const step of smoke)assert.ok(step.run.endsWith('--smoke'));
 
 });
+
+test('quality warms the trusted release dependency cache for each platform without caching application outputs',()=>{
+  const cacheOf=job=>job.steps.find(step=>step.uses?.startsWith('Swatinem/rust-cache@')).with;
+  const quality=cacheOf(workflow.jobs.quality);
+  const mac=cacheOf(release.jobs.build);
+  const other=cacheOf(release.jobs['release-platforms']);
+  const vendorKey="${{ hashFiles('vendor/glib/**') }}";
+  for(const cache of [quality,mac,other]){
+    assert.equal(cache.workspaces,'src-tauri');
+    // The pinned action ignores `key` when a `shared-key` is present.
+    assert.equal(cache.key,undefined);
+    assert.ok(cache['shared-key'].endsWith('-'+vendorKey));
+    assert.notEqual(cache['cache-workspace-crates'],true);
+    assert.notEqual(cache['cache-all-crates'],true);
+    assert.notEqual(cache['add-rust-environment-hash-key'],false);
+  }
+  assert.equal(quality['shared-key'],'desktop-${{ matrix.target }}-'+vendorKey);
+  assert.equal(other['shared-key'],quality['shared-key']);
+  assert.equal(mac['shared-key'],quality['shared-key'].replace('${{ matrix.target }}',platforms.macos.target));
+  const artifact=workflow.jobs.quality.steps.find(step=>step.uses?.startsWith('actions/upload-artifact@'));
+  assert.equal(artifact.if,'always()');
+  assert.equal(artifact.with['compression-level'],0);
+  assert.ok(artifact.with.path.includes('reports/*'));
+});
+
+test('Bun download caches are shared across installation jobs while complete trusted quality lanes alone write them',()=>{
+  const quality=workflow.jobs.quality;
+  const restoreOf=job=>job.steps.find(step=>step.id==='bun-cache');
+  const restore=restoreOf(quality);
+  assert.equal(workflow.env.BUN_INSTALL_CACHE_DIR,'${{ github.workspace }}/../rayrag-bun-cache');
+  assert.equal(release.env.BUN_INSTALL_CACHE_DIR,workflow.env.BUN_INSTALL_CACHE_DIR);
+  assert.equal(restore.with.path,'${{ env.BUN_INSTALL_CACHE_DIR }}');
+  assert.equal(restore.uses,'actions/cache/restore@v6.1.0');
+  assert.equal(restore.with.key,"bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-${{ hashFiles('bun.lock', 'tools/release/bun.lock') }}");
+  assert.equal(restore.with['restore-keys'],"bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-");
+  assert.notEqual(restore.with['fail-on-cache-miss'],true);
+  assert.notEqual(restore.with.enableCrossOsArchive,true);
+  for(const job of [quality,...Object.values(release.jobs)]){
+    assert.deepEqual(restoreOf(job).with,restore.with);
+    const firstInstall=job.steps.findIndex(step=>step.run?.includes('bun install'));
+    assert.ok(job.steps.indexOf(restoreOf(job))<firstInstall);
+    assert.ok(job.steps[firstInstall].run.includes('--frozen-lockfile'));
+  }
+  const save=quality.steps.find(step=>step.uses==='actions/cache/save@v6.1.0'&&step.with.path===restore.with.path);
+  assert.equal(save.with.key,'${{ steps.bun-cache.outputs.cache-primary-key }}');
+  assert.equal(save.if,"github.repository == 'oDestroyeRo/openrayrag' && github.ref == 'refs/heads/main' && steps.bun-cache.outputs.cache-hit != 'true'");
+  assert.ok(quality.steps.indexOf(save)>quality.steps.findIndex(step=>step.run?.includes('bun run check')));
+  for(const job of Object.values(release.jobs))assert.ok(!job.steps.some(step=>step.uses?.startsWith('actions/cache/save@')));
+});
+
+test('Tauri tool reuse stays within platform and locked tool versions and still builds and smokes on misses',()=>{
+  const quality=workflow.jobs.quality,releaseJob=release.jobs['release-platforms'];
+  const restore=quality.steps.find(step=>step.id==='tauri-cache');
+  assert.equal(restore.if,"matrix.platform != 'macos'");
+  assert.equal(restore.uses,'actions/cache/restore@v6.1.0');
+  assert.equal(restore.with.path,'~/.cache/tauri\n~/AppData/Local/tauri\n');
+  assert.equal(restore.with.key,"tauri-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'src-tauri/Cargo.lock') }}");
+  assert.equal(restore.with['restore-keys'],undefined);
+  assert.notEqual(restore.with['fail-on-cache-miss'],true);
+  assert.notEqual(restore.with.enableCrossOsArchive,true);
+  assert.deepEqual(releaseJob.steps.find(step=>step.id==='tauri-cache').with,restore.with);
+  for(const job of [quality,releaseJob]){
+    const build=job.steps.find(step=>step.run?.includes('ci-platform.mjs build'));
+    assert.ok(job.steps.indexOf(job.steps.find(step=>step.id==='tauri-cache'))<job.steps.indexOf(build));
+    assert.ok(!(build.if??'').includes('cache-hit'));
+  }
+  const save=quality.steps.find(step=>step.uses==='actions/cache/save@v6.1.0'&&step.with.key.includes('tauri-cache'));
+  assert.equal(save.with.path,restore.with.path);
+  assert.equal(save.with.key,'${{ steps.tauri-cache.outputs.cache-primary-key }}');
+  assert.equal(save.if,"matrix.platform != 'macos' && github.repository == 'oDestroyeRo/openrayrag' && github.ref == 'refs/heads/main' && steps.tauri-cache.outputs.cache-hit != 'true'");
+  for(const smoke of quality.steps.filter(step=>step.run?.includes('--smoke')))
+    assert.ok(quality.steps.indexOf(save)>quality.steps.indexOf(smoke));
+});
+
 test('aggregate cannot report success after failed, cancelled, skipped or missing lanes',()=>{
   const gate=workflow.jobs.verify;
   assert.equal(gate.name,'CI / required');assert.deepEqual(gate.needs,['quality','security']);assert.equal(gate.if,'always()');

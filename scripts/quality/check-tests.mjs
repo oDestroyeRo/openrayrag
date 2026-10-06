@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { Writable } from 'node:stream';
 import { verificationPlan, invocation, executePlan } from './check.mjs';
 import { ProcessExecutionError, runLoggedProcess } from '../shared/process-diagnostics.mjs';
@@ -41,6 +41,8 @@ test('platform-specific checks remain explicit, and Bun uses its shell-free exec
     const plan = await verificationPlan(platform);
     const glib = plan.find(step => step.args[0] === 'vendor/glib/verify.py');
     assert.equal(glib.args.includes('--test'), platform === 'linux');
+    assert.equal(glib.cargoTargetDirectory, platform === 'linux' ? 'src-tauri/target' : undefined);
+    assert.ok(plan.every(step => step === glib || step.cargoTargetDirectory === undefined));
     assert.equal(plan.some(step => step.args.includes('release_test.py')), platform === 'darwin');
   }
   const command = invocation({ tool: 'bun', args: ['install', '--frozen-lockfile'] }, {}, 'win32');
@@ -49,6 +51,23 @@ test('platform-specific checks remain explicit, and Bun uses its shell-free exec
   assert.equal(invocation({ tool: 'python', args: [] }, {}, 'win32').file, 'python');
   const config = Bun.TOML.parse(await readFile(new URL('../../bunfig.toml', import.meta.url), 'utf8'));
   assert.equal(config.run.bun, true);
+});
+
+test('GLib dependency reuse resolves against the checkout without changing later steps or explicit caller targets', async () => {
+  const plan = await verificationPlan('linux');
+  const glib = plan.find(step => step.report === 'glib.log');
+  const native = plan.find(step => step.report === 'native.log');
+  const directory = resolve(tmpdir(), 'rayrag-target-fixture');
+  for (const inherited of [undefined, '/caller/target']) {
+    const env = inherited === undefined ? {} : { CARGO_TARGET_DIR: inherited };
+    const before = { ...env }, observed = [];
+    await executePlan([glib, native], async (_file, _args, options) => {
+      observed.push(options.env.CARGO_TARGET_DIR);
+      assert.equal(options.env.PYTHONDONTWRITEBYTECODE, '1');
+    }, directory, env);
+    assert.deepEqual(observed, [inherited ?? join(directory, 'src-tauri', 'target'), inherited]);
+    assert.deepEqual(env, before);
+  }
 });
 
 test('verification stops at the first failure and retains the failing step report', async () => {
