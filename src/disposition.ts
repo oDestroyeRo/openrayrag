@@ -1,5 +1,5 @@
-import { itemId as domainItemId } from './domain-values';
-import type { ReadonlyData } from './settings';
+import { itemId as domainItemId, bagId as domainBagId, quantity as domainQuantity, regularItemBagId,
+  type ItemId, type BagId, type Quantity } from './domain-values';
 import { inventoryItemCount, inventoryItemDraft } from './character-state-logic';
 import { sort } from 'remeda';
 import type { InventoryItemInput as InventoryItem } from './protocol-feature';
@@ -16,6 +16,12 @@ export interface DispositionRule {
   allowUnique: boolean;
 }
 export interface DispositionPolicy { maxSpend: number; rules: DispositionRule[] }
+/** Decision views retain admitted units while permitting local rule selection. */
+export type DispositionRuleView = Readonly<Omit<DispositionRule, 'itemId' | 'keep' | 'minimum' | 'desired' | 'maximum'>
+  & { itemId: ItemId; keep: Quantity; minimum: Quantity; desired: Quantity; maximum: Quantity }>;
+export interface DispositionPolicyView { readonly maxSpend: Quantity; readonly rules: readonly DispositionRuleView[] }
+declare class DispositionAdmission { private readonly dispositionAdmission: void }
+export type ValidatedDispositionPolicy = DispositionPolicyView & DispositionAdmission;
 export const DEFAULT_DISPOSITION: DispositionPolicy = { maxSpend: 0, rules: [] };
 export type ContainerName = 'inventory' | 'storage' | 'cart';
 export interface DispositionContainer {
@@ -42,13 +48,13 @@ export interface DispositionContext {
 }
 export interface DispositionAction {
   kind: 'store' | 'cart' | 'sell' | 'withdraw' | 'uncart' | 'buy';
-  itemId: number; count: number; from: ContainerName | 'shop'; to: ContainerName | 'shop';
-  bagId?: number; uniqueId?: string;
+  itemId: ItemId; count: Quantity; from: ContainerName | 'shop'; to: ContainerName | 'shop';
+  bagId?: BagId; uniqueId?: string;
   command: WorldAction;
   estimatedCost: number; reservedSpend: number; estimatedProceeds: number;
 }
-export interface DispositionProtection { container: ContainerName; itemId: number; bagId: number; count: number; reason: string }
-export interface DispositionTarget { itemId: number; count: number; kind: 'shortage' | 'excess'; reasons: string[] }
+export interface DispositionProtection { container: ContainerName; itemId: ItemId; bagId: BagId; count: Quantity; reason: string }
+export interface DispositionTarget { itemId: ItemId; count: Quantity; kind: 'shortage' | 'excess'; reasons: string[] }
 export interface DispositionPlan {
   binding: { revision: string; fingerprint: string };
   actions: DispositionAction[]; protections: DispositionProtection[];
@@ -65,7 +71,7 @@ function integer(value: unknown, min: number, max: number): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) throw new Error('Invalid disposition quantity or identifier.');
   return value;
 }
-export function validateDispositionPolicy(input: unknown): DispositionPolicy {
+export function validateDispositionPolicy(input: unknown): ValidatedDispositionPolicy {
   const policy = object(input, ['maxSpend', 'rules']);
   const maxSpend = integer(policy.maxSpend, 0, 2_000_000_000);
   if (!Array.isArray(policy.rules) || policy.rules.length > 128) throw new Error('Keep at most 128 disposition rules.');
@@ -81,8 +87,12 @@ export function validateDispositionPolicy(input: unknown): DispositionPolicy {
       cart: row.cart as boolean, restock: row.restock as DispositionRule['restock'], allowUnique: row.allowUnique as boolean };
   });
   if (new Set(rules.map(row => row.itemId)).size !== rules.length) throw new Error('Conflicting disposition rules for the same item.');
-  return { maxSpend, rules };
+  // Brand only after all original ordered checks, including aggregate conflicts.
+  return { maxSpend: domainQuantity(maxSpend), rules: rules.map(rule => ({ ...rule,
+    itemId: domainItemId(rule.itemId), keep: domainQuantity(rule.keep), minimum: domainQuantity(rule.minimum),
+    desired: domainQuantity(rule.desired), maximum: domainQuantity(rule.maximum) })) } as unknown as ValidatedDispositionPolicy;
 }
+export const VALIDATED_DEFAULT_DISPOSITION = validateDispositionPolicy(DEFAULT_DISPOSITION);
 
 const names: ContainerName[] = ['inventory', 'storage', 'cart'];
 const safeNumber = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 2_147_483_647;
@@ -92,8 +102,8 @@ function canonical(value: unknown): string {
   if (value && typeof value === 'object') return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
   return JSON.stringify(value) ?? 'null';
 }
-function fingerprint(policy: ReadonlyData<DispositionPolicy>, context: DispositionContext): string {
-  const ids = new Set(policy.rules.map(row => row.itemId));
+function fingerprint(policy: DispositionPolicyView, context: DispositionContext): string {
+  const ids = new Set<number>(policy.rules.map(row => row.itemId));
   for (const name of names) for (const item of context.containers[name].items ?? []) ids.add(item.itemId);
   const metadata = Object.fromEntries([...ids].sort((a, b) => a - b).map(id => [id, context.metadata[id] ?? null]));
   return canonical({ policy: { ...policy, rules: sort(policy.rules, (a, b) => a.itemId - b.itemId) },
@@ -119,7 +129,9 @@ function cloneWorld(world: WorkflowWorld): WorkflowWorld {
 
 /** Pure suggestion only: no sender, RPC, timer, or executor is accepted here. */
 export function planDisposition(input: unknown, context: DispositionContext): DispositionPlan {
-  const policy = validateDispositionPolicy(input);
+  return planAdmittedDisposition(validateDispositionPolicy(input), context);
+}
+export function planAdmittedDisposition(policy: ValidatedDispositionPolicy, context: DispositionContext): DispositionPlan {
   const plan: DispositionPlan = { binding: { revision: context.revision, fingerprint: fingerprint(policy, context) },
     actions: [], protections: [], unmet: [], blocked: [], estimatedCost: 0, reservedSpend: 0, estimatedProceeds: 0 };
   const fail = (message: string) => { if (!plan.blocked.includes(message)) plan.blocked.push(message); };
@@ -141,7 +153,7 @@ export function planDisposition(input: unknown, context: DispositionContext): Di
   const workflow = (): WorkflowContext => ({ ...context.workflow, world, zeny,
     inventory: containers.inventory.items!, equipped: [...context.equipment!, context.ammoId!],
     itemCatalog: Object.fromEntries(Object.entries(context.metadata).map(([id, item]) => [id, { sellPrice: item.sellPrice ?? -1, itemClass: item.itemClass }])) });
-  const protection = (item: InventoryItem, name: ContainerName, rule?: DispositionRule): string | null => {
+  const protection = (item: InventoryItem, name: ContainerName, rule?: DispositionRuleView): string | null => {
     if (name === 'inventory' && context.equipment!.includes(item.bagId)) return 'Equipped item';
     if (name === 'inventory' && context.ammoId === item.bagId) return 'Selected ammunition';
     if (context.workflow.protectedItemIds?.includes(item.itemId)) return 'Protected by transaction policy';
@@ -160,9 +172,9 @@ export function planDisposition(input: unknown, context: DispositionContext): Di
   const rules = sort(policy.rules, (a, b) => a.itemId - b.itemId);
   for (const name of names) for (const item of ordered(containers[name].items ?? [])) {
     const reason = protection(item, name, rules.find(row => row.itemId === item.itemId));
-    if (reason) plan.protections.push({ container: name, itemId: item.itemId, bagId: item.bagId, count: item.count, reason });
+    if (reason) plan.protections.push({ container: name, itemId: domainItemId(item.itemId), bagId: domainBagId(item.bagId), count: domainQuantity(item.count), reason });
   }
-  const count = (itemId: number) => inventoryItemCount(domainItemId(itemId))(containers.inventory.items!);
+  const count = (itemId: ItemId) => inventoryItemCount(itemId)(containers.inventory.items!);
   function capacity(item: InventoryItem, destination: ContainerName, requested: number, buy: boolean): { count: number; reason?: string } {
     const target = containers[destination]; const info = context.metadata[item.itemId];
     if (target.items === null) return { count: 0, reason: `${destination} stock is not observed.` };
@@ -199,7 +211,7 @@ export function planDisposition(input: unknown, context: DispositionContext): Di
     world.storage.clear(); for (const row of containers.storage.items ?? []) world.storage.set(row.bagId, row);
     world.cart.clear(); for (const row of containers.cart.items ?? []) world.cart.set(row.bagId, row);
   }
-  function suggest(rule: DispositionRule, item: InventoryItem, kind: DispositionAction['kind'], requested: number): { count: number; reasons: string[] } {
+  function suggest(rule: DispositionRuleView, item: InventoryItem, kind: DispositionAction['kind'], requested: number): { count: number; reasons: string[] } {
     const info = context.metadata[item.itemId]; const reasons: string[] = [];
     const from: DispositionAction['from'] = kind === 'buy' ? 'shop' : kind === 'withdraw' ? 'storage' : kind === 'uncart' ? 'cart' : 'inventory';
     const to: DispositionAction['to'] = kind === 'sell' ? 'shop' : kind === 'store' ? 'storage' : kind === 'cart' ? 'cart' : 'inventory';
@@ -232,7 +244,7 @@ export function planDisposition(input: unknown, context: DispositionContext): Di
     }
     const action = command(quantity); const blockers = worldActionBlockers(action, workflow());
     if (blockers.length) return { count: 0, reasons: [...reasons, ...blockers] };
-    plan.actions.push({ kind, itemId: item.itemId, count: quantity, from, to, ...(from === 'shop' ? {} : { bagId: item.bagId }),
+    plan.actions.push({ kind, itemId: domainItemId(item.itemId), count: domainQuantity(quantity), from, to, ...(from === 'shop' ? {} : { bagId: domainBagId(item.bagId) }),
       ...(item.type === 2 ? { uniqueId: item.guid } : {}), command: action, estimatedCost: cost, reservedSpend: reserved, estimatedProceeds: proceeds });
     zeny += proceeds - cost; conservativeZeny += proceeds - reserved;
     plan.estimatedCost += cost; plan.reservedSpend += reserved; plan.estimatedProceeds += proceeds;
@@ -244,7 +256,7 @@ export function planDisposition(input: unknown, context: DispositionContext): Di
     const stockFloor = Math.max(rule.keep, ...context.minimumStock?.filter(row => row.itemId === rule.itemId).map(row => row.count) ?? []);
     const protectedExcess = Math.min(Math.max(0, carried - rule.maximum), Math.max(0, stockFloor - rule.maximum));
     let remaining = Math.max(0, carried - Math.max(rule.maximum, stockFloor)); const reasons: string[] = [];
-    if (protectedExcess) plan.unmet.push({ itemId: rule.itemId, count: protectedExcess, kind: 'excess', reasons: ['Protected stock floor takes precedence over the maximum target.'] });
+    if (protectedExcess) plan.unmet.push({ itemId: rule.itemId, count: domainQuantity(protectedExcess), kind: 'excess', reasons: ['Protected stock floor takes precedence over the maximum target.'] });
     if (remaining > 0) {
       const options = (['store', 'cart', 'sell'] as const).filter(kind => rule[kind]);
       if (!options.length) reasons.push('No excess disposition is permitted; preserve.');
@@ -256,12 +268,12 @@ export function planDisposition(input: unknown, context: DispositionContext): Di
         // Unknown preferred prerequisites cannot authorize a destructive fallback.
         if (remaining && reasons.some(reason => /unknown|unavailable|not observed|required|not open|not ready|confirmed/i.test(reason))) break;
       }
-      if (remaining) plan.unmet.push({ itemId: rule.itemId, count: remaining, kind: 'excess', reasons: [...new Set(reasons)] });
+      if (remaining) plan.unmet.push({ itemId: rule.itemId, count: domainQuantity(remaining), kind: 'excess', reasons: [...new Set(reasons)] });
     } else if (carried < rule.minimum) {
       remaining = rule.desired - carried;
       if (rule.restock === 'off') reasons.push('Restocking is disabled.');
       else if (rule.restock === 'buy') {
-        const result = suggest(rule, { bagId: rule.itemId, itemId: rule.itemId, count: remaining, type: 1 }, 'buy', remaining);
+        const result = suggest(rule, { bagId: regularItemBagId(rule.itemId), itemId: rule.itemId, count: remaining, type: 1 }, 'buy', remaining);
         remaining -= result.count; reasons.push(...result.reasons);
       } else {
         const source = containers[rule.restock];
@@ -273,7 +285,7 @@ export function planDisposition(input: unknown, context: DispositionContext): Di
         }
         if (remaining && !reasons.length) reasons.push(`Insufficient ${rule.restock} stock.`);
       }
-      if (remaining) plan.unmet.push({ itemId: rule.itemId, count: remaining, kind: 'shortage', reasons: [...new Set(reasons)] });
+      if (remaining) plan.unmet.push({ itemId: rule.itemId, count: domainQuantity(remaining), kind: 'shortage', reasons: [...new Set(reasons)] });
     }
   }
   for (const target of plan.unmet) for (const reason of target.reasons) fail(`Item #${target.itemId}: ${reason}`);

@@ -35,7 +35,7 @@ describe('disposition policy boundaries', () => {
   it('preserves legacy/default items and validates detached policies', () => {
     const ctx = context(); const result = planDisposition(DEFAULT_DISPOSITION, ctx);
     expect(result.actions).toEqual([]); expect(result.protections[0]?.reason).toContain('No disposition rule');
-    const original = policy(); const parsed = validateDispositionPolicy(original); parsed.rules[0]!.keep = 0; expect(original.rules[0]!.keep).toBe(2);
+    const original = policy(); const parsed = validateDispositionPolicy(original); original.rules[0]!.keep = 0; expect(parsed.rules[0]!.keep).toBe(2);
   });
   it.each([
     { keep: 4 }, { minimum: 6 }, { desired: 7 }, { maximum: 32768 }, { itemId: 0 }, { maximum: 0.5 },

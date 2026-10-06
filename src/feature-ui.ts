@@ -16,7 +16,7 @@ import { SocialUi } from './social-ui';
 import { MemoUi } from './memo-ui';
 import { WarpUi } from './warp-ui';
 import { type ActorObservationSnapshot } from './actor-observations';
-import { DEFAULT_AUTOMATION, DEFAULT_RETREAT, DEFAULT_PARTY_HEAL, validateAutomation, automationDraft, settingsDraft, type AutomationSettings, type AutomationSettingsInput, type ValidatedAutomationSettings, type SettingsInput } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_RETREAT, DEFAULT_PARTY_HEAL, validateAutomation, automationDraft, type AutomationSettings, type AutomationSettingsInput, type ValidatedAutomationSettings, type SettingsInput } from './settings';
 import { MAX_PROFILES, ProfileStore } from './profiles';
 import { ITEM_CATALOG, SKILL_CATALOG, itemName } from './game-catalog';
 import { validateWorkflowSpec } from './workflows';
@@ -335,7 +335,7 @@ export class FeatureUi {
     const output=document.createElement('div');output.id='supply-preview';output.className='telemetry-summary';output.setAttribute('role','status');output.textContent='Supply trips are off by default. Choose protected stock rules and verified services.';
     button.addEventListener('click',()=>{try{
       const a=this.read(),disposition={...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(a)},p=object(this.status.player);
-      output.textContent=previewSupplyTrip(settingsDraft({...this.hooks.settings(),automation:a}),{character:text(p.name),epoch:text(this.status.sessionId),map:text(this.status.map),position:typeof p.x==='number'&&typeof p.y==='number'?{x:Math.floor(p.x),y:Math.floor(p.y)}:null,
+      output.textContent=previewSupplyTrip({...this.hooks.settings(),automation:a},{character:text(p.name),epoch:text(this.status.sessionId),map:text(this.status.map),position:typeof p.x==='number'&&typeof p.y==='number'?{x:Math.floor(p.x),y:Math.floor(p.y)}:null,
         connected:this.status.connected===true,alive:p.dead===false,fresh:true,settled:disposition.workflow.idle,canPrepare:false,fieldRequested:false,inventoryRevision:0,currencyRevision:0,economicUncertain:false,disposition});
     }catch(error){output.textContent=error instanceof Error?error.message:'Invalid supply settings.';}});
     panel.append(button,output);this.note('travel','Supply trips use your protected stock rules. Each shop batch opens a fresh verified service. Stop, manual input, death or an uncertain transaction pauses the trip and prevents automatic field resume. The captured return map and cell appear in status.');

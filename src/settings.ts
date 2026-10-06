@@ -3,7 +3,7 @@ import { validateHpPotions, type HpPotionSettings } from './hp-potions';
 import { validateRecoveryItems, type RecoveryItemSettings } from './recovery-items';
 import type { Position } from './protocol';
 import { validActorConditions, type ActorPredicate } from './actor-observations-logic';
-import { validateDispositionPolicy, type DispositionPolicy } from './disposition';
+import { validateDispositionPolicy, type DispositionPolicy, type ValidatedDispositionPolicy } from './disposition';
 import { validateSupplySettings, type SupplySettings } from './supply-trip-logic';
 import { itemId, skillId, speciesId, quantity, percentage, seconds, minutes, mapCode,
   type ItemId, type SkillId, type SpeciesId, type Quantity, type Percentage, type Seconds, type Minutes, type MapCode } from './domain-values';
@@ -76,7 +76,8 @@ type DomainRecoveryItems = Omit<RecoveryItemSettings, 'itemIds' | 'belowPercent'
 type DomainAttackStrategy = Omit<AttackStrategyRule, 'speciesIds' | 'skillId' | 'maxAttempts' | 'maxUses' | 'cooldownSeconds'>
   & { speciesIds: SpeciesId[]; skillId: SkillId & (11 | 12 | 16); maxAttempts: Quantity; maxUses: Quantity; cooldownSeconds: Seconds };
 type DomainAutomation = Omit<AutomationSettings, 'loadout' | 'combat' | 'loot' | 'recovery' | 'escape' | 'items'
-  | 'hpPotions' | 'spPotions' | 'skills' | 'equipment' | 'attackStrategies' | 'allocation' | 'follow' | 'travel' | 'limits' | 'partyHeal'> & {
+  | 'hpPotions' | 'spPotions' | 'skills' | 'equipment' | 'attackStrategies' | 'allocation' | 'follow' | 'travel' | 'limits' | 'partyHeal' | 'disposition'> & {
+  disposition?: ValidatedDispositionPolicy;
   loadout: Omit<LoadoutSettings, 'minAmmoStock' | 'ammoPreferences' | 'cooldownSeconds'>
     & { minAmmoStock: Quantity; ammoPreferences: { itemId: ItemId }[]; cooldownSeconds: Seconds };
   combat: Omit<AutomationSettings['combat'], 'rules'> & { rules: (Omit<MonsterRule, 'classId'> & { classId: SpeciesId })[] };
@@ -100,7 +101,8 @@ type DomainAutomation = Omit<AutomationSettings, 'loadout' | 'combat' | 'loot' |
 // copy must pass aggregate admission again without changing the JSON model.
 declare class AutomationAdmission { private readonly automationAdmission: void }
 /** Read-only decision view supports safe field filtering without claiming aggregate admission. */
-export type AutomationPolicy = ReadonlyData<DomainAutomation>;
+export type AutomationPolicy = ReadonlyData<Omit<DomainAutomation,'disposition'>>
+  & {readonly disposition?:ValidatedDispositionPolicy};
 export type ValidatedAutomationSettings = AutomationPolicy & AutomationAdmission;
 type DomainSettings = Omit<Settings, 'map' | 'targets' | 'minHpPercent' | 'route_randomWalk_maxRouteTime' | 'attackMaxRouteTime' | 'automation'>
   & { map: MapCode | ''; targets: SpeciesId[]; minHpPercent: Percentage;
@@ -152,6 +154,7 @@ export function validateRetreat(value:RetreatSettings):RetreatSettings {
   return {...value};
 }
 export function validateAutomation(a: AutomationSettingsInput): ValidatedAutomationSettings {
+  let disposition: ValidatedDispositionPolicy | undefined;
   try {
     strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies','mapPolicy','partyHeal','retreat','hpPotions','spPotions']);
     if(Object.hasOwn(a,'partyHeal')) {
@@ -171,7 +174,7 @@ export function validateAutomation(a: AutomationSettingsInput): ValidatedAutomat
       || Object.hasOwn(escape,'threatWindowSeconds') && !bounded(escape.threatWindowSeconds!,1,60)) throw new Error();
     if (typeof escape.enabled !== 'boolean' || !bounded(escape.hpBelowPercent,1,95) || !['random','save'].includes(escape.mode)
       || !['item','skill'].includes(escape.method) || !bounded(escape.minStock,0,9999) || !bounded(escape.cooldownSeconds,1,3600)) throw new Error();
-    if (Object.hasOwn(a,'disposition')) validateDispositionPolicy(a.disposition);
+    if (Object.hasOwn(a,'disposition')) disposition = validateDispositionPolicy(a.disposition);
     if(Object.hasOwn(a,'attackStrategies')) {
       if(!Array.isArray(a.attackStrategies)||a.attackStrategies.length>32||new Set(a.attackStrategies.map(r=>r.id)).size!==a.attackStrategies.length)throw new Error();
       for(const r of a.attackStrategies){
@@ -222,7 +225,7 @@ export function validateAutomation(a: AutomationSettingsInput): ValidatedAutomat
       || !bounded(a.limits.weightPercent,0,100) || typeof a.respawn.enabled !== 'boolean' || !bounded(a.respawn.maxDeaths,0,100)
       || typeof a.schedule.enabled !== 'boolean' || !bounded(a.schedule.startHour,0,23) || !bounded(a.schedule.endHour,0,23)) throw new Error();
   } catch { throw new Error('Invalid automation settings. Check rules, recovery thresholds and session limits.'); }
-  return admitAutomation(structuredClone({ ...a, escape: a.escape ?? DEFAULT_ESCAPE }));
+  return admitAutomation(structuredClone({ ...a, escape: a.escape ?? DEFAULT_ESCAPE }), disposition);
 }
 function admitRecoveryItems(value: ReadonlyData<RecoveryItemSettings>): DomainRecoveryItems {
   return { ...value, itemIds: value.itemIds.map(value => itemId(value)), belowPercent: percentage(value.belowPercent),
@@ -234,9 +237,10 @@ function admitEscape(value: ReadonlyData<EscapeSettings>): ReadonlyData<DomainEs
     cooldownSeconds: seconds(value.cooldownSeconds), ...(threatWindowSeconds !== undefined ? { threatWindowSeconds: seconds(threatWindowSeconds) } : {}) };
 }
 /** Called only after the original ordered schema checks have all succeeded. */
-function admitAutomation(a: AutomationSettingsInput): ValidatedAutomationSettings {
-  const { escape, hpPotions, spPotions, attackStrategies, partyHeal, ...base } = a;
-  const domain: ReadonlyData<DomainAutomation> = { ...base,
+function admitAutomation(a: AutomationSettingsInput, disposition: ValidatedDispositionPolicy | undefined): ValidatedAutomationSettings {
+  const { escape, hpPotions, spPotions, attackStrategies, partyHeal, disposition: _rawDisposition, ...base } = a;
+  const domain: AutomationPolicy = { ...base,
+    ...(disposition ? { disposition } : {}),
     loadout: { ...a.loadout, minAmmoStock: quantity(a.loadout.minAmmoStock), cooldownSeconds: seconds(a.loadout.cooldownSeconds),
       ammoPreferences: a.loadout.ammoPreferences.map(row => ({ itemId: itemId(row.itemId) })) },
     combat: { ...a.combat, rules: a.combat.rules.map(rule => ({ ...rule, classId: speciesId(rule.classId) })) },

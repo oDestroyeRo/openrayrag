@@ -1,9 +1,8 @@
-import type { Revision } from './domain-values';
-import { itemId as domainItemId } from './domain-values';
+import type { Revision, ItemId, Quantity } from './domain-values';
 import { inventoryItemCount } from './character-state-logic';
 import type { Position } from './protocol';
-import type { SettingsInput as Settings } from './settings';
-import type { DispositionAction, DispositionContext, DispositionPolicy } from './disposition';
+import type { SettingsInput as Settings, AutomationSettingsInput } from './settings';
+import type { DispositionAction, DispositionContext, DispositionPolicyView, ValidatedDispositionPolicy } from './disposition';
 export interface SupplySettings {
   enabled: boolean;
   stockEnabled: boolean;
@@ -37,9 +36,12 @@ export const DEFAULT_SUPPLY: SupplySettings = {
 };
 
 export interface SupplyGoal {
-  itemId: number;
-  desired: number;
+  readonly itemId: ItemId;
+  readonly desired: Quantity;
 }
+/** Supply validates its own limits; disposition has already passed settings admission. */
+export type SupplyPolicySettings = Omit<Settings,'automation'> & {readonly automation?:
+  Omit<AutomationSettingsInput,'disposition'> & {readonly disposition?:ValidatedDispositionPolicy}};
 
 export interface SupplyContext {
   character: string;
@@ -69,8 +71,8 @@ export type SupplyNext =
 export interface SupplyPorts<Receipt> {
   next(
     context: SupplyContext,
-    goals: SupplyGoal[],
-    policy: DispositionPolicy,
+    goals: readonly SupplyGoal[],
+    policy: DispositionPolicyView,
     remainingBudget: number,
   ): SupplyNext;
   confirm(receipt: Receipt, context: SupplyContext): boolean;
@@ -219,6 +221,6 @@ export function validateSupplyResumeGuard(input: unknown): SupplyResumeGuard {
   return structuredClone(value) as unknown as SupplyResumeGuard;
 }
 
-export const count = (context: SupplyContext, id: number) =>
+export const count = (context: SupplyContext, id: ItemId) =>
   context.disposition.containers.inventory.items == null ? null
-    : inventoryItemCount(domainItemId(id))(context.disposition.containers.inventory.items);
+    : inventoryItemCount(id)(context.disposition.containers.inventory.items);

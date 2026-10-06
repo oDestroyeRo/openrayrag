@@ -1197,7 +1197,7 @@ export class CompanionController {
         if(this.supply.uncertain)return true;
         const action=intent.action.command;
         // Recompute immediately before creating a workflow or transport receipt.
-        const next=nextSupplyAction(context,this.supply.snapshot().goals,{...this.requestedSettings!.automation!.disposition!,maxSpend:Math.min(this.requestedSettings!.automation!.disposition!.maxSpend,Math.max(0,this.requestedSettings!.automation!.supply!.maxSpend-this.supply.snapshot().reserved+intent.action.reservedSpend)),
+        const next=nextSupplyAction(context,this.supply.snapshot().goals,{...this.requestedSettings!.automation!.disposition!,maxSpend:quantity(Math.min(this.requestedSettings!.automation!.disposition!.maxSpend,Math.max(0,this.requestedSettings!.automation!.supply!.maxSpend-this.supply.snapshot().reserved+intent.action.reservedSpend))),
           rules:this.requestedSettings!.automation!.disposition!.rules.map(rule=>{const goal=this.supply.snapshot().goals.find(goal=>goal.itemId===rule.itemId);return goal?{...rule,minimum:goal.desired,desired:goal.desired}:rule;})},this.requestedSettings!.automation!.supply!,{storageFull:this.supplyStorageFull});
         if(next.type!=='action'||JSON.stringify(next.action)!==JSON.stringify(intent.action))throw new Error('Supply stock, price or prerequisites changed before dispatch.');
         let economic:WorkflowReceipt;

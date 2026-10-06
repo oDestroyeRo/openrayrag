@@ -85,7 +85,7 @@ export function confirmSupplyReceipt(
     expectedBags.set(id, quantity((expectedBags.get(id) ?? 0) + delta));
   if (a.to === "inventory") {
     if (a.kind === "buy" || receipt.source?.type === 1)
-      expectedBags.set(regularItemBagId(itemId(a.itemId)), quantity((expectedBags.get(regularItemBagId(itemId(a.itemId))) ?? 0) + a.count));
+      expectedBags.set(regularItemBagId(a.itemId), quantity((expectedBags.get(regularItemBagId(a.itemId)) ?? 0) + a.count));
     else if (receipt.source?.type === 2) {
       const incoming = context.disposition.containers.inventory.items.filter(
         (item) => sameSupplyItem(item, receipt.source!),
