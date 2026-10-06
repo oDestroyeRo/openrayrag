@@ -61,8 +61,11 @@ function typeContracts(raw: Settings, rawAutomation: AutomationSettings, form: V
   acceptsForm(run);
   // @ts-expect-error A spread removes aggregate admission even if branded scalar fields are unchanged.
   acceptsForm({...form});
+  const invalidAutomation={...automation,recovery:{...automation.recovery,hpStart:percentage(90),hpEnd:percentage(50)}};
   // @ts-expect-error A cross-field invalid edit must pass the aggregate parser again.
-  acceptsAutomation({...automation,recovery:{...automation.recovery,hpStart:percentage(90),hpEnd:percentage(50)}});
+  acceptsAutomation(invalidAutomation);
+  // @ts-expect-error The real helper cannot manufacture aggregate admission from an edited structural copy.
+  acceptsAutomation(automationSettings({automation:invalidAutomation}));
   // @ts-expect-error Scalar structure alone does not establish automation admission.
   acceptsAutomation(rawAutomation);
   const structural: AutomationSettingsInput = automation;

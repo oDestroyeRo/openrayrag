@@ -99,13 +99,16 @@ type DomainAutomation = Omit<AutomationSettings, 'loadout' | 'combat' | 'loot' |
 // Erased private fields disappear from object spreads, so an edited structural
 // copy must pass aggregate admission again without changing the JSON model.
 declare class AutomationAdmission { private readonly automationAdmission: void }
-export type ValidatedAutomationSettings = ReadonlyData<DomainAutomation> & AutomationAdmission;
+/** Read-only decision view supports safe field filtering without claiming aggregate admission. */
+export type AutomationPolicy = ReadonlyData<DomainAutomation>;
+export type ValidatedAutomationSettings = AutomationPolicy & AutomationAdmission;
 type DomainSettings = Omit<Settings, 'map' | 'targets' | 'minHpPercent' | 'route_randomWalk_maxRouteTime' | 'attackMaxRouteTime' | 'automation'>
   & { map: MapCode | ''; targets: SpeciesId[]; minHpPercent: Percentage;
     route_randomWalk_maxRouteTime: Seconds; attackMaxRouteTime: Seconds; automation?: ValidatedAutomationSettings };
 declare class FormAdmission { private readonly formAdmission: void }
 declare class RunAdmission { private readonly runAdmission: void }
-export type ValidatedFormSettings = ReadonlyData<DomainSettings> & FormAdmission;
+export type ValidatedFormSettings = ReadonlyData<Omit<DomainSettings,'automation'>>
+  & {readonly automation?:ValidatedAutomationSettings} & FormAdmission;
 export type RunSettings = ValidatedFormSettings & RunAdmission;
 
 /** Mutable editor projections are detached; admitted models remain read-only. */
