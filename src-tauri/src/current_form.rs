@@ -1,61 +1,14 @@
 //! Settings-only persistence. Credentials and running intent are not part of this schema.
-use crate::{automation::Settings, login::local_store as file};
-use serde::{Deserialize, Serialize};
+pub(crate) use crate::current_form_logic::FormDocument;
+use crate::{
+    current_form_logic::{encode, matches_encoded, parse, validate_revision, ERROR, MAX_BYTES},
+    login::local_store as file,
+};
 use std::{
     fs::File,
     io::{Read, Write},
     path::PathBuf,
 };
-const MAX_BYTES: u64 = 256_000;
-const ERROR: &str = "Current settings could not be saved or restored. Updates will wait.";
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct FormDocument {
-    pub version: u8,
-    pub revision: u64,
-    #[serde(deserialize_with = "required_profile_id")]
-    pub selected_profile_id: Option<String>,
-    pub settings: Settings,
-}
-fn required_profile_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-    Option::<String>::deserialize(d)
-}
-impl FormDocument {
-    pub fn validate(&self) -> Result<(), String> {
-        if self.version != 1
-            || self.revision > 9_007_199_254_740_991
-            || self.selected_profile_id.as_ref().is_some_and(|id| {
-                id.is_empty()
-                    || id.len() > 64
-                    || !id
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-            })
-        {
-            return Err(ERROR.into());
-        }
-        self.settings.validate_form().map_err(|_| ERROR.into())
-    }
-}
-fn parse(bytes: &[u8]) -> Result<FormDocument, String> {
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(ERROR.into());
-    }
-    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| ERROR)?;
-    // The only prior schema lacked revision/profile metadata. Unknown keys still reject.
-    if value.get("version").and_then(|v| v.as_u64()) == Some(0) {
-        let o = value.as_object_mut().ok_or(ERROR)?;
-        if o.len() != 2 || !o.contains_key("settings") {
-            return Err(ERROR.into());
-        }
-        o.insert("version".into(), 1.into());
-        o.insert("revision".into(), 0.into());
-        o.insert("selectedProfileId".into(), serde_json::Value::Null);
-    }
-    let d: FormDocument = serde_json::from_value(value).map_err(|_| ERROR)?;
-    d.validate()?;
-    Ok(d)
-}
 fn read(directory: &File) -> Result<Option<FormDocument>, String> {
     let Some(mut f) = file::private_file(directory, "current.json").map_err(|_| ERROR)? else {
         return Ok(None);
@@ -78,21 +31,13 @@ pub(crate) fn load(app_data: PathBuf) -> Result<Option<FormDocument>, String> {
     }
 }
 pub(crate) fn save(app_data: PathBuf, d: &FormDocument) -> Result<(), String> {
-    d.validate()?;
-    let bytes = serde_json::to_vec(d).map_err(|_| ERROR)?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(ERROR.into());
-    }
+    let bytes = encode(d)?;
     let dir = file::LocalLoginStore::settings(app_data)
         .open_directory(true)
         .map_err(|_| ERROR)?
         .ok_or(ERROR)?;
     if let Some(old) = read(&dir)? {
-        if d.revision < old.revision
-            || d.revision == old.revision && serde_json::to_vec(&old).map_err(|_| ERROR)? != bytes
-        {
-            return Err(ERROR.into());
-        }
+        validate_revision(d, &old, &bytes)?;
     }
     file::private_file(&dir, "current.json").map_err(|_| ERROR)?;
     file::remove_private_file(&dir, ".current.tmp").map_err(|_| ERROR)?;
@@ -104,7 +49,7 @@ pub(crate) fn save(app_data: PathBuf, d: &FormDocument) -> Result<(), String> {
         file::rename_at(&dir, ".current.tmp", "current.json").map_err(|_| ERROR)?;
         file::sync_directory(&dir).map_err(|_| ERROR)?;
         let restored = read(&dir)?.ok_or(ERROR)?;
-        if serde_json::to_vec(&restored).map_err(|_| ERROR)? != bytes {
+        if !matches_encoded(&restored, &bytes)? {
             return Err(ERROR.into());
         }
         Ok(())
@@ -155,25 +100,6 @@ mod tests {
         assert_eq!(restored.selected_profile_id, form.selected_profile_id);
     }
     #[test]
-    fn document_excludes_credentials_and_intent() {
-        let d = document(0);
-        let mut v = serde_json::to_value(d).unwrap();
-        for key in [
-            "password",
-            "username",
-            "running",
-            "runRequested",
-            "refine",
-            "previewToken",
-            "refineReceipt",
-            "refineConfirmation",
-        ] {
-            v[key] = true.into();
-            assert!(parse(&serde_json::to_vec(&v).unwrap()).is_err());
-            v.as_object_mut().unwrap().remove(key);
-        }
-    }
-    #[test]
     fn bounded_corrupt_private_reads() {
         let t = tempfile::tempdir().unwrap();
         let p = t.path().canonicalize().unwrap();
@@ -185,14 +111,5 @@ mod tests {
         .unwrap();
         assert!(load(p.clone()).is_err());
         assert!(save(p, &document(1)).is_err());
-    }
-    #[test]
-    fn migration_has_no_running_intent() {
-        let d = document(0);
-        let v = serde_json::json!({"version":0,"settings":d.settings});
-        let x = parse(&serde_json::to_vec(&v).unwrap()).unwrap();
-        assert_eq!(x.version, 1);
-        assert_eq!(x.revision, 0);
-        assert!(x.selected_profile_id.is_none());
     }
 }

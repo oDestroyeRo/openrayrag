@@ -1,54 +1,19 @@
 //! Bounded signed archive validation and a same-volume replacement with rollback.
 //! This does not invoke the plugin's privileged macOS installer.
-use base64::{engine::general_purpose::STANDARD, Engine};
-use minisign_verify::{PublicKey, Signature};
+#[cfg(target_os = "macos")]
+use crate::update_install_logic::{self as policy, safe_path};
+pub(crate) use crate::update_install_logic::{verify, MAX_ARCHIVE};
 #[cfg(target_os = "macos")]
 use std::{
     fs,
     io::{self, Cursor, Read},
-    path::{Component, Path},
+    path::Path,
     process::Command,
 };
-pub(crate) const MAX_ARCHIVE: usize = 128 * 1024 * 1024;
 #[cfg(target_os = "macos")]
 const MAX_EXPANDED: u64 = 512 * 1024 * 1024;
 #[cfg(target_os = "macos")]
 const ERROR:&str="Automatic installation did not finish. Use the release download or the retained recovery bundle if needed.";
-pub(crate) fn verify(
-    bytes: &[u8],
-    signature: &str,
-    key: &str,
-    version: &str,
-) -> Result<(), String> {
-    if bytes.is_empty() || bytes.len() > MAX_ARCHIVE || signature.len() > 4096 {
-        return Err("Update signature is invalid.".into());
-    }
-    let check = || -> Option<()> {
-        let key = String::from_utf8(STANDARD.decode(key).ok()?).ok()?;
-        let sig = String::from_utf8(STANDARD.decode(signature).ok()?).ok()?;
-        let sig = Signature::decode(&sig).ok()?;
-        PublicKey::decode(&key)
-            .ok()?
-            .verify(bytes, &sig, true)
-            .ok()?;
-        let mut versions = sig
-            .trusted_comment()
-            .split('\t')
-            .filter_map(|s| s.strip_prefix("version:"));
-        if versions.next()? != version || versions.next().is_some() {
-            return None;
-        }
-        Some(())
-    };
-    check().ok_or_else(|| "Update signature or signed version is invalid.".into())
-}
-#[cfg(target_os = "macos")]
-fn safe_path(p: &Path) -> bool {
-    p.components().all(|c| matches!(c, Component::Normal(_)))
-        && p.components()
-            .next()
-            .is_some_and(|c| c.as_os_str() == "Rayrag Companion.app")
-}
 #[cfg(target_os = "macos")]
 fn extract(bytes: &[u8], directory: &Path) -> io::Result<()> {
     // Check raw records before tar internally buffers GNU/PAX metadata. Such
@@ -118,40 +83,24 @@ fn launchable(bundle: &Path) -> bool {
         .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o100 != 0)
 }
 #[cfg(target_os = "macos")]
+fn read_bundle_metadata(bundle: &Path) -> Option<plist::Value> {
+    policy::parse_plist(&fs::read(bundle.join("Contents/Info.plist")).ok()?)
+}
+#[cfg(target_os = "macos")]
 fn newer_than_installed(bundle: &Path, version: &str) -> bool {
-    let Some(installed) = plist::Value::from_file(bundle.join("Contents/Info.plist"))
-        .ok()
-        .and_then(|v| {
-            v.as_dictionary()?
-                .get("CFBundleShortVersionString")?
-                .as_string()
-                .map(str::to_owned)
-        })
+    let Some(installed) =
+        read_bundle_metadata(bundle).and_then(|v| policy::bundle_version(&v).map(str::to_owned))
     else {
         return false;
     };
-    let (Ok(candidate), Ok(current)) = (
-        semver::Version::parse(version),
-        semver::Version::parse(&installed),
-    ) else {
+    let Some(newer) = policy::version_is_newer(version, &installed) else {
         return false;
     };
-    bundle_matches(bundle, &installed) && candidate > current
+    bundle_matches(bundle, &installed) && newer
 }
 #[cfg(target_os = "macos")]
 fn bundle_matches(bundle: &Path, version: &str) -> bool {
-    let Ok(v) = plist::Value::from_file(bundle.join("Contents/Info.plist")) else {
-        return false;
-    };
-    let Some(d) = v.as_dictionary() else {
-        return false;
-    };
-    d.get("CFBundleIdentifier").and_then(|v| v.as_string()) == Some("com.rayrag.companion")
-        && d.get("CFBundleShortVersionString")
-            .and_then(|v| v.as_string())
-            == Some(version)
-        && d.get("CFBundleVersion").and_then(|v| v.as_string()) == Some(version)
-        && d.get("CFBundleExecutable").and_then(|v| v.as_string()) == Some("rayrag-companion")
+    read_bundle_metadata(bundle).is_some_and(|v| policy::bundle_matches(&v, version))
 }
 /// Atomic exchange leaves the canonical .app launchable at every crash boundary.
 #[cfg(target_os = "macos")]
@@ -704,22 +653,6 @@ mod tests {
         )
         .unwrap();
         assert!(launchable(&bundle));
-    }
-    #[test]
-    fn signature_and_authenticated_version_bind_the_payload() {
-        let f: serde_json::Value =
-            serde_json::from_str(include_str!("update-signature-test.json")).unwrap();
-        let b = STANDARD
-            .decode(f["payloadBase64"].as_str().unwrap())
-            .unwrap();
-        let sig = f["signature"].as_str().unwrap();
-        let key = f["publicKey"].as_str().unwrap();
-        verify(&b, sig, key, "0.2.27").unwrap();
-        assert!(verify(b"archive", "bad", "bad", "0.2.1").is_err());
-        assert!(verify(&b, sig, key, "0.2.28").is_err());
-        let mut altered = b;
-        altered[0] ^= 1;
-        assert!(verify(&altered, sig, key, "0.2.27").is_err());
     }
     #[test]
     #[cfg(target_os = "macos")]

@@ -1,4 +1,7 @@
-use serde::{Deserialize, Serialize};
+pub(crate) use crate::login_logic::{
+    ConnectionMode, LoginProfile, LoginRequest, SavedLogin, UpdateAccount,
+};
+use serde::Serialize;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{Manager, Webview};
@@ -6,79 +9,6 @@ use tauri::{Manager, Webview};
 #[path = "local_login_store.rs"]
 pub(crate) mod local_store;
 pub(crate) const VERIFIED_BUILD: &str = "Build_2569-09-01-01-55";
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum ConnectionMode {
-    BotOnly,
-    #[default]
-    GameClient,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct LoginProfile {
-    pub(crate) username: String,
-    pub(crate) password: String,
-    pub(crate) character_slot: u8,
-    #[serde(default)]
-    pub(crate) mode: ConnectionMode,
-    #[serde(default)]
-    auto_login: bool,
-}
-
-impl LoginProfile {
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.username.trim().is_empty()
-            || self.username.chars().count() > 64
-            || self.username.chars().any(char::is_control)
-            || self.password.is_empty()
-            || self.password.len() > 256
-            || self.password.contains('\0')
-            || self.character_slot > 2
-        {
-            return Err("Enter a username, password and character slot 1–3.".into());
-        }
-        Ok(())
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SavedLogin {
-    mode: ConnectionMode,
-    username: String,
-    character_slot: u8,
-    auto_login: bool,
-}
-
-/// Proven account metadata only; continuation storage never receives credentials.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct UpdateAccount {
-    pub username: String,
-    pub character_slot: u8,
-    pub mode: ConnectionMode,
-}
-impl UpdateAccount {
-    pub fn validate(&self) -> Result<(), String> {
-        if self.username.trim().is_empty()
-            || self.username.chars().count() > 64
-            || self.username.chars().any(char::is_control)
-            || self.character_slot > 2
-        {
-            return Err("Update account is invalid.".into());
-        }
-        Ok(())
-    }
-    fn from_profile(profile: &LoginProfile) -> Self {
-        Self {
-            username: profile.username.clone(),
-            character_slot: profile.character_slot,
-            mode: profile.mode,
-        }
-    }
-}
 
 pub(crate) struct PendingLogin {
     profile: LoginProfile,
@@ -322,37 +252,17 @@ pub(crate) async fn forget_login(window: Webview) -> Result<(), String> {
     login_store(window.app_handle())?.forget()
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct LoginRequest {
-    #[serde(default)]
-    mode: Option<ConnectionMode>,
-    // Null credentials mean reuse the local profile. Its password never returns
-    // to the controller webview.
-    credentials: Option<LoginProfile>,
-    character_slot: u8,
-    remember: bool,
-    auto_login: bool,
-}
-
 fn resolve_profile(
     request: LoginRequest,
     load: impl FnOnce() -> Result<Option<LoginProfile>, String>,
 ) -> Result<LoginProfile, String> {
-    if request.auto_login && !request.remember {
-        return Err("Save the login on this Mac to sign in when the app opens.".into());
-    }
-    let mut profile = match request.credentials {
-        Some(profile) => profile,
-        None => load()?.ok_or("Enter your account or save a login first.")?,
+    crate::login_logic::validate_request(&request)?;
+    let saved = if request.credentials.is_none() {
+        load()?
+    } else {
+        None
     };
-    profile.character_slot = request.character_slot;
-    if let Some(mode) = request.mode {
-        profile.mode = mode;
-    }
-    profile.auto_login = request.auto_login;
-    profile.validate()?;
-    Ok(profile)
+    crate::login_logic::resolve_profile(request, saved)
 }
 
 #[tauri::command]

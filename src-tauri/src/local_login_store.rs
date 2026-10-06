@@ -1,12 +1,12 @@
 //! Native-only, unencrypted local persistence. Never expose bytes or OS errors to IPC.
 use super::LoginProfile;
+use crate::local_login_logic::{self as document, MAX_BYTES};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 const PROFILE: &str = "profile.json";
 const TEMPORARY: &str = ".profile.tmp";
-const MAX_BYTES: u64 = 4096;
 const READ_ERROR: &str =
     "Could not read the local saved login. Forget it or enter your account manually.";
 const SAVE_ERROR: &str = "Could not save the login on this computer.";
@@ -41,11 +41,7 @@ impl LocalLoginStore {
             }
             let mut bytes = Vec::new();
             file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
-            if bytes.len() as u64 > MAX_BYTES {
-                return Err(invalid());
-            }
-            let profile: LoginProfile = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-            profile.validate().map_err(|_| invalid())?;
+            let profile = document::parse(&bytes).map_err(|_| invalid())?;
             Ok(Some(profile))
         };
         read().map_err(|_| READ_ERROR.into())
@@ -61,11 +57,7 @@ impl LocalLoginStore {
         write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
     ) -> Result<(), String> {
         let save = || -> io::Result<()> {
-            profile.validate().map_err(|_| invalid())?;
-            let bytes = serde_json::to_vec(profile).map_err(|_| invalid())?;
-            if bytes.len() as u64 > MAX_BYTES {
-                return Err(invalid());
-            }
+            let bytes = document::encode(profile).map_err(|_| invalid())?;
             let directory = self.open_directory(true)?.ok_or_else(invalid)?;
             // Reject unsafe destination and stale temporary entries, including
             // hard links. A directory lock coordinates other app processes.
