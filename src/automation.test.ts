@@ -48,11 +48,61 @@ describe('character state and schedule boundaries',()=>{
  it('does not mistake an inventory delta for a complete inventory',()=>{const state=new CharacterState();state.apply({type:'inventoryDelta',add:true,bagId:501,change:1,weight:10,item:{bagId:501,itemId:501,count:1,type:1}},1);expect(state.inventoryKnown).toBe(false);});
  it('invalidates a known inventory on an impossible unknown removal',()=>{const state=new CharacterState();state.apply({type:'inventory',items:[],equipment:[],ammoId:-1},1);state.apply({type:'inventoryDelta',add:false,bagId:501,change:1,weight:10},1);expect(state.inventoryKnown).toBe(false);});
  it('supports an overnight schedule without restarting outside it',()=>{const a=structuredClone(DEFAULT_AUTOMATION);a.schedule={enabled:true,startHour:22,endHour:6};expect(inSchedule(a,new Date(2026,1,1,23).getTime())).toBe(true);expect(inSchedule(a,new Date(2026,1,1,5).getTime())).toBe(true);expect(inSchedule(a,new Date(2026,1,1,12).getTime())).toBe(false);});
- it('does not confirm an item from an unrelated inventory change',()=>{let now=1000;const state=new CharacterState();state.apply({type:'inventory',items:[{bagId:501,itemId:501,count:4,type:1},{bagId:502,itemId:502,count:4,type:1}],equipment:[],ammoId:-1},1);const scheduler=new AutomationScheduler(()=>{},()=>now);scheduler.submit({type:'useItem',itemId:501},state);const event:FeatureEvent={type:'inventoryDelta',add:false,bagId:502,change:1,weight:10};state.apply(event,1);expect(scheduler.observe(event,state,1).confirmed).toBe(false);now+=6000;expect(scheduler.timeout()).toContain('No server confirmation');});
+ it('does not confirm an item from an unrelated inventory change',()=>{let now=1000;const state=new CharacterState();state.apply({type:'inventory',items:[{bagId:501,itemId:501,count:4,type:1},{bagId:502,itemId:502,count:4,type:1}],equipment:[],ammoId:-1},1);const scheduler=new AutomationScheduler(()=>{},()=>now);scheduler.submit({type:'useItem',itemId:501},state);const event:FeatureEvent={type:'inventoryDelta',add:false,bagId:502,change:1,weight:10};state.apply(event,1);expect(scheduler.observe(event,state,1).state).toBe('ignored');now+=6000;expect(scheduler.timeout()).toContain('No server confirmation');});
 });
 
 describe('captured action receipts',()=>{
  function inventory(count=4):FeatureEvent{return {type:'inventory',items:[{bagId:501,itemId:501,count,type:1}],equipment:[],ammoId:-1};}
+ it.each([
+  [{type:'requestFailure',reason:3},'Server rejected useItem (code 3).'],
+  [{type:'skillFailure',reason:4},'Server rejected useItem (code 4).'],
+  [{type:'featureError',message:'x'.repeat(130)},`Server rejected useItem: ${'x'.repeat(120)}`],
+ ] as const)('tags rejection from %j without publishing the internal cause', (event,reason)=>{
+  const state=new CharacterState();state.apply(inventory(),1);
+  const scheduler=new AutomationScheduler(()=>{},()=>1000);
+  scheduler.submit({type:'useItem',itemId:501},state);
+  const settlement=scheduler.observe(event,state,1);
+  expect(settlement).toEqual({state:'rejected',failure:{type:'server-rejection',reason}});
+  expect(scheduler.result).toEqual({sequence:1,status:'failed',reason});
+  if(settlement.state==='rejected')settlement.failure.reason='Changed observation text.';
+  scheduler.result.reason='Translated display message.';
+  expect(scheduler.result.reason).toBe(reason);
+  expect(scheduler.retireReceipt(true)).toBe('rejected');
+  expect(scheduler.receipt).toBeNull();
+ });
+ it.each(['cancel','timeout','send-failure'] as const)('keeps %s resource uncertainty despite rejection-like display text',cause=>{
+  let now=1000;
+  const state=new CharacterState();state.apply(inventory(),1);
+  const scheduler=new AutomationScheduler(()=>{if(cause==='send-failure')throw Error('Send failed.');},()=>now);
+  if(cause==='send-failure')expect(()=>scheduler.submit({type:'useItem',itemId:501},state)).toThrow('Send failed.');
+  else {
+   scheduler.submit({type:'useItem',itemId:501},state);
+   if(cause==='cancel')scheduler.reset();else {now+=6000;scheduler.timeout();}
+  }
+  const reason=cause==='cancel'?'Action canceled.':cause==='timeout'?'No server confirmation for useItem.':'Connection failed while sending action.';
+  expect(scheduler.result).toEqual({sequence:1,status:'failed',reason});
+  scheduler.result.reason='Server rejected useItem (code 3).';
+  expect(scheduler.retireReceipt(true)).toBe('uncertain');
+  expect(scheduler.receipt).toEqual({sequence:1,action:{type:'useItem',itemId:501}});
+ });
+ it('reserves the observed identity and receipt before a synchronous transport confirmation',()=>{
+  const identity={world:'field',selfId:1,selfIncarnation:1,targetId:2,targetIncarnation:1};
+  const action={type:'skill',mode:'target',skillId:3,level:1,target:2} as const;
+  const response:SkillResult={type:'skillResult',mode:'target',source:1,target:2,skillId:3,level:1,motionSeconds:0,position:{x:100,y:100}};
+  const state=new CharacterState(),order:string[]=[];
+  const scheduler=new AutomationScheduler(()=>{
+   expect(order).toEqual(['reserved']);expect(scheduler.pendingIdentity).toEqual(identity);
+   expect(scheduler.receipt).toEqual({sequence:1,action});
+   order.push('send');expect(scheduler.observe(response,state,1)).toEqual({state:'confirmed'});
+  },()=>1000,()=>identity);
+  scheduler.submit(action,state,undefined,0,{receipt:()=>true,reserved:(sequence,observed)=>{
+   expect(sequence).toBe(1);expect(observed).toEqual(identity);order.push('reserved');
+  }});
+  expect(order).toEqual(['reserved','send']);
+  expect(scheduler.result).toEqual({sequence:1,status:'confirmed',reason:'skill confirmed by the server.'});
+  expect(scheduler.receipt).toBeNull();
+  expect(scheduler.observe(response,state,1)).toEqual({state:'ignored'});
+ });
  it('captures before transport reentry and keeps the original baseline after cancellation',()=>{
   let now=1000;const state=new CharacterState();state.apply(inventory(),1);
   const scheduler=new AutomationScheduler(()=>{
@@ -68,7 +118,7 @@ describe('captured action receipts',()=>{
   let now=1000;const state=new CharacterState();state.apply(inventory(),1);
   const scheduler=new AutomationScheduler(()=>{},()=>now);scheduler.submit({type:'useItem',itemId:501},state);
   const readback=inventory(3);state.apply(readback,1);
-  expect(scheduler.observe(readback,state,1).confirmed).toBe(false);
+  expect(scheduler.observe(readback,state,1).state).toBe('ignored');
   expect(scheduler.reconcileReceipt([readback],state,1,DEFAULT_AUTOMATION)).toBeNull();
   now+=6000;expect(scheduler.timeout()).toContain('No server confirmation');
   expect(scheduler.retireReceipt(true)).toBe('uncertain');
@@ -112,8 +162,8 @@ describe('self cast server response correlation',()=>{
   const response:SkillResult={type:'skillResult',mode:'target',source:1,target:1,attacker:1,
     skillId,level:3,position:{x:100,y:100},motionSeconds:2,damage:0,result:0,hits:1,damageSeconds:0,indirect:false};
   for(const mismatch of [{...response,target:2},{...response,source:2},{...response,skillId:99},
-    {...response,level:2},{...response,indirect:true}])expect(scheduler.observe(mismatch,state,1).confirmed).toBe(false);
-  expect(scheduler.observe(response,state,1).confirmed).toBe(true);
+    {...response,level:2},{...response,indirect:true}])expect(scheduler.observe(mismatch,state,1).state).toBe('ignored');
+  expect(scheduler.observe(response,state,1).state).toBe('confirmed');
   expect(scheduler.result.status).toBe('confirmed');
   expect(scheduler.busy).toBe(true);
   now+=2000;
@@ -125,8 +175,8 @@ describe('self cast server response correlation',()=>{
   scheduler.submit({type:'skill',mode:'target',skillId:41,level:1,target:2},state);
   const response:SkillResult={type:'skillResult',mode:'target',source:1,target:1,
     skillId:41,level:1,position:{x:100,y:100},motionSeconds:0,indirect:false};
-  expect(scheduler.observe(response,state,1).confirmed).toBe(false);
-  expect(scheduler.observe({...response,target:2},state,1).confirmed).toBe(true);
+  expect(scheduler.observe(response,state,1).state).toBe('ignored');
+  expect(scheduler.observe({...response,target:2},state,1).state).toBe('confirmed');
  });
 });
 
@@ -140,7 +190,7 @@ describe('bounded skill confirmation deadlines',()=>{
   expect(scheduler.result.status).toBe('pending');
   now+=6000;
   expect(scheduler.observe({type:'skillResult',mode:'ground',source:1,skillId:85,level:1,
-    position:{x:100,y:100},targetPosition:{x:100,y:100},motionSeconds:0,indirect:false},state,1).confirmed).toBe(true);
+    position:{x:100,y:100},targetPosition:{x:100,y:100},motionSeconds:0,indirect:false},state,1).state).toBe('confirmed');
   expect(scheduler.result.status).toBe('confirmed');
   expect(sends).toBe(1);
  });

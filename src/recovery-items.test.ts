@@ -66,7 +66,7 @@ describe('carried HP and SP recovery items',()=>{
     const action=f.scheduler.next(f.automation,fullHp,f.state,null).action!;
     expect(action).toEqual({type:'useItem',itemId:505});f.scheduler.submit(action,f.state);
     expect(f.scheduler.next(f.automation,fullHp,f.state,null)).toEqual({});
-    expect(f.consume(514).confirmed).toBe(false);expect(f.consume(505).confirmed).toBe(true);
+    expect(f.consume(514).state).toBe('ignored');expect(f.consume(505).state).toBe('confirmed');
     f.advance(4999);expect(f.scheduler.next(f.automation,fullHp,f.state,null)).toEqual({});
     f.advance(1);expect(f.scheduler.next(f.automation,fullHp,f.state,null).action).toEqual({type:'useItem',itemId:514});
   });
@@ -101,7 +101,7 @@ describe('carried HP and SP recovery items',()=>{
     f.automation.hpPotions={...DEFAULT_RECOVERY_ITEMS,mode:'selected',itemIds:[518],cooldownSeconds:shortResource==='hp'?5:30};
     f.automation.spPotions={...DEFAULT_SP_ITEMS,mode:'selected',itemIds:[518],cooldownSeconds:shortResource==='sp'?5:30};
     const action=f.scheduler.next(f.automation,p,f.state,null).action!;
-    f.scheduler.submit(action,f.state);expect(f.consume(518).confirmed).toBe(true);
+    f.scheduler.submit(action,f.state);expect(f.consume(518).state).toBe('confirmed');
     f.advance(5000);expect(f.scheduler.next(f.automation,p,f.state,null)).toEqual({});
     const shortPolicy=shortResource==='hp'?f.automation.hpPotions:f.automation.spPotions,fallback=shortResource==='hp'?512:514;
     shortPolicy.itemIds.push(fallback);

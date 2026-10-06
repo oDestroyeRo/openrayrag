@@ -411,8 +411,8 @@ export class BotEngine {
       const pendingSkill = this.automation.pendingAction;
       const strategyTarget=this.strategies.pendingTarget;
       const result = this.automation.observe(e as FeatureEvent,this.character,this.player?.id??null);
-      if(result.confirmed||result.failure)this.strategies.settled(this.automation.result.sequence,result.confirmed?'confirmed':'rejected',strategyTarget===null?null:engagementIdentity(strategyTarget,this.observations.context(strategyTarget)));
-      if (result.confirmed && this.running && e.type === 'skillResult' && e.mode === 'target'
+      if(result.state!=='ignored')this.strategies.settled(this.automation.result.sequence,result.state,strategyTarget===null?null:engagementIdentity(strategyTarget,this.observations.context(strategyTarget)));
+      if (result.state==='confirmed' && this.running && e.type === 'skillResult' && e.mode === 'target'
         && e.target !== undefined && pendingSkill?.type === 'skill' && pendingSkill.mode === 'target'
         && this.entities.get(e.target)?.kind === 1 && !e.indirect && (e.attacker === undefined || e.attacker === -1 || e.attacker === e.source) && !this.foreignTargets.has(e.target)) {
         const identity=this.actionIdentity(pendingSkill);
@@ -435,9 +435,9 @@ export class BotEngine {
       }
       if(e.type==='skillResult'&&e.mode==='target'&&(e.damage??0)>0&&e.indirect===false
         &&(e.attacker===undefined||e.attacker===-1||e.attacker===e.source))this.observeAggressor(e.source,e.target);
-      if(result.confirmed&&pendingSkill?.type==='equip')this.loadout.confirmed(this.character);
+      if(result.state==='confirmed'&&pendingSkill?.type==='equip')this.loadout.confirmed(this.character);
       if(loadoutFailure&&(this.running||this.manualTask)&&automationSettings(this.settings).loadout.enabled)this.stop(loadoutFailure);
-      if (result.failure) this.stop(result.failure);
+      if (result.state==='rejected') this.stop(result.failure.reason);
       if((this.running||this.manualTask)&&automationSettings(this.settings).loadout.enabled&&['inventory','inventoryDelta','equipment'].includes(e.type)&&this.pending?.type==='attack'){
         const failure=this.player?this.loadout.attackGuard(automationSettings(this.settings),this.player,this.character):null;if(failure){this.loadout.stockFault(failure,this.character);this.stop(failure);}
       }
