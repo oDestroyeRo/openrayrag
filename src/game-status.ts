@@ -1,3 +1,4 @@
+import { allPass, map } from 'remeda';
 import type { Snapshot } from './engine';
 import type { EscapeSnapshot } from './escape-logic';
 import type { LoginStatus } from './login-logic';
@@ -6,6 +7,15 @@ import { validNavigationStatus } from './navigation-status';
 import { validFeatureStatus } from './feature-ui-logic';
 
 export type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; connectionMode?: 'botOnly' | 'gameClient'; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean; escape?: EscapeSnapshot; macro?:import('./macros').MacroSnapshot; supplyGuard?:import('./supply-trip').SupplyResumeGuard; deathRecoveryGuard?:import('./death-recovery').DeathRecoveryGuard };
+
+const finite = (value: unknown): boolean => typeof value === 'number' && Number.isFinite(value);
+const fieldsMatch = (fields: readonly string[], valid: (value: unknown) => boolean) =>
+  allPass(map(fields, field => (value: Record<string, unknown>) => valid(value[field])));
+const entityNumbers = fieldsMatch(['id','classId','kind','level','hp','maxHp','x','y'], finite);
+const statusFlags = fieldsMatch(['connected','compatible','running'], value => typeof value === 'boolean');
+const statusText = fieldsMatch(['reason','map','target'], value => typeof value === 'string' && value.length <= 1024);
+const statusCounts = fieldsMatch(['attacks','kills','looted'], finite);
+const dropNumbers = fieldsMatch(['id','x','y'], finite);
 
 export function validStatus(value: unknown): value is GameStatus {
   if (!value || typeof value !== 'object') return false;
@@ -16,21 +26,20 @@ export function validStatus(value: unknown): value is GameStatus {
   const login = s.login as Partial<LoginStatus> | undefined;
   if (!login || typeof login.message !== 'string' || login.message.length > 1024
     || !['idle','signingIn','selecting','entering','complete','failed','cancelled'].includes(login.phase ?? '')) return false;
-  const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
   const entity = (v: unknown) => {
     if (!v || typeof v !== 'object') return false;
     const e = v as Record<string, unknown>;
-    return Number.isInteger(e.id)&&Number(e.id)>=0&&Number(e.id)<=0x7fffffff&&['id','classId','kind','level','hp','maxHp','x','y'].every(k => finite(e[k])) && typeof e.name === 'string' && e.name.length <= 512;
+    return Number.isInteger(e.id)&&Number(e.id)>=0&&Number(e.id)<=0x7fffffff&&entityNumbers(e) && typeof e.name === 'string' && e.name.length <= 512;
   };
   if (!validNavigationStatus(s.navigation)) return false;
   if ((s.runRequested !== undefined && typeof s.runRequested !== 'boolean') || (s.state !== undefined && !['running','waiting','idle'].includes(s.state as string))) return false;
-  return ['connected','compatible','running'].every(k => typeof s[k] === 'boolean')
-    && ['reason','map','target'].every(k => typeof s[k] === 'string' && (s[k] as string).length <= 1024)
+  return statusFlags(s)
+    && statusText(s)
     && validMapInfo(s.mapInfo, s.map as string)
-    && ['attacks','kills','looted'].every(k => finite(s[k]))
+    && statusCounts(s)
     && (s.player === null || entity(s.player) && (s.player as Record<string,unknown>).kind===0)
     && Array.isArray(s.monsters) && s.monsters.length <= 150 && s.monsters.every(entity)
-    && Array.isArray(s.drops) && s.drops.length <= 150 && s.drops.every(v => v && ['id','x','y'].every(k => finite(v[k])))
+    && Array.isArray(s.drops) && s.drops.length <= 150 && s.drops.every(v => v && dropNumbers(v))
     && Array.isArray(s.log) && s.log.length <= 50 && s.log.every(v => v && finite(v.at) && typeof v.text === 'string' && v.text.length < 1024)
     && validFeatureStatus(s);
 }

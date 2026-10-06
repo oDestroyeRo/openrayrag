@@ -1,3 +1,5 @@
+import { filter, find } from 'remeda';
+import { carriedRecoveryItem, recoveryChoices, recoveryInventory, recoveryStockSummary } from './recovery-item-ui-logic';
 import { itemName } from './game-catalog';
 import { DEFAULT_RECOVERY_ITEMS, DEFAULT_SP_ITEMS, RECOVERY_ITEM_IDS, type RecoveryItemSettings, type RecoveryResource } from './recovery-items';
 
@@ -58,7 +60,7 @@ export class RecoveryItemUi {
     this.mode.addEventListener('change', () => {
       if (this.locked) return;
       if (this.mode.value === 'selected' && this.itemIds.length === 0) {
-        const first = this.ids.find(id => (this.stock?.get(id) ?? 0) > 0);
+        const first = find(this.ids, carriedRecoveryItem(this.stock));
         if (first !== undefined) this.itemIds = [first];
       }
       this.syncChoices(); this.changed();
@@ -89,17 +91,7 @@ export class RecoveryItemUi {
   lock(locked: boolean): void { this.locked = locked; this.syncChoices(); }
 
   update(character: unknown): void {
-    const value = character && typeof character === 'object' ? character as Record<string, unknown> : {};
-    let stock: Map<number, number> | null = null;
-    if (value.inventoryKnown === true && Array.isArray(value.inventory) && value.inventory.length <= 600) {
-      stock = new Map();
-      for (const entry of value.inventory) {
-        const row = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {};
-        if (!Number.isInteger(row.itemId) || Number(row.itemId) < 1 || Number(row.itemId) > 2147483647 || !Number.isInteger(row.count) || Number(row.count) < 0 || Number(row.count) > 32767) { stock = null; break; }
-        const itemId = Number(row.itemId);
-        stock.set(itemId, (stock.get(itemId) ?? 0) + Number(row.count));
-      }
-    }
+    const stock = recoveryInventory(character);
     this.stock = stock;
     for (const [itemId, row] of this.rows) setText(row.stock, stock === null ? 'Carried: unknown' : `Carried: ${stock.get(itemId) ?? 0}`);
     this.syncChoices();
@@ -140,7 +132,8 @@ export class RecoveryItemUi {
     const select = () => {
       if (choice.disabled || this.locked || this.mode.value !== 'selected') return;
       if (choice.checked === this.itemIds.includes(itemId)) return;
-      this.itemIds = choice.checked ? [...this.itemIds.filter(id => id !== itemId), itemId] : this.itemIds.filter(id => id !== itemId);
+      const remaining = filter(this.itemIds, id => id !== itemId);
+      this.itemIds = choice.checked ? [...remaining, itemId] : remaining;
       this.syncChoices(); this.changed();
     };
     // Commit before input bubbles to Main, which refreshes and locks the form.
@@ -151,7 +144,7 @@ export class RecoveryItemUi {
 
   private syncChoices(): void {
     const selected = this.mode.value === 'selected', any = this.mode.value === 'any';
-    const order = selected ? [...this.itemIds, ...this.ids.filter(id => !this.itemIds.includes(id))] : [...this.ids];
+    const { order, visibleOrder } = recoveryChoices({ selected, itemIds: this.itemIds, ids: this.ids, stock: this.stock });
     for (let index = 0; index < order.length; index++) {
       const row = this.rows.get(order[index]!)!;
       // Retain row/input identity; move only rows whose preference changed.
@@ -159,7 +152,6 @@ export class RecoveryItemUi {
     }
     this.mode.disabled = this.locked;
     for (const input of [this.belowPercent, this.minStock, this.cooldownSeconds]) input.disabled = this.locked;
-    const visibleOrder = order.filter(id => (this.stock?.get(id) ?? 0) > 0);
     for (const [itemId, row] of this.rows) {
       const index = this.itemIds.indexOf(itemId);
       row.root.hidden = (this.stock?.get(itemId) ?? 0) === 0;
@@ -177,8 +169,7 @@ export class RecoveryItemUi {
     setText(this.guide, this.mode.value === 'off' ? `Automatic ${name} items are off. Your choices are retained.` : this.mode.value === 'selected' && this.itemIds.length === 0
       ? `Choose at least one carried ${name} recovery item before saving or starting the bot.`
       : 'Earlier available items are used first. Each keeps the configured reserve, and all share one cooldown. Your choices are retained when you switch modes.');
-    const carried = this.ids.some(id => (this.stock?.get(id) ?? 0) > 0);
-    const missing = this.stock === null ? 0 : this.itemIds.filter(id => (this.stock?.get(id) ?? 0) === 0).length;
+    const { carried, missing } = recoveryStockSummary({ ids: this.ids, itemIds: this.itemIds, stock: this.stock });
     setText(this.inventoryMessage, this.stock === null ? 'Waiting for current inventory.' : `${carried ? '' : `No carried ${name} recovery items.`}${missing ? ` ${missing} saved selection${missing === 1 ? ' is' : 's are'} out of stock; choices are kept for restocking.` : ''}`.trim());
     this.inventoryMessage.hidden = this.inventoryMessage.textContent === '';
     if (this.mode.value === 'off' || this.resource !== 'hp') { this.stopWarning.hidden = true; setText(this.stopWarning, ''); return; }

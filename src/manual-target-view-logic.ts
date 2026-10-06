@@ -1,3 +1,4 @@
+import { filter, find, map, pipe } from 'remeda';
 import { validActorSnapshot } from './actor-observations-logic';
 import type { CharacterSnapshot } from './character-state-logic';
 import { manualTargetPolicy, validateManualTargetRequest, type ManualPreviewContext, type ManualTargetRequest } from './manual-target-logic';
@@ -6,6 +7,18 @@ import type { Settings } from './settings';
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' ? value as Record<string, unknown> : {};
 
 export const actorKey = (world: string, id: number, incarnation: number): string => `${world}:${id}:${incarnation}`;
+
+export function manualMonsterChoices(status: Record<string, unknown>): { value: string; label: string }[] {
+  const actors = validActorSnapshot(status.actorObservations) ? status.actorObservations : null;
+  return pipe(Array.isArray(status.monsters) ? status.monsters : [],
+    map(raw => {
+      const actor = !Array.isArray(raw) ? object(raw) : {};
+      return { actor, observed: actors ? find(actors.actors, row => row.id === actor.id && row.kind === 1) : undefined };
+    }),
+    filter(({ actor, observed }) => !!observed && actor.dead !== true && typeof actor.hp === 'number' && !(actor.hp <= 0)),
+    map(({ actor, observed }) => ({ value: actorKey(actors!.world, Number(actor.id), observed!.incarnation),
+      label: `${String(actor.name ?? 'Monster').slice(0, 64)} #${actor.id} · level ${actor.level} · ${actor.x}, ${actor.y} · lifetime ${observed!.incarnation}` })));
+}
 
 /** Shared UI admission; the controller still rebuilds the route and checks receipts. */
 export function manualTargetView(status: Record<string, unknown>, settings: Settings,

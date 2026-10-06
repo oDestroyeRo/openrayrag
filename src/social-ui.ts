@@ -1,4 +1,4 @@
-import { socialContextFromStatus } from './social-ui-logic';
+import { socialContextFromStatus, socialHistoryText } from './social-ui-logic';
 export { socialContextFromStatus, validSocialSnapshot } from './social-ui-logic';
 import { EMOTES, validateSocialAction, type ManualSocialAction } from './social-protocol';
 import { ManualSocial } from './social';
@@ -47,9 +47,7 @@ export class SocialUi {
     const lifecycle = JSON.stringify([this.status.sessionId ?? null, this.status.connectionId ?? null, social.generation ?? null, player.id ?? null, player.name ?? null]);
     if (this.lifecycle !== null && this.lifecycle !== lifecycle) this.draft.value = '';
     this.lifecycle = lifecycle;
-    const rows = Array.isArray(social.history) ? social.history.map(record) : [];
-    const states: Record<string, string> = { sent: 'Sent', echo: 'Echo observed', unconfirmed: 'Unconfirmed', observed: 'Observed' };
-    this.history.textContent = rows.map(row => `${states[String(row.state)] ?? 'Observed'} · ${String(row.name ?? '')} · ${row.kind === 'chat' ? ['Say', 'Shout', 'Party', 'Notice'][Number(row.channel)] ?? 'Chat' : 'Emote'}: ${String(row.text ?? '')}`).join('\n');
+    this.history.textContent = socialHistoryText(social.history);
     this.update();
   }
   private blocker(action: ManualSocialAction): string | null {

@@ -1,6 +1,10 @@
+import { find, map } from 'remeda';
 import { clientStatus } from './client-status';
 import type { MapInfo } from './map-data-logic';
 import type { Settings } from './settings';
+
+const targetName = (monsters: MapInfo['monsters']) => (id: number) =>
+  find(monsters, monster => monster.classId === id)?.name;
 
 /** An idle task label can survive a run/state transition; it is not an action. */
 export function dashboardTaskLabel(value: unknown): string {
@@ -22,7 +26,7 @@ export function clientDashboard(value: unknown, context: Parameters<typeof clien
     : status.state === 'READY' ? 'Ready to start'
     : status.state === 'CONNECTED' ? 'Choose your character' : 'Connect your character';
   if (!settings) return { ...status, headline, setup: 'Setup needs attention · review your settings' };
-  const names = settings.map === mapInfo?.code ? settings.targets.map(id => mapInfo.monsters.find(monster => monster.classId === id)?.name) : [];
+  const names = settings.map === mapInfo?.code ? map(settings.targets, targetName(mapInfo.monsters)) : [];
   const targets = !settings.targets.length ? 'No targets selected' : names.length && names.every(Boolean) && names.length <= 2
     ? names.join(', ') : `${settings.targets.length} selected targets`;
   const mode = settings.automation?.combat.mode;

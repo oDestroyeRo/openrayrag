@@ -1,3 +1,4 @@
+import { map } from 'remeda';
 import { actorSnapshotAt as snapshotAt, observedActorChoices, bindObservedActor } from './actor-predicate-ui-logic';
 import { evaluateActorPredicate, type ActorObservationSnapshot, type ActorPredicate, type ActorSelector } from './actor-observations';
 import { RESOURCE_OPERATORS, type ResourceOperator } from './actor-resources';
@@ -29,13 +30,13 @@ export class ActorPredicateEditor {
     const scope=this.select('Actor',[['self','Your character'],['target','Current server target'],...(this.allowCandidate?[["candidate","Candidate monster"] as [string,string]]:[]),['actor','Observed actor']],actor.scope);
     const actors=this.select('Choose / rebind actor',[['','Choose a currently observed actor']], '');
     const type=this.select('Evidence',[['actorStatus','Status'],['actorCasting','Casting'],['actorHpPercent','Observed HP %'],['actorSpPercent','Own / party SP %']],condition.field);
-    const statusOptions=STATUS_CATALOG.map(status=>[String(status.id),`${status.name} · ${status.id}`] as [string,string]);
+    const statusOptions=map(STATUS_CATALOG,status=>[String(status.id),`${status.name} · ${status.id}`] as [string,string]);
     if(condition.field==='actorStatus'&&!STATUS_CATALOG.some(status=>status.id===condition.statusId))statusOptions.push([String(condition.statusId),`Unsupported status ${condition.statusId}`]);
     const status=this.select('Status',statusOptions,condition.field==='actorStatus'?String(condition.statusId):statusOptions[0]?.[0]??'1');
     const desired=this.select('Required state',[['true','Present / casting'],['false','Absent / idle']],String(condition.operator==='eq'?condition.value:!condition.value));
     const skillLabel=document.createElement('label');skillLabel.className='form-field';skillLabel.textContent='Casting skill · blank means any';
     const skill=document.createElement('input');skill.type='number';skill.min='1';skill.max='255';skill.setAttribute('list','skillId-catalog');skill.value=condition.field==='actorCasting'&&condition.skillId!==undefined?String(condition.skillId):'';skillLabel.append(skill);
-    const comparison=this.select('Comparison',RESOURCE_OPERATORS.map(operator=>[operator,({lt:'<',lte:'≤',eq:'=',gte:'≥',gt:'>'})[operator]]),condition.field==='actorHpPercent'||condition.field==='actorSpPercent'?condition.operator:'lte');
+    const comparison=this.select('Comparison',map(RESOURCE_OPERATORS,operator=>[operator,({lt:'<',lte:'≤',eq:'=',gte:'≥',gt:'>'})[operator]]),condition.field==='actorHpPercent'||condition.field==='actorSpPercent'?condition.operator:'lte');
     const percentLabel=document.createElement('label');percentLabel.className='form-field';percentLabel.textContent='Threshold %';
     const percent=document.createElement('input');percent.type='number';percent.min='0';percent.max='100';percent.step='any';percent.value=typeof condition.value==='number'?String(condition.value):'50';percentLabel.append(percent);
     const trace=document.createElement('p');trace.className='hint';

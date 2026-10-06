@@ -197,6 +197,7 @@
   "src/protocol.ts": "logic",
   "src/reconnect-logic.ts": "logic",
   "src/reconnect.ts": "orchestration",
+  "src/recovery-item-ui-logic.ts": "logic",
   "src/recovery-item-ui.ts": "orchestration",
   "src/recovery-items.ts": "logic",
   "src/refine-logic.ts": "logic",

@@ -1,9 +1,11 @@
+import { concat, filter, map, pipe, piped, unique } from 'remeda';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateSettings, type Settings } from './settings';
 
 export const MAX_PROFILES = 20;
 const MAX_DOCUMENT_BYTES = 256_000;
 export interface BotProfile { id: string; name: string; character: string; savedAt: number; settings: Settings }
 export interface ProfileDocument { version: 1; profiles: BotProfile[] }
+const profileIds = piped(map<readonly BotProfile[], string>(profile => profile.id), unique());
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 function keys(value: Record<string, unknown>, expected: string[]): boolean {
   const actual = Object.keys(value);
@@ -64,8 +66,8 @@ export function parseProfileDocument(text: string): ProfileDocument {
   const value: unknown = JSON.parse(text);
   if (!record(value) || !keys(value, ['version', 'profiles']) || value.version !== 1
     || !Array.isArray(value.profiles) || value.profiles.length > MAX_PROFILES) throw new Error('Unsupported profile document.');
-  const profiles = value.profiles.map(checkedProfile);
-  if (new Set(profiles.map(profile => profile.id)).size !== profiles.length) throw new Error('Profile IDs must be unique.');
+  const profiles = map(value.profiles, checkedProfile);
+  if (profileIds(profiles).length !== profiles.length) throw new Error('Profile IDs must be unique.');
   return { version: 1, profiles };
 }
 
@@ -74,7 +76,7 @@ export function profileSaveAllowed(profiles: readonly BotProfile[], existingId?:
   if (!existingId && profiles.length >= MAX_PROFILES) throw new Error(`Keep at most ${MAX_PROFILES} profiles.`);
 }
 export function savedProfiles(profiles: readonly BotProfile[], profile: BotProfile): BotProfile[] {
-  return [...profiles.filter(saved => saved.id !== profile.id), profile].map(checkedProfile);
+  return pipe(profiles, filter(saved => saved.id !== profile.id), concat([profile]), map(checkedProfile));
 }
 export function encodeProfileDocument(profiles: readonly BotProfile[]): string {
   const document = JSON.stringify({ version: 1, profiles });
@@ -87,8 +89,8 @@ export function profileImportAllowed(profiles: readonly BotProfile[], imported: 
 }
 export function importedProfiles(profiles: readonly BotProfile[], imported: readonly BotProfile[], identities: readonly { id: string; savedAt: number }[]): BotProfile[] {
   if (identities.length !== imported.length) throw new Error('Could not create unique profile IDs.');
-  const copies = imported.map((profile, index) => checkedProfile({ ...profile, ...identities[index] }));
-  if (new Set([...profiles, ...copies].map(profile => profile.id)).size !== profiles.length + copies.length) throw new Error('Could not create unique profile IDs.');
+  const copies = map(imported, (profile, index) => checkedProfile({ ...profile, ...identities[index] }));
+  if (profileIds([...profiles, ...copies]).length !== profiles.length + copies.length) throw new Error('Could not create unique profile IDs.');
   return copies;
 }
 export function profileForMap(profiles: readonly BotProfile[], id: string, map: string, character?: string): BotProfile {

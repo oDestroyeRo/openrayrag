@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_SETTINGS } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
 import { checkedProfile, importedProfiles, parseProfileDocument, savedProfiles } from './profiles-logic';
 import { BUILTIN_SERVICES } from './npc-services';
 import { importedServices, parseServiceDocument, savedServices } from './npc-service-store-logic';
@@ -11,10 +11,16 @@ import { formatBotScript, parseBotScript } from './bot-script';
 import { loginPacketStatus, selectionReadiness } from './login-logic';
 import { actorSnapshotAt, bindObservedActor, observedActorChoices } from './actor-predicate-ui-logic';
 import type { ActorObservationSnapshot } from './actor-observations';
-import { featureObservation, featureServiceBlocked, featureActive } from './feature-ui-logic';
+import { featureObservation, featureServiceBlocked, featureActive, featureServiceChoices, featureServiceEvidence, featureAttackStrategiesText, featureRuleConditionsText, featureNpcChoices, featureInventoryText, featureSkillsText } from './feature-ui-logic';
 import { consoleInventory, consoleMonsters } from './bot-console-logic';
 import type { Snapshot } from './engine';
 import { loadMapCatalog } from './map-data';
+import { carriedRecoveryItem, recoveryChoices, recoveryInventory, recoveryStockSummary } from './recovery-item-ui-logic';
+import { dispositionStockFloors } from './disposition-ui-logic';
+import { manualMonsterChoices } from './manual-target-view-logic';
+import { memoSlotsText } from './memo-ui-logic';
+import { socketSlotsText } from './socket-ui-logic';
+import { socialHistoryText } from './social-ui-logic';
 
 const settings = () => ({ ...structuredClone(DEFAULT_SETTINGS), map: 'prt_fild08', targets: [4000] });
 const profile = () => checkedProfile({ id: 'original', name: 'Original', character: 'Synthetic', savedAt: 10, settings: settings() });
@@ -49,6 +55,14 @@ describe('detached local document proposals', () => {
     expect(() => importedServices([original], [original], [original.id])).toThrow('unique');
     expect(() => importedServices([], [original], [])).toThrow('unique');
     expect(() => parseServiceDocument(JSON.stringify({ version: 1, services: [original], password: 'synthetic' }))).toThrow('fields');
+  });
+  it('validates every source entry before checking document identity collisions', () => {
+    const original = profile();
+    expect(() => parseProfileDocument(JSON.stringify({ version: 1, profiles: [original, original, { ...original, savedAt: -1 }] })))
+      .toThrow('Invalid profile name or metadata.');
+    const service = structuredClone(BUILTIN_SERVICES[0]!);
+    expect(() => parseServiceDocument(JSON.stringify({ version: 1, services: [service, service, { ...service, name: '' }] })))
+      .toThrow('Invalid service text.');
   });
   it('keeps service state unchanged when persistence rejects a validated proposal', () => {
     let fail = false;
@@ -161,6 +175,80 @@ describe('pure editor and telemetry projections', () => {
     rows[0]!.text = 'Changed';
     expect(status).toEqual(before);
   });
+  it('preserves first-observed order when display names and monster distances tie', () => {
+    const status = { character: { inventoryKnown: true, inventory: [
+      { itemId: 664, count: 2 }, { itemId: 644, count: 1 }, { itemId: 664, count: 3 }, { itemId: 501, count: 0 }] },
+      player: { x: 10, y: 10 }, monsters: [
+        { id: 9, name: 'First', x: 11, y: 10, hp: 1, maxHp: 1, level: 1, dead: false },
+        { id: 2, name: 'Second', x: 10, y: 11, hp: 1, maxHp: 1, level: 1, dead: false }] } as unknown as Snapshot;
+    const before = structuredClone(status);
+    expect(consoleInventory(status)).toEqual([
+      { itemId: 664, count: 5, label: 'Gift Box × 5' }, { itemId: 644, count: 1, label: 'Gift Box × 1' }]);
+    expect(consoleMonsters(status).map(row => row.key)).toEqual(['unavailable:9', 'unavailable:2']);
+    expect(status).toEqual(before);
+  });
+  it('merges stock reservations by maximum while preserving first-configured item order', () => {
+    const policy = structuredClone(DEFAULT_AUTOMATION);
+    const item = { resource: 'hp' as const, belowPercent: 50, cooldownSeconds: 5 };
+    policy.items = [{ ...item, itemId: 502, minStock: 2 }, { ...item, itemId: 501, minStock: 3 }, { ...item, itemId: 502, minStock: 4 }];
+    policy.hpPotions = { mode: 'selected', itemIds: [501, 503], belowPercent: 50, minStock: 5, cooldownSeconds: 5 };
+    const before = structuredClone(policy);
+    const floors = dispositionStockFloors(policy);
+    expect(floors).toEqual([{ itemId: 502, count: 4 }, { itemId: 501, count: 5 }, { itemId: 503, count: 5 }]);
+    floors[0]!.count = 99;
+    expect(policy).toEqual(before);
+  });
+  it('binds service selectors without retaining or modifying preview evidence', () => {
+    const services = structuredClone(BUILTIN_SERVICES), before = structuredClone(services);
+    const choices = featureServiceChoices(services);
+    const buy = choices('buy');
+    expect(buy).toContainEqual(['trader.prt-fild05.tool-dealer.buy.v1', 'Prontera Field05 · Open buy shop']);
+    expect(choices('storage').every(([id]) => id.includes('storage'))).toBe(true);
+    buy[0]![1] = 'Changed';
+    expect(services).toEqual(before);
+    const status = { character: { inventoryKnown: true, skillsKnown: true, stats: { zeny: 100 },
+      inventory: [{ itemId: 501, count: 3 }], learned: [{ skillId: 1, level: 5 }] },
+      actors: [{ id: 0, kind: 2, classId: 3, name: 'NPC', x: 1, y: 2, dead: false }, { id: 1, kind: 1 }] };
+    const evidence = featureServiceEvidence(status);
+    expect(JSON.parse(evidence)).toEqual([true, 100, true, 5, [[501, 3]], [[0, 2, 3, 'NPC', 1, 2, false]]]);
+    status.character.inventory[0]!.count = 4;
+    expect(featureServiceEvidence(status)).not.toBe(evidence);
+  });
+  it('projects actor identity choices and exact ordered slot/history text independently', () => {
+    const observed = actors();
+    observed.actors.push({ ...structuredClone(observed.actors[0]!), id: 7, kind: 1, name: 'Monster' });
+    const status = { actorObservations: observed, monsters: [
+      { id: 7, name: 'Monster', level: 2, x: 3, y: 4, hp: 1, dead: false },
+      { id: 7, name: 'Dead', level: 2, x: 3, y: 4, hp: 0, dead: true },
+      { id: 8, name: 'Unobserved', hp: 1 }] };
+    const before = structuredClone(status), choices = manualMonsterChoices(status);
+    expect(choices).toEqual([{ value: `${observed.world}:7:1`, label: 'Monster #7 · level 2 · 3, 4 · lifetime 1' }]);
+    choices[0]!.label = 'Changed';
+    expect(status).toEqual(before);
+    expect(memoSlotsText([null, { map: 'prontera', x: 10, y: 20 }, null, null]))
+      .toBe('Slot 0: Empty\nSlot 1: prontera (10, 20)\nSlot 2: Empty\nSlot 3: Empty');
+    expect(socketSlotsText([0, 2147483647, 0, 0])).toBe('empty, Item #2147483647, empty, empty');
+    expect(socialHistoryText([{ state: 'echo', name: 'Fixture', kind: 'chat', channel: 2, text: 'Hello' },
+      { state: 'observed', name: 'Other', kind: 'emote', text: ':)' }]))
+      .toBe('Echo observed · Fixture · Party: Hello\nObserved · Other · Emote: :)');
+  });
+  it('keeps display caps, diagnostic order and NPC-zero choices without evaluating omitted rows', () => {
+    const unexpected = { get id() { throw new Error('Omitted row evaluated'); } };
+    const actor = { id: 0, normalStarted: true, rules: [{ id: 'first', attempts: 2, uses: 1, uncertain: true, rejected: true }] };
+    const strategies = featureAttackStrategiesText({ entries: [...Array.from({ length: 8 }, () => actor), unexpected], truncated: true });
+    expect(strategies.split('Actor #0')).toHaveLength(9);
+    expect(strategies).toContain('first · 2 attempts · 1 confirmed · unresolved');
+    expect(strategies).not.toContain('rejected');
+    expect(strategies).toMatch(/Additional actor ledgers omitted from display\.$/);
+    expect(featureRuleConditionsText([{ rule: 'Rule', truncated: true, conditions: [
+      { state: 'unavailable', reason: 'Unknown' }, { state: 'matched', reason: 'Fresh' }] }]))
+      .toBe('Rule · additional evidence omitted\n  unavailable · Unknown\n  matched · Fresh');
+    expect(featureNpcChoices([{ id: 0, kind: 2, name: '' }, { id: 1, kind: 1, name: 'Monster' }, { id: 2, kind: 4, name: 'Trader' }]))
+      .toEqual([{ value: '0', label: 'NPC · #0', key: '0:' }, { value: '2', label: 'Trader · #2', key: '2:Trader' }]);
+    expect(featureInventoryText([...Array.from({ length: 30 }, () => ({ bagId: 1, itemId: 501, count: 2 })),
+      { get itemId() { throw new Error('Omitted inventory row evaluated'); } }]).split('\n')).toHaveLength(30);
+    expect(featureSkillsText([{ skillId: 2, level: 1 }])).toBe('First Aid · Lv 1');
+  });
   it('makes terminal login states inert and resets selection settlement after readiness loss', () => {
     expect(loginPacketStatus({ phase: 'cancelled', message: '' }, Uint8Array.of(0), 0)).toBeNull();
     expect(loginPacketStatus({ phase: 'signingIn', message: '' }, Uint8Array.of(0), 0)?.phase).toBe('failed');
@@ -168,6 +256,32 @@ describe('pure editor and telemetry projections', () => {
     expect(selectionReadiness(true, 100, 299).settled).toBe(false);
     expect(selectionReadiness(true, 100, 300).settled).toBe(true);
     expect(selectionReadiness(false, 100, 400)).toEqual({ since: null, settled: false });
+  });
+});
+
+describe('recovery item observation and preference projections', () => {
+  it('keeps saved preference order across zero stock and returns detached display arrays', () => {
+    const stock = new Map([[501, 2], [502, 3], [503, 0]]), ids = [502, 501, 503], itemIds = [503, 501];
+    const projected = recoveryChoices({ selected: true, ids, itemIds, stock });
+    expect(projected).toEqual({ order: [503, 501, 502], visibleOrder: [501, 502] });
+    expect(recoveryStockSummary({ ids, itemIds, stock })).toEqual({ carried: true, missing: 1 });
+    expect(carriedRecoveryItem(stock)(503)).toBe(false);
+    projected.order.reverse(); projected.visibleOrder.length = 0;
+    expect(itemIds).toEqual([503, 501]); expect(ids).toEqual([502, 501, 503]);
+    stock.set(503, 1);
+    expect(recoveryChoices({ selected: true, ids, itemIds, stock }).visibleOrder).toEqual([503, 501, 502]);
+    expect(recoveryChoices({ selected: false, ids, itemIds, stock }).order).toEqual(ids);
+  });
+  it('discards malformed inventory atomically and stops decoding at its first invalid row', () => {
+    const inventory = [{ itemId: 502, count: 3 }, { itemId: 501, count: 0 }, { itemId: 501, count: 5 }];
+    const before = structuredClone(inventory), stock = recoveryInventory({ inventoryKnown: true, inventory })!;
+    expect([...stock]).toEqual([[502, 3], [501, 5]]);
+    stock.set(501, 99); expect(inventory).toEqual(before);
+    const untouched = { get itemId() { throw new Error('Later row evaluated'); } };
+    expect(recoveryInventory({ inventoryKnown: true, inventory: [inventory[0], { itemId: 0, count: 1 }, untouched] })).toBeNull();
+    expect(recoveryInventory({ inventoryKnown: false, inventory })).toBeNull();
+    expect(recoveryInventory({ inventoryKnown: true, inventory: Array.from({ length: 601 }, () => inventory[0]) })).toBeNull();
+    expect(recoveryInventory({ inventoryKnown: true, inventory: [] })).toEqual(new Map());
   });
 });
 

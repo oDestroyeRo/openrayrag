@@ -1,3 +1,4 @@
+import { omit } from 'remeda';
 import { validWarpSnapshot } from './warp-ui-logic';
 export { validWarpSnapshot } from './warp-ui-logic';
 import { WARP_RECOVERY, type WarpSnapshot } from './warp';
@@ -39,7 +40,7 @@ export class WarpUi {
     const identity=JSON.stringify([s.sessionId,s.connectionId,object(s.player).id,object(s.player).name,this.snapshot?.generation]);
     if(this.lifecycle&&identity!==this.lifecycle)this.retire();this.lifecycle=identity;
     if(this.request){const current=this.request.type==='warpGround'?this.snapshot?.ready:this.snapshot?.activation?.preview;if(JSON.stringify(this.request.preview)!==JSON.stringify(current))this.retire();}
-    if(this.awaitingPreview&&this.snapshot?.preview&&this.policy&&this.expected&&JSON.stringify((({preview:_preview,...rest})=>rest)(this.snapshot.preview))===JSON.stringify(this.expected)){
+    if(this.awaitingPreview&&this.snapshot?.preview&&this.policy&&this.expected&&JSON.stringify(omit(this.snapshot.preview,['preview']))===JSON.stringify(this.expected)){
       this.request=validateWarpRequest(this.snapshot.preview);this.awaitingPreview=false;
       const a=this.request.type==='warpActivate',slot=a?this.snapshot.captured?.slot:Number(this.slot.value),destination=a?this.snapshot.captured?.destination:this.snapshot.slots?.[slot??0],ground=a?this.snapshot.captured?.ground:{x:Number(this.x.value),y:Number(this.y.value)};
       this.previewText.textContent=`${a?'Activation':'Ground'} preview · memo slot ${slot}: ${destination?.map} (${destination?.x}, ${destination?.y}). Ground (${ground?.x}, ${ground?.y}). ${a?'Second-stage SP cost: 0 while selection is valid.':`Effective SP prerequisite: ${this.snapshot.cost}.`}

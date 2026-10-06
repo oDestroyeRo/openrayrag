@@ -1,3 +1,4 @@
+import { entries, filter, fromEntries, groupBy, map, pipe, reduce, take, values } from 'remeda';
 import { hpPotionIds } from './hp-potions';
 import { recoveryItemIds } from './recovery-items';
 import { ITEM_CATALOG, itemName } from './game-catalog';
@@ -33,27 +34,27 @@ function items(input: unknown): InventoryItem[] | null {
  * Equipment, selected ammo and unique protections are applied by the planner.
  */
 export function publishedDispositionMetadata(): Readonly<Record<string, DispositionItemInfo>> {
-  return Object.fromEntries(Object.entries(ITEM_CATALOG).map(([id, item]) => {
+  return pipe(ITEM_CATALOG, entries(), map(([id, item]) => {
     const known = [1, 2, 3, 4, 5, 6].includes(item.itemClass);
     return [id, { weight: number(item.weight), sellPrice: number(item.sellPrice), itemClass: item.itemClass,
       unique: known ? [2, 3].includes(item.itemClass) : null,
-      ...(known ? { store: true, sell: true, cart: true, buy: true } : {}) }];
-  }));
+      ...(known ? { store: true, sell: true, cart: true, buy: true } : {}) }] as const;
+  }), fromEntries());
 }
 const metadata = publishedDispositionMetadata();
-const compatibleAmmoIds = Object.entries(AMMO_CATALOG).filter(([, info]) => info.ammoType === 0).map(([id]) => Number(id));
+const compatibleAmmoIds = pipe(AMMO_CATALOG, entries(), filter(([, info]) => info.ammoType === 0), map(([id]) => Number(id)));
 
 export function dispositionStockFloors(settings: AutomationSettings): { itemId: number; count: number }[] {
-  const floors = settings.items.map(row => ({ itemId: row.itemId, count: row.minStock }));
-  floors.push(...hpPotionIds(settings.hpPotions).map(itemId => ({ itemId, count: settings.hpPotions!.minStock })));
-  floors.push(...recoveryItemIds(settings.spPotions,'sp').map(itemId => ({ itemId, count: settings.spPotions!.minStock })));
+  const floors = map(settings.items, row => ({ itemId: row.itemId, count: row.minStock }));
+  const withReserve = (policy: { minStock: number } | undefined) => (itemId: number) => ({ itemId, count: policy!.minStock });
+  floors.push(...map(hpPotionIds(settings.hpPotions), withReserve(settings.hpPotions)));
+  floors.push(...map(recoveryItemIds(settings.spPotions,'sp'), withReserve(settings.spPotions)));
   const escape = settings.escape;
   if (escape?.enabled && escape.method === 'item') floors.push({ itemId: escape.mode === 'random' ? 601 : 602, count: escape.minStock });
   if (settings.loadout.enabled && settings.loadout.minAmmoStock > 0)
-    floors.push(...compatibleAmmoIds.map(itemId => ({ itemId, count: settings.loadout.minAmmoStock })));
-  const unique = new Map<number, number>();
-  for (const row of floors) unique.set(row.itemId, Math.max(unique.get(row.itemId) ?? 0, row.count));
-  return [...unique].map(([itemId, count]) => ({ itemId, count }));
+    floors.push(...map(compatibleAmmoIds, withReserve({ minStock: settings.loadout.minAmmoStock })));
+  return pipe(floors, groupBy(row => `item:${row.itemId}`), values(),
+    map(rows => ({ itemId: rows[0]!.itemId, count: reduce(rows, (count, row) => Math.max(count, row.count), 0) })));
 }
 
 /** Read-only adapter. No game/controller hooks are available to this module. */
@@ -84,7 +85,7 @@ export function dispositionContextFromStatus(status: Record<string, unknown>): D
   const equipment = Array.isArray(character.equipment) && character.equipment.length <= 14
     && character.equipment.every(id => typeof id === 'number' && Number.isInteger(id) && id >= -1 && id <= 2_147_483_647) ? [...character.equipment] as number[] : null;
   const ammoId = typeof character.ammoId === 'number' && Number.isInteger(character.ammoId) && character.ammoId >= -1 && character.ammoId <= 2_147_483_647 ? character.ammoId : null;
-  const learned = character.skillsKnown === true && Array.isArray(character.learned) ? character.learned.map(object) : [];
+  const learned = character.skillsKnown === true && Array.isArray(character.learned) ? map(character.learned, object) : [];
   const pushCartLevel = number(learned.find(row => row.skillId === 73)?.level) ?? 0;
   const ownId=number(player.id);const own=ownId!==null&&Number.isInteger(ownId)&&ownId>=0&&ownId<=0x7fffffff&&player.kind===0;
   const ready = status.connected === true && status.compatible === true && own && player.dead === false;
@@ -112,10 +113,10 @@ export function dispositionContextFromStatus(status: Record<string, unknown>): D
 export function dispositionPreviewText(plan: DispositionPlan): string {
   const lines = [`Preview only · ${plan.actions.length} suggested actions · ${plan.protections.length} protected entries`,
     `Estimated spending ${plan.estimatedCost}z · Budget reserved ${plan.reservedSpend}z · Estimated proceeds ${plan.estimatedProceeds}z`,
-    ...plan.actions.map((action, index) => `${index + 1}. ${action.kind} ${itemName(action.itemId)} × ${action.count}${action.bagId === undefined ? '' : ` · bag #${action.bagId}`} · ${action.from} → ${action.to}`),
-    ...plan.protections.slice(0, 32).map(row => `Keep ${itemName(row.itemId)} × ${row.count} · ${row.container} bag #${row.bagId}: ${row.reason}`),
-    ...plan.unmet.map(row => `Unmet ${row.kind}: ${itemName(row.itemId)} × ${row.count}`),
-    ...plan.blocked.map(reason => `Blocked: ${reason}`)];
+    ...map(plan.actions, (action, index) => `${index + 1}. ${action.kind} ${itemName(action.itemId)} × ${action.count}${action.bagId === undefined ? '' : ` · bag #${action.bagId}`} · ${action.from} → ${action.to}`),
+    ...pipe(plan.protections, take(32), map(row => `Keep ${itemName(row.itemId)} × ${row.count} · ${row.container} bag #${row.bagId}: ${row.reason}`)),
+    ...map(plan.unmet, row => `Unmet ${row.kind}: ${itemName(row.itemId)} × ${row.count}`),
+    ...map(plan.blocked, reason => `Blocked: ${reason}`)];
   if (plan.protections.length > 32) lines.push(`+ ${plan.protections.length - 32} further protected entries`);
   if (plan.estimatedCost !== plan.reservedSpend) lines.push('Shop pricing may differ from the display. The spending reservation uses the higher quote.');
   lines.push('No items moved or sold. Generate a new preview when stock or transaction state changes.');

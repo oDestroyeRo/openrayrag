@@ -1,6 +1,6 @@
-import { validSocketSnapshot } from './socket-ui-logic';
+import { validSocketSnapshot, socketSlotsText } from './socket-ui-logic';
 export { validSocketSnapshot } from './socket-ui-logic';
-import { SOCKET_METADATA, type SocketSnapshot, type SocketPreview } from './socket';
+import type { SocketSnapshot, SocketPreview } from './socket';
 import { socketStockFloors, type SocketPreviewRequest, type SocketCommitRequest } from './socket-protocol';
 import type { AutomationSettings } from './settings';
 
@@ -45,7 +45,7 @@ export class SocketUi {
     const blocked=this.locked||this.sending||this.status?.pending===true;
     this.target.disabled=this.card.disabled=blocked;this.preview.disabled=blocked||!this.target.value||!this.card.value;
     this.commit.disabled=blocked||!this.current||String(this.current.targetBagId)!==this.target.value||String(this.current.cardBagId)!==this.card.value;
-    const p=this.current,slots=p?.target.slots.map(id=>id?SOCKET_METADATA[id]?.name??`Item #${id}`:'empty').join(', ');
+    const p=this.current,slots=p?socketSlotsText(p.target.slots):undefined;
     this.output.textContent=[this.status?`${this.status.state} · ${this.status.reason}`:'Connect a verified character and stop automation to preview socketing.',
       p&&`${p.target.name} +${p.target.refine} · bag ${p.targetBagId} · current slots: [${slots}]. Consume 1 ${p.card.name}; slot ${p.slot+1} becomes item #${p.card.itemId}. Keep ${p.card.reserve} in reserve.`].filter(Boolean).join('\n');
   }

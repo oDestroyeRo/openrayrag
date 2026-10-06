@@ -1,10 +1,9 @@
-import { validMemoSnapshot } from './memo-ui-logic';
+import { validMemoSnapshot, memoSlotsText, memoLocationText as describe } from './memo-ui-logic';
 export { validMemoSnapshot } from './memo-ui-logic';
 import { memoPreview, type MemoSnapshot } from './memo';
-import { validateMemoRequest, type MemoLocation, type MemoRequest, type MemoSlot } from './memo-protocol';
+import { validateMemoRequest, type MemoRequest, type MemoSlot } from './memo-protocol';
 
 const object=(v:unknown):Record<string,unknown>=>v&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
-const describe=(v:MemoLocation|null):string=>v?`${v.map} (${v.x}, ${v.y})`:'Empty';
 /** Revision-bound explicit controls. Neither a selection nor a status event sends. */
 export class MemoUi {
   readonly root=document.createElement('details');
@@ -46,7 +45,7 @@ export class MemoUi {
   }
   private update():void{
     const blocker=this.blocker();this.choice.disabled=this.locked||this.sending;this.previewButton.disabled=!!blocker;this.saveButton.disabled=!!blocker||!this.request;
-    this.slots.textContent=Array.from({length:4},(_,slot)=>`Slot ${slot}: ${this.snapshot?.slots?describe(this.snapshot.slots[slot]!):'Unknown · full readback not observed'}`).join('\n');
+    this.slots.textContent=memoSlotsText(this.snapshot?.slots);
     this.reason.textContent=[this.snapshot?.state?`${this.snapshot.state} · ${this.snapshot.reason}`:'Waiting for the server memo snapshot.',blocker].filter(Boolean).join('\n');
   }
   private preview():void{

@@ -1,3 +1,4 @@
+import { map, take } from 'remeda';
 import type { Entity } from './protocol';
 
 export interface MapMonster {
@@ -52,8 +53,8 @@ export function parseMapCatalog(mapData: unknown, monsterData: unknown): MapCata
 }
 
 export function currentMapInfo(code: string, entities: Iterable<Entity>, catalog: MapCatalog | null, loading: boolean): MapInfo {
-  const map = catalog?.get(code);
-  const monsters = new Map(map?.monsters.map(monster => [monster.classId, { ...monster }]));
+  const metadata = catalog?.get(code);
+  const monsters = new Map(map(metadata?.monsters ?? [], (monster): [number, MapMonster] => [monster.classId, { ...monster }]));
   const observed = new Set<number>();
   // Aggregate before the radar's 150-entity cap; these counts are visible live
   // entities, while spawnCount is the database's configured map population.
@@ -72,7 +73,7 @@ export function currentMapInfo(code: string, entities: Iterable<Entity>, catalog
     }
     monster.visibleCount++;
   }
-  return { code, name: map?.name ?? code, source: loading ? 'loading' : map ? 'database' : 'observed', monsters: [...monsters.values()].slice(0,128) };
+  return { code, name: metadata?.name ?? code, source: loading ? 'loading' : metadata ? 'database' : 'observed', monsters: take([...monsters.values()],128) };
 }
 
 export function validMapInfo(value: unknown, code: string): value is MapInfo {
