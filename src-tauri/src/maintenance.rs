@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+pub(crate) use crate::maintenance_logic::GameIdentity;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -6,12 +6,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct GameIdentity {
-    pub session_id: String,
-    pub connection_id: String,
-}
 #[derive(Clone)]
 pub(crate) struct Lease {
     pub nonce: String,

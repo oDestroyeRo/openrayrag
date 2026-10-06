@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import {
   readFile,
   writeFile,
@@ -530,6 +531,10 @@ test("reviewed historical plans survive a future policy snapshot without trustin
       join(folder, "scripts/semantic-release-plan.mjs"),
       await readFile(new URL("./semantic-release-plan.mjs", import.meta.url)),
     );
+    await writeFile(
+      join(folder, "scripts/semantic-release-policy.mjs"),
+      await readFile(new URL("./semantic-release-policy.mjs", import.meta.url)),
+    );
     const configSource = await readFile(
       new URL("../release.config.mjs", import.meta.url),
       "utf8",
@@ -569,4 +574,55 @@ test("reviewed historical plans survive a future policy snapshot without trustin
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
+});
+
+
+test("pure stable-version arithmetic agrees with pinned semver at every numeric boundary", () => {
+  const require = createRequire(new URL("../tools/release/package.json", import.meta.url));
+  const semver = require("semver");
+  assert.equal(require("semver/package.json").version, RELEASE_ENGINE_VERSIONS.semver);
+  const components = [0, 1, 9, 10, 42, Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER];
+  const versions = components.flatMap(major => components.flatMap(minor => components.map(patch => `${major}.${minor}.${patch}`)));
+  for (const [index, version] of versions.entries()) {
+    assert.equal(stableVersion(version), semver.valid(version));
+    const other = versions[(index + 1) % versions.length];
+    assert.equal(compareVersions(version, other), semver.compare(version, other));
+    assert.equal(compareVersions(other, version), semver.compare(other, version));
+    assert.equal(compareVersions(version, version), 0);
+    for (const type of ["major", "minor", "patch"]) {
+      const next = semver.inc(version, type);
+      if (semver.valid(next) === next) assert.equal(bumpVersion(version, type), next);
+      else assert.throws(() => bumpVersion(version, type), /stable release version/);
+    }
+  }
+  for (const value of ["1.0.0\n", "1.0.0\r\n", " 1.0.0", "1.0.0 ", "00.0.0", "0.01.0", "0.0.01", "1.0.0-rc.1", "1.0.0+build", "9007199254740992.0.0", "0.9007199254740992.0", "0.0.9007199254740992", "9".repeat(1000) + ".0.0"]) {
+    assert.throws(() => stableVersion(value), /stable release version/);
+  }
+});
+
+test("pure release contracts and injected planning work without installing release plugins", async () => {
+  const plan = await planFor(["fix: preserve contract loading"]);
+  const folder = await mkdtemp(join(tmpdir(), "rayrag-pure-release-contracts-"));
+  try {
+    await mkdir(join(folder, "scripts"));
+    for (const name of ["semantic-release-policy", "semantic-release-plan", "release-policy", "release-reservation-policy", "release-source-policy"]) {
+      await writeFile(join(folder, `scripts/${name}.mjs`), await readFile(new URL(`./${name}.mjs`, import.meta.url)));
+    }
+    for (const name of ["release.config.mjs", "release-policy-history.json", "release-migration.json"]) {
+      await writeFile(join(folder, name), await readFile(new URL(`../${name}`, import.meta.url)));
+    }
+    const script = `import assert from 'node:assert/strict';
+      const policy = await import(${JSON.stringify(pathToFileURL(join(folder, "scripts/semantic-release-policy.mjs")).href)});
+      const core = await import(${JSON.stringify(pathToFileURL(join(folder, "scripts/release-policy.mjs")).href)});
+      const reservation = await import(${JSON.stringify(pathToFileURL(join(folder, "scripts/release-reservation-policy.mjs")).href)});
+      await import(${JSON.stringify(pathToFileURL(join(folder, "scripts/release-source-policy.mjs")).href)});
+      assert.equal(policy.validatePlan(${JSON.stringify(plan)}).version, ${JSON.stringify(plan.version)});
+      assert.equal(core.assetNames('0.3.0').archive, 'Rayrag_Companion_0.3.0_aarch64.app.tar.gz');
+      assert.equal(reservation.planRefName(${JSON.stringify(plan)}), 'refs/tags/rayrag-release-plan/' + ${JSON.stringify(plan.tag)});
+      const {planRelease} = await import(${JSON.stringify(pathToFileURL(join(folder, "scripts/semantic-release-plan.mjs")).href)});
+      const planned = await planRelease(${JSON.stringify(inputFor())}, {cwd:'injected-directory', analyzer:()=> 'patch', notesGenerator:()=> 'Injected notes.'});
+      assert.equal(planned.plan.notes, 'Injected notes.');`;
+    const output = execFileSync(process.execPath, ["--input-type=module", "--eval", script], { timeout: 10_000, stdio: "pipe" });
+    assert.equal(output.toString(), "");
+  } finally { await rm(folder, { recursive: true, force: true }); }
 });

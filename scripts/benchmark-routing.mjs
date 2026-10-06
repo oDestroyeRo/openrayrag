@@ -11,8 +11,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { createHash } from 'node:crypto';
 
+export async function runBenchmark(args = process.argv.slice(2)) {
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-const baseline=execFileSync('git',['rev-parse','--verify',`${process.argv[2]??'HEAD'}^{commit}`],{cwd:root,encoding:'utf8'}).trim();
+const baseline=execFileSync('git',['rev-parse','--verify',`${args[0]??'HEAD'}^{commit}`],{cwd:root,encoding:'utf8'}).trim();
 const folder=await mkdtemp(join(tmpdir(),'rayrag-routing-benchmark-'));
 async function bundle(name,ref){
   const output=join(folder,`${name}.mjs`);
@@ -99,3 +100,9 @@ try{
   for(let i=0;i<beforeResults.length;i++)deepStrictEqual(afterResults[i].outcome,beforeResults[i].outcome,beforeResults[i].scenario);
   console.log(JSON.stringify({baseline,bun:process.versions.bun,before:beforeResults.map(compact),after:afterResults.map(compact)},null,2));
 }finally{await rm(folder,{recursive:true,force:true});}
+
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await runBenchmark();
+}

@@ -1,19 +1,13 @@
 import type { AttackStrategyRule } from './settings';
-import type { ObservationContext, ActorObservationSnapshot } from './actor-observations';
-import { evaluateActorPredicate } from './actor-observations';
-import { castReadiness, type CastProfile } from './cast-policy';
+import type { ActorObservationSnapshot } from './actor-observations-logic';
+import { evaluateActorPredicate } from './actor-observations-logic';
+import { castReadiness } from './cast-policy';
 import type { CharacterState } from './character-state';
 
-export interface EngagementIdentity {world:string;id:number;incarnation:number}
-interface RuleLedger {attempts:number;uses:number;lastDispatch:number|null;uncertain:boolean;rejected:boolean}
-interface Engagement {identity:EngagementIdentity;normalStarted:boolean;rules:Map<string,RuleLedger>}
-export type StrategyChoice = {state:'cast';rule:AttackStrategyRule;profile:CastProfile;identity:EngagementIdentity}
-  | {state:'wait';reason:string} | {state:'normal'};
-export interface AttackStrategySnapshot {pending:boolean;entries:Array<EngagementIdentity & {normalStarted:boolean;rules:Array<{id:string;attempts:number;uses:number;uncertain:boolean;rejected:boolean}>}>;truncated:boolean}
-const key=(identity:EngagementIdentity)=>`${identity.world}:${identity.id}:${identity.incarnation}`;
-export function engagementIdentity(id:number,context:ObservationContext):EngagementIdentity|null {
-  return context.incarnation ? {world:context.world,id,incarnation:context.incarnation} : null;
-}
+import { type EngagementIdentity, type Engagement, type StrategyChoice, type AttackStrategySnapshot, key } from './attack-strategy-logic';
+
+export { type EngagementIdentity, type StrategyChoice, type AttackStrategySnapshot, engagementIdentity } from './attack-strategy-logic';
+
 /** Per-incarnation allowances live independently of selected target and run
  * intent. Only actor/world invalidation releases them; Stop/Start never does.
  * This ledger sends no packets and never owns a second cast receipt. */

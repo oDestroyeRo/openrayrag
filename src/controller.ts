@@ -1,3 +1,4 @@
+import { fieldIdentityWaitReason, fieldResumeDecision } from './controller-field-policy';
 import { PartyFollowRuntime, type PartyFollowContext, type PartyFollowSnapshot } from './party-follow';
 import { PartyHealPolicy, partyHealCandidates, partyHpCondition, type PartyHealSnapshot } from './party-heal';
 import { deathLimitGuidance, farmingDestination, deathCycle, deathGuard, validateDeathRecoveryGuard, type DeathRecoveryGuard, type DeathCycle } from './death-recovery';
@@ -33,12 +34,14 @@ import { DATABASE_TELEPORT_COOLDOWN_MS, databaseTeleportWait } from './database-
 import { inSchedule, actionConfirmationTimeout } from './automation';
 import { searchGrid, type WalkGrid } from './navigation';
 import type { InventoryItem } from './protocol-feature';
-import { NpcServiceRuntime, validateServiceExecution, observeServiceReceipt, confirmServiceReceipt, type ServiceContext, type ServiceReceipt, type ServiceSnapshot } from './npc-services';
+import { NpcServiceRuntime, observeServiceReceipt, confirmServiceReceipt, type ServiceContext, type ServiceReceipt, type ServiceSnapshot } from './npc-services';
+import { validateServiceExecution } from './npc-services-logic';
 import { ITEM_CATALOG } from './game-catalog';
 import { SupplyTripRuntime, validateSupplyResumeGuard, type SupplyContext, type SupplyIntent, type SupplySnapshot, type SupplyResumeGuard } from './supply-trip';
 import { nextSupplyAction, type SupplyPhaseEvidence } from './supply-plan';
-import { createSupplyReceipt, observeSupplyReceipt, confirmSupplyReceipt, type SupplyReceipt } from './supply-receipt';
-import { dispositionStockFloors, publishedDispositionMetadata } from './disposition-ui';
+import { observeSupplyReceipt } from './supply-receipt';
+import { createSupplyReceipt, confirmSupplyReceipt, type SupplyReceipt } from './supply-receipt-logic';
+import { dispositionStockFloors, publishedDispositionMetadata } from './disposition-ui-logic';
 import { BUILTIN_SERVICES, serviceByContractId,resolveServiceNpc, type NpcServiceDefinition } from './npc-services';
 import { confirmWorkflowReceipt, type WorkflowReceipt } from './workflows';
 import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type EscapeSnapshot, type EscapeResumeGuard } from './escape';
@@ -1624,32 +1627,20 @@ export class CompanionController {
     if (now < this.yieldUntil) { this.wait('Yielding briefly to manual game input.'); return; }
     if(!this.engine.observedOwnCastSettled()){this.waitingReason=this.engine.reason=OWN_CAST_WAIT_REASON;return;}
     if (now < this.fencedUntil || !this.travel.movementSettled(this.engine.map,player) || !this.engine.idleForActions()) { this.wait('Waiting for the previous action and movement to settle.'); return; }
-    if (!this.engine.connected) { this.wait('Waiting for the game to reconnect.'); return; }
-    if (!this.engine.compatible) { this.wait('Waiting for a verified game build and protocol.'); return; }
-    if (!player || !this.engine.map) { this.wait('Waiting for the character and map to load.'); return; }
-    if(!player.dead&&!this.engine.actorActionIdentity()){this.wait('Waiting for the current own actor lifetime to be observed.');return;}
+    const identityWait=fieldIdentityWaitReason({connected:this.engine.connected,compatible:this.engine.compatible,
+      hasPlayer:!!player,map:this.engine.map,dead:player?.dead??false,ownActorObserved:!player||player.dead||!!this.engine.actorActionIdentity()});
+    if(identityWait){this.wait(identityWait);return;}
+    if(!player)return;
     this.characterName ??= player.name;
-    if (player.name !== this.characterName) { this.wait('Waiting for the originally selected character.'); return; }
-    if (this.unresolvedWorld) { this.wait('Waiting for the canceled world request to settle or its interaction to close.'); return; }
-    if (policy.limits.weightPercent) {
-      const stats = this.engine.character.stats;
-      if (stats?.weight === undefined || !stats.maxWeight) { this.wait('Waiting for a confirmed weight update.'); return; }
-      if (stats.weight / stats.maxWeight * 100 >= policy.limits.weightPercent) { this.wait('Waiting for carried weight to fall below the configured limit.'); return; }
-    }
-    if (now - this.lastFrame > 15_000) {
-      if(this.travel.databasePreparing)this.waitingReason=this.travel.snapshot().reason;
-      else this.wait('Waiting for a fresh server update.');return;
-    }
-    if (player.dead && (!policy.respawn.enabled || this.engine.deaths > policy.respawn.maxDeaths)) {
-      this.wait(policy.respawn.enabled ? `Death limit reached. ${deathLimitGuidance(this.engine.deaths,policy.respawn.maxDeaths)}` : 'Waiting for revival.'); return;
-    }
-    if (!player.dead && (!player.maxHp || player.hp / player.maxHp * 100 <= settings.minHpPercent)) {
-      this.wait('Waiting for HP to recover above the configured limit.'); return;
-    }
-    if (this.world.npc.mode !== 'idle' || this.world.npc.id !== null || this.world.vending) {
-      this.wait('Waiting for the current NPC or vending interaction to finish.'); return;
-    }
-    if (now < this.retryAt) return;
+    const stats=this.engine.character.stats;
+    const decision=fieldResumeDecision({now,lastFrame:this.lastFrame,retryAt:this.retryAt,originalCharacter:this.characterName,character:player.name,
+      unresolvedWorld:!!this.unresolvedWorld,weightLimit:policy.limits.weightPercent,weight:stats?.weight,maxWeight:stats?.maxWeight,
+      databasePreparing:this.travel.databasePreparing,databaseReason:now-this.lastFrame>15_000&&this.travel.databasePreparing?this.travel.snapshot().reason:'',dead:player.dead,
+      respawnEnabled:policy.respawn.enabled,deaths:this.engine.deaths,maxDeaths:policy.respawn.maxDeaths,
+      hp:player.hp,maxHp:player.maxHp,minHpPercent:settings.minHpPercent,npcMode:this.world.npc.mode,npcId:this.world.npc.id,vending:!!this.world.vending});
+    if(decision.type==='wait'){this.wait(decision.reason);return;}
+    if(decision.type==='database-wait'){this.waitingReason=decision.reason;return;}
+    if(decision.type==='hold')return;
     try {
       const executionPolicy=mapPolicy(settings);
       const destination = executionPolicy.lockArea?.map ?? (this.partyFollow.completed?'':(this.returning && this.returnSettings ? this.returnSettings.map : policy.travel.destinationMap));

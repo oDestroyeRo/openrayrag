@@ -1,4 +1,5 @@
-import { evaluateActorPredicate, validActorSnapshot, type ActorObservationSnapshot, type ActorPredicate, type ActorSelector } from './actor-observations';
+import { actorSnapshotAt as snapshotAt, observedActorChoices, bindObservedActor } from './actor-predicate-ui-logic';
+import { evaluateActorPredicate, type ActorObservationSnapshot, type ActorPredicate, type ActorSelector } from './actor-observations';
 import { RESOURCE_OPERATORS, type ResourceOperator } from './actor-resources';
 import { STATUS_CATALOG } from './actor-status-catalog';
 
@@ -43,16 +44,17 @@ export class ActorPredicateEditor {
       const snap=this.snapshot();actors.parentElement!.hidden=scope.value!=='actor';status.parentElement!.hidden=type.value!=='actorStatus';skillLabel.hidden=type.value!=='actorCasting';
       const resource=type.value==='actorHpPercent'||type.value==='actorSpPercent';desired.parentElement!.hidden=resource;comparison.parentElement!.hidden=!resource;percentLabel.hidden=!resource;
       actors.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent=actor.scope==='actor'?`Bound to #${actor.id}; choose again to rebind`:'Choose a currently observed actor';actors.append(empty);
-      if(snap)for(const observed of snap.actors.filter(a=>a.kind===0||a.kind===1)){const option=document.createElement('option');option.value=String(observed.id);option.textContent=`${observed.name||'Actor'} · #${observed.id}`;actors.append(option);}actors.value='';
+      for(const observed of observedActorChoices(snap)){const option=document.createElement('option');option.value=observed.value;option.textContent=observed.label;actors.append(option);}actors.value='';
       const result=evaluateActorPredicate(read(),snap);trace.textContent=`${result.state} · ${result.reason}`;
     };
     scope.addEventListener('change',()=>{if(scope.value==='self'||scope.value==='target'||scope.value==='candidate')actor={scope:scope.value};else if(actor.scope!=='actor')actor={scope:'actor',id:1,incarnation:1,world:'00000000-0000-0000-0000-000000000000'};refresh();this.changed();});
-    actors.addEventListener('change',()=>{const snap=this.snapshot();const selected=snap?.actors.find(a=>String(a.id)===actors.value);if(snap&&selected)actor={scope:'actor',id:selected.id,world:snap.world,incarnation:selected.incarnation};refresh();this.changed();});
+    actors.addEventListener('change',()=>{const selected=bindObservedActor(this.snapshot(),actors.value);if(selected)actor=selected;refresh();this.changed();});
     for(const input of [type,status,desired,skill,comparison,percent])input.addEventListener('input',()=>{refresh();this.changed();});
     const remove=document.createElement('button');remove.type='button';remove.className='text-button';remove.textContent='Remove condition';remove.addEventListener('click',()=>{this.entries.delete(row);row.remove();this.add.disabled=this.entries.size>=16;this.changed();});
     row.append(scope.parentElement!,actors.parentElement!,type.parentElement!,status.parentElement!,desired.parentElement!,skillLabel,comparison.parentElement!,percentLabel,trace,remove);this.entries.set(row,read);this.rows.append(row);row.addEventListener('focusin',refresh);refresh();this.add.disabled=this.entries.size>=16;
   }
 }
-export function actorSnapshotAt(value:unknown,at=Date.now()):ActorObservationSnapshot|undefined {
-  return validActorSnapshot(value)?{...value,at}:undefined;
+/** Compatibility facade supplies the browser clock; the projection receives it explicitly. */
+export function actorSnapshotAt(value: unknown, at = Date.now()): ActorObservationSnapshot | undefined {
+  return snapshotAt(value, at);
 }

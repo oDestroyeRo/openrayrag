@@ -1,5 +1,5 @@
 import type { Settings } from './settings';
-import { mapPolicy } from './map-policy';
+import { mapPolicy } from './map-policy-logic';
 
 /** Runtime-only state: profiles contain policy, never an outstanding request. */
 export interface DeathRecoveryGuard {

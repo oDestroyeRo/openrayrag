@@ -1,27 +1,11 @@
-import { formDocument, type FormDocument } from './current-form';
-import type { FeatureUi } from './feature-ui';
-import { settingsWithFieldMap } from './field-controls';
-import type { MapInfo } from './map-data';
+import { formDocument, type FormDocument } from './current-form-logic';
+import { settingsWithFieldMap } from './field-controls-logic';
 import { DEFAULT_AUTOMATION, MAX_TARGETS, validateFormSettings, validateSettings, type Settings } from './settings';
 import { MapTargets } from './targets';
 
-type AutomationEditor = Pick<FeatureUi, 'read' | 'write' | 'levelDifference' | 'selectedProfileId' | 'restoreProfileSelection'>;
-type FormSnapshot = Omit<FormDocument, 'version' | 'revision'>;
-export interface SettingsFormProjection {
-  runSettings(): Settings;
-  snapshot(): FormSnapshot;
-}
-export interface SettingsFormContext {
-  sessionId: string;
-  mapInfo: MapInfo;
-  level: number | null;
-  runActive: boolean;
-  controlsLocked: boolean;
-  targetsLocked: boolean;
-  retainedTargets?: readonly number[];
-}
-interface Hooks { context(): SettingsFormContext; changed(): void }
-interface TargetRow { label: HTMLLabelElement; input: HTMLInputElement; name: HTMLElement; detail: HTMLElement; count: HTMLElement }
+import type { AutomationEditor, FormSnapshot, SettingsFormProjection, Hooks, TargetRow } from './settings-form-logic';
+
+export { type SettingsFormProjection, type SettingsFormContext } from './settings-form-logic';
 
 /** The DOM owns edits; configured targets survive unavailable field observations.
  * CurrentForm continues to own revisions, delayed restoration and serialized saves.

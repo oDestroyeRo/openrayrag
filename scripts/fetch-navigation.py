@@ -8,31 +8,23 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
-import re
 import subprocess
 import sys
 import tempfile
 
-sources = json.loads((Path(__file__).resolve().parent / 'navigation-sources.json').read_text())['maps']
-destination = Path(sys.argv[1])
-destination.mkdir(parents=True, exist_ok=True)
+from navigation_logic import reviewed_bundle_matches, scene_url
 
 
 def matches(path, source):
     if not path.exists() or path.stat().st_size != source['bundleBytes']:
         return False
     with path.open('rb') as handle:
-        return hashlib.file_digest(handle, 'sha256').hexdigest() == source['sourceSha256']
+        return reviewed_bundle_matches(source, path.stat().st_size, hashlib.file_digest(handle, 'sha256').hexdigest())
 
 
-def fetch(source):
+def fetch(source, destination):
     code = source['map']
-    if not re.fullmatch(r'[a-z0-9_-]{1,64}', code):
-        raise ValueError('Invalid map code')
-    expected = ('https://websea01.rayrag.com/StreamingAssets/aa/WebGL/'
-                f'scenes_scenes_assets_scenes_maps_{code}.unity.bundle')
-    if source['sourceUrl'] != expected:
-        raise ValueError('Unexpected scene URL')
+    expected = scene_url(source)
     output = destination / f'rayrag-{code}-scene.bundle'
     if matches(output, source):
         return False
@@ -51,6 +43,14 @@ def fetch(source):
     return True
 
 
-with ThreadPoolExecutor(max_workers=4) as pool:
-    fetched = sum(pool.map(fetch, sources))
-print(json.dumps({'maps': len(sources), 'downloaded': fetched, 'cached': len(sources) - fetched}))
+def main(argv=None):
+    destination, = map(Path, sys.argv[1:] if argv is None else argv)
+    sources = json.loads((Path(__file__).resolve().parent / 'navigation-sources.json').read_text())['maps']
+    destination.mkdir(parents=True, exist_ok=True)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        fetched = sum(pool.map(lambda source: fetch(source, destination), sources))
+    print(json.dumps({'maps': len(sources), 'downloaded': fetched, 'cached': len(sources) - fetched}))
+
+
+if __name__ == '__main__':
+    main()

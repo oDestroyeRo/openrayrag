@@ -10,32 +10,12 @@ import { nativeSmoke } from './native-smoke.mjs';
 import { verifyAppImageExecutable } from './appimage-proof.mjs';
 import { runLoggedProcess, smokePackagingEnvironment } from './process-diagnostics.mjs';
 
+import { platforms, assertArchitecture, packageBuildArgs } from './ci-platform-policy.mjs';
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const platforms = {
-  macos: { os:'darwin', arch:'arm64', target:'aarch64-apple-darwin', bundles:'app,dmg' },
-  windows: { os:'win32', arch:'x64', target:'x86_64-pc-windows-msvc', bundles:'nsis' },
-  linux: { os:'linux', arch:'x64', target:'x86_64-unknown-linux-gnu', bundles:'deb,appimage' },
-};
+export { platforms, assertArchitecture, packageConfig } from './ci-platform-policy.mjs';
 function requireValue(ok, message) { if (!ok) throw new Error(message); }
 const run = (file,args,options={}) => execFileSync(file,args,{cwd:root,stdio:['ignore','pipe','pipe'],...options});
-export function assertArchitecture(bytes, target) {
-  if (target === platforms.windows.target) {
-    requireValue(bytes.length >= 64 && bytes.toString('ascii',0,2)==='MZ','Missing Windows executable header.');
-    const offset=bytes.readUInt32LE(60);
-    requireValue(offset+26<=bytes.length && bytes.toString('ascii',offset,offset+4)==='PE\0\0'
-      && bytes.readUInt16LE(offset+4)===0x8664 && bytes.readUInt16LE(offset+24)===0x20b,'Application is not Windows x64.');
-  } else if (target === platforms.linux.target) {
-    requireValue(bytes.length>=64 && bytes.subarray(0,4).equals(Buffer.from([127,69,76,70]))
-      && bytes[4]===2 && bytes[5]===1 && bytes.readUInt16LE(18)===62,'Application is not Linux x64.');
-  } else throw new Error('Unsupported executable target.');
-}
-export function packageConfig(platform, smoke) {
-  requireValue(Object.hasOwn(platforms,platform),'Unsupported package platform.');
-  return {
-    ...(smoke ? {identifier:'com.rayrag.companion.ci',app:{security:{capabilities:['ci-smoke']}}} : {}),
-    bundle:{createUpdaterArtifacts:false,targets:platforms[platform].bundles.split(',')},
-  };
-}
 async function walk(folder, skipLinks=false) {
   const items=[];
   for(const entry of await readdir(folder,{withFileTypes:true})) {
@@ -118,7 +98,7 @@ async function inspect(platform,bundle,binary,version,identifier,smoke) {
       const mount=join(temporary,'mount');await mkdir(mount);
       run('hdiutil',['attach',dmg,'-readonly','-nobrowse','-mountpoint',mount]);
       try {
-        run('python',['-c','import importlib.util,sys,pathlib; s=importlib.util.spec_from_file_location("release_native",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.compare_apps(pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]))',join(root,'scripts/release-native.py'),app,join(mount,'Rayrag Companion.app')]);
+        run('python',['-c','import importlib.util,sys,pathlib; sys.path.insert(0,str(pathlib.Path(sys.argv[1]).parent)); s=importlib.util.spec_from_file_location("release_native",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.compare_apps(pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]))',join(root,'scripts/release-native.py'),app,join(mount,'Rayrag Companion.app')]);
       }finally {run('hdiutil',['detach',mount]);}
       if(smoke)await nativeSmoke(executable,join(root,'reports/smoke.json'));
       payload.set(names.dmg,await readFile(dmg));
@@ -143,10 +123,7 @@ export async function build(platform, mode) {
     await stampVersions(root,`0.2.${count}`);
   }
   const version=JSON.parse(await readFile(join(root,'package.json'),'utf8')).version;
-  const config=packageConfig(platform,smoke);
-  const args=['build','--target',spec.target,'--bundles',spec.bundles,'--config',JSON.stringify(config),'--ci','--no-binary-patching'];
-  if(smoke)args.push('--features','ci-smoke');
-  args.push('--','--locked');
+  const args=packageBuildArgs(platform,smoke);
   const command=[join(root,'node_modules/@tauri-apps/cli/tauri.js'),...args];
   if(smoke)await runLoggedProcess(process.execPath,command,{
     cwd:root,env:buildEnvironment,report:join(root,'reports',`package-${platform}.log`),

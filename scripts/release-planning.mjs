@@ -1,12 +1,12 @@
 // Trusted-source orchestration. The pure engines and reservation ledger own policy;
 // callers inject Git history, commit ranges, API access and native verification.
 import {
-  planRelease,
   validatePlan,
   serializePlan,
   planSha256,
   MAX_PLAN_BYTES,
-} from "./semantic-release-plan.mjs";
+} from "./semantic-release-policy.mjs";
+import { planRelease } from "./semantic-release-plan.mjs";
 import {
   readReservations,
   reservePlan,

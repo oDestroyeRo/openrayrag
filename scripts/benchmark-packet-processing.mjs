@@ -3,11 +3,14 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { packetReport, validatePacketReport } from './benchmark-policy.mjs';
 
 // Offline synthetic replay through the real adapters. Instrumented decoder counts
 // and uninstrumented timings use separate bundles. No network or native transport.
+export async function runBenchmark(args = process.argv.slice(2)) {
 const root = resolve(import.meta.dirname, '..');
-const baseline = process.argv[2];
+const baseline = args[0];
 if (!baseline) throw new Error('Usage: bun scripts/benchmark-packet-processing.mjs <baseline-ref>');
 const temporary = await mkdtemp(join(tmpdir(), 'rayrag-packet-benchmark-'));
 const adapterPaths = new Set(['src/controller.ts', 'src/direct-runtime.ts', 'src/bridge.ts']);
@@ -111,22 +114,15 @@ try {
   // Count runs are separate from timing runs; all timing bundles omit counters.
   const beforeCounts=await measure(baseline,true),afterCounts=await measure(null,true);
   const beforeTime=await measure(baseline,false),afterTime=await measure(null,false);
-  const result={baseline,frames:afterCounts.frames,modes:{}};
-  for(const mode of ['gameClient','botOnly']){
-    result.modes[mode]={
-      generalDecodes:{before:beforeCounts[mode].counts.general,after:afterCounts[mode].counts.general},
-      worldDecodes:{before:beforeCounts[mode].counts.world,after:afterCounts[mode].counts.world},
-      snapshotEqual:JSON.stringify(beforeCounts[mode].snapshot)===JSON.stringify(afterCounts[mode].snapshot),
-      outgoingEqual:JSON.stringify(beforeCounts[mode].writes)===JSON.stringify(afterCounts[mode].writes),
-      outgoing:afterCounts[mode].writes,
-      medianMs:{before:beforeTime[mode].medianMs,after:afterTime[mode].medianMs},
-      samplesMs:{before:beforeTime[mode].samplesMs,after:afterTime[mode].samplesMs},
-    };
-  }
+  const result = packetReport(baseline, beforeCounts, afterCounts, beforeTime, afterTime);
   process.stdout.write(`${JSON.stringify(result,null,2)}\n`);
-  if(Object.values(result.modes).some(mode=>!mode.snapshotEqual||!mode.outgoingEqual
-    ||mode.generalDecodes.after!==result.frames||mode.worldDecodes.after!==result.frames))
-    throw new Error('Packet replay differed or an accepted frame was decoded more than once.');
+  validatePacketReport(result);
 } finally {
   await rm(temporary,{recursive:true,force:true});
+}
+
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await runBenchmark();
 }

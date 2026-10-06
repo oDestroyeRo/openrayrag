@@ -12,15 +12,13 @@ import tarfile
 import tempfile
 import zipfile
 
+from release_policy import (checked, compare_app_manifests, validate_app_archive,
+                            validate_bundle_metadata, validate_workflow_zip)
+
 LIMIT = 512 * 1024 * 1024
 ASSET_LIMIT = 256 * 1024 * 1024
 BUNDLE_LIMIT = 9 * ASSET_LIMIT
 APP = 'Rayrag Companion.app'
-
-
-def checked(ok, message):
-    if not ok:
-        raise ValueError(message)
 
 
 def run(*args):
@@ -30,16 +28,10 @@ def run(*args):
 def unpack_tar(archive, destination):
     with tarfile.open(archive, 'r:gz') as source:
         members = source.getmembers()
-        checked(0 < len(members) <= 10000 and sum(m.size for m in members) <= LIMIT, 'App archive exceeds bounds.')
-        seen = set()
+        validate_app_archive(members, APP, LIMIT)
         directories = []
         for member in members:
             path = pathlib.PurePosixPath(member.name)
-            checked(not path.is_absolute() and '..' not in path.parts and path.parts and path.parts[0] == APP, 'Unsafe app archive path.')
-            checked(member.isdir() or member.isfile(), 'App archive links/devices are not supported.')
-            checked(member.mode & 0o7000 == 0, 'Special app archive permissions are forbidden.')
-            checked(str(path) not in seen, 'Duplicate app archive path.')
-            seen.add(str(path))
             target = destination.joinpath(*path.parts)
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
@@ -79,8 +71,7 @@ def app_manifest(app):
 
 
 def compare_apps(archive_app, dmg_app):
-    checked(app_manifest(archive_app) == app_manifest(dmg_app),
-            'DMG and updater archive contain different application bytes, paths or permissions.')
+    compare_app_manifests(app_manifest(archive_app), app_manifest(dmg_app))
 
 
 def verify_app(app, version):
@@ -92,9 +83,7 @@ def verify_app(app, version):
     checked(stat.S_ISREG(mode) and mode & stat.S_IXUSR, 'App binary is not owner-executable.')
     with (app / 'Contents/Info.plist').open('rb') as source:
         info = plistlib.load(source)
-    checked(info.get('CFBundleIdentifier') == 'com.rayrag.companion', 'Bundle identifier differs.')
-    checked(info.get('CFBundleShortVersionString') == version and info.get('CFBundleVersion') == version, 'Bundle version differs.')
-    checked(info.get('CFBundleExecutable') == 'rayrag-companion', 'Unexpected bundle executable.')
+    validate_bundle_metadata(info, version)
     checked(run('lipo', '-archs', str(app / 'Contents/MacOS/rayrag-companion')).decode().strip() == 'arm64', 'App is not ARM64-only.')
     run('codesign', '--verify', '--deep', '--strict', str(app))
 
@@ -125,20 +114,21 @@ def verify(folder, version):
 def extract_zip(archive, destination, names):
     with zipfile.ZipFile(archive) as source:
         members = source.infolist()
-        layouts = names if names and isinstance(names[0], list) else [names]
-        checked(any(sorted(m.filename for m in members) == sorted(layout) for layout in layouts), 'Workflow artifact has unexpected or duplicate paths.')
-        checked(sum(m.file_size for m in members) <= BUNDLE_LIMIT and all(0 < m.file_size <= ASSET_LIMIT for m in members), 'Workflow artifact exceeds bounds.')
+        validate_workflow_zip(members, names, ASSET_LIMIT, BUNDLE_LIMIT)
         for member in members:
-            checked(pathlib.PurePosixPath(member.filename).name == member.filename and not member.is_dir(), 'Invalid workflow artifact path.')
-            checked(not stat.S_ISLNK(member.external_attr >> 16), 'Workflow artifact links are forbidden.')
             with source.open(member) as reader, (destination / member.filename).open('xb') as writer:
                 shutil.copyfileobj(reader, writer)
 
 
-if __name__ == '__main__':
-    if sys.argv[1] == 'verify':
-        verify(pathlib.Path(sys.argv[2]), sys.argv[3])
-    elif sys.argv[1] == 'extract-zip':
-        extract_zip(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]), json.loads(sys.argv[4]))
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[0] == 'verify':
+        verify(pathlib.Path(argv[1]), argv[2])
+    elif argv[0] == 'extract-zip':
+        extract_zip(pathlib.Path(argv[1]), pathlib.Path(argv[2]), json.loads(argv[3]))
     else:
         raise ValueError('Unknown release verification command.')
+
+
+if __name__ == '__main__':
+    main()

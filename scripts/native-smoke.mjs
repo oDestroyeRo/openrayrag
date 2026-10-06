@@ -6,41 +6,12 @@ import { mkdtemp, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { isDeepStrictEqual } from 'node:util';
 
-const EXPECTED_CHECKS = ['webview-boot', 'offline-controller', 'native-settings-ipc', 'window-close-save'];
+import { createSmokeLaunch, validateResult, verifyReopened } from './native-smoke-policy.mjs';
+export { validateResult, verifyReopened } from './native-smoke-policy.mjs';
 
 export function smokeLaunch(binary, root, platform = process.platform, env = process.env) {
-  if (platform !== 'linux') return { binary: resolve(binary), prefixArgs: [], env };
-  return {
-    binary: 'dbus-run-session', prefixArgs: ['--', resolve(binary)],
-    env: { ...env, XDG_DATA_HOME: join(root, 'xdg-data'), XDG_CACHE_HOME: join(root, 'xdg-cache') },
-  };
-}
-
-export function validateResult(result, stage, token) {
-  if (result?.protocol !== 1 || result.stage !== stage || result.token !== token || result.passed !== true
-      || !EXPECTED_CHECKS.every(check => result.checks?.includes(check))) {
-    throw new Error(`Native ${stage} smoke did not return a complete passing result.`);
-  }
-  if (stage === 'reopen' && !result.checks.includes('settings-restore')) throw new Error('Native reopening did not prove settings restoration.');
-  const document = result.document;
-  if (document?.version !== 1 || !Number.isSafeInteger(document.revision) || document.revision < 1
-      || document.selectedProfileId !== null || document.settings?.radius !== 17
-      || document.settings.loot !== false || document.settings.route_step !== 7
-      || Object.keys(document).sort().join(',') !== 'revision,selectedProfileId,settings,version') {
-    throw new Error(`Native ${stage} smoke did not retain the edited settings.`);
-  }
-  return document;
-}
-
-export function verifyReopened(saved, reopened) {
-  // Startup may advance the save revision while confirming identical contents.
-  const { revision: savedRevision, ...savedContents } = saved;
-  const { revision: reopenedRevision, ...reopenedContents } = reopened;
-  if (reopenedRevision < savedRevision || !isDeepStrictEqual(savedContents, reopenedContents)) {
-    throw new Error('Native reopening changed the saved settings.');
-  }
+  return createSmokeLaunch(resolve(binary), root, platform, env);
 }
 
 export async function runStage(binary, stage, { root, data, result, token, timeoutMs = 45_000, prefixArgs = [], env = process.env }) {

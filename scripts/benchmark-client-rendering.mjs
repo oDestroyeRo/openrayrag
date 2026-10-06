@@ -13,7 +13,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { cpus, platform, release, tmpdir, totalmem } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isDeepStrictEqual } from 'node:util';
+import { rendererOptions, compareRenderingReports, median } from './benchmark-policy.mjs';
 
 export async function writeBenchmarkReport(report, requestedOutput) {
   const output = requestedOutput ? resolve(requestedOutput)
@@ -22,20 +22,14 @@ export async function writeBenchmarkReport(report, requestedOutput) {
   return output;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+export async function runBenchmark(args = process.argv.slice(2)) {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const options = new Map();
-for (let i = 2; i < process.argv.length; i += 2) {
-  if (!['--ref', '--output', '--compare', '--samples', '--iterations', '--chrome'].includes(process.argv[i]) || !process.argv[i + 1]) throw new Error(`Invalid option: ${process.argv[i]}`);
-  options.set(process.argv[i], process.argv[i + 1]);
-}
-const samples = Number(options.get('--samples') ?? 5), iterations = Number(options.get('--iterations') ?? 100);
-if (![samples, iterations].every(n => Number.isInteger(n) && n > 0)) throw new Error('Samples and iterations must be positive integers.');
+const { options, samples, iterations } = rendererOptions(args);
 const commit = execFileSync('git', ['rev-parse', '--verify', `${options.get('--ref') ?? 'HEAD'}^{commit}`], { cwd: root, encoding: 'utf8' }).trim();
 const chromePath = options.get('--chrome') ?? process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const temporary = await mkdtemp(join(tmpdir(), 'rayrag-client-rendering-'));
 const sourceHashes = new Map();
-const harnessFiles = ['scripts/benchmark-client-rendering.mjs', 'scripts/client-rendering-fixture.ts', 'scripts/client-rendering-native.ts', 'bun.lock'];
+const harnessFiles = ['scripts/benchmark-client-rendering.mjs', 'scripts/benchmark-policy.mjs', 'scripts/client-rendering-fixture.ts', 'scripts/client-rendering-native.ts', 'bun.lock'];
 const harnessHash = createHash('sha256');
 for (const file of harnessFiles) harnessHash.update(file).update(await readFile(join(root, file)));
 const harness = { files: harnessFiles, hash: harnessHash.digest('hex') };
@@ -69,7 +63,6 @@ class DevTools {
   }
 }
 const metrics = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(({ name, value }) => [name, value]));
-const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 try {
   await build({ entryPoints: [join(root, 'scripts/client-rendering-fixture.ts')], bundle: true, format: 'esm', platform: 'browser', target: 'chrome120', loader: { '.svg': 'text' }, outfile: join(temporary, 'bundle.js'), logLevel: 'silent',
     plugins: [{ name: 'offline-native-and-source', setup(builder) {
@@ -136,14 +129,7 @@ try {
   if (cdp.errors.length) throw new Error(cdp.errors.join('\n'));
   if (options.has('--compare')) {
     const baseline = JSON.parse(await readFile(resolve(options.get('--compare')), 'utf8'));
-    const { samples: _samples, ...methodology } = report.methodology;
-    const { samples: _oldSamples, ...oldMethodology } = baseline.methodology;
-    if (report.schemaVersion !== baseline.schemaVersion || !isDeepStrictEqual(report.harness, baseline.harness) || !isDeepStrictEqual(report.machine, baseline.machine) || !isDeepStrictEqual(methodology, oldMethodology) || !isDeepStrictEqual(report.workload, baseline.workload)) throw new Error('Comparison requires the same harness, dependencies, machine/browser, methodology and workload.');
-    report.comparison = report.scenarios.map(row => {
-      const old = baseline.scenarios.find(old => old.name === row.name);
-      if (!old || !isDeepStrictEqual(row.samples[0].outcome, old.samples[0].outcome)) throw new Error(`Visible outcome differs from baseline: ${row.name}`);
-      return { name: row.name, elapsedRatio: row.medianElapsedMs / old.medianElapsedMs, rendererTaskRatio: row.medianRendererTaskMs / old.medianRendererTaskMs, sameVisibleOutcome: true };
-    });
+    report.comparison = compareRenderingReports(report, baseline);
   }
   const output = await writeBenchmarkReport(report, options.get('--output'));
   console.log(`Saved ${output}; ${report.probes.passed.length} behavior probes passed.`);
@@ -153,4 +139,8 @@ try {
   if (server) await new Promise(resolve => server.close(resolve));
   await rm(temporary, { recursive: true, force: true });
 }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await runBenchmark();
 }

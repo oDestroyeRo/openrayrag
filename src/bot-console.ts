@@ -1,8 +1,9 @@
-import { validActorSnapshot } from './actor-observations';
+import { mapCoordinate, consoleCharacterText, consoleInventory, consoleMonsters } from './bot-console-logic';
+export { mapCoordinate } from './bot-console-logic';
 import type { Snapshot } from './engine';
 import { ITEM_CATALOG, itemName } from './game-catalog';
 import { previewManualTarget } from './manual-target';
-import { actorKey, manualTargetView } from './manual-target-view';
+import { manualTargetView } from './manual-target-view';
 import { NAVIGATION_MAPS, searchGrid } from './navigation';
 import { paintMapCollision } from './map-raster';
 import type { Position } from './protocol';
@@ -16,18 +17,6 @@ interface Hooks {
   lootSettings(): void;
   manualTools(): void;
 }
-const observed = (value: unknown): string => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value.toLocaleString() : '—';
-
-/** The displayed raster covers the full CSS box; map Y increases upwards. */
-export function mapCoordinate(clientX: number, clientY: number,
-  rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>, width: number, height: number): Position | null {
-  if (![clientX, clientY, rect.left, rect.top, rect.width, rect.height, width, height].every(Number.isFinite)
-    || rect.width <= 0 || rect.height <= 0 || width <= 0 || height <= 0) return null;
-  const x = clientX - rect.left, y = clientY - rect.top;
-  if (x < 0 || y < 0 || x >= rect.width || y >= rect.height) return null;
-  return { x: Math.floor(x / rect.width * width), y: height - 1 - Math.floor(y / rect.height * height) };
-}
-
 /** Projection only. Manual commands enter the existing receipt-owning controller. */
 export class BotConsole {
   private status: Snapshot | null = null;
@@ -130,36 +119,23 @@ export class BotConsole {
   }
   render(status: Snapshot | null): void {
     this.status = status;
-    const stats = status?.character.stats, experience = status?.character.experience;
-    this.get('console-levels').textContent = `${observed(stats?.level ?? status?.player?.level)} / ${observed(stats?.jobLevel)}`;
-    this.get('console-weight').textContent = `${observed(stats?.weight)} / ${observed(stats?.maxWeight)}`;
-    this.get('console-zeny').textContent = observed(stats?.zeny);
-    this.get('console-experience').textContent = `Base EXP ${observed(experience?.baseTotal)} (+${observed(experience?.baseGained)}) · Job EXP ${observed(experience?.jobTotal)} (+${observed(experience?.jobGained)})`;
-    this.get('console-base-experience').textContent = `${observed(experience?.baseTotal)} (+${observed(experience?.baseGained)})`;
-    this.get('console-job-experience').textContent = `${observed(experience?.jobTotal)} (+${observed(experience?.jobGained)})`;
+    for (const [id, text] of Object.entries(consoleCharacterText(status))) this.get(`console-${id}`).textContent = text;
     const character = status?.character, signature = JSON.stringify([this.world(), character?.inventoryKnown, character?.inventory.map(item => [item.itemId, item.count])]);
     if (signature !== this.inventorySignature) {
       this.inventorySignature = signature;
-      const selected = this.inventoryWorld === this.world() ? this.items.value : '', stock = new Map<number, number>();
+      const selected = this.inventoryWorld === this.world() ? this.items.value : '', stock = consoleInventory(status);
       this.inventoryWorld = this.world();
-      if (character?.inventoryKnown) for (const item of character.inventory) if (item.count > 0) stock.set(item.itemId, (stock.get(item.itemId) ?? 0) + item.count);
       this.items.replaceChildren();
       const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = 'Choose an item'; this.items.append(placeholder);
-      for (const [itemId, count] of [...stock].sort(([a], [b]) => itemName(a).localeCompare(itemName(b)))) {
-        const option = document.createElement('option'); option.value = String(itemId); option.textContent = `${itemName(itemId)} × ${count}`; this.items.append(option);
+      for (const { itemId, label } of stock) {
+        const option = document.createElement('option'); option.value = String(itemId); option.textContent = label; this.items.append(option);
       }
-      this.items.value = stock.has(Number(selected)) && selected !== '' ? selected : '';
-      this.get('console-stock-count').textContent = character?.inventoryKnown ? `${stock.size} item types` : 'Not observed';
+      this.items.value = stock.some(item => item.itemId === Number(selected)) && selected !== '' ? selected : '';
+      this.get('console-stock-count').textContent = character?.inventoryKnown ? `${stock.length} item types` : 'Not observed';
     }
-    const actors = validActorSnapshot(status?.actorObservations) ? status!.actorObservations : null;
     const live = new Set<string>(), list = this.get('monster-list');
-    const nearby = (status?.monsters ?? []).filter(monster => !monster.dead && monster.hp > 0).sort((a, b) => {
-      const distance = (p: Position) => status?.player ? Math.max(Math.abs(p.x - status.player.x), Math.abs(p.y - status.player.y)) : 0;
-      return distance(a) - distance(b);
-    });
-    for (const monster of nearby) {
-      const actor = actors?.actors.find(row => row.id === monster.id && row.kind === 1);
-      const key = actor ? actorKey(actors!.world, actor.id, actor.incarnation) : `unavailable:${monster.id}`;
+    for (const monster of consoleMonsters(status)) {
+      const key = monster.key;
       live.add(key); let row = this.monsters.get(key);
       if (!row) {
         const root = document.createElement('div'), text = document.createElement('span'), button = document.createElement('button');
@@ -167,8 +143,8 @@ export class BotConsole {
         button.addEventListener('click', () => this.operation(() => this.target({ type: 'attack', key })));
         root.append(text, button); list.append(root); row = { root, text, button }; this.monsters.set(key, row);
       }
-      row.text.textContent = `${monster.name} · Lv ${monster.level}\n${monster.x}, ${monster.y} · HP ${monster.hp} / ${monster.maxHp}`;
-      row.button.hidden = !actor; row.button.setAttribute('aria-label', `Attack ${monster.name} #${monster.id}`);
+      row.text.textContent = monster.text;
+      row.button.hidden = !monster.attackable; row.button.setAttribute('aria-label', monster.label);
     }
     for (const [key, row] of this.monsters) if (!live.has(key)) { row.root.remove(); this.monsters.delete(key); }
     // The empty placeholder is a separate node so telemetry never replaces focused action buttons.

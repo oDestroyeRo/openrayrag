@@ -27,6 +27,22 @@ export function sourceDependencyFiles(sourceSha, git) {
   return files;
 }
 
+// Older releases contain the original inline validators. New sources carry
+// extracted modules; discover only this allowlist at the selected immutable SHA.
+const SPLIT_SOURCE_FILES = [
+  "scripts/release-policy.mjs", "scripts/release-publication.mjs",
+  "scripts/release-source-policy.mjs", "scripts/release-reservation-policy.mjs",
+  "scripts/release_policy.py",
+  "scripts/semantic-release-policy.mjs",
+];
+export function sourceModuleFiles(sourceSha, git) {
+  const files = git(["ls-tree", "--name-only", sourceSha, "--", ...SPLIT_SOURCE_FILES])
+    .toString("utf8").trim().split("\n").filter(Boolean);
+  requireValue(files.every(name => SPLIT_SOURCE_FILES.includes(name)) && new Set(files).size === files.length,
+    "Unexpected source validator modules.");
+  return files;
+}
+
 export async function peelTag(api, tag, fresh = false) {
   let object = (await api(`/git/ref/tags/${tag}`, { fresh })).object;
   const seen = new Set();
@@ -50,7 +66,7 @@ export function commitsBetween(git, base, source) {
 
 export async function loadSourceValidators(folder, sourceSha, git) {
   const dependencyFiles = sourceDependencyFiles(sourceSha, git);
-  for (const name of [...SOURCE_FILES, ...dependencyFiles]) {
+  for (const name of [...SOURCE_FILES, ...sourceModuleFiles(sourceSha, git), ...dependencyFiles]) {
     const destination = join(folder, name);
     await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
     await writeFile(destination, git(["show", `${sourceSha}:${name}`]), { flag: "wx", mode: 0o600 });

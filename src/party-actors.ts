@@ -1,16 +1,11 @@
-import type { ActorObservations, ObservationContext, PartyActorEvidence } from './actor-observations';
+import type { ActorObservations } from './actor-observations';
 import { RESOURCE_STALE_MS } from './actor-resources';
 import type { PartyMember, WorldEvent } from './world-protocol';
 
-export interface PartyActorBinding {
-  partyId: number; memberId: number; entityId: number; map: string;
-  world: string; incarnation: number; affiliationRevision: number;
-}
-type Party = { id: number; name: string; members: Map<number,PartyMember> } | null;
-interface Association {
-  member: PartyMember; context: ObservationContext; actor: PartyActorEvidence | null;
-  binding: PartyActorBinding | null; resourcesApplied: boolean;
-}
+import type { PartyActorBinding, Party, Association } from './party-actors-logic';
+
+export { type PartyActorBinding } from './party-actors-logic';
+
 /** A full roster row authorizes one visible lifetime only. Partial rows cannot rebind it. */
 export class PartyActorBindings {
   private observations?:ActorObservations;

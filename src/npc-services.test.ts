@@ -39,7 +39,7 @@ function setup(definition = storage) {
   const sent: Array<Action | WorldAction> = [];
   const world = new WorldState();
   world.reset(definition.map);
-  const c: ServiceContext = {
+  const c: ServiceContext & { world: WorldState } = {
     map: definition.map,
     playerId: 1,
     alive: true,

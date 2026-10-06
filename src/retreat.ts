@@ -1,11 +1,14 @@
-import type {ActionIdentity} from './actor-identity';
-import {attackDistance} from './combat';
-import {minimumRouteCost, type GridNavigator} from './navigation';
-import type {Position} from './protocol';
-import type {RetreatSettings} from './settings';
+import type { ActionIdentity } from './actor-identity';
+import { attackDistance } from './combat';
+import { minimumRouteCost } from './navigation-logic';
+import type { GridNavigator } from './navigation';
+import type { Position } from './protocol';
+import type { RetreatSettings } from './settings';
 
-export interface RetreatEntry {identity:ActionIdentity;since:number;progress:number;accepted:boolean;attempts:number}
-const key=(identity:ActionIdentity)=>`${identity.world}:${identity.targetId}:${identity.targetIncarnation}`;
+import { type RetreatEntry, key, type RetreatPlan } from './retreat-logic';
+
+export { type RetreatEntry, type RetreatPlan, type RetreatSnapshot, IDLE_RETREAT, type RetreatTask } from './retreat-logic';
+
 /** No live entry is evicted: Stop/Start and switching targets cannot refill budgets. */
 export class RetreatLedger {
   private readonly entries=new Map<string,RetreatEntry>();
@@ -18,7 +21,7 @@ export class RetreatLedger {
   remove(id:number):void {for(const [key,entry]of this.entries)if(entry.identity.targetId===id)this.entries.delete(key);}
   clear():void {this.entries.clear();}
 }
-export interface RetreatPlan {destination:Position;cells:Position[];cost:number}
+
 /** Enumerate at most 841 cheap coordinates, inspect the first 128 candidates
  * for safe ground/sight, and plan at most 32 valid firing candidates.
  * Candidate ties: movement lower bound, greater separation, y then x. Final
@@ -44,6 +47,3 @@ export function planRetreat(nav:GridNavigator,from:Position,target:Position,rang
   }
   return best?{destination:best.destination,cells:best.cells,cost:best.cost}:null;
 }
-export interface RetreatSnapshot {state:'off'|'watching'|'stopping'|'walking'|'waiting'|'resumed'|'skipped';reason:string;targetId:number|null;attempts:number;destination:Position|null;settling:boolean}
-export const IDLE_RETREAT:RetreatSnapshot={state:'off',reason:'Normal attack retreat is off.',targetId:null,attempts:0,destination:null,settling:false};
-export interface RetreatTask {identity:ActionIdentity;entry:RetreatEntry;targetPosition:Position;destination:Position;cells:Position[];phase:'stopping'|'walking'|'cancelled';cleared:boolean;walkPending:boolean;walkSent:boolean;stopRetried:boolean;steps:number;since:number;movementSince:number|null;reason:string;unsentRemoval?:{id:number;name:string;map:string;world:string;incarnation:number;reason:0|1};unsentArrival?:{id:number;name:string;map:string;entry:1|2}}

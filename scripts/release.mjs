@@ -17,8 +17,6 @@ import {
   TARGET,
   WINDOWS_TARGET,
   LINUX_TARGET,
-  IDENTIFIER,
-  ENDPOINT,
   BUN_VERSION,
   RUST_VERSION,
   MAX_RELEASE_ASSET,
@@ -33,9 +31,10 @@ import {
   validatePlatformBuild,
   publishRelease,
 } from "./release-core.mjs";
-import { stableVersion, serializePlan } from "./semantic-release-plan.mjs";
+import { stableVersion, serializePlan } from "./semantic-release-policy.mjs";
 import { planProduction, loadProductionPlan } from "./release-planning.mjs";
 import { PLAN_REF_PREFIX, MAX_RESERVATIONS } from "./release-reservations.mjs";
+import { VERSION_PATHS, versionContents, validateUpdaterConfig, tagResponseBytes, annotatedTag } from "./release-source-policy.mjs";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const exec = (file, args, cwd = repositoryRoot) =>
   execFileSync(file, args, {
@@ -45,86 +44,16 @@ const exec = (file, args, cwd = repositoryRoot) =>
   }).trim();
 export async function stampVersions(root, version) {
   stableVersion(version);
-  const paths = [
-    "package.json",
-    "src-tauri/Cargo.toml",
-    "src-tauri/Cargo.lock",
-    "src-tauri/tauri.conf.json",
-  ];
-  const values = await Promise.all(
-      paths.map((p) => readFile(join(root, p), "utf8")),
-    ),
-    pkg = JSON.parse(values[0]),
-    config = JSON.parse(values[3]);
-  const old = pkg.version;
-  requireValue(
-    pkg.name === "rayrag-companion" &&
-      config.version === old,
-    "Source versions are inconsistent.",
-  );
-  const cargo = values[1].replaceAll("\r\n", "\n").split("\n");
-  let section = "",
-    changed = 0;
-  for (let i = 0; i < cargo.length; i++) {
-    if (cargo[i].startsWith("[")) section = cargo[i];
-    if (section === "[package]" && /^version = /.test(cargo[i])) {
-      requireValue(
-        cargo[i] === `version = "${old}"`,
-        "Cargo package version differs.",
-      );
-      cargo[i] = `version = "${version}"`;
-      changed++;
-    }
-  }
-  requireValue(changed === 1, "Expected one Cargo package version.");
-  let packages = 0;
-  const cargoLock = values[2]
-    .replaceAll("\r\n", "\n")
-    .split("[[package]]")
-    .map((block) => {
-      if (/^\nname = "rayrag-companion"\n/m.test(block)) {
-        packages++;
-        requireValue(
-          block.includes(`\nversion = "${old}"\n`),
-          "Cargo lock version differs.",
-        );
-        return block.replace(
-          `\nversion = "${old}"\n`,
-          `\nversion = "${version}"\n`,
-        );
-      }
-      return block;
-    })
-    .join("[[package]]");
-  requireValue(packages === 1, "Expected one root package in Cargo.lock.");
-  // Bun's dependency lock has no root package version; keep it byte-identical.
-  pkg.version = config.version = version;
-  const updates = [
-    JSON.stringify(pkg, null, 2) + "\n",
-    cargo.join("\n"),
-    cargoLock,
-    JSON.stringify(config, null, 2) + "\n",
-  ];
-  await Promise.all(paths.map((p, i) => writeFile(join(root, p), updates[i])));
+  const values = await Promise.all(VERSION_PATHS.map(p => readFile(join(root, p), "utf8")));
+  // Validate and transform every source before the first write.
+  const updates = versionContents(values, version);
+  await Promise.all(VERSION_PATHS.map((p, i) => writeFile(join(root, p), updates[i])));
 }
 async function readConfig() {
   const c = JSON.parse(
     await readFile(join(repositoryRoot, "src-tauri/tauri.conf.json"), "utf8"),
   );
-  requireValue(
-    c.identifier === IDENTIFIER &&
-      c.bundle?.createUpdaterArtifacts === true &&
-      typeof c.plugins?.updater?.pubkey === "string" &&
-      c.plugins.updater.pubkey.length > 20,
-    "Updater configuration/public key is not ready.",
-  );
-  requireValue(
-    JSON.stringify(c.plugins.updater.endpoints) ===
-      JSON.stringify([ENDPOINT]) &&
-      c.plugins.updater.requireSignedVersion === true,
-    "Updater endpoint/signed-version contract differs.",
-  );
-  return c;
+  return validateUpdaterConfig(c);
 }
 async function filesAt(folder, version) {
   const names = await readdir(folder);
@@ -239,24 +168,8 @@ export function readLocalTagObject(root, sha) {
     maxBuffer: 256 * 1024,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const end = output.indexOf(10);
-  requireValue(end >= 0, "Malformed Git object response.");
-  const response = output.subarray(0, end).toString("ascii");
-  if (response === `${sha} missing`) return null;
-  const match = response.match(/^([a-f0-9]{40}) tag ([1-9]\d*)$/);
-  requireValue(
-    match && match[1] === sha,
-    "Reservation is not an annotated Git tag.",
-  );
-  const size = Number(match[2]);
-  requireValue(
-    Number.isSafeInteger(size) &&
-      size <= 130 * 1024 &&
-      output.length === end + 1 + size + 1 &&
-      output.at(-1) === 10,
-    "Invalid annotated Git object size.",
-  );
-  const bytes = output.subarray(end + 1, end + 1 + size);
+  const bytes = tagResponseBytes(sha, output);
+  if (bytes === null) return null;
   requireValue(
     execFileSync("git", ["hash-object", "-t", "tag", "--stdin"], {
       cwd: root,
@@ -267,28 +180,7 @@ export function readLocalTagObject(root, sha) {
     }).trim() === sha,
     "Annotated Git object checksum differs.",
   );
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-    split = text.indexOf("\n\n");
-  requireValue(split >= 0, "Annotated Git object headers are missing.");
-  const headers = new Map();
-  for (const line of text.slice(0, split).split("\n")) {
-    const space = line.indexOf(" ");
-    requireValue(
-      space > 0 && !headers.has(line.slice(0, space)),
-      "Invalid annotated Git object headers.",
-    );
-    headers.set(line.slice(0, space), line.slice(space + 1));
-  }
-  requireValue(
-    [...headers.keys()].sort().join("|") === "object|tag|tagger|type",
-    "Unexpected annotated Git object headers.",
-  );
-  return {
-    sha,
-    tag: headers.get("tag"),
-    message: text.slice(split + 2),
-    object: { type: headers.get("type"), sha: headers.get("object") },
-  };
+  return annotatedTag(sha, bytes);
 }
 export class GitHubReleaseApi {
   /**

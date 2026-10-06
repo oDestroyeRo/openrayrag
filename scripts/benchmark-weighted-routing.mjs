@@ -8,12 +8,15 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
+import { median } from './benchmark-policy.mjs';
+
+export async function runBenchmark(args = process.argv.slice(2)) {
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-if(!process.argv[2])throw new Error('Provide the frozen pre-optimization ESM bundle.');
-const incremental=process.argv.includes('--incremental');
+if(!args[0])throw new Error('Provide the frozen pre-optimization ESM bundle.');
+const incremental=args.includes('--incremental');
 const scheduler={now:()=>performance.now(),schedule:callback=>{let cancelled=false;queueMicrotask(()=>{if(!cancelled)callback();});return()=>{cancelled=true;};}};
 const folder=await mkdtemp(join(tmpdir(),'rayrag-weighted-oracle-'));
-const median=v=>v.sort((a,b)=>a-b)[Math.floor(v.length/2)];
+
 let seed=2532;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/2**32;};
 function outcome(planner,route,fromMap,from,walls,policy){
   if(!route)return null;let score=0,map=fromMap,p=from;
@@ -22,7 +25,7 @@ function outcome(planner,route,fromMap,from,walls,policy){
 }
 try{
   const outfile=join(folder,'after.mjs');await build({stdin:{contents:"export {TravelPlanner} from './src/travel.ts';export {DEFAULT_MAP_POLICY} from './src/map-policy.ts';",resolveDir:root},bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'});
-  const [before,after]=await Promise.all([import(pathToFileURL(resolve(process.argv[2])).href),import(pathToFileURL(outfile).href)]);
+  const [before,after]=await Promise.all([import(pathToFileURL(resolve(args[0])).href),import(pathToFileURL(outfile).href)]);
   let comparisons=0;const fixtures=[];
   for(const destination of ['prontera','payon','geffen']){
     const rows=[],outcomes=[];
@@ -44,3 +47,9 @@ try{
   }
   console.log(JSON.stringify({incremental,weightedOptimumComparisons:comparisons,fixtures},null,2));
 }finally{await rm(folder,{recursive:true,force:true});}
+
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await runBenchmark();
+}

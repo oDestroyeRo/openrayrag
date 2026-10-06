@@ -1,7 +1,6 @@
 import type { InventoryItem } from './protocol-feature';
 import type { WorldAction } from './world-protocol';
-import { WorldState } from './world-state';
-import { saleProceeds, shopQuote, worldActionBlockers, type WorkflowContext } from './workflows';
+import { saleProceeds, shopQuote, worldActionBlockers, workflowWorldFromSnapshot, workflowWorldSnapshot, type WorkflowContext, type WorkflowWorld } from './workflows-logic';
 
 export const DISPOSITION_SOURCE_PIN = '4099e2c000c3c550516760b9c1241595aac9aceb';
 export const MAX_DISPOSITION_ACTIONS = 32;
@@ -98,7 +97,7 @@ function fingerprint(policy: DispositionPolicy, context: DispositionContext): st
     equipment: context.equipment === null ? null : [...context.equipment].sort((a, b) => a - b), ammoId: context.ammoId, metadata,
     minimumStock: [...context.minimumStock ?? []].sort((a, b) => a.itemId - b.itemId),
     workflow: { map: context.workflow.map, playerId: context.workflow.playerId, alive: context.workflow.alive, idle: context.workflow.idle,
-      zeny: context.workflow.zeny, world: context.workflow.world.snapshot(), protectedItemIds: context.workflow.protectedItemIds,
+      zeny: context.workflow.zeny, world: workflowWorldSnapshot(context.workflow.world), protectedItemIds: context.workflow.protectedItemIds,
       pushCartLevel: context.workflow.pushCartLevel } });
 }
 function invalidContainer(container: DispositionContainer): boolean {
@@ -109,15 +108,9 @@ function invalidContainer(container: DispositionContainer): boolean {
       || !Number.isInteger(item.count) || item.count < 1 || item.count > 32767 || ![1, 2].includes(item.type)
       || item.type === 1 && item.bagId !== item.itemId || item.type === 2 && item.count !== 1));
 }
-function cloneWorld(world: WorldState): WorldState {
-  const copy = new WorldState();
-  copy.map = world.map; copy.generation = world.generation; copy.revision = world.revision;
-  copy.npc = structuredClone(world.npc); copy.shop = structuredClone(world.shop);
-  copy.storageReady = world.storageReady; copy.hasCart = world.hasCart; copy.cartReady = world.cartReady;
-  copy.vending = structuredClone(world.vending);
-  for (const [id, item] of world.storage) copy.storage.set(id, { ...item });
-  for (const [id, item] of world.cart) copy.cart.set(id, { ...item });
-  return copy;
+function cloneWorld(world: WorkflowWorld): WorkflowWorld {
+  const snapshot = workflowWorldSnapshot(world);
+  return workflowWorldFromSnapshot({ ...snapshot, barter: [], party: null, invite: null, viewedVending: null });
 }
 
 /** Pure suggestion only: no sender, RPC, timer, or executor is accepted here. */

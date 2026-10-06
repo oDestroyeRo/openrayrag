@@ -1,14 +1,9 @@
-import type { Entity } from './protocol';
-import type { FeatureEvent, InventoryItem, PlayerStats, SkillLevel } from './protocol-feature';
+import type { FeatureEvent, InventoryItem, PlayerStats } from './protocol-feature';
 
-export interface CharacterSnapshot {
-  stats: PlayerStats | null; inventoryKnown: boolean; skillsKnown: boolean;
-  inventory: InventoryItem[]; cart: InventoryItem[] | null; equipment: number[]; ammoId: number;
-  learned: SkillLevel[]; granted: SkillLevel[]; sitting: boolean | null;
-  statuses: Array<{ id: number; seconds: number }>;
-  experience: { baseTotal: number; baseGained: number; jobTotal: number; jobGained: number } | null;
-}
-export type StatefulEntity = Entity & { sp?: number; maxSp?: number; sitting?: boolean; statuses?: Array<{ id: number; seconds: number }> };
+import type { CharacterSnapshot, StatefulEntity } from './character-state-logic';
+
+export { type CharacterSnapshot, type StatefulEntity } from './character-state-logic';
+
 export class CharacterState {
   stats: PlayerStats | null = null;
   inventoryKnown = false; skillsKnown = false;

@@ -1,42 +1,12 @@
 import { completePlanning, runPlanning, type PlanningOptions, type PlanningWork } from './route-planning';
-import { DEFAULT_MAP_POLICY, mapAllowed, PORTAL_COST, type MapPolicy } from './map-policy';
-import catalog from './data/travel-portals.json';
-import { GridNavigator, MAX_MAP_DIMENSION, searchGrid, type PortalArea, type WalkGrid } from './navigation';
-import { type Position } from './protocol';
+import { DEFAULT_MAP_POLICY, mapAllowed, PORTAL_COST, type MapPolicy } from './map-policy-logic';
+import { GridNavigator, searchGrid } from './navigation';
+import { MAX_MAP_DIMENSION, type PortalArea, type WalkGrid } from './navigation-logic';
+import type { Position } from './protocol';
 
-export interface PortalEdge {
-  id: string;
-  fromMap: string;
-  toMap: string;
-  area: PortalArea;
-  arrival: Position;
-  source: { kind: string; commit: string; path: string; line: number };
-}
-export interface TravelStep {
-  portal: PortalEdge;
-  /** Includes the start, and ends at the first cell of the selected trigger. */
-  cells: Position[];
-  /** The next map's initial exit from a trigger, if its arrival is excluded. */
-  arrivalEscape: Position[];
-}
-export const TRAVEL_PORTALS: readonly PortalEdge[] = catalog.edges;
-export const TRAVEL_SOURCE_COMMIT = catalog.sourceCommit;
-const directions = [[0,1],[1,1],[1,0],[1,-1],[0,-1],[-1,-1],[-1,0],[-1,1]] as const;
-const cardinal = [[0,1],[1,0],[0,-1],[-1,0]] as const;
-const penalties = [0,60,50,20,10,0] as const;
-const inside = (p: Position, area: PortalArea) => Math.abs(p.x - area.x) <= area.halfWidth
-  && Math.abs(p.y - area.y) <= area.halfHeight;
-const sameArea = (a: PortalArea, b: PortalArea) => a.x === b.x && a.y === b.y
-  && a.halfWidth === b.halfWidth && a.halfHeight === b.halfHeight;
-const sameArrival = (a: PortalEdge, b: PortalEdge) => a.toMap === b.toMap
-  && a.arrival.x === b.arrival.x && a.arrival.y === b.arrival.y;
-interface Cell { state: number; cost: number; priority: number }
-interface Path { cells: Position[]; cost: number }
-function* copyCells(cells: readonly Position[], end = cells.length): PlanningWork<Position[]> {
-  const copy: Position[] = [];
-  for (let i = 0; i < end; i++) { if (i % 128 === 0) yield 'route-copy'; copy.push({ ...cells[i]! }); }
-  return copy;
-}
+import { type PortalEdge, type TravelStep, TRAVEL_PORTALS, directions, cardinal, penalties, inside, sameArea, sameArrival, type Cell, type Path, copyCells, type WorldNode, type TravelPlannerOptions } from './travel-logic';
+
+export { type PortalEdge, type TravelStep, TRAVEL_PORTALS, TRAVEL_SOURCE_COMMIT, type TravelPlannerOptions } from './travel-logic';
 
 /** Small generic heap, used for bounded cell and world searches. */
 class Heap<T> {
@@ -69,6 +39,7 @@ class Heap<T> {
     return first;
   }
 }
+
 
 /** Physical cells plus all excluded areas, independent of live movement state. */
 class MapCells {
@@ -142,17 +113,6 @@ class MapCells {
   }
 }
 
-interface WorldNode {
-  key: string; map: string; position: Position; hops: number; cost: number; estimate: number;
-  parent: WorldNode | null; step: Omit<TravelStep, 'arrivalEscape'> | null;
-  pending: PortalEdge | null;
-}
-export interface TravelPlannerOptions {
-  edges?: readonly PortalEdge[];
-  grid?: (map: string) => WalkGrid | null;
-  /** Same-map teleports require observing the confirmed arrival position. */
-  allowSameMap?: boolean;
-}
 
 export class TravelPlanner {
   private readonly edges: readonly PortalEdge[];
@@ -553,14 +513,20 @@ export class TravelPlanner {
 
 }
 
+
 const planner = new TravelPlanner();
+
 export const routeBetweenMaps = (fromMap: string, from: Position, toMap: string, avoidWalls = true, policy: MapPolicy = DEFAULT_MAP_POLICY): TravelStep[] | null =>
   planner.routeBetweenMaps(fromMap,from,toMap,avoidWalls,policy);
+
 export const planPortalApproach = (map: string, from: Position, edge: PortalEdge, avoidWalls = true): Position[] | null =>
   planner.planPortalApproach(map,from,edge,avoidWalls);
+
 export const planArrivalEscape = (map: string, from: Position, avoidWalls = true): Position[] | null =>
   planner.planArrivalEscape(map,from,avoidWalls);
+
 export const travelNavigator = (map: string, cells: readonly Position[]): GridNavigator | null => planner.travelNavigator(map,cells);
+
 
 export const routeBetweenMapsAsync = (fromMap: string, from: Position, toMap: string, avoidWalls = true, policy: MapPolicy = DEFAULT_MAP_POLICY, options: PlanningOptions = {}): Promise<TravelStep[] | null> =>
   planner.routeBetweenMapsAsync(fromMap, from, toMap, avoidWalls, policy, options);

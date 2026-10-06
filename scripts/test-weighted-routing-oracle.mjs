@@ -7,6 +7,7 @@ import { build } from 'esbuild';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+export async function runBenchmark(args = process.argv.slice(2)) {
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const folder=await mkdtemp(join(tmpdir(),'rayrag-weighted-proof-')),bundle=join(folder,'planner.mjs');
 await build({stdin:{contents:"export {TravelPlanner} from './src/travel.ts';export {DEFAULT_MAP_POLICY} from './src/map-policy.ts';",resolveDir:root},bundle:true,platform:'node',format:'esm',outfile:bundle,logLevel:'silent'});
@@ -60,3 +61,9 @@ for(let run=0;run<250;run++){
 console.log(JSON.stringify({comparisons,reachable,elapsedMs:Math.round(performance.now()-started)}));
 
 } finally { await rm(folder,{recursive:true,force:true}); }
+
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await runBenchmark();
+}

@@ -12,7 +12,10 @@ function oracle(grid: WalkGrid): Uint8ClampedArray {
 }
 function check(grid: WalkGrid): void {
   const pixels = new Uint8ClampedArray(grid.width * grid.height * 4); paintMapCollision(grid, pixels);
-  expect(pixels).toEqual(oracle(grid));
+  const expected = oracle(grid);
+  expect(pixels.length).toBe(expected.length);
+  // Compare every channel without deep-assertion overhead on full map buffers.
+  expect(pixels.findIndex((byte, index) => byte !== expected[index])).toBe(-1);
 }
 describe('collision raster', () => {
   it('matches planner tile colors exactly, including Y inversion, blocked portal overlap and inclusive margins', () => {

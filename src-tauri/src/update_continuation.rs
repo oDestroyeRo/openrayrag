@@ -1,11 +1,18 @@
 //! One-shot update continuation authority. Ordinary startup never grants run intent.
+use crate::update_continuation_logic::{
+    self as policy, character, restart_arguments, runtime_identity, startup_stopped,
+    validate_field, DiskCheckpoint, ERROR, LAUNCH_PREFIX, MAX_BYTES,
+};
+#[cfg(test)]
+use crate::update_continuation_logic::{launch_token, STOPPED_FLAG, TTL_MS};
+pub(crate) use crate::update_continuation_logic::{request_id, Continuation, ContinuationBase};
 use crate::{
     automation::{DeathRecoveryGuard, EscapeResumeGuard, Settings, SupplyResumeGuard},
     current_form::{self, FormDocument},
+    current_form_logic::same_form,
     login::{self, local_store as file, UpdateAccount},
     maintenance::{GameIdentity, Gate, SharedGate},
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     ffi::OsString,
@@ -16,40 +23,9 @@ use std::{
 };
 use tauri::{Emitter, Manager, Webview};
 
-const ERROR: &str = "Update continuation is unavailable. Sign in and start manually.";
 const CHECKPOINT: &str = "update-continuation.json";
 const TEMPORARY: &str = ".update-continuation.tmp";
-const LAUNCH_PREFIX: &str = "--rayrag-update-resume=";
-const STOPPED_FLAG: &str = "--rayrag-update-stopped";
-const MAX_BYTES: u64 = 1_000_000;
-const TTL_MS: u64 = 10 * 60 * 1000;
-const SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ContinuationBase {
-    version: u8,
-    field: Value,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Continuation {
-    version: u8,
-    pub account: UpdateAccount,
-    form: FormDocument,
-    field: Value,
-    pub runtime: Value,
-    saved_account: bool,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DiskCheckpoint {
-    version: u8,
-    target_version: String,
-    created_at: u64,
-    launch_token: Option<String>,
-    continuation: Continuation,
-}
 struct Prepared {
     request_id: String,
     account: UpdateAccount,
@@ -173,12 +149,6 @@ impl ContinuationState {
 fn invalid<T>() -> Result<T, String> {
     Err(ERROR.into())
 }
-pub(crate) fn request_id(value: &str) -> bool {
-    value.len() == 32
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
 fn now() -> Result<u64, String> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -187,302 +157,8 @@ fn now() -> Result<u64, String> {
         .try_into()
         .map_err(|_| ERROR.into())
 }
-fn exact(value: &Value, keys: &[&str]) -> bool {
-    value
-        .as_object()
-        .is_some_and(|o| o.len() == keys.len() && keys.iter().all(|k| o.contains_key(*k)))
-}
-fn number(value: &Value) -> bool {
-    value.as_u64().is_some_and(|n| n <= SAFE_INTEGER)
-}
-fn bounded(value: &Value, depth: usize) -> bool {
-    if depth > 32 {
-        return false;
-    }
-    match value {
-        Value::Null | Value::Bool(_) => true,
-        Value::Number(n) => n
-            .as_f64()
-            .is_some_and(|n| n.is_finite() && n.abs() <= SAFE_INTEGER as f64),
-        Value::String(s) => s.len() <= 65_536 && !s.contains('\0'),
-        Value::Array(a) => a.len() <= 1024 && a.iter().all(|v| bounded(v, depth + 1)),
-        Value::Object(o) => {
-            o.len() <= 256
-                && o.iter().all(|(k, v)| {
-                    let key = k.to_ascii_lowercase().replace(['_', '-'], "");
-                    k.len() <= 64
-                        && !["password", "credential", "packet"]
-                            .iter()
-                            .any(|name| key.contains(name))
-                        && !matches!(
-                            key.as_str(),
-                            "password"
-                                | "credentials"
-                                | "cookie"
-                                | "cookies"
-                                | "authorization"
-                                | "accesstoken"
-                                | "refreshtoken"
-                                | "authtoken"
-                                | "sessiontoken"
-                                | "packet"
-                                | "packets"
-                                | "rawpacket"
-                                | "rawpackets"
-                                | "packetbytes"
-                        )
-                        && bounded(v, depth + 1)
-                })
-        }
-    }
-}
-fn validate_settings(value: &Value) -> Result<(), String> {
-    let settings: Settings = serde_json::from_value(value.clone()).map_err(|_| ERROR)?;
-    settings.validate().map_err(|_| ERROR.into())
-}
 pub(crate) fn validate_runtime(value: &Value) -> Result<(), String> {
-    if !exact(
-        value,
-        &[
-            "version",
-            "frozenAt",
-            "status",
-            "settings",
-            "macro",
-            "partyHeal",
-            "run",
-        ],
-    ) || value["version"] != 1
-        || !number(&value["frozenAt"])
-        || value["frozenAt"]
-            .as_u64()
-            .map_or(true, |n| n == 0 || n > now().unwrap_or(0))
-        || !value["status"].is_object()
-        || value["status"]["connected"] != true
-        || value["status"]["compatible"] != true
-        || !value["status"]["runRequested"].is_boolean()
-        || character(value).is_none()
-        || runtime_identity(value).is_none()
-        || !bounded(value, 0)
-        || serde_json::to_vec(value).map_err(|_| ERROR)?.len() > 750_000
-    {
-        return invalid();
-    }
-    if !value["settings"].is_null() {
-        validate_settings(&value["settings"])?;
-    }
-    let heal = &value["partyHeal"];
-    if !exact(heal, &["version", "attempts", "confirmed", "cooldownUntil"])
-        || heal["version"] != 1
-        || !["attempts", "confirmed", "cooldownUntil"]
-            .iter()
-            .all(|k| number(&heal[*k]))
-        || heal["confirmed"].as_u64() > heal["attempts"].as_u64()
-    {
-        return invalid();
-    }
-    let run = &value["run"];
-    if !run.is_null()
-        && (!exact(run, &["startedAt", "kills", "pickups", "deaths"])
-            || run["startedAt"].as_u64() > value["frozenAt"].as_u64()
-            || !["startedAt", "kills", "pickups", "deaths"]
-                .iter()
-                .all(|k| number(&run[*k])))
-    {
-        return invalid();
-    }
-    if !value["macro"].is_null() {
-        let m = &value["macro"];
-        if !exact(
-            m,
-            &[
-                "version",
-                "script",
-                "selector",
-                "sequence",
-                "retainedField",
-                "state",
-                "reason",
-                "generation",
-                "nextId",
-                "startedAt",
-                "lastTime",
-                "actionsIssued",
-                "actionsCompleted",
-                "spendReserved",
-            ],
-        ) || m["version"] != 1
-            || !matches!(m["state"].as_str(), Some("running" | "monitoring"))
-            || !m["selector"].is_object()
-            || !m["reason"].as_str().is_some_and(|s| s.len() <= 800)
-            || ![
-                "generation",
-                "nextId",
-                "startedAt",
-                "lastTime",
-                "actionsIssued",
-                "actionsCompleted",
-                "spendReserved",
-            ]
-            .iter()
-            .all(|k| number(&m[*k]))
-            || m["actionsCompleted"] != m["actionsIssued"]
-            || m["lastTime"].as_u64() < m["startedAt"].as_u64()
-            || m["lastTime"].as_u64() > value["frozenAt"].as_u64()
-        {
-            return invalid();
-        }
-        let script = value["macro"].get("script").ok_or(ERROR)?;
-        crate::control::request_script(
-            "macro",
-            &json!({"script":script,"settings":value["settings"]}),
-        )
-        .map_err(|_| ERROR)?;
-    }
-    if (value["status"]["runRequested"] == true || !value["macro"].is_null())
-        && (value["settings"].is_null() || run.is_null())
-    {
-        return invalid();
-    }
-    Ok(())
-}
-fn validate_field(value: &Value) -> Result<(), String> {
-    if value.is_null() {
-        return Ok(());
-    }
-    if !exact(
-        value,
-        &[
-            "version",
-            "desired",
-            "character",
-            "session",
-            "generation",
-            "startedAt",
-            "metricsSession",
-            "previous",
-            "totals",
-            "escapeGuard",
-            "supplyGuard",
-            "deathGuard",
-            "escapeOverflowUncertain",
-            "supplyOverflow",
-            "deathOverflow",
-        ],
-    ) || value["version"] != 1
-        || !bounded(value, 0)
-        || !["generation", "startedAt"]
-            .iter()
-            .all(|k| number(&value[*k]))
-        || !["character", "session", "metricsSession"].iter().all(|k| {
-            value[*k].as_str().is_some_and(|s| {
-                !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control)
-            })
-        })
-        || !["escapeOverflowUncertain", "supplyOverflow", "deathOverflow"]
-            .iter()
-            .all(|k| value[*k].is_boolean())
-    {
-        return invalid();
-    }
-    validate_settings(&value["desired"])?;
-    for k in ["previous", "totals"] {
-        if !exact(&value[k], &["kills", "looted", "deaths", "attacks"])
-            || !["kills", "looted", "deaths", "attacks"]
-                .iter()
-                .all(|n| number(&value[k][*n]))
-        {
-            return invalid();
-        }
-    }
-    for key in ["supplyGuard", "deathGuard"] {
-        let guard = &value[key];
-        if guard.is_null() {
-            continue;
-        }
-        if !exact(guard, &["session", "at", "guard"])
-            || !guard["session"]
-                .as_str()
-                .is_some_and(|s| !s.is_empty() && s.len() <= 256)
-            || !number(&guard["at"])
-            || guard["guard"]["character"] != value["character"]
-        {
-            return invalid();
-        }
-        if key == "supplyGuard" {
-            serde_json::from_value::<SupplyResumeGuard>(guard["guard"].clone())
-                .map_err(|_| ERROR)?
-                .validate()?;
-        } else {
-            serde_json::from_value::<DeathRecoveryGuard>(guard["guard"].clone())
-                .map_err(|_| ERROR)?
-                .validate()?;
-        }
-    }
-    let escape = &value["escapeGuard"];
-    if !escape.is_null() {
-        let keys = if escape.get("recovery").is_some() {
-            vec!["session", "cooldownUntil", "latched", "recovery"]
-        } else {
-            vec!["session", "cooldownUntil", "latched"]
-        };
-        if !exact(escape, &keys)
-            || !escape["session"]
-                .as_str()
-                .is_some_and(|s| !s.is_empty() && s.len() <= 256)
-            || !number(&escape["cooldownUntil"])
-            || !escape["latched"].is_boolean()
-        {
-            return invalid();
-        }
-        let mut projected = json!({"cooldownSeconds":0,"latched":escape["latched"]});
-        if let Some(recovery) = escape.get("recovery") {
-            projected["recovery"] = recovery.clone();
-        }
-        serde_json::from_value::<EscapeResumeGuard>(projected)
-            .map_err(|_| ERROR)?
-            .validate()?;
-    }
-    Ok(())
-}
-fn runtime_identity(runtime: &Value) -> Option<GameIdentity> {
-    let status = &runtime["status"];
-    for key in ["sessionId", "connectionId"] {
-        let id = status[key].as_str()?;
-        if id.is_empty()
-            || id.len() > 64
-            || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        {
-            return None;
-        }
-    }
-    Some(GameIdentity {
-        session_id: status["sessionId"].as_str()?.to_owned(),
-        connection_id: status["connectionId"].as_str()?.to_owned(),
-    })
-}
-fn character(runtime: &Value) -> Option<&str> {
-    runtime
-        .pointer("/status/player/name")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
-}
-fn validate_payload(payload: &Continuation) -> Result<(), String> {
-    if payload.version != 1 {
-        return invalid();
-    }
-    payload.account.validate()?;
-    payload.form.validate()?;
-    validate_field(&payload.field)?;
-    validate_runtime(&payload.runtime)?;
-    let name = character(&payload.runtime).ok_or(ERROR)?;
-    if !payload.field.is_null() && payload.field["character"].as_str() != Some(name) {
-        return invalid();
-    }
-    Ok(())
-}
-fn same_form(a: &FormDocument, b: &FormDocument) -> bool {
-    serde_json::to_vec(a).ok() == serde_json::to_vec(b).ok()
+    policy::validate_runtime(value, now().unwrap_or(0))
 }
 fn clear_disk(path: PathBuf) -> Result<(), String> {
     let Some(dir) = file::LocalLoginStore::new(path)
@@ -496,11 +172,7 @@ fn clear_disk(path: PathBuf) -> Result<(), String> {
     file::sync_directory(&dir).map_err(|_| ERROR.into())
 }
 fn write_disk(path: PathBuf, disk: &DiskCheckpoint) -> Result<(), String> {
-    validate_payload(&disk.continuation)?;
-    let bytes = serde_json::to_vec(disk).map_err(|_| ERROR)?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return invalid();
-    }
+    let bytes = policy::encode_checkpoint(disk, now().unwrap_or(0))?;
     let dir = file::LocalLoginStore::new(path)
         .open_directory(true)
         .map_err(|_| ERROR)?
@@ -521,30 +193,26 @@ fn write_disk(path: PathBuf, disk: &DiskCheckpoint) -> Result<(), String> {
     }
     result
 }
-fn launch_token(args: &[OsString]) -> Option<String> {
-    let matching: Vec<_> = args
-        .iter()
-        .skip(1)
-        .filter_map(|arg| arg.to_str()?.strip_prefix(LAUNCH_PREFIX))
-        .collect();
-    if matching.len() != 1 || !request_id(matching[0]) {
-        return None;
-    }
-    Some(matching[0].into())
-}
-fn startup_stopped(args: &[OsString]) -> bool {
-    args.iter()
-        .skip(1)
-        .any(|arg| arg.to_str() == Some(STOPPED_FLAG))
-}
-fn restart_arguments(args: &mut Vec<OsString>, stopped: bool) {
-    args.retain(|arg| {
-        !arg.to_str()
-            .is_some_and(|s| s.starts_with(LAUNCH_PREFIX) || s == STOPPED_FLAG)
-    });
-    if stopped {
-        args.push(STOPPED_FLAG.into());
-    }
+fn read_and_remove_checkpoint(path: PathBuf) -> Result<Option<Vec<u8>>, String> {
+    let Some(dir) = file::LocalLoginStore::new(path)
+        .open_directory(false)
+        .map_err(|_| ERROR)?
+    else {
+        return Ok(None);
+    };
+    let bytes = if let Some(f) = file::private_file(&dir, CHECKPOINT).map_err(|_| ERROR)? {
+        let mut bytes = Vec::new();
+        f.take(MAX_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ERROR)?;
+        Some(bytes)
+    } else {
+        None
+    };
+    file::remove_private_file(&dir, CHECKPOINT).map_err(|_| ERROR)?;
+    file::remove_private_file(&dir, TEMPORARY).map_err(|_| ERROR)?;
+    file::sync_directory(&dir).map_err(|_| ERROR)?;
+    Ok(bytes)
 }
 /// Remove the private checkpoint under its directory lock before validating or
 /// exposing it. Even wrong arguments, corrupt contents and crashes consume it.
@@ -554,57 +222,20 @@ fn consume(
     compiled: &str,
     at: u64,
 ) -> Result<Option<Continuation>, String> {
-    let bytes = {
-        let Some(dir) = file::LocalLoginStore::new(path.clone())
-            .open_directory(false)
-            .map_err(|_| ERROR)?
-        else {
-            return Ok(None);
-        };
-        let bytes = if let Some(f) = file::private_file(&dir, CHECKPOINT).map_err(|_| ERROR)? {
-            let mut bytes = Vec::new();
-            f.take(MAX_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| ERROR)?;
-            Some(bytes)
-        } else {
-            None
-        };
-        file::remove_private_file(&dir, CHECKPOINT).map_err(|_| ERROR)?;
-        file::remove_private_file(&dir, TEMPORARY).map_err(|_| ERROR)?;
-        file::sync_directory(&dir).map_err(|_| ERROR)?;
-        bytes
-    };
-    let Some(bytes) = bytes.filter(|b| b.len() as u64 <= MAX_BYTES) else {
+    let bytes = read_and_remove_checkpoint(path.clone())?;
+    let Some(mut continuation) = bytes.and_then(|bytes| {
+        policy::eligible_checkpoint(&bytes, args, compiled, at, now().unwrap_or(0))
+    }) else {
         return Ok(None);
     };
-    let Ok(mut disk) = serde_json::from_slice::<DiskCheckpoint>(&bytes) else {
-        return Ok(None);
-    };
-    if startup_stopped(args) {
-        return Ok(None);
-    }
-    let Some(token) = launch_token(args) else {
-        return Ok(None);
-    };
-    if disk.version != 1
-        || disk.target_version != compiled
-        || disk.launch_token.as_deref() != Some(&token)
-        || at < disk.created_at
-        || at - disk.created_at > TTL_MS
-        || validate_payload(&disk.continuation).is_err()
-    {
-        return Ok(None);
-    }
     let Ok(Some(form)) = current_form::load(path.clone()) else {
         return Ok(None);
     };
-    if !same_form(&form, &disk.continuation.form) {
+    if !same_form(&form, &continuation.form) {
         return Ok(None);
     }
-    disk.continuation.saved_account =
-        login::saved_account_matches(path, &disk.continuation.account);
-    Ok(Some(disk.continuation))
+    continuation.saved_account = login::saved_account_matches(path, &continuation.account);
+    Ok(Some(continuation))
 }
 pub(crate) fn initialize(app: &tauri::AppHandle) -> Result<(), String> {
     let path = crate::app_data(app).map_err(|_| ERROR)?;
@@ -789,18 +420,7 @@ pub(crate) fn reserve(
     Ok(())
 }
 fn envelope(r: &Reserved) -> Result<Continuation, String> {
-    // Form types deliberately remain settings-only. Clone by validated JSON so
-    // no persistence-only metadata is introduced into their public contract.
-    let form = serde_json::from_value(serde_json::to_value(&r.form).map_err(|_| ERROR)?)
-        .map_err(|_| ERROR)?;
-    Ok(Continuation {
-        version: 1,
-        account: r.prepared.account.clone(),
-        form,
-        field: r.field.clone(),
-        runtime: r.runtime.clone().ok_or(ERROR)?,
-        saved_account: false,
-    })
+    policy::envelope(&r.prepared.account, &r.form, &r.field, r.runtime.as_ref())
 }
 pub(crate) fn capture(
     app: &tauri::AppHandle,
@@ -880,7 +500,7 @@ pub(crate) async fn restart(app: &tauri::AppHandle, target: &str) -> Result<(), 
                 .inner()
                 .lock()
                 .map_err(|_| ERROR)?;
-            restart_arguments(&mut env.args_os, state.stop_restart);
+            env.args_os = restart_arguments(&env.args_os, state.stop_restart);
             if let Some(r) = state.reserved.as_ref().filter(|_| !state.stop_restart) {
                 let token = uuid::Uuid::new_v4().simple().to_string();
                 write_disk(
@@ -1226,7 +846,7 @@ mod tests {
         record.continuation = envelope(state.reserved.as_ref().unwrap()).unwrap();
         let mut args = arguments();
         args.push(STOPPED_FLAG.into()); // Inherited arguments do not poison the new update.
-        restart_arguments(&mut args, state.stop_restart);
+        args = restart_arguments(&args, state.stop_restart);
         assert!(!startup_stopped(&args));
         write_disk(path.clone(), &record).unwrap();
         args.push(format!("{LAUNCH_PREFIX}{}", record.launch_token.unwrap()).into());
@@ -1297,7 +917,7 @@ mod tests {
             assert!(state.available.is_none());
             assert!(state.claimed.is_none());
             let mut args = arguments();
-            restart_arguments(&mut args, state.stop_restart);
+            args = restart_arguments(&args, state.stop_restart);
             assert_eq!(startup_stopped(&args), committed && stop);
             assert!(launch_token(&args).is_none());
             state.cancel(committed, false); // Later failure cleanup cannot undo explicit Stop.
@@ -1309,7 +929,7 @@ mod tests {
         let mut args = arguments();
         args.push(STOPPED_FLAG.into());
         args.push("--unrelated-option".into());
-        restart_arguments(&mut args, false);
+        args = restart_arguments(&args, false);
         assert_eq!(
             args,
             vec![
@@ -1319,17 +939,17 @@ mod tests {
         );
         assert!(!startup_stopped(&args));
         assert!(launch_token(&args).is_none());
-        restart_arguments(&mut args, true);
+        args = restart_arguments(&args, true);
         assert!(startup_stopped(&args));
         assert!(launch_token(&args).is_none());
-        restart_arguments(&mut args, true);
+        args = restart_arguments(&args, true);
         assert_eq!(
             args.iter()
                 .filter(|arg| arg.to_str() == Some(STOPPED_FLAG))
                 .count(),
             1
         );
-        restart_arguments(&mut args, false);
+        args = restart_arguments(&args, false);
         assert!(!startup_stopped(&args));
     }
     #[test]

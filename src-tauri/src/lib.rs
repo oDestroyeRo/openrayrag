@@ -1,40 +1,33 @@
 use automation::Settings;
-use std::sync::OnceLock;
+use catalog_logic::{map_dimensions, supported_map};
 use tauri::{webview::WebviewBuilder, Emitter, Manager, Webview, WebviewUrl};
 mod automation;
+mod catalog_logic;
 mod ci_smoke;
 mod client_view;
 mod control;
 mod current_form;
+mod current_form_logic;
 mod direct;
 mod direct_wire;
+mod local_login_logic;
 mod login;
+mod login_logic;
 mod maintenance;
+mod maintenance_logic;
 mod mode_guard;
 mod settings_close;
 mod update_continuation;
+mod update_continuation_logic;
 mod update_install;
+mod update_install_logic;
 mod updater;
+mod updater_logic;
 
 const GAME_URL: &str = "https://websea01.rayrag.com/";
 const BRIDGE: &str = include_str!("../generated/game-bridge.js");
 // Bounded inventory, cart and storage snapshots can each contain 600 items.
 const MAX_STATUS_BYTES: usize = 500_000;
-
-fn navigation_maps() -> &'static serde_json::Map<String, serde_json::Value> {
-    static MAPS: OnceLock<serde_json::Map<String, serde_json::Value>> = OnceLock::new();
-    MAPS.get_or_init(|| {
-        serde_json::from_str(include_str!("../../src/data/navigation-maps.json"))
-            .expect("Bundled navigation catalog must be valid")
-    })
-}
-fn supported_map(map: &str) -> bool {
-    navigation_maps().contains_key(map)
-}
-fn map_dimensions(map: &str) -> Option<(u64, u64)> {
-    let grid = navigation_maps().get(map)?;
-    Some((grid.get("width")?.as_u64()?, grid.get("height")?.as_u64()?))
-}
 
 fn app_data(app: &tauri::AppHandle) -> Result<std::path::PathBuf, tauri::Error> {
     if let Some(directory) = ci_smoke::data_dir() {

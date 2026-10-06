@@ -9,9 +9,12 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { createHash } from 'node:crypto';
+import { median } from './benchmark-policy.mjs';
+
+export async function runBenchmark(args = process.argv.slice(2)) {
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-const ref=execFileSync('git',['rev-parse','--verify',`${process.argv[2]??'HEAD'}^{commit}`],{cwd:root,encoding:'utf8'}).trim();
-const incremental=process.argv.includes('--incremental');
+const ref=execFileSync('git',['rev-parse','--verify',`${args[0]??'HEAD'}^{commit}`],{cwd:root,encoding:'utf8'}).trim();
+const incremental=args.includes('--incremental');
 // Oracle mode removes timer latency; responsiveness is measured separately.
 const scheduler={now:()=>performance.now(),schedule:callback=>{let cancelled=false;queueMicrotask(()=>{if(!cancelled)callback();});return()=>{cancelled=true;};}};
 const query=(planner,args,current)=>incremental&&current?planner.routeBetweenMapsAsync(...args,undefined,undefined,{scheduler}):planner.routeBetweenMaps(...args);
@@ -22,7 +25,7 @@ async function bundle(name,baseline=false){
   return import(pathToFileURL(outfile).href);
 }
 let seed=25;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/2**32;};
-const median=v=>v.sort((a,b)=>a-b)[Math.floor(v.length/2)];
+
 try{
   const [before,after]=await Promise.all([bundle('before',true),bundle('after')]);
   const fixtures=[['prt_fild08',{x:169,y:193},'prontera'],['prt_fild08',{x:169,y:193},'payon'],['prt_fild08',{x:169,y:193},'geffen'],['moc_fild02',{x:77,y:338},'morocc']];
@@ -37,3 +40,9 @@ try{
   }
   console.log(JSON.stringify({baseline:ref,incremental,exactComparisons:comparisons,fixtures:summaries},null,2));
 }finally{await rm(folder,{recursive:true,force:true});}
+
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await runBenchmark();
+}

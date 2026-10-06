@@ -1,7 +1,7 @@
 import data from './data/cast-policy.json';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost } from './game-catalog';
 import type { CharacterState } from './character-state';
-import { evaluateActorPredicate, type ActorObservationSnapshot, type ActorPredicate } from './actor-observations';
+import { evaluateActorPredicate, type ActorObservationSnapshot, type ActorPredicate } from './actor-observations-logic';
 
 export const CAST_POLICY_PIN = data.pin;
 export const AUTOMATIC_ATTACK_SKILLS = [11,12,16] as const;
