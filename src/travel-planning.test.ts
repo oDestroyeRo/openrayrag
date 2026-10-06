@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TravelController, type TravelPlanningContext } from './travel-controller';
 import { DEFAULT_MAP_POLICY } from './map-policy';
-import { routeBetweenMaps, type TravelStep } from './travel';
+import { routeBetweenMaps, TravelPlanner, type TravelStep } from './travel';
 import * as travelRoutes from './travel';
 import type { Entity, GameEvent } from './protocol';
 import type { Action } from './engine';
@@ -11,14 +11,121 @@ const policy = {...DEFAULT_MAP_POLICY,mode:'weighted' as const};
 const route = () => routeBetweenMaps('prt_fild08',player(),'prontera',false,policy)!;
 function setup(continueRequested=false) {
   let clock=100_000;
-  const sent:Action[]=[], pending:Array<{resolve:(value:TravelStep[]|null)=>void;reject:(reason:unknown)=>void;signal?:AbortSignal}>=[];
+  const sent:Action[]=[], pending:Array<{map:string;start:{x:number;y:number};resolve:(value:TravelStep[]|null)=>void;reject:(reason:unknown)=>void;signal?:AbortSignal}>=[];
   const context:TravelPlanningContext={identity:'connection-1/world-1/own-1',map:'prt_fild08',player:player()};
   const travel=new TravelController(a=>sent.push(a),()=>clock,undefined,{context:()=>context,continueRequested:()=>continueRequested,
-    plan:(_map,_from,_destination,_walls,_policy,options)=>new Promise((resolve,reject)=>pending.push({resolve,reject,signal:options?.signal}))});
+    plan:(map,start,_destination,_walls,_policy,options)=>new Promise((resolve,reject)=>pending.push({map,start:{...start},resolve,reject,signal:options?.signal}))});
   const start=()=>travel.start(context.map,context.player!,'prontera',10,false,policy);
   return {travel,sent,pending,context,start,advance:(ms:number)=>{clock+=ms;}};
 }
 const flush=async()=>{await Promise.resolve();await Promise.resolve();};
+function officialArrival(f:ReturnType<typeof setup>,map='prt_fild08',entryType:1|2=1) {
+  f.context.identity=null;f.context.player=undefined;
+  f.context.map=map;f.travel.observe([entryType===1?{type:'map',map}:{type:'clear'}]);
+  f.context.identity='connection-1/world-2/own-2';f.context.player={...player(),x:171};
+  f.travel.observe([{type:'spawn',entity:f.context.player,entryType}]);
+}
+const currentRoute=(f:ReturnType<typeof setup>)=>routeBetweenMaps(f.context.map,f.context.player!,'prontera',false,policy)!;
+
+describe('weighted replanning after official movement',()=>{
+  it.each([1,2] as const)('plans from the verified official arrival before a later dispatch (entry type %s)',async entryType=>{
+    const f=setup(true);f.start();const trip=f.travel.tripId;
+    officialArrival(f,'prt_fild08',entryType);
+    expect(f.pending[0]!.signal?.aborted).toBe(true);
+    expect(f.pending).toHaveLength(2);expect(f.pending[1]).toMatchObject({map:f.context.map,start:{x:171,y:370}});
+    expect(f.travel.snapshot().state).toBe('planning');expect(f.travel.tripId).toBe(trip);expect(f.sent).toEqual([]);
+    f.pending[1]!.resolve(currentRoute(f));await flush();
+    expect(f.travel.snapshot().state).toBe('walking');expect(f.sent).toEqual([]);
+    f.travel.tick(f.context.map,f.context.player);expect(f.sent.map(a=>a.type)).toEqual(['walk']);
+  });
+  it('waits for official accepted movement to settle before starting another weighted job',async()=>{
+    const f=setup(true);f.start();const trip=f.travel.tripId;f.travel.officialGameplay();
+    f.travel.observe([{type:'walk',id:1,walk:{origin:player(),cells:[{x:170,y:370},{x:171,y:370}],secondsPerCell:.1,firstSeconds:.1,locked:false}}]);
+    expect(f.pending[0]!.signal?.aborted).toBe(true);f.advance(100);f.travel.tick(f.context.map,f.context.player);
+    expect(f.pending).toHaveLength(1);f.advance(201);f.context.player!.x=171;f.travel.tick(f.context.map,f.context.player);
+    expect(f.pending).toHaveLength(2);expect(f.travel.snapshot().state).toBe('planning');expect(f.travel.tripId).toBe(trip);
+    f.pending[1]!.resolve(currentRoute(f));await flush();expect(f.sent).toEqual([]);
+  });
+  it.each(['resolve','reject'] as const)('Stop retires a replan and ignores its late %s after a new request',async outcome=>{
+    const f=setup(true);f.start();officialArrival(f);f.travel.cancel();
+    expect(f.pending[1]!.signal?.aborted).toBe(true);f.start();const trip=f.travel.tripId;
+    if(outcome==='resolve')f.pending[1]!.resolve(currentRoute(f));else f.pending[1]!.reject(new Error('Retired replan'));
+    f.pending[0]!.resolve(route());await flush();
+    expect(f.travel.snapshot().state).toBe('planning');expect(f.travel.tripId).toBe(trip);expect(f.sent).toEqual([]);
+    f.pending[2]!.resolve(currentRoute(f));await flush();f.travel.tick(f.context.map,f.context.player);
+    expect(f.sent.map(a=>a.type)).toEqual(['walk']);
+  });
+  it.each(['identity','map','position','dead','missing'] as const)('rejects a replan when current %s changes before installation',async change=>{
+    const f=setup(true);f.start();officialArrival(f);const planned=currentRoute(f);
+    if(change==='identity')f.context.identity='connection-2/world-1/own-1';
+    if(change==='map')f.context.map='prontera';
+    if(change==='position')f.context.player!.x++;
+    if(change==='dead')f.context.player!.dead=true;
+    if(change==='missing')f.context.player=undefined;
+    f.pending[1]!.resolve(planned);await flush();expect(f.pending[1]!.signal?.aborted).toBe(true);
+    expect(f.travel.snapshot().state).toBe('failed');expect(f.sent).toEqual([]);
+  });
+  it.each(['identity','position'] as const)('revalidates a replanned %s immediately before movement',async change=>{
+    const f=setup(true);f.start();officialArrival(f);f.pending[1]!.resolve(currentRoute(f));await flush();
+    if(change==='identity')f.context.identity='replacement-own';else f.context.player!.x++;
+    f.travel.tick(f.context.map,f.context.player);expect(f.travel.snapshot().state).toBe('failed');
+    expect(f.sent.some(a=>a.type==='walk')).toBe(false);
+  });
+  it.each<GameEvent>([{type:'death',id:1},{type:'enter',id:1,map:'prt_fild08'},{type:'remove',id:1,dead:true}])('retires a replan on authoritative $type',async event=>{
+    const f=setup(true);f.start();officialArrival(f);f.travel.observe([event]);
+    expect(f.pending[1]!.signal?.aborted).toBe(true);f.pending[1]!.resolve(currentRoute(f));await flush();
+    expect(f.travel.snapshot().state).toBe('failed');expect(f.sent).toEqual([]);
+  });
+  it('applies the original overall deadline while official replanning is stalled',async()=>{
+    const f=setup(true);f.start();f.advance(1_199_000);officialArrival(f);
+    f.advance(1001);f.travel.tick(f.context.map,f.context.player);
+    expect(f.pending[1]!.signal?.aborted).toBe(true);
+    expect(f.travel.snapshot()).toMatchObject({state:'failed',reason:'Travel reached its twenty-minute limit.'});
+    f.pending[1]!.resolve(currentRoute(f));await flush();expect(f.sent).toEqual([]);
+  });
+  it.each(['unreachable','reject'] as const)('ends an unsuccessful official replan without movement (%s)',async outcome=>{
+    const f=setup(true);f.start();officialArrival(f);
+    if(outcome==='unreachable')f.pending[1]!.resolve(null);else f.pending[1]!.reject(new Error('Replan search failed'));
+    await flush();expect(f.travel.snapshot()).toMatchObject({state:'failed',reason:outcome==='unreachable'
+      ?'No verified route from the observed official movement destination.':'Replan search failed'});
+    expect(f.pending[1]!.signal?.aborted).toBe(true);expect(f.sent).toEqual([]);
+  });
+  it('ends the current job if installing its arrival escape fails',async()=>{
+    const f=setup(true);f.start();officialArrival(f);
+    const escape=vi.spyOn(travelRoutes,'planArrivalEscape').mockImplementation(()=>{throw new Error('Arrival escape failed');});
+    try{
+      f.pending[1]!.resolve([]);await flush();expect(f.pending[1]!.signal?.aborted).toBe(true);
+      expect(f.travel.snapshot()).toMatchObject({state:'failed',reason:'Arrival escape failed'});expect(f.sent).toEqual([]);
+    }finally{escape.mockRestore();}
+  });
+  it('keeps legacy official replanning synchronous without creating a planning job',()=>{
+    const f=setup(true);f.travel.start(f.context.map,f.context.player!,'prontera',10,false);const trip=f.travel.tripId;
+    officialArrival(f);expect(f.pending).toHaveLength(0);expect(f.travel.tripId).toBe(trip);
+    expect(f.travel.snapshot().state).toBe('walking');f.travel.tick(f.context.map,f.context.player);
+    expect(f.sent.map(a=>a.type)).toEqual(['walk']);
+  });
+  it('returns from the official arrival handler before the existing scheduler performs search work',async()=>{
+    let reads=0;const callbacks=new Set<()=>void>(),sent:Action[]=[];
+    const edges=[{id:'bd',fromMap:'b',toMap:'d',area:{x:7,y:4,halfWidth:0,halfHeight:0},arrival:{x:1,y:1},source:{kind:'Warp' as const,commit:'fixture',path:'fixture',line:1}}];
+    const planner=new TravelPlanner({edges,grid:map=>({width:10,height:10,portals:edges.filter(e=>e.fromMap===map).map(e=>e.area),walkable:p=>{reads++;return p.x>=0&&p.y>=0&&p.x<10&&p.y<10;}})});
+    const context:TravelPlanningContext={identity:'old-own',map:'a',player:{...player(),x:1,y:1}};
+    let travel!:TravelController;
+    const scheduler:PlanningScheduler={now:()=>0,schedule:callback=>{
+      expect(travel.snapshot().state).toBe('planning');callbacks.add(callback);return()=>callbacks.delete(callback);
+    }};
+    travel=new TravelController(a=>sent.push(a),()=>100_000,undefined,{context:()=>context,continueRequested:()=>true,scheduler,plan:planner.routeBetweenMapsAsync.bind(planner)});
+    travel.start('a',context.player!,'d',10,false,policy);const trip=travel.tripId;
+    context.map='b';context.identity=null;context.player=undefined;travel.observe([{type:'map',map:'b'}]);
+    expect(callbacks.size).toBe(0);context.identity='new-own';context.player={...player(),x:1,y:1};
+    travel.observe([{type:'spawn',entity:context.player,entryType:1}]);
+    expect(travel.snapshot().state).toBe('planning');expect(travel.tripId).toBe(trip);
+    expect(reads).toBe(0);expect(callbacks.size).toBe(1);expect(sent).toEqual([]);
+    while(callbacks.size){const callback=callbacks.values().next().value!;callbacks.delete(callback);callback();}
+    await flush();const expected=planner.routeBetweenMaps('b',{x:1,y:1},'d',false,policy)!;
+    expect(travel.snapshot().route).toEqual(expected[0]!.cells);expect(travel.snapshot().state).toBe('walking');expect(sent).toEqual([]);
+    travel.tick(context.map,context.player);expect(sent.map(a=>a.type)).toEqual(['walk']);
+  });
+});
 describe('weighted planning owns travel before yielding',()=>{
   it.each(['stop','position'] as const)('retires planning before a trusted official %s replans the same trip',async type=>{
     const f=setup(true);f.start();const trip=f.travel.tripId;f.travel.officialGameplay();
@@ -40,6 +147,7 @@ describe('weighted planning owns travel before yielding',()=>{
     f.context.map='prontera';f.travel.observe([{type:'map',map:'prontera'}]);
     f.context.identity='connection-1/world-2/own-1';f.context.player={...player(),x:156,y:26};
     f.travel.observe([{type:'spawn',entity:f.context.player,entryType:1}]);
+    expect(f.travel.snapshot().state).toBe('planning');f.pending[1]!.resolve([]);await flush();
     f.travel.tick(f.context.map,f.context.player);expect(f.travel.snapshot().state).toBe('complete');
     expect(f.travel.tripId).toBe(trip);expect(f.sent).toEqual([]);
   });

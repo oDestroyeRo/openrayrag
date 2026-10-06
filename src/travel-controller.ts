@@ -206,28 +206,7 @@ export class TravelController {
     this.latest = { map, player }; this.installedStart = null;
     this.executionIdentity = this.planningOptions.context?.().identity ?? null;
     if (policy.mode === 'weighted') {
-      const context = this.planningOptions.context?.();
-      if (context && (!context.identity || context.map !== map || !context.player || context.player.dead || context.player.id !== player.id || distance(cell(context.player), cell(player)) !== 0)) {
-        this.state = 'failed'; this.reason = 'A current own actor lifetime is required for route planning.'; return;
-      }
-      const request: PlanningRequest = { generation: ++this.generation, abort: new AbortController(), identity: context?.identity ?? null, start: cell(player), policy: policyIdentity(this.policy) };
-      this.planning = request; this.route = []; this.state = 'planning';
-      this.reason = `Planning a verified route to ${destination}. Stop cancels planning.`;
-      // Ownership is visible before the planner can schedule its first slice.
-      try {
-        void (this.planningOptions.plan ?? routeBetweenMapsAsync)(map, request.start, destination, avoidWalls, this.policy,
-          { signal: request.abort.signal, scheduler: this.planningOptions.scheduler }).then(result => {
-          if (this.planning !== request || request.generation !== this.generation) return;
-          if (!this.planningCurrent(request)) { this.cancel('Route planning state changed. Choose the destination again.', true); return; }
-          if (!result) { this.cancel('No verified route connects this position to the destination under the map policy.', true); return; }
-          this.planning = null; this.steps = result; this.installedStart = { ...request.start };
-          const current = this.planningOptions.context?.() ?? this.latest;
-          this.plan(current.player!, result[0]?.cells);
-        }).catch(error => {
-          if (request.generation === this.generation)
-            this.cancel(error instanceof Error ? error.message : 'Route planning failed.', true);
-        });
-      } catch (error) { this.cancel(error instanceof Error ? error.message : 'Route planning failed.', true); }
+      this.planWeighted(player);
       return;
     }
     this.state = 'walking'; this.plan(player);
@@ -252,6 +231,35 @@ export class TravelController {
     this.approachNav = nav; this.approachTarget = destination; this.consecutiveNudges = 0; this.nudgeNavigator = null; this.steps = []; this.destination = map; this.map = map; this.playerId = player.id;
     this.stepSize = stepSize; this.route = route; this.finalEscape = true; this.leg = null; this.awaitingSpawn = false;
     this.since = this.now(); this.lastAction = 0; this.state = 'walking'; this.reason = purpose==='field-entry'?'Entering the field lock area.':'Approaching the NPC on verified ground.';
+  }
+
+  private planWeighted(player: Entity, unavailableReason = 'No verified route connects this position to the destination under the map policy.'): void {
+    const context = this.planningOptions.context?.();
+    if (context && (!context.identity || context.map !== this.map || !context.player || context.player.dead || context.player.id !== player.id || distance(cell(context.player), cell(player)) !== 0)) {
+      this.state = 'failed'; this.reason = 'A current own actor lifetime is required for route planning.'; return;
+    }
+    const request: PlanningRequest = { generation: ++this.generation, abort: new AbortController(), identity: context?.identity ?? null, start: cell(player), policy: policyIdentity(this.policy) };
+    this.planning = request; this.steps = []; this.route = []; this.installedStart = null; this.state = 'planning';
+    this.reason = `Planning a verified route to ${this.destination}. Stop cancels planning.`;
+    // Ownership is visible before the planner can schedule its first slice.
+    try {
+      void (this.planningOptions.plan ?? routeBetweenMapsAsync)(this.map, request.start, this.destination, this.avoidWalls, this.policy,
+        { signal: request.abort.signal, scheduler: this.planningOptions.scheduler }).then(result => {
+        if (this.planning !== request || request.generation !== this.generation) return;
+        if (!this.planningCurrent(request)) { this.cancel('Route planning state changed. Choose the destination again.', true); return; }
+        if (!result) { this.cancel(unavailableReason, true); return; }
+        this.steps = result; this.installedStart = { ...request.start };
+        const current = this.planningOptions.context?.() ?? this.latest;
+        this.plan(current.player!, result[0]?.cells);
+        if (this.planning === request) this.planning = null;
+      }).catch(error => {
+        if (this.planning === request && request.generation === this.generation)
+          this.cancel(error instanceof Error ? error.message : 'Route planning failed.', true);
+      });
+    } catch (error) {
+      if (this.planning === request && request.generation === this.generation)
+        this.cancel(error instanceof Error ? error.message : 'Route planning failed.', true);
+    }
   }
 
   private planningCurrent(request: PlanningRequest): boolean {
@@ -482,6 +490,7 @@ export class TravelController {
     if(this.approachTarget&&this.map===this.destination){this.steps=[];this.plan(player);return;}
     this.approachNav=null;
     // Keep the trip identity and its original total deadline when replanning.
+    if(this.policy.mode==='weighted'){this.planWeighted(player,'No verified route from the observed official movement destination.');return;}
     const steps=routeBetweenMaps(this.map,cell(player),this.destination,this.avoidWalls,this.policy);
     if(!steps){this.cancel('No verified route from the observed official movement destination.',true);return;}
     this.steps=steps;this.plan(player);
