@@ -1,13 +1,14 @@
 // Deterministic architecture rules. Discovery, compilation and reporting live in architecture.mjs.
 import { createScanner, SyntaxKind } from 'typescript/unstable/ast';
+import { filter, flatMap, map, pipe } from 'remeda';
 
 export const ROLES = ['logic', 'effects', 'orchestration'];
 
 export function inventoryViolations(files, roles) {
   const actual = new Set(files);
   return [
-    ...files.filter(file => !Object.hasOwn(roles, file)).map(file => `${file}: missing architecture role`),
-    ...Object.entries(roles).flatMap(([file, role]) => !actual.has(file)
+    ...pipe(files, filter(file => !Object.hasOwn(roles, file)), map(file => `${file}: missing architecture role`)),
+    ...flatMap(Object.entries(roles), ([file, role]) => !actual.has(file)
       ? [`${file}: stale architecture entry`]
       : !ROLES.includes(role) ? [`${file}: unknown architecture role ${role}`] : []),
   ];
@@ -21,6 +22,15 @@ const PACKAGE_OPERATIONS = new Map([
   ['node:crypto', CRYPTO_OPERATIONS], ['node:util', UTIL_OPERATIONS],
   ['node:path', new Set(['join', 'normalize', 'dirname', 'basename', 'extname', 'isAbsolute', 'parse', 'format'])],
   ['node:url', new Set(['fileURLToPath', 'domainToASCII', 'domainToUnicode'])],
+  // Remeda also exports randomness, timers and retained state. Only explicit
+  // deterministic operations are available to logic; callbacks must stay pure.
+  ['remeda', new Set([
+    'allPass', 'anyPass', 'concat', 'countBy', 'entries', 'filter', 'find', 'findIndex',
+    'first', 'flatMap', 'fromEntries', 'groupBy', 'identity', 'indexBy', 'isDefined',
+    'isNonNullish', 'keys', 'map', 'mapKeys', 'mapValues', 'omit', 'partition', 'pick',
+    'pipe', 'piped', 'prop', 'reduce', 'sort', 'sortBy', 'sumBy', 'take', 'unique',
+    'uniqueBy', 'values',
+  ])],
 ]);
 const AMBIENT = ['window', 'document', 'globalThis', 'self', 'localStorage', 'sessionStorage',
   'fetch', 'XMLHttpRequest', 'WebSocket', 'console', 'process', 'Bun', 'Deno',
@@ -77,10 +87,16 @@ export function scriptEffectViolations(file, code, markedGlobals = false) {
       if (!member || member === 'random') failures.add('ambient Math.random or capability');
     }
   }
-  // Namespace/default imports could hide random, key-generation or printing effects.
+  // Namespace/default imports and re-exports could hide effects or retained state.
   for (let i = 0; i < tokens.length; i++) {
-    if (tokens[i].kind !== SyntaxKind.ImportKeyword || tokens[i + 1]?.text === '(') continue;
-    const end = tokens.findIndex((token, j) => j > i && token.kind === SyntaxKind.StringLiteral);
+    const declaration = tokens[i].kind;
+    if (declaration !== SyntaxKind.ImportKeyword && declaration !== SyntaxKind.ExportKeyword) continue;
+    if (tokens[i + 1]?.text === '(' || declaration === SyntaxKind.ExportKeyword && !['{', '*'].includes(tokens[i + 1]?.text)) continue;
+    let end = -1;
+    if (tokens[i + 1]?.kind === SyntaxKind.StringLiteral) end = i + 1;
+    else for (let j = i + 1; j < tokens.length && tokens[j].text !== ';'; j++) {
+      if (tokens[j].kind === SyntaxKind.FromKeyword && tokens[j + 1]?.kind === SyntaxKind.StringLiteral) { end = j + 1; break; }
+    }
     if (end < 0 || !PACKAGE_OPERATIONS.has(tokens[end].value)) continue;
     const library = tokens[end].value, operations = PACKAGE_OPERATIONS.get(library);
     if (tokens[i + 1]?.text !== '{') { failures.add(`unrestricted ${library} import`); continue; }
