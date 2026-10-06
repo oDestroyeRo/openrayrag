@@ -25,6 +25,18 @@ catalog main      → source reads → build_catalog(inputs) → write/print
 
 Keep effect ordering visible. A persistence failure must not commit a new in-memory collection. A send failure must retain unresolved receipts. Update continuation removes and syncs a one-shot checkpoint before validating/exposing it. Native commands retain view authorization, maintenance admission and lock ownership. Extracting a condition must not eagerly evaluate a previously short-circuited stateful query.
 
+## Domain values and external data
+
+An external number or string is evidence to validate, not a domain value merely because a type annotation names it. Keep raw wire, JSON and editable form DTOs separate from admitted domain models. At the existing admission point, the owning parser checks structure, field-specific bounds and relationships, then produces distinct validated identities, quantities, units and revision channels. Pure decisions consume those models; orchestration retains lifecycle ownership; effects serialize their values using the unchanged external representation.
+
+Use private-field Rust newtypes with typed constructor errors and no unchecked construction path. Deriving `Deserialize`, `Generic` or `LabelledGeneric` for a scalar can bypass its constructor even when its field is private. Deserialize raw DTOs and convert at the existing validation stage, or use explicitly validated deserialization. Frunk may assemble or transform already validated components. An aggregate with relationships between fields still needs a checked constructor; individually valid components do not establish those relationships.
+
+TypeScript and checked Bun JavaScript use opaque or branded primitives and readonly domain records. Put nominal assertions in the small owning constructors/parsers, after their runtime checks. Callers use those owners, rather than asserting that a primitive has a domain type. A readonly view over a mutable external alias is insufficient: retain owned data or detach it at admission, including nested arrays. Mutable UI drafts and state owners remain separate from readonly policy inputs.
+
+Arithmetic returns an ordinary primitive. Revalidate results that could violate a brand, including quantity subtraction, revision increments and unit conversion overflow, before changing owned state or dispatching an effect. Distinguish revision channels and use explicit seconds/milliseconds conversions. Preserve signed protocol timing and zero/negative wire sentinels in their actual owners; a general domain constructor does not replace narrower schema bounds or admit a sentinel as an identity.
+
+Keep primitives for binary offsets, opcodes, flags, search indexes and scratch arithmetic, platform handles, display text and unvalidated drafts. A wrapper must protect an actual domain distinction or construction invariant. Compile-time tests should call real domain consumers with incompatible values; runtime tests cover malformed input, alias mutation, boundary values, arithmetic, unchanged serialization and failure ordering. These checks prove the declared admission contracts, not the safety of deliberate unchecked casts or arbitrary reflective construction.
+
 ## Unary functions and composition
 
 Prefer a named input record for decisions with several related arguments, especially booleans. For repeated evaluation against the same context, bind that context once and return a unary function that can be passed directly to `map`, `filter` or `every`:
