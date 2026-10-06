@@ -157,7 +157,7 @@ test('anonymous source module discovery supports old releases and bounds new val
 test('fixture configuration uses supplied directories and creates no output by itself', () => {
   const config = responsiveFixtureBuildOptions('/project', '/output');
   assert.equal(config.stdin.resolveDir, '/project');
-  assert.equal(config.outfile, '/output/fixture.js');
+  assert.equal(config.outfile, join('/output', 'fixture.js'));
   assert.equal(config.write, false);
   assert.equal(config.target, 'safari16');
   assert.match(config.stdin.contents, /Offline route planning/);
