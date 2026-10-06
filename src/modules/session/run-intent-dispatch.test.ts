@@ -166,7 +166,23 @@ describe('run intent dispatch', () => {
     sent.resolve(); await resuming; expect((await held)!.outcome).toMatchObject({ status: 'accepted' });
     expect(f.actions().slice(-2)).toEqual(['stop', 'stop']);
     expect(f.field.requested).toBe(true); expect(f.field.metrics.kills).toBe(2);
+    expect(f.native.mock.calls.filter(call=>call[1]?.action==='stop').map(call=>call[1])).toEqual([
+      {action:'stop',runLimit:'kills'},{action:'stop',runLimit:'kills'},
+    ]);
     expect(f.dispatch.limitHeld).toBe(true); expect(f.dispatch.resume(ready('later'))).toBeNull();
+  });
+
+  it('keeps automatic time-limit attribution separate from a later explicit Stop without renewing intent',async()=>{
+    const f=fixture(),configured={...settings(),automation:structuredClone(DEFAULT_AUTOMATION)};
+    configured.automation.limits.minutes=1;
+    await f.dispatch.start(configured,ready());f.advance(60_000);
+    await f.dispatch.holdAtRunLimit(true);
+    expect(f.native.mock.calls.at(-1)?.[1]).toEqual({action:'stop',runLimit:'minutes'});
+    expect(f.field.requested).toBe(true);expect(f.field.limitCause).toBe('minutes');
+    f.advance(60_000);expect(f.dispatch.resume(ready('later'))).toBeNull();
+    await f.dispatch.stop();
+    expect(f.native.mock.calls.at(-1)?.[1]).toEqual({action:'stop'});
+    expect(f.field.requested).toBe(false);expect(f.field.limitCause).toBeNull();
   });
 
   it('retries a failed limit hold and never marks a replacement connection held', async () => {

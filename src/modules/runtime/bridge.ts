@@ -1,4 +1,5 @@
 import { initializationCertificate, initializationResetCandidate, initializationResetAllowed, initializationIdentityCurrent } from './runtime-initialization-policy';
+import { controlStopReason, type RunLimitCause } from '../session/run-limit-logic';
 import type { DeathRecoveryGuard } from '../recovery/death-recovery';
 import { MaintenanceLease } from './maintenance';
 import { couldOwnOfficialGameplay, isOfficialGameplayCommand, isOfficialLookCommand, isOfficialMovementCommand, isOfficialRefineCommand } from './official-input';
@@ -19,7 +20,7 @@ interface BridgeWindow extends Window {
   createUnityInstance?: (...args: unknown[]) => Promise<UnityClient>;
   __TAURI_INTERNALS__?: { invoke: (name: string, args: unknown) => Promise<unknown> };
   __RAYRAG__?: {
-    control: (action: 'start' | 'stop' | 'heartbeat' | 'apply', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard, applyId?:string,liveSettingsGuard?:LiveSettingsGuard) => void;
+    control: (action: 'start' | 'stop' | 'heartbeat' | 'apply', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard, applyId?:string,liveSettingsGuard?:LiveSettingsGuard,runLimit?:RunLimitCause|null) => void;
     perform: (action: 'command' | 'workflow' | 'routine' | 'macro' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance' | 'warp' | 'warpPreview' | 'warpCancel', request: unknown) => void;
     maintenance:(nonce:string,reserve:boolean|'commit')=>void;
     prepareUpdate:(requestId:string)=>void;
@@ -318,10 +319,11 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   };
 
   page.__RAYRAG__ = {
-    control(action, settings, escapeGuard, supplyGuard, recoveryGuard, applyId, liveSettingsGuard) {
+    control(action, settings, escapeGuard, supplyGuard, recoveryGuard, applyId, liveSettingsGuard,runLimit) {
+      const stopReason=controlStopReason(action,runLimit);
       maintenance.assertDispatch();mutation();
       if (action === 'heartbeat') { heartbeat = Date.now(); controller.heartbeat(true);retryInitialization();return; }
-      if (action === 'stop') { updateRequest=null;cancelLogin(); stop('Stopped by you.'); return; }
+      if (action === 'stop') { updateRequest=null;cancelLogin(); stop(stopReason); return; }
       try {
         if (page.buildUrl !== VERIFIED_BUILD) throw new Error('This game build is not verified.');
         if (!settings) throw new Error('Choose combat settings first.');

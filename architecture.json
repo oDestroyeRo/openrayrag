@@ -221,6 +221,7 @@
   "src/modules/session/reconnect.ts": "orchestration",
   "src/modules/session/run-intent-dispatch-logic.ts": "logic",
   "src/modules/session/run-intent-dispatch.ts": "orchestration",
+  "src/modules/session/run-limit-logic.ts": "logic",
   "src/modules/settings/bot-script.ts": "logic",
   "src/modules/settings/current-form-logic.ts": "logic",
   "src/modules/settings/current-form.ts": "orchestration",

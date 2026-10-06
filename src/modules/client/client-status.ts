@@ -45,7 +45,7 @@ function heldReason(status: Record<string, unknown>): string {
 /** Read-only projection; it does not change run intent, owner holds or admission. */
 export function clientStatus(value: unknown, context: StatusContext): { state: string; reason: string } {
   const status = record(value), login = record(status.login);
-  const state = status.running === true && !context.limitReason ? 'RUNNING'
+  const state = context.limitReason ? 'LIMIT' : status.running === true ? 'RUNNING'
     : context.fieldRequested || status.runRequested === true || context.held || record(status.warp).blocked === true ? 'WAITING'
       : status.player && status.compatible === true ? context.setupReason ? 'SETUP' : 'READY' : status.connected === true ? 'CONNECTED' : 'OFFLINE';
   const loginMessage = login.phase === 'failed' || login.phase === 'cancelled' || context.loginBusy;

@@ -51,6 +51,7 @@ import { BUILTIN_SERVICES, serviceByContractId,resolveServiceNpc, type NpcServic
 import { confirmWorkflowReceipt, stock, type WorkflowReceipt } from '../services/workflows';
 import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type EscapeSnapshot, type EscapeResumeGuard } from '../recovery/escape';
 import { liveSettingsGuard, planLiveSettings, validSettingsApplyId, validateLiveSettingsGuard, type LiveSettingsGuard, type LiveSettingsPlan, type SettingsApplySnapshot } from '../settings/live-settings-logic';
+import { reachedRunLimit, runLimitReason } from '../session/run-limit-logic';
 
 
 export type ControllerAction = ExpandedAction | WorldAction;
@@ -1827,10 +1828,9 @@ export class CompanionController {
     if (this.runRequested) {
       const policy = automationSettings(this.requestedSettings!);
       if (!inSchedule(policy, now)) { this.wait('Waiting for the configured daily schedule.'); return; }
-      if (policy.limits.minutes > 0 && now - this.started >= policy.limits.minutes * 60_000
-        || policy.limits.kills > 0 && this.engine.kills - this.runKills >= policy.limits.kills
-        || policy.limits.pickups > 0 && this.engine.looted - this.runPickups >= policy.limits.pickups) {
-        this.wait('Configured session limit reached. Stop and reconfigure to begin a new run.'); return;
+      const limit=reachedRunLimit({limits:policy.limits,elapsedMilliseconds:now-this.started,kills:this.engine.kills-this.runKills,pickups:this.engine.looted-this.runPickups});
+      if (limit) {
+        this.wait(runLimitReason(limit)); return;
       }
       if (!this.heartbeatHealthy) { this.resumeRun(); return; }
       if (!this.engine.connected || !this.engine.compatible || now - this.lastFrame > 15_000) {

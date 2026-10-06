@@ -63,7 +63,7 @@ describe('current owner presentation', () => {
   });
   it('retains running, requested, connected and offline presentation priorities', () => {
     expect(clientStatus({ ...ready, running: true }, { ...context, held: true }).state).toBe('RUNNING');
-    expect(clientStatus({ ...ready, running: true }, { ...context, fieldRequested: true, limitReason: 'Limit reached.' }).state).toBe('WAITING');
+    expect(clientStatus({ ...ready, running: true }, { ...context, fieldRequested: true, limitReason: 'Limit reached.' }).state).toBe('LIMIT');
     expect(clientStatus(ready, { ...context, fieldRequested: true }).state).toBe('WAITING');
     expect(clientStatus({ ...ready, runRequested: true }, context).state).toBe('WAITING');
     expect(clientStatus({ ...ready, player: null }, context).state).toBe('CONNECTED');

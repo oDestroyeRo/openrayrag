@@ -1,4 +1,5 @@
 import { initializationCertificate, initializationResetCandidate, initializationResetAllowed, initializationIdentityCurrent, shouldSendPlayerReady } from './runtime-initialization-policy';
+import { controlStopReason, type RunLimitCause } from '../session/run-limit-logic';
 import { wireController } from './controller-wire';
 import type { CompanionController } from './controller';
 import type { ControllerUpdateCheckpoint, ControllerUpdateRestore } from '../update/controller-update';
@@ -160,11 +161,12 @@ export class DirectRuntime {
     }catch{this.terminal('Bot connection unavailable. Pending outcomes remain unresolved.',true);}
     finally{this.polling=false;this.confirmPrepared();this.confirmMaintenance();}
   }
-  control(action:'start'|'stop'|'heartbeat'|'apply',settings:Parameters<CompanionController['start']>[0],escapeGuard?:Parameters<CompanionController['start']>[1],supplyGuard?:Parameters<CompanionController['start']>[2],recoveryGuard?:Parameters<CompanionController['start']>[3],applyId?:string,liveSettingsGuard?:Parameters<CompanionController['start']>[4]):void{
+  control(action:'start'|'stop'|'heartbeat'|'apply',settings:Parameters<CompanionController['start']>[0],escapeGuard?:Parameters<CompanionController['start']>[1],supplyGuard?:Parameters<CompanionController['start']>[2],recoveryGuard?:Parameters<CompanionController['start']>[3],applyId?:string,liveSettingsGuard?:Parameters<CompanionController['start']>[4],runLimit?:RunLimitCause|null):void{
+    const stopReason=controlStopReason(action,runLimit);
     this.lease.assertDispatch();this.mutate();
     if(action==='heartbeat'){this.heartbeat=this.now();this.controller.heartbeat(true);return;}
     try{
-      if(action==='stop'){this.updateRequest=null;this.controller.stop();}
+      if(action==='stop'){this.updateRequest=null;this.controller.stop(stopReason);}
       else {this.controller.heartbeat(true);
         if(action==='apply')this.controller.applySettings(settings,applyId??'');
         else this.controller.start(settings,escapeGuard,supplyGuard,recoveryGuard,liveSettingsGuard);

@@ -161,8 +161,10 @@ fn control_bot(
     death_recovery_guard: Option<settings::automation::DeathRecoveryGuard>,
     apply_id: Option<String>,
     live_settings_guard: Option<settings::automation::LiveSettingsGuard>,
+    run_limit: Option<game::control::RunLimitCause>,
 ) -> Result<(), String> {
     require_view(&window, "main")?;
+    game::control::validate_run_limit(&action, run_limit)?;
     if let Some(guard) = &live_settings_guard {
         if action != "start" {
             return Err("Live settings protection is only accepted by start.".into());
@@ -329,8 +331,10 @@ fn control_bot(
             serde_json::to_string(&apply_id).map_err(|_| "Invalid settings Apply identity.")?;
         let live_guard_json = serde_json::to_string(&live_settings_guard)
             .map_err(|_| "Invalid live settings protection.")?;
+        let run_limit_json =
+            serde_json::to_string(&run_limit).map_err(|_| "Invalid run limit cause.")?;
         format!(
-            "window.__RAYRAG__?.control({action_json},{settings_json},{escape_json},{supply_json},{recovery_json},{apply_json},{live_guard_json})"
+            "window.__RAYRAG__?.control({action_json},{settings_json},{escape_json},{supply_json},{recovery_json},{apply_json},{live_guard_json},{run_limit_json})"
         )
     };
     if action == "warp" {

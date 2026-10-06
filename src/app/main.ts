@@ -291,6 +291,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   element('status').classList.toggle('active',dashboard.state==='RUNNING');
   element('status').dataset.state=dashboard.state;
   element('client-run-title').textContent = dashboard.headline;
+  if(dashboard.state==='LIMIT')message(dashboard.reason);
   element('console-setup-summary').textContent = `${activeSettings?'Active run: ':''}${dashboard.setup}`;
   const retainedDiffers=!!dashboardSettings&&!!fieldSettings&&(dashboardSettings.map!==fieldSettings.map||dashboardSettings.targets.join(',')!==fieldSettings.targets.join(','));
   savedDraftSummary.hidden=!activeSettings&&!retainedDiffers;

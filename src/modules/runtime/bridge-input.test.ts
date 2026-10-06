@@ -12,6 +12,7 @@ import { socketCommand } from '../socket/socket-protocol';
 import { refineCommand } from '../refine/refine-protocol';
 import { socialCommand } from '../social/social-protocol';
 import type { ControllerUpdateRestore } from '../update/controller-update';
+import type { RunLimitCause } from '../session/run-limit-logic';
 
 const captured=vi.hoisted(()=>({controller:null as CompanionController|null,senders:[] as Array<(...args:never[])=>void>}));
 vi.mock('./controller',async original=>{
@@ -39,7 +40,7 @@ function spawn(e:Entity,entryType=0):Uint8Array {
     .u8(e.kind).u8(0).u8(0).i32(e.x).i32(e.y).u8(e.level).i32(e.hp).i32(e.maxHp).i32(e.sp??0).i32(e.maxSp??0).i32(0).u8(0).finish();
   return new BitWriter().u8(OP.spawn).u8(entryType).i32(body.length).take(body).finish();
 }
-type Page={WebSocket:typeof NativeSocket;buildUrl:string;__RAYRAG__?:{control:(action:'start'|'stop'|'heartbeat'|'apply',settings?:Settings,escape?:unknown,supply?:unknown,death?:unknown,applyId?:string)=>void;maintenance:(nonce:string,reserve:boolean|'commit')=>void;perform:(action:string,request:unknown)=>void;prepareUpdate:(requestId:string)=>void;cancelUpdate:(requestId:string)=>void;restoreUpdate:(payload:ControllerUpdateRestore)=>void}};
+type Page={WebSocket:typeof NativeSocket;buildUrl:string;__RAYRAG__?:{control:(action:'start'|'stop'|'heartbeat'|'apply',settings?:Settings,escape?:unknown,supply?:unknown,death?:unknown,applyId?:string,liveSettingsGuard?:unknown,runLimit?:RunLimitCause|null)=>void;maintenance:(nonce:string,reserve:boolean|'commit')=>void;perform:(action:string,request:unknown)=>void;prepareUpdate:(requestId:string)=>void;cancelUpdate:(requestId:string)=>void;restoreUpdate:(payload:ControllerUpdateRestore)=>void}};
 async function fixture(ready=true,ownId=0){
   const invoke=vi.fn(async(name:string):Promise<unknown>=>name==='warp_guard_mark'?'11111111-1111-4111-8111-111111111111':name==='update_ack'||name==='update_lease_alive'?true:undefined);
   const page:Page & Pick<Window,'addEventListener'> & {__TAURI_INTERNALS__:{invoke:typeof invoke}}={WebSocket:NativeSocket,buildUrl:VERIFIED_BUILD,addEventListener:()=>{},__TAURI_INTERNALS__:{invoke}},listeners=new Map<string,EventListener>();
@@ -58,6 +59,16 @@ async function fixture(ready=true,ownId=0){
   const input=(type='keydown',trusted=true)=>listeners.get(type)!({isTrusted:trusted} as Event);
   return {page,socket,c,packet,packetOn,input,invoke,start:(settings:Settings)=>page.__RAYRAG__!.control('start',settings),step:async(ms:number)=>vi.advanceTimersByTimeAsync(ms)};
 }
+it('game-client Stop retains automatic limit attribution and rejects a cause on another action before effects',async()=>{
+  const f=await fixture();const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0 as const};
+  f.start(settings);const before=f.c.snapshot(),writes=f.socket.writes.length;
+  expect(()=>f.page.__RAYRAG__!.control('start',settings,undefined,undefined,undefined,undefined,undefined,'pickups')).toThrow();
+  expect(f.c.snapshot()).toEqual(before);expect(f.socket.writes).toHaveLength(writes);
+  f.page.__RAYRAG__!.control('stop',undefined,undefined,undefined,undefined,undefined,undefined,'pickups');
+  expect(f.c.snapshot().log[0]?.text).toContain('pickup limit');expect(f.c.snapshot().log[0]?.text).not.toContain('Stopped by you');
+  f.page.__RAYRAG__!.control('stop');expect(f.c.snapshot().log[0]?.text).toBe('Stopped by you.');
+});
+
 it('game-client preparation drains a late attack receipt and final ACK carries the same frozen counters',async()=>{
   const f=await fixture(),requestId='a'.repeat(32),nonce='b'.repeat(32);
   f.start({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0});await f.step(100);

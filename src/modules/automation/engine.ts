@@ -1,4 +1,4 @@
-import { minutesToMilliseconds } from '../../shared/domain-values';
+import { reachedRunLimit, runLimitReason } from '../session/run-limit-logic';
 import { skillId as domainSkillId } from '../../shared/domain-values';
 import { flatMap, map } from 'remeda';
 import { manualActionBlocker } from './engine-action-policy';
@@ -748,7 +748,8 @@ export class BotEngine {
     if (now - Math.max(this.lastFrame, this.runStarted) > 15000) { this.stop('No recent server updates.'); return; }
     const a = automationSettings(this.settings);
     if (!inSchedule(a,now)) { this.stop('Daily schedule ended. Press Start during the next allowed period.'); return; }
-    if ((a.limits.minutes && now - this.runStarted >= minutesToMilliseconds(a.limits.minutes)) || (a.limits.kills && this.kills - this.runKills >= a.limits.kills) || (a.limits.pickups && this.looted - this.runPickups >= a.limits.pickups)) { this.stop('Configured session limit reached.'); return; }
+    const limit=reachedRunLimit({limits:a.limits,elapsedMilliseconds:now-this.runStarted,kills:this.kills-this.runKills,pickups:this.looted-this.runPickups});
+    if (limit) { this.stop(runLimitReason(limit)); return; }
     if(!dispatchDecisions){
       if(this.retreatTask)this.tickRetreat(now,false);
       // Panel input yields decisions, not ownership. Advance accepted legs and

@@ -10,7 +10,7 @@ import type { GameStatus } from '../client/game-status';
 import { searchGrid } from '../navigation/navigation';
 import { liveSettingsGuard } from '../settings/live-settings-logic';
 
-const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, scriptStorageFails: false, useEditor: false, editor: null as MacroUi | null, setupScript: null as BotScriptDocument['script'], setupSettings: null as SettingsInput | null, syncSetup: vi.fn(), clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
+const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, scriptStorageFails: false, useEditor: false, limitMinutes:0, editor: null as MacroUi | null, setupScript: null as BotScriptDocument['script'], setupSettings: null as SettingsInput | null, syncSetup: vi.fn(), clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, isTauri: () => true }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: ipc.listen }));
 vi.mock('../client/feature-ui', async () => {
@@ -44,7 +44,7 @@ vi.mock('../client/feature-ui', async () => {
     clearMacro():void{ipc.clearMacro();}
     clearSocial():void{}
     clearMemo():void{}
-    read() { return structuredClone(DEFAULT_AUTOMATION); }
+    read() { const value=structuredClone(DEFAULT_AUTOMATION);value.limits.minutes=ipc.limitMinutes;return value; }
     lock(): void {}
   }, validFeatureStatus: () => true };
 });
@@ -118,7 +118,7 @@ async function fixture(saved: SavedProfile | null | Promise<SavedProfile|null> =
     getElementById: (id: string) => elements.get(id), createElement: (tag:string) => new Element(elements,tag),
   });
   vi.stubGlobal('innerWidth',1100);vi.stubGlobal('innerHeight',880);
-  ipc.featureSettled=true;ipc.macroDirty=false;ipc.useEditor=useEditor;ipc.scriptStorageFails=false;ipc.editor=null;ipc.setupScript=null;ipc.setupSettings=null;ipc.syncSetup.mockClear();ipc.clearMacro.mockClear();ipc.invoke.mockReset(); ipc.listen.mockClear();
+  ipc.featureSettled=true;ipc.macroDirty=false;ipc.useEditor=useEditor;ipc.limitMinutes=0;ipc.scriptStorageFails=false;ipc.editor=null;ipc.setupScript=null;ipc.setupSettings=null;ipc.syncSetup.mockClear();ipc.clearMacro.mockClear();ipc.invoke.mockReset(); ipc.listen.mockClear();
   ipc.invoke.mockImplementation(async (command: string,args?:{document?:{revision:number}}) => {
     if(command==='current_form')return savedForm;
     if(command==='save_current_form')return args?.document?.revision;
@@ -663,6 +663,21 @@ it('Connect account opens the retained account form without creating or showing 
  const f=await fixture();await f.get('open').emit('click');
  expect(f.get('client-page-settings').hidden).toBe(false);
  expect(f.calls('open_game')).toEqual([]);expect(f.calls('login_game')).toEqual([]);expect(f.calls('control_bot')).toEqual([]);
+});
+
+it('shows automatic time-limit completion and retains the run until explicit Stop',async()=>{
+  const f=await fixture();ipc.limitMinutes=1;
+  await publishStatus(readyStatus('limited-run'));await f.get('select-targets').emit('click');await f.get('start').emit('click');
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(f.calls('control_bot').filter(call=>call[1]?.action==='stop').map(call=>call[1])).toEqual([{action:'stop',runLimit:'minutes'}]);
+  expect(f.get('status').textContent).toBe('LIMIT');expect(f.get('client-run-title').textContent).toBe('Run limit reached');
+  expect(f.get('notice').textContent).toContain('Press Stop to end this run');
+  expect(f.get('start').disabled).toBe(true);expect(f.get('stop').disabled).toBe(false);
+  await publishStatus({...readyStatus('limited-run'),reason:'Configured session limit reached.'});
+  expect(f.get('status').textContent).toBe('LIMIT');expect(f.get('start').disabled).toBe(true);
+  await f.get('stop').emit('click');
+  expect(f.calls('control_bot').at(-1)?.[1]).toEqual({action:'stop'});
+  expect(f.get('status').textContent).toBe('READY');expect(f.get('start').disabled).toBe(false);
 });
 
 it.each(['disconnect','account-disconnect'])('requires settled, fresh stopped state for %s and clears telemetry for a new login',async disconnectId=>{
