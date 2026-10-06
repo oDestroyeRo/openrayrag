@@ -1,3 +1,4 @@
+import { initializationCertificate, initializationResetCandidate, initializationResetAllowed, initializationIdentityCurrent, shouldSendPlayerReady } from './runtime-initialization-policy';
 import { wireController } from './controller-wire';
 import type { CompanionController } from './controller';
 import type { ControllerUpdateCheckpoint, ControllerUpdateRestore } from './controller-update';
@@ -89,7 +90,7 @@ export class DirectRuntime {
     if(event.kind==='closed'||event.kind==='failed'){
       this.terminal(event.reason,event.kind==='closed'||/stream failed|timed out|TLS connection/.test(event.reason));return;
     }
-    if(event.kind==='readySent'){if(!this.opened)throw new Error('Ready before connection');this.controller.observeOfficialPacket(new Uint8Array([2]));this.certificate=this.initial&&this.full&&this.memo;return;}
+    if(event.kind==='readySent'){if(!this.opened)throw new Error('Ready before connection');this.controller.observeOfficialPacket(new Uint8Array([2]));this.certificate=initializationCertificate({initial:this.initial,fullResources:this.full,memo:this.memo,readyObserved:true});return;}
     if(event.kind==='opened'){
       if(this.opened)throw new Error('Duplicate connection');this.opened=true;
       this.controller.connect(true);this.login={phase:'selecting',message:'Selecting the requested existing character.'};return;
@@ -103,7 +104,9 @@ export class DirectRuntime {
     const observation=this.controller.receive(bytes,this.controller.connectionGeneration,before=>{
       const ownEntry=before.spawns.find(e=>e.id===this.controller.engine.playerId&&e.kind===0);
       if(ownEntry&&!this.firstOwnSeen){this.firstOwnSeen=true;
-        if(this.initial&&this.certificate&&ownEntry.entryType===1&&this.resources!==null&&this.resources===this.controller.officialInitializationResourceRevision())this.resetAllowed=true;}
+        const certificate=this.initial&&this.certificate;
+        if(initializationResetCandidate(certificate,ownEntry.entryType,this.resources)
+          &&initializationResetAllowed(certificate,ownEntry.entryType,this.resources,this.controller.officialInitializationResourceRevision()))this.resetAllowed=true;}
     });
     if(!observation)return;
     if(observation.enter){
@@ -121,7 +124,7 @@ export class DirectRuntime {
     if(this.initial&&observation.memoSlots)this.memo=true;
     // Initial full resources and memo are sent before PlayerReady. Map changes need
     // their applied reset only. A duplicate/stale opcode never supplies this proof.
-    if(this.readyPending&&(!this.initial||this.full&&this.memo)){
+    if(shouldSendPlayerReady(this.readyPending,this.initial,this.full,this.memo)){
       this.readyPending=false;await this.send(new Uint8Array([2]));
       if(this.ended)return;
     }
@@ -134,7 +137,7 @@ export class DirectRuntime {
     if(this.controller.engine.player){this.entered=true;this.login={phase:'complete',message:'Character connected. Bot controls are ready.'};}
   }
   private reconcile(){
-    if(!this.certificate||!this.own||this.lease.blocked||this.ended||this.own!==JSON.stringify(this.controller.engine.actorActionIdentity(undefined,true)))return;
+    if(!initializationIdentityCurrent(this.certificate,this.own,JSON.stringify(this.controller.engine.actorActionIdentity(undefined,true)),this.lease.blocked,this.ended))return;
     if(this.controller.warp.blocked){if(this.resources!==null&&this.controller.reconcileOfficialInitialization(this.resources))this.certificate=false;}
     else if(this.refineResources!==null){this.controller.reconcileOfficialRefineInitialization(this.refineResources);this.certificate=false;}
   }

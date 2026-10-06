@@ -1,3 +1,5 @@
+import { planningScheduler } from './route-scheduling-effects';
+
 /** Each yield releases a bounded piece of map analysis, heuristic work or A*. */
 export type PlanningPhase = 'map-analysis' | 'local-search' | 'heuristic' | 'world-search' | 'route-copy';
 export type PlanningWork<T> = Generator<PlanningPhase | void, T>;
@@ -16,10 +18,6 @@ export interface PlanningOptions {
 export class PlanningCancelled extends Error {
   constructor() { super('Route planning cancelled.'); this.name = 'AbortError'; }
 }
-const scheduler: PlanningScheduler = {
-  now: () => performance.now(),
-  schedule(callback) { const handle = setTimeout(callback, 0); return () => clearTimeout(handle); },
-};
 // No waiting queue: each runtime retains at most four independent jobs. Callers
 // cancel their previous request before starting another, so previews cannot
 // accumulate work or displace an executing controller's job.
@@ -31,7 +29,7 @@ export function completePlanning<T>(work: PlanningWork<T>): T {
   return result.value;
 }
 export function runPlanning<T>(work: PlanningWork<T>, options: PlanningOptions = {}): Promise<T> {
-  const runtime = options.scheduler ?? scheduler;
+  const runtime = options.scheduler ?? planningScheduler;
   const budget = options.sliceMs ?? 8;
   if (!Number.isFinite(budget) || budget <= 0 || budget > 16) return Promise.reject(new RangeError('Planning slice must be greater than 0 and at most 16 ms.'));
   if (options.signal?.aborted) return Promise.reject(new PlanningCancelled());

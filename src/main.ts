@@ -1,3 +1,4 @@
+import { accountHasDraft, panelUpdateWaitReason, panelDisconnectReady, panelControls } from './runtime-panel-policy';
 import { CurrentForm } from './current-form';
 import { SettingsClose, type CloseRequest } from './settings-close';
 import { BotConsole } from './bot-console';
@@ -44,7 +45,7 @@ let loginStartedAt = 0;
 let accountReady = !native;
 let accountBaseline:string|null=null;
 function accountFields():string{return JSON.stringify(['username','character-slot','connection-mode'].map(id=>element<HTMLInputElement>(id).value).concat(['remember-login','auto-login'].map(id=>String(element<HTMLInputElement>(id).checked))));}
-function accountDraft():boolean{return !!element<HTMLInputElement>('password').value||accountBaseline!==null&&accountFields()!==accountBaseline;}
+function accountDraft():boolean{return accountHasDraft(element<HTMLInputElement>('password').value,accountFields(),accountBaseline);}
 let updateBusy=false;
 let updateSettled:Promise<void>=Promise.resolve();
 let updateFinished:()=>void=()=>{};
@@ -172,27 +173,15 @@ function formChanged():void {
   if(saveTimer)clearTimeout(saveTimer);
   saveTimer=setTimeout(()=>{void currentForm.flush().catch(()=>{element('update-status').textContent='Updates are waiting for valid, saved current settings.';});},300);
 }
+function pendingRequests() {
+  const pending=dispatches.pending;
+  return {login:!!pending.login,resume:!!pending.resume,service:!!pending.service,manual:!!pending.manual,limit:!!pending.limit};
+}
 function mainUpdateWaitReason():string|null {
-  if(!closeRegistered)return 'Update waits for settings initialization.';
-  if(closeBusy)return 'Update waits for the settings window to finish closing.';
-  if(!accountReady)return 'Update waits for the saved account to finish loading.';
-  if(!currentForm.initialized)return 'Update waits for current settings to be restored.';
-  if(accountDraft())return 'Update waits for your account draft. Sign in or clear the draft first.';
-  if(updateBusy)return 'Update settlement is already in progress.';
-  if(busy)return 'Update waits for the current request to finish.';
-  if(dispatches.stopping)return 'Update waits for Stop to finish.';
-  if(loginBusy)return 'Update waits for sign-in to finish.';
-  if(heartbeatPending)return 'Update waits for the current connection check to finish.';
-  if(dispatches.pending.login)return 'Update waits for the pending sign-in request to finish.';
-  if(dispatches.pending.resume)return 'Update waits for the pending automation resume to finish.';
-  if(dispatches.pending.service)return 'Update waits for the pending service action to finish.';
-  if(dispatches.pending.manual)return 'Update waits for the pending manual action to finish.';
-  if(dispatches.pending.limit)return 'Update waits for automation to stop at its configured limit.';
-  if(features.hasUnsavedMacro())return 'Update waits for your Script draft. Apply & save or Discard draft first.';
-  if(updateContinuation.pending)return 'The previous update is waiting to continue your run.';
-  if(!features.settledForMaintenance(true))return 'Update waits for pending game actions or previews to finish.';
-  if(reconnect.waitingUntil)return 'Update waits for the scheduled reconnect to finish.';
-  return null;
+  return panelUpdateWaitReason({closeRegistered,closeBusy,accountReady,formInitialized:currentForm.initialized,
+    accountDraft:accountDraft(),updateBusy,busy,stopping:dispatches.stopping,loginBusy,heartbeatPending,pending:pendingRequests(),
+    unsavedMacro:features.hasUnsavedMacro(),continuationPending:updateContinuation.pending,
+    featuresSettled:features.settledForMaintenance(true),reconnectScheduled:!!reconnect.waitingUntil});
 }
 async function pollUpdate():Promise<void>{
   if(!native||!closeRegistered||closeBusy||closeStatus||updatePolling||updateBusy)return;updatePolling=true;
@@ -227,9 +216,9 @@ const botConsole = new BotConsole(shell.main, {
   manualTools: () => shell.showPage('manual'),
 });
 function disconnectReady():boolean {
-  return native && gameOpen && accountReady && !updateBusy && !busy && !dispatches.stopping && !loginBusy && !dispatches.pending.login && !dispatches.pending.resume
-    && !dispatches.pending.service && !dispatches.pending.manual && !dispatches.pending.limit && !heartbeatPending && !runActive()
-    && features.settledForMaintenance() && !(latest?.connected && latest.player && Date.now()-receivedAt>=7000);
+  return panelDisconnectReady({native,gameOpen,accountReady,updateBusy,busy,stopping:dispatches.stopping,loginBusy,
+    pending:pendingRequests(),heartbeatPending,runActive:runActive(),featuresSettled:features.settledForMaintenance(),
+    connectedCharacter:!!(latest?.connected&&latest.player),statusAgeMs:Date.now()-receivedAt});
 }
 
 
@@ -287,15 +276,18 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   stopButton.disabled = dispatches.stopping || !gameOpen && !fieldRun.requested && !loginBusy && !updateContinuation.pending;
   openButton.disabled = false;
   element<HTMLButtonElement>('disconnect').disabled = !disconnectReady();
-  botConsole.lock(busy || dispatches.stopping || loginBusy || !ready || runActive() || !features.settledForMaintenance(), !native ? 'Browser preview · native connection required.' : busy || dispatches.stopping || loginBusy ? 'Wait for the current request to finish.' : !ready ? 'Connect a fresh verified character to use manual controls.' : runActive() || !features.settledForMaintenance() ? 'Stop the bot; wait for pending actions before manual control.' : '');
-  element<HTMLButtonElement>('signin').disabled = !native || !accountReady || busy || dispatches.stopping || loginBusy || !!(latest?.connected && latest.player);
-  element<HTMLButtonElement>('forget-login').disabled = busy || dispatches.stopping || loginBusy;
+  const controls=panelControls({native,ready:!!ready,accountReady,connectedCharacter:!!(latest?.connected&&latest.player),
+    busy,stopping:dispatches.stopping,loginBusy,gameOpen,rememberLogin:element<HTMLInputElement>('remember-login').checked,
+    sessionLoginAvailable,runActive:runActive(),featuresSettled:features.settledForMaintenance()});
+  botConsole.lock(controls.manualLocked,controls.manualReason);
+  element<HTMLButtonElement>('signin').disabled = controls.signinDisabled;
+  element<HTMLButtonElement>('forget-login').disabled = controls.forgetLoginDisabled;
   for (const id of ['username', 'password', 'character-slot', 'remember-login']) {
-    element<HTMLInputElement>(id).disabled = !accountReady || busy || dispatches.stopping || loginBusy;
+    element<HTMLInputElement>(id).disabled = controls.accountDisabled;
   }
-  element<HTMLSelectElement>('connection-mode').disabled = !accountReady || gameOpen || busy || dispatches.stopping || loginBusy;
-  element<HTMLInputElement>('auto-login').disabled = busy || dispatches.stopping || loginBusy || !element<HTMLInputElement>('remember-login').checked;
-  element<HTMLInputElement>('auto-reconnect').disabled = busy || dispatches.stopping || loginBusy || !sessionLoginAvailable;
+  element<HTMLSelectElement>('connection-mode').disabled = controls.modeDisabled;
+  element<HTMLInputElement>('auto-login').disabled = controls.autoLoginDisabled;
+  element<HTMLInputElement>('auto-reconnect').disabled = controls.autoReconnectDisabled;
   features.withSettings(projection.runSettings,()=>features.lock(busy || dispatches.stopping || loginBusy || runActive(),busy || dispatches.stopping || loginBusy || !ready || runActive(),busy || dispatches.stopping || loginBusy || !ready || features.serviceBlocked(),busy || dispatches.stopping || loginBusy || !ready || fieldRun.requested));
 }
 

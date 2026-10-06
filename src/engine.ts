@@ -1,3 +1,4 @@
+import { manualActionBlocker } from './engine-action-policy';
 import { ObservedThreats, type ThreatSnapshot } from './observed-threats';
 import { CastAvailability, type ObservedCast } from './cast-availability';
 import { matchesSkillExecution, matchesPartyHealExecution } from './skill-execution';
@@ -19,11 +20,11 @@ import { automationSettings, DEFAULT_SETTINGS, validateSettings, type Settings, 
 import { acceptsMonster, acceptsLoot, inSchedule, monsterRule, lootRule, effectiveSkillLevel, AutomationScheduler, type AutomationTask, type ActionResult, type ActionReceipts } from './automation';
 import { CharacterState, type CharacterSnapshot, type StatefulEntity } from './character-state';
 import { validateExpandedAction, type ExpandedAction, type FeatureEvent } from './protocol-feature';
-import { ITEM_CATALOG, SKILL_CATALOG, skillCost, skillPrerequisites } from './game-catalog';
+import { SKILL_CATALOG, skillCost } from './game-catalog';
 import { attackDistance, normalAttackProfile } from './combat';
 import {RetreatLedger,planRetreat,IDLE_RETREAT,type RetreatTask,type RetreatSnapshot} from './retreat';
 import {retreatSettings} from './settings';
-import { AMMO_CATALOG, LoadoutPolicy, type LoadoutSnapshot } from './loadout';
+import { LoadoutPolicy, type LoadoutSnapshot } from './loadout';
 import { IDLE_MANUAL_TARGET, manualAmmoGuard, manualTargetSettings, manualStateBlocker, previewManualTarget, sameActionIdentity as sameManualIdentity, validateManualTargetRequest, type ManualTargetRequest, type ManualTargetSnapshot } from './manual-target';
 export { MAX_TARGETS, DEFAULT_SETTINGS, DEFAULT_AUTOMATION, validateSettings, validateAutomation } from './settings';
 export type { Settings, AutomationSettings } from './settings';
@@ -1600,26 +1601,11 @@ export class BotEngine {
     if(!this.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
     if(!this.idleForActions())throw new Error('Stop automation and wait for movement and action confirmation first.');
     const p=this.player;
-    if(!this.connected||!this.compatible||!p)throw new Error('A verified character is required.');
-    if(action.type==='respawn') {if(!p.dead)throw new Error('Respawn requires a dead character.');}
-    else if(p.dead)throw new Error('Revive before using this action.');
-    if(action.type==='sit'&&action.sitting&&p.classId===0&&(!this.character.skillsKnown||(this.character.learned.get(1)??0)<2))throw new Error('A novice needs verified Basic Mastery level 2 to sit.');
-    if(action.type==='useItem') {
-      if(!this.character.inventoryKnown||this.character.count(action.itemId)<1)throw new Error('Item is not present in a verified inventory.');
-      const item=ITEM_CATALOG[action.itemId];if(!item||item.useType<1)throw new Error('This item is not usable.');
-      if(action.target!==undefined&&action.target!==-1&&!this.entities.has(action.target)&&!this.actors.has(action.target))throw new Error('Item target is not visible.');
-      if(item.useType===2&&(action.target===undefined||action.target===-1))throw new Error('This item requires a target.');
-    }
-    if(action.type==='equip') {const item=this.character.inventory.get(action.bagId),info=item?ITEM_CATALOG[item.itemId]:undefined;if(!this.character.inventoryKnown||!item||!info||![2,3,4].includes(info.itemClass)||(!info.position&&!AMMO_CATALOG[item!.itemId]))throw new Error('Equipment is not present in a verified inventory.');}
-    if(action.type==='allocateSkill') {
-      const skill=SKILL_CATALOG[action.skillId],requirements=skillPrerequisites(p.classId,action.skillId),learned=this.character.learned.get(action.skillId)??0;
-      if(!this.character.skillsKnown||!this.character.stats?.skillPoints||!skill||learned>=skill.maxLevel||requirements===null||requirements.some(r=>(this.character.learned.get(r.skillId)??0)<r.level))throw new Error('Skill points, class prerequisites and a learnable skill are required.');
-    }
-    if(action.type==='allocateStats') {
-      const stats=this.character.stats;if(!stats?.attributes||stats.statPoints===undefined)throw new Error('Verified attributes and stat points are required.');
-      let cost=0;for(let i=0;i<6;i++){const current=stats.attributes[i]!;if(current+action.attributes[i]!>99)throw new Error('Attributes cannot exceed 99.');for(let n=0;n<action.attributes[i]!;n++)cost+=2+Math.floor((current+n-1)/10);}
-      if(cost>stats.statPoints)throw new Error('Insufficient verified stat points.');
-    }
+    const blocker=manualActionBlocker(action,{connected:this.connected,compatible:this.compatible,player:p??null,
+      inventoryKnown:this.character.inventoryKnown,inventory:this.character.inventory,skillsKnown:this.character.skillsKnown,
+      learned:this.character.learned,stats:this.character.stats,entities:this.entities,actors:this.actors});
+    if(blocker)throw new Error(blocker);
+    if(!p)throw new Error('A verified character is required.');
     if(action.type==='skill') {
       const requestedLevel=action.level;
       if(this.character.skillLevel(action.skillId)<requestedLevel)throw new Error('An active learned or granted skill is required.');
