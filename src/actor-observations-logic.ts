@@ -95,52 +95,63 @@ export function validActorSnapshot(value: unknown): value is ActorObservationSna
   });
 }
 
+/** Bind read-only observation inputs for one synchronous evaluation pass.
+ * Do not retain this evaluator across ticks or mutate its snapshot while using it. */
+export function actorPredicateEvaluator(snapshot: ActorObservationSnapshot | undefined): (condition: ActorPredicate) => PredicateTrace {
+  return condition => {
+    const trace = (state: PredicateTrace['state'], reason: string): PredicateTrace => ({ condition: structuredClone(condition), state, reason });
+    if (!validActorPredicate(condition,true)) return trace('unavailable','Actor condition has invalid fields or threshold.');
+    if (!snapshot || !snapshot.connected || snapshot.lastFrameAt === null || snapshot.at < snapshot.lastFrameAt
+      || snapshot.at - snapshot.lastFrameAt > ACTOR_OBSERVATION_LIMITS.staleMs) return trace('unavailable','Actor observations need a fresh connected world.');
+    const selector = condition.actor;
+    if (selector.scope === 'actor' && selector.world !== snapshot.world) return trace('unavailable','Observed actor belongs to an earlier world. Rebind this condition.');
+    const id = selector.scope === 'self' ? snapshot.selfId : selector.scope === 'target' ? snapshot.targetId : selector.scope==='candidate'?snapshot.candidateId:selector.id;
+    const actor = snapshot.actors.find(actor => actor.id === id);
+    if(!actor&&snapshot.truncated)return trace('unavailable','Actor observations were truncated; inspect fewer actors.');
+    if (!actor || (selector.scope === 'actor' && actor.incarnation !== selector.incarnation)) return trace('unavailable','Actor is absent or its lifetime changed. Rebind an observed actor.');
+    if (actor.kind !== 0 && actor.kind !== 1) return trace('unavailable','Actor evidence is supported for players and monsters only.');
+    if (actor.observedAt > snapshot.at) return trace('unavailable','Actor observation clock is unavailable.');
+    if (condition.field === 'actorHpPercent' || condition.field === 'actorSpPercent') {
+      if (selector.scope === 'candidate' && actor.kind !== 1) return trace('unavailable','Candidate resources require a monster.');
+      const resource = condition.field === 'actorHpPercent' ? actor.hp : actor.sp;
+      const label = condition.field === 'actorHpPercent' ? 'HP' : 'SP';
+      if (!resource || resource.reason !== null) return trace('unavailable',`${label} unavailable: ${resource?.reason ?? 'no verified resource source'}${resource?.source?` (source: ${resource.source})`:''}.`);
+      if (condition.field==='actorSpPercent' && (actor.kind!==0
+        || actor.id===snapshot.selfId && !['spawn','own-stats','own-sp'].includes(resource.source??'')
+        || actor.id!==snapshot.selfId && (actor.id<=0||resource.source!=='party'))) return trace('unavailable','SP requires verified own state or a visible current-party player binding.');
+      if (!resourceFresh(resource,snapshot.at)) return trace('unavailable',`${label} from ${resource.source} is stale or its observation clock is unavailable (15-second limit).`);
+      if (actor.hp?.value === 0) return trace('unavailable','A living actor HP observation is required.');
+      const percent = resource.value! / resource.max! * 100;
+      const matched = compareResource(resource.value!*100,condition.operator,condition.value*resource.max!);
+      return trace(matched?'matched':'unmatched',`${label} ${percent.toFixed(2)}% from ${resource.source}, observed ${snapshot.at-resource.at!} ms ago.`);
+    }
+    let actual: boolean;
+    if (condition.field === 'actorStatus') {
+      if (!SUPPORTED_STATUS_IDS.has(condition.statusId)) return trace('unavailable','This status has no reliable visible add/remove contract.');
+      const status = actor.statuses.find(status => status.id === condition.statusId);
+      if (status && (!status.known || status.observedAt > snapshot.at || status.present && status.expiresAt!==null && snapshot.at>=status.expiresAt)) return trace('unavailable','Status refresh or predicted expiry is unresolved; wait for removal or a new snapshot.');
+      if (!status && !actor.statusesKnown) return trace('unavailable','A complete supported status snapshot is unavailable.');
+      actual = !!status?.present;
+    } else {
+      const cast = actor.cast;
+      if (cast.state === 'unknown' || cast.observedAt === null || cast.observedAt > snapshot.at
+        || cast.state === 'casting' && (cast.deadline === null || snapshot.at >= cast.deadline)) return trace('unavailable','Casting is unknown or its deadline ended without a completion observation.');
+      actual = cast.state === 'casting' && (condition.skillId === undefined || condition.skillId === cast.skillId);
+    }
+    const matched = condition.operator === 'eq' ? actual === condition.value : actual !== condition.value;
+    return trace(matched?'matched':'unmatched',matched?'Actor condition matched.':'Actor condition did not match.');
+  };
+}
+
+/** Compatibility entrypoint for callers evaluating a single condition. */
 export function evaluateActorPredicate(condition: ActorPredicate, snapshot: ActorObservationSnapshot | undefined): PredicateTrace {
-  const trace = (state: PredicateTrace['state'], reason: string): PredicateTrace => ({ condition: structuredClone(condition), state, reason });
-  if (!validActorPredicate(condition,true)) return trace('unavailable','Actor condition has invalid fields or threshold.');
-  if (!snapshot || !snapshot.connected || snapshot.lastFrameAt === null || snapshot.at < snapshot.lastFrameAt
-    || snapshot.at - snapshot.lastFrameAt > ACTOR_OBSERVATION_LIMITS.staleMs) return trace('unavailable','Actor observations need a fresh connected world.');
-  const selector = condition.actor;
-  if (selector.scope === 'actor' && selector.world !== snapshot.world) return trace('unavailable','Observed actor belongs to an earlier world. Rebind this condition.');
-  const id = selector.scope === 'self' ? snapshot.selfId : selector.scope === 'target' ? snapshot.targetId : selector.scope==='candidate'?snapshot.candidateId:selector.id;
-  const actor = snapshot.actors.find(actor => actor.id === id);
-  if(!actor&&snapshot.truncated)return trace('unavailable','Actor observations were truncated; inspect fewer actors.');
-  if (!actor || (selector.scope === 'actor' && actor.incarnation !== selector.incarnation)) return trace('unavailable','Actor is absent or its lifetime changed. Rebind an observed actor.');
-  if (actor.kind !== 0 && actor.kind !== 1) return trace('unavailable','Actor evidence is supported for players and monsters only.');
-  if (actor.observedAt > snapshot.at) return trace('unavailable','Actor observation clock is unavailable.');
-  if (condition.field === 'actorHpPercent' || condition.field === 'actorSpPercent') {
-    if (selector.scope === 'candidate' && actor.kind !== 1) return trace('unavailable','Candidate resources require a monster.');
-    const resource = condition.field === 'actorHpPercent' ? actor.hp : actor.sp;
-    const label = condition.field === 'actorHpPercent' ? 'HP' : 'SP';
-    if (!resource || resource.reason !== null) return trace('unavailable',`${label} unavailable: ${resource?.reason ?? 'no verified resource source'}${resource?.source?` (source: ${resource.source})`:''}.`);
-    if (condition.field==='actorSpPercent' && (actor.kind!==0
-      || actor.id===snapshot.selfId && !['spawn','own-stats','own-sp'].includes(resource.source??'')
-      || actor.id!==snapshot.selfId && (actor.id<=0||resource.source!=='party'))) return trace('unavailable','SP requires verified own state or a visible current-party player binding.');
-    if (!resourceFresh(resource,snapshot.at)) return trace('unavailable',`${label} from ${resource.source} is stale or its observation clock is unavailable (15-second limit).`);
-    if (actor.hp?.value === 0) return trace('unavailable','A living actor HP observation is required.');
-    const percent = resource.value! / resource.max! * 100;
-    const matched = compareResource(resource.value!*100,condition.operator,condition.value*resource.max!);
-    return trace(matched?'matched':'unmatched',`${label} ${percent.toFixed(2)}% from ${resource.source}, observed ${snapshot.at-resource.at!} ms ago.`);
-  }
-  let actual: boolean;
-  if (condition.field === 'actorStatus') {
-    if (!SUPPORTED_STATUS_IDS.has(condition.statusId)) return trace('unavailable','This status has no reliable visible add/remove contract.');
-    const status = actor.statuses.find(status => status.id === condition.statusId);
-    if (status && (!status.known || status.observedAt > snapshot.at || status.present && status.expiresAt!==null && snapshot.at>=status.expiresAt)) return trace('unavailable','Status refresh or predicted expiry is unresolved; wait for removal or a new snapshot.');
-    if (!status && !actor.statusesKnown) return trace('unavailable','A complete supported status snapshot is unavailable.');
-    actual = !!status?.present;
-  } else {
-    const cast = actor.cast;
-    if (cast.state === 'unknown' || cast.observedAt === null || cast.observedAt > snapshot.at
-      || cast.state === 'casting' && (cast.deadline === null || snapshot.at >= cast.deadline)) return trace('unavailable','Casting is unknown or its deadline ended without a completion observation.');
-    actual = cast.state === 'casting' && (condition.skillId === undefined || condition.skillId === cast.skillId);
-  }
-  const matched = condition.operator === 'eq' ? actual === condition.value : actual !== condition.value;
-  return trace(matched?'matched':'unmatched',matched?'Actor condition matched.':'Actor condition did not match.');
+  return actorPredicateEvaluator(snapshot)(condition);
 }
 
 export function actorConditionsMatch(conditions: ActorPredicate[] | undefined, snapshot: ActorObservationSnapshot | undefined): boolean {
-  return !conditions?.length || conditions.every(condition => evaluateActorPredicate(condition,snapshot).state === 'matched');
+  if (!conditions?.length) return true;
+  const evaluate = actorPredicateEvaluator(snapshot);
+  return conditions.every(condition => evaluate(condition).state === 'matched');
 }
 
 export const unknownCast = (): CastObservation => ({state:'unknown',observedAt:null,deadline:null,skillId:null});

@@ -72,8 +72,42 @@ export function validFeatureStatus(value: Record<string, unknown>): boolean {
   });
 }
 
-export function featureServiceBlocked(status: Record<string, unknown>): boolean { return macroActive(status.macro) || object(status.warp).blocked===true || object(status.refine).blocked===true || object(status.retreat).settling===true || ['pending','uncertain'].includes(text(object(status.partyHeal).state)) || object(status.partyFollow).ownsTravel===true || object(status.manualTarget).active===true || object(status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(status.travel).state)) || object(status.socket).pending===true || object(status.memo).blocked===true || object(status.supply).uncertain===true || object(status.social).pending===true || object(status.escape).pending===true || object(status.service).active===true || object(status.workflow).running===true || ['running','waiting'].includes(text(object(status.routine).state)) || object(status.actionResult).status==='pending'; }
-export function featureActive(status: Record<string, unknown>): boolean { return macroActive(status.macro) || object(status.warp).blocked===true || object(status.refine).blocked===true || object(status.retreat).settling===true || ['pending','uncertain'].includes(text(object(status.partyHeal).state)) || object(status.partyFollow).ownsTravel===true || object(status.manualTarget).active===true || object(status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(status.travel).state)) || object(status.socket).pending===true || object(status.memo).blocked===true || object(status.social).pending===true || object(status.service).active===true || object(status.workflow).running===true || ['running','waiting'].includes(text(object(status.routine).state)) || object(status.actionResult).status==='pending' || object(status.task).pending===true; }
+type FeaturePredicate = (status: Record<string, unknown>) => boolean;
+const featureHas = (field: string) => (feature: string): FeaturePredicate =>
+  status => object(status[feature])[field] === true;
+const pending = featureHas('pending');
+const blocked = featureHas('blocked');
+const featureState = ({ feature, states }: { feature: string; states: readonly string[] }): FeaturePredicate =>
+  status => states.includes(text(object(status[feature]).state));
+const anyFeature = (predicates: readonly FeaturePredicate[]): FeaturePredicate =>
+  status => predicates.some(predicate => predicate(status));
+
+// Bind static policy once; evaluate in order and stop at the first match.
+const sharedActivity: readonly FeaturePredicate[] = [
+  status => macroActive(status.macro),
+  blocked('warp'),
+  blocked('refine'),
+  featureHas('settling')('retreat'),
+  featureState({ feature: 'partyHeal', states: ['pending', 'uncertain'] }),
+  featureHas('ownsTravel')('partyFollow'),
+  featureHas('active')('manualTarget'),
+  featureHas('settling')('manualTarget'),
+  featureState({ feature: 'travel', states: ['planning', 'walking', 'transition'] }),
+  pending('socket'),
+  blocked('memo'),
+];
+const operationActivity: readonly FeaturePredicate[] = [
+  featureHas('active')('service'),
+  featureHas('running')('workflow'),
+  featureState({ feature: 'routine', states: ['running', 'waiting'] }),
+  status => object(status.actionResult).status === 'pending',
+];
+export const featureServiceBlocked = anyFeature([
+  ...sharedActivity, featureHas('uncertain')('supply'), pending('social'), pending('escape'), ...operationActivity,
+]);
+export const featureActive = anyFeature([
+  ...sharedActivity, pending('social'), ...operationActivity, pending('task'),
+]);
 export function featureObservation(status: Record<string, unknown>, at: number): RoutineObservation {
     const stats=object(object(status.character).stats);const player=object(status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(status.actorObservations, at),map:text(status.map),elapsedSeconds:number(status.elapsedSeconds)??0};
     if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;

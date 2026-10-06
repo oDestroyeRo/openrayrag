@@ -9,7 +9,7 @@ import { peelTag, verifySource } from "./release-public-source.mjs";
 
 import {
   MAX_PUBLIC_TOTAL, MAX_PUBLICATION_ATTEMPTS, HELP, parseOptions,
-  releaseSnapshot, sameSourceWorkflow, validateArtifactProduction, hasSuccessfulPublisher,
+  releaseSnapshot, sourceWorkflowMatches, validateArtifactProduction, hasSuccessfulPublisher,
 } from "./release-public-policy.mjs";
 export { HELP, parseOptions, releaseSnapshot, validateArtifactProduction } from "./release-public-policy.mjs";
 
@@ -19,9 +19,10 @@ export async function publicationEvidence(api, originalRun, originalJobs, option
   // Rerunning only a failed publisher may omit previously successful assembly
   // jobs from this attempt. Its restore step revalidates the original marker,
   // ZIP digest and signed payload; original build/assembly proof remains separate.
+  const matchesSource = sourceWorkflowMatches(options);
   const listed = await api(`/actions/workflows/release.yml/runs?head_sha=${options.sourceSha}&per_page=100`);
   requireValue(Array.isArray(listed.workflow_runs) && listed.workflow_runs.length <= 100, "Invalid or oversized publication run list.");
-  const candidates = listed.workflow_runs.filter(run => sameSourceWorkflow(run, options));
+  const candidates = listed.workflow_runs.filter(matchesSource);
   let checked = 0;
   for (const candidate of candidates) {
     const first = candidate.id === originalRun.id ? originalRun.run_attempt + 1 : 1;
@@ -29,7 +30,7 @@ export async function publicationEvidence(api, originalRun, originalJobs, option
       checked++;
       const runId = String(candidate.id);
       const run = attempt === candidate.run_attempt ? candidate : await api(`/actions/runs/${runId}/attempts/${attempt}`);
-      requireValue(sameSourceWorkflow(run, options) && run.id === candidate.id && run.run_attempt === attempt, "Publication attempt has a different source or identity.");
+      requireValue(matchesSource(run) && run.id === candidate.id && run.run_attempt === attempt, "Publication attempt has a different source or identity.");
       if (run.status !== "completed" || run.conclusion !== "success") continue;
       const jobs = await api(`/actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`);
       if (hasSuccessfulPublisher(run, jobs, options))

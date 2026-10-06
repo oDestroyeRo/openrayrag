@@ -240,7 +240,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
         if(revision!==this.observationRevision||active!==this||failed||this.readyState!==NativeSocket.OPEN||connectionGeneration!==controller.connectionGeneration||maintenance.blocked)return;
         // A timer may recheck retained first-initialization evidence after grace
         // or readiness changes. It never supplies missing reset/resource proof.
-        if(officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0&&reconciliationEligible&&reconciliationRevision===officialRevision&&initializationIdentityCurrent(fullResources,readyOwn,JSON.stringify(engine.actorActionIdentity(undefined,true)),false,false)){
+        if(officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0&&reconciliationEligible&&reconciliationRevision===officialRevision&&initializationIdentityCurrent({certificate:fullResources,own:readyOwn,current:JSON.stringify(engine.actorActionIdentity(undefined,true)),blocked:false,ended:false})){
           if(!refineBaselineConsumed){
             if(controller.warp.blocked){if(resetResources!==null&&controller.reconcileOfficialInitialization(resetResources))refineBaselineConsumed=true;}
             else{refineBaselineConsumed=true;if(refineResources!==null)controller.reconcileOfficialRefineInitialization(refineResources);}
@@ -285,8 +285,9 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
             const firstOwn=before.spawns.find(e=>e.kind===0&&e.id===engine.playerId);
             if(firstOwn&&!firstOwnSeen){firstOwnSeen=true;
               const certificate=initializationCertificate({initial:initialEnter,fullResources,memo:memoObserved,readyObserved:this.readyObserved});
-              if(initializationResetCandidate(certificate,firstOwn.entryType,resetResources)
-                &&initializationResetAllowed(certificate,firstOwn.entryType,resetResources,controller.officialInitializationResourceRevision()))guardResetAllowed=true;}
+              const reset={certificate,entryType:firstOwn.entryType,baseline:resetResources};
+              if(initializationResetCandidate(reset)
+                &&initializationResetAllowed({...reset,current:controller.officialInitializationResourceRevision()}))guardResetAllowed=true;}
           });
           if(!observation)return;
           if(engine.actorActionIdentity(undefined,true)){this.gameplayReady=true;this.gameplayCharacter=engine.player?.name??null;}

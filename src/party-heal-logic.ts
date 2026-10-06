@@ -1,5 +1,5 @@
 import type { ActionIdentity } from './actor-identity';
-import { evaluateActorPredicate, type ActorObservationSnapshot, type ActorPredicate } from './actor-observations-logic';
+import { actorPredicateEvaluator, type ActorObservationSnapshot, type ActorPredicate } from './actor-observations-logic';
 import { resourceFresh } from './actor-resources';
 import type { PartyActorBinding } from './party-actors-logic';
 import type { Entity } from './protocol';
@@ -34,10 +34,11 @@ export function partyHpCondition(binding:PartyActorBinding,threshold:number):Act
 export function partyHealCandidates(bindings:PartyActorBinding[],actors:ReadonlyMap<number,Entity>,selfId:number,observations:ActorObservationSnapshot,threshold:number):PartyHealCandidate[] {
   if(!observations.connected)return [];
   const candidates:PartyHealCandidate[]=[];
+  const evaluate = actorPredicateEvaluator(observations);
   for(const binding of bindings){
     const actor=actors.get(binding.entityId),row=observations.actors.find(a=>a.id===binding.entityId);
     if(binding.entityId<=0||binding.entityId===selfId||!actor||actor.kind!==0||actor.dead||actor.hp<=0||!row||row.incarnation!==binding.incarnation||observations.world!==binding.world||!resourceFresh(row.hp,observations.at)||row.hp!.value!<=0)continue;
-    if(evaluateActorPredicate(partyHpCondition(binding,threshold),observations).state!=='matched')continue;
+    if(evaluate(partyHpCondition(binding,threshold)).state!=='matched')continue;
     candidates.push({binding,hp:row.hp!.value!,maxHp:row.hp!.max!,hpAt:row.hp!.at!});
   }
   // Cross multiplication is exact even at int32 resource bounds.

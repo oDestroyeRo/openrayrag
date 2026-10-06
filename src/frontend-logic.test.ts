@@ -78,6 +78,44 @@ describe('detached local document proposals', () => {
 });
 
 describe('pure editor and telemetry projections', () => {
+  it.each([
+    ['macro', 'state', 'running'], ['macro', 'state', 'waiting'], ['macro', 'state', 'monitoring'],
+    ['warp', 'blocked', true], ['refine', 'blocked', true], ['retreat', 'settling', true],
+    ['partyHeal', 'state', 'pending'], ['partyHeal', 'state', 'uncertain'], ['partyFollow', 'ownsTravel', true],
+    ['manualTarget', 'active', true], ['manualTarget', 'settling', true],
+    ['travel', 'state', 'planning'], ['travel', 'state', 'walking'], ['travel', 'state', 'transition'],
+    ['socket', 'pending', true], ['memo', 'blocked', true], ['social', 'pending', true],
+    ['service', 'active', true], ['workflow', 'running', true],
+    ['routine', 'state', 'running'], ['routine', 'state', 'waiting'], ['actionResult', 'status', 'pending'],
+  ] as const)('recognizes shared activity for %s.%s = %s', (feature, field, value) => {
+    const status = { [feature]: { [field]: value } }, before = structuredClone(status);
+    expect([status, {}, status].map(featureActive)).toEqual([true, false, true]);
+    expect([status, {}, status].map(featureServiceBlocked)).toEqual([true, false, true]);
+    expect(status).toEqual(before);
+  });
+  it('keeps service blockers distinct from task activity and rejects truthy non-booleans', () => {
+    for (const feature of ['supply', 'escape']) {
+      const status = { [feature]: { [feature === 'supply' ? 'uncertain' : 'pending']: true } };
+      expect(featureServiceBlocked(status)).toBe(true);
+      expect(featureActive(status)).toBe(false);
+    }
+    expect(featureServiceBlocked({ task: { pending: true } })).toBe(false);
+    expect(featureActive({ task: { pending: true } })).toBe(true);
+    const inactive = { socket: { pending: 1 }, service: { active: 'true' }, warp: { blocked: {} },
+      macro: { state: 'completed' }, travel: { state: 'idle' }, routine: { state: null }, actionResult: { status: true } };
+    expect(featureActive(inactive)).toBe(false);
+    expect(featureServiceBlocked(inactive)).toBe(false);
+  });
+  it('stops feature evaluation at the first match and preserves blocker ordering', () => {
+    const unexpected = () => { throw new Error('later feature was evaluated'); };
+    for (const evaluate of [featureActive, featureServiceBlocked]) {
+      expect(evaluate({ macro: { state: 'running' }, get warp() { return unexpected(); } })).toBe(true);
+      expect(evaluate({ manualTarget: { active: true, get settling() { return unexpected(); } } })).toBe(true);
+    }
+    expect(featureServiceBlocked({ supply: { uncertain: true }, get social() { return unexpected(); } })).toBe(true);
+    expect(featureServiceBlocked({ social: { pending: true }, get escape() { return unexpected(); } })).toBe(true);
+    expect(featureActive({ get supply() { return unexpected(); }, get escape() { return unexpected(); }, task: { pending: true } })).toBe(true);
+  });
   it('decodes saved macro source and adds collision-free examples without changing the source document', () => {
     const document = { settings: settings(), script: macroExample('item') }, before = structuredClone(document);
     const source = formatBotScript(document);

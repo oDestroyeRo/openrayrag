@@ -11,6 +11,7 @@ import {
   createReportDirectory, downloadActionsZip, runReadOnly, bunInstallCommand,
 } from "./release-public-io.mjs";
 import { parseOptions, releaseSnapshot, verifyPublishedRelease, publicationEvidence } from "./release-public.mjs";
+import { sourceWorkflowMatches, sameSourceWorkflow, validateArtifactProduction, hasSuccessfulPublisher } from "./release-public-policy.mjs";
 import { peelTag, commitsBetween, verifySource, sourceDependencyFiles } from "./release-public-source.mjs";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
@@ -238,6 +239,67 @@ function fixture() {
   };
   return { opt, io, source, requests, writes, release, marker, provenance, jobs, run, artifact, content };
 }
+
+test("source workflow predicates reuse a captured source without mutating inputs", () => {
+  const { opt, run } = fixture(), before = structuredClone({ opt, run });
+  const matchesSource = sourceWorkflowMatches(opt);
+  Object.freeze(run);
+  const dispatched = Object.freeze({ ...run, event: "workflow_dispatch" });
+  const foreign = Object.freeze({ ...run, head_sha: "b".repeat(40) });
+  const runs = Object.freeze([run, dispatched, foreign]);
+  assert.deepEqual(runs.filter(matchesSource), [run, dispatched]);
+  assert.deepEqual(runs.filter(matchesSource), [run, dispatched]);
+  assert.equal(matchesSource(run), true);
+  assert.equal(sameSourceWorkflow(run, opt), true);
+  assert.deepEqual({ opt, run }, before);
+
+  opt.sourceSha = foreign.head_sha;
+  assert.equal(matchesSource(run), true);
+  assert.equal(matchesSource(foreign), false);
+  assert.equal(sameSourceWorkflow(run, opt), false);
+  assert.equal(sameSourceWorkflow(foreign, opt), true);
+});
+
+test("source workflow predicates retain the trusted run identity and event contract", () => {
+  const { opt, run } = fixture(), matchesSource = sourceWorkflowMatches(opt);
+  for (const changed of [
+    { id: 0 }, { id: "123" }, { id: Number.MAX_SAFE_INTEGER + 1 },
+    { run_attempt: 0 }, { run_attempt: "2" },
+    { head_sha: "b".repeat(40) }, { head_branch: "other" },
+    { event: "pull_request" }, { path: ".github/workflows/other.yml" },
+  ]) {
+    const candidate = Object.freeze({ ...run, ...changed });
+    assert.equal(matchesSource(candidate), false);
+    assert.equal(sameSourceWorkflow(candidate, opt), false);
+  }
+});
+
+test("nested job labels preserve exact leaf gates and successful publication steps", () => {
+  const { opt, run, jobs, artifact, provenance, marker } = fixture();
+  for (const job of jobs.jobs) job.name = `Outer workflow / ${job.name}`;
+  const before = structuredClone({ opt, run, jobs, artifact, provenance, marker });
+  for (let repeat = 0; repeat < 2; repeat++) {
+    validateArtifactProduction(run, jobs, artifact, provenance, marker, opt);
+    assert.equal(hasSuccessfulPublisher(run, jobs, opt), true);
+  }
+  assert.deepEqual({ opt, run, jobs, artifact, provenance, marker }, before);
+
+  for (const name of ["build", "assemble", "publish", "release-platforms (windows, new-runner, target)", "release-platforms (linux, new-runner, target)"]) {
+    const target = jobs.jobs.find(job => job.name.endsWith(` / ${name}`));
+    for (const entries of [jobs.jobs.filter(job => job !== target), [...jobs.jobs, target]]) {
+      const changed = { jobs: entries, total_count: entries.length };
+      if (name === "publish") assert.equal(hasSuccessfulPublisher(run, changed, opt), false);
+      else assert.throws(() => validateArtifactProduction(run, changed, artifact, provenance, marker, opt), /Missing successful/);
+    }
+  }
+
+  const publisher = jobs.jobs.find(job => job.name.endsWith(" / publish"));
+  for (const steps of [[], undefined, publisher.steps.map(step => ({ ...step, conclusion: "skipped" })),
+    publisher.steps.map(step => ({ ...step, name: `Outer workflow / ${step.name}` }))]) {
+    const changed = { ...jobs, jobs: jobs.jobs.map(job => job === publisher ? { ...job, steps } : job) };
+    assert.notEqual(hasSuccessfulPublisher(run, changed, opt), true);
+  }
+});
 
 test("immutable ancestor proof supports dynamic counts/assets/runners and no latest dependency", async () => {
   const f = fixture();

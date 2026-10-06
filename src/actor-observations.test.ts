@@ -1,5 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {ActorObservations,PERMANENT_STATUS_SECONDS,evaluateActorPredicate,validActorConditions,validActorSnapshot,publishConditionReports,type ActorPredicate} from './actor-observations';
+import { actorConditionsMatch, actorPredicateEvaluator } from './actor-observations-logic';
 import {STATUS_CATALOG} from './actor-status-catalog';
 import type {Entity,GameEvent} from './protocol';
 const statusId=()=>STATUS_CATALOG[0]!.id;
@@ -27,4 +28,30 @@ describe('bounded predicate data',()=>{
  it('accepts exact typed conditions and rejects unbounded or executable additions',()=>{expect(validActorConditions([status(),casting()])).toBe(true);for(const invalid of [null,Array(17).fill(status()),[{...status(),script:'code'}],[{...casting(),skillId:null}],[{...status(),statusId:0}],[{...status(),value:0}],[{...status(),operator:{toString:()=>"eq"}}],[{...status(),actor:{scope:'self',id:1}}],[{...status(),actor:{scope:'actor',id:1,incarnation:1,world:'bad'}}]])expect(validActorConditions(invalid)).toBe(false);});
  it('bounds display status and condition publication without changing authoritative evaluation',()=>{const s=setup();s.set(Number.MAX_SAFE_INTEGER-100_000);s.observations.frame();for(let id=1;id<=64;id++)s.observations.spawn({...entity,id,name:'\u0000'.repeat(64),statuses:STATUS_CATALOG.map(status=>({id:status.id,seconds:60}))});const snapshot=s.snapshot();const third=snapshot.actors.find(actor=>actor.id===3)!;const condition:ActorPredicate={...status(),actor:{scope:'actor',id:3,world:snapshot.world,incarnation:third.incarnation}};expect(snapshot.truncated).toBe(true);expect(snapshot.actors.reduce((total,actor)=>total+actor.statuses.length,0)).toBeLessThanOrEqual(128);expect(evaluateActorPredicate(condition,snapshot).state).toBe('unavailable');expect(evaluateActorPredicate({...condition,value:false},snapshot).state).toBe('unavailable');expect(evaluateActorPredicate(condition,s.observations.snapshot(1,null,true,[condition],false)).state).toBe('matched');const reports=Array.from({length:32},()=>({rule:'Monster 2147483647 · actor 2147483647',conditions:Array.from({length:16},()=>evaluateActorPredicate({...condition,actor:{scope:'actor',id:2147483647,world:snapshot.world,incarnation:2147483647}},snapshot))}));const published=publishConditionReports(reports);expect(published).toHaveLength(9);expect(published.slice(0,8).every(report=>report.conditions.length===4&&report.truncated)).toBe(true);expect(published.at(-1)?.rule).toContain('omitted');expect(new TextEncoder().encode(JSON.stringify({actorObservations:snapshot,ruleConditions:published})).length).toBeLessThan(65_536);});
  it('publishes a bounded clone and reports truncation as unknown',()=>{const s=setup();for(let id=2;id<=400;id++)s.observations.spawn({...entity,id});const snapshot=s.snapshot();expect(snapshot.actors).toHaveLength(64);expect(validActorSnapshot(snapshot)).toBe(true);expect(validActorSnapshot({...snapshot,actors:Array(65).fill(snapshot.actors[0])})).toBe(false);expect(validActorSnapshot({...snapshot,actors:[snapshot.actors[0],snapshot.actors[0]]})).toBe(false);snapshot.actors[0]!.name='mutated';expect(s.snapshot().actors[0]!.name).toBe('Player');});
+});
+
+describe('snapshot-bound actor evaluation', () => {
+  it('reuses one evaluator without changing inputs and returns detached condition traces', () => {
+    const snapshot = setup().snapshot();
+    const conditions = [status(false), status(true), casting(false)];
+    const before = structuredClone({ snapshot, conditions });
+    const evaluate = actorPredicateEvaluator(snapshot);
+    const traces = conditions.map(evaluate);
+    expect(traces.map(trace => trace.state)).toEqual(['matched', 'unmatched', 'unavailable']);
+    expect(conditions.map(evaluate)).toEqual(traces);
+    expect({ snapshot, conditions }).toEqual(before);
+    traces[0]!.condition.actor.scope = 'target';
+    expect(conditions.map(evaluate)[0]!.condition.actor).toEqual({ scope: 'self' });
+    expect(conditions).toEqual(before.conditions);
+    expect(actorPredicateEvaluator({ ...snapshot, connected: false })(conditions[0]!).state).toBe('unavailable');
+    expect(evaluate(conditions[0]!).state).toBe('matched');
+  });
+
+  it('stops matching after the first failed condition and leaves absent conditions optional', () => {
+    const conditions = [status(true), status(false)];
+    Object.defineProperty(conditions, 1, { get: () => { throw new Error('A later condition was evaluated.'); } });
+    expect(actorConditionsMatch(conditions, setup().snapshot())).toBe(false);
+    expect(actorConditionsMatch([], undefined)).toBe(true);
+    expect(actorConditionsMatch(undefined, undefined)).toBe(true);
+  });
 });

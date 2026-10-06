@@ -105,8 +105,9 @@ export class DirectRuntime {
       const ownEntry=before.spawns.find(e=>e.id===this.controller.engine.playerId&&e.kind===0);
       if(ownEntry&&!this.firstOwnSeen){this.firstOwnSeen=true;
         const certificate=this.initial&&this.certificate;
-        if(initializationResetCandidate(certificate,ownEntry.entryType,this.resources)
-          &&initializationResetAllowed(certificate,ownEntry.entryType,this.resources,this.controller.officialInitializationResourceRevision()))this.resetAllowed=true;}
+        const reset={certificate,entryType:ownEntry.entryType,baseline:this.resources};
+        if(initializationResetCandidate(reset)
+          &&initializationResetAllowed({...reset,current:this.controller.officialInitializationResourceRevision()}))this.resetAllowed=true;}
     });
     if(!observation)return;
     if(observation.enter){
@@ -124,7 +125,7 @@ export class DirectRuntime {
     if(this.initial&&observation.memoSlots)this.memo=true;
     // Initial full resources and memo are sent before PlayerReady. Map changes need
     // their applied reset only. A duplicate/stale opcode never supplies this proof.
-    if(shouldSendPlayerReady(this.readyPending,this.initial,this.full,this.memo)){
+    if(shouldSendPlayerReady({pending:this.readyPending,initial:this.initial,fullResources:this.full,memo:this.memo})){
       this.readyPending=false;await this.send(new Uint8Array([2]));
       if(this.ended)return;
     }
@@ -137,7 +138,7 @@ export class DirectRuntime {
     if(this.controller.engine.player){this.entered=true;this.login={phase:'complete',message:'Character connected. Bot controls are ready.'};}
   }
   private reconcile(){
-    if(!initializationIdentityCurrent(this.certificate,this.own,JSON.stringify(this.controller.engine.actorActionIdentity(undefined,true)),this.lease.blocked,this.ended))return;
+    if(!initializationIdentityCurrent({certificate:this.certificate,own:this.own,current:JSON.stringify(this.controller.engine.actorActionIdentity(undefined,true)),blocked:this.lease.blocked,ended:this.ended}))return;
     if(this.controller.warp.blocked){if(this.resources!==null&&this.controller.reconcileOfficialInitialization(this.resources))this.certificate=false;}
     else if(this.refineResources!==null){this.controller.reconcileOfficialRefineInitialization(this.refineResources);this.certificate=false;}
   }

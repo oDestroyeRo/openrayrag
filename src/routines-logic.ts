@@ -1,4 +1,4 @@
-import { evaluateActorPredicate, validActorPredicate, type ActorPredicate, type ActorObservationSnapshot } from './actor-observations-logic';
+import { actorPredicateEvaluator, validActorPredicate, type ActorPredicate, type ActorObservationSnapshot } from './actor-observations-logic';
 export type NumericOperator = 'lt' | 'lte' | 'eq' | 'gte' | 'gt';
 
 export type RoutineCondition =
@@ -161,27 +161,40 @@ function compare(actual: number, operator: NumericOperator, expected: number): b
   }
 }
 
+export interface RoutineConditionContext {
+  observation: RoutineObservation; allowExtendedElapsed?: boolean;
+}
+
+/** Bind read-only observations for one synchronous rule evaluation pass. */
+export function routineConditionEvaluator({ observation, allowExtendedElapsed = false }: RoutineConditionContext): (condition: RoutineCondition) => ConditionTrace {
+  const evaluateActor = actorPredicateEvaluator(observation.actors);
+  return condition => {
+    if (condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent') return evaluateActor(condition);
+    let matched: boolean;
+    if (condition.field === 'map') {
+      if (!mapCode(observation.map)) return { condition: { ...condition }, state: 'unavailable', reason: 'Current map is unavailable.' };
+      matched = condition.operator === 'eq' ? observation.map === condition.value : observation.map !== condition.value;
+    } else {
+      const actual = condition.field === 'inventory'
+        ? (record(observation.inventory) && Object.hasOwn(observation.inventory, condition.itemId) ? observation.inventory[condition.itemId] : undefined)
+        : observation[condition.field];
+      const available = condition.field === 'hpPercent' || condition.field === 'spPercent' || condition.field === 'weightPercent' ? finite(actual, 0, 100)
+        : condition.field === 'level' || condition.field === 'jobLevel' ? integer(actual, 1, 1_000)
+        : condition.field === 'elapsedSeconds' ? finite(actual, 0, allowExtendedElapsed ? Number.MAX_SAFE_INTEGER / 1_000 : ROUTINE_LIMITS.durationSeconds)
+          : integer(actual, 0, MAX_NUMBER);
+      if (!available || typeof actual !== 'number') return { condition: { ...condition }, state: 'unavailable',
+        reason: condition.field === 'inventory' ? `Count for item ${condition.itemId} is unavailable.` : `${condition.field} is unavailable.` };
+      matched = compare(actual, condition.operator, condition.value);
+    }
+    return { condition: { ...condition }, state: matched ? 'matched' : 'unmatched',
+      reason: matched ? 'Condition matched.' : 'Condition did not match.' };
+  };
+}
+
+/** Compatibility entrypoint for callers evaluating a single condition. */
 export function evaluateRoutineCondition(condition: RoutineCondition, observation: RoutineObservation,
   allowExtendedElapsed = false): ConditionTrace {
-  if (condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent') return evaluateActorPredicate(condition,observation.actors);
-  let matched: boolean;
-  if (condition.field === 'map') {
-    if (!mapCode(observation.map)) return { condition: { ...condition }, state: 'unavailable', reason: 'Current map is unavailable.' };
-    matched = condition.operator === 'eq' ? observation.map === condition.value : observation.map !== condition.value;
-  } else {
-    const actual = condition.field === 'inventory'
-      ? (record(observation.inventory) && Object.hasOwn(observation.inventory, condition.itemId) ? observation.inventory[condition.itemId] : undefined)
-      : observation[condition.field];
-    const available = condition.field === 'hpPercent' || condition.field === 'spPercent' || condition.field === 'weightPercent' ? finite(actual, 0, 100)
-      : condition.field === 'level' || condition.field === 'jobLevel' ? integer(actual, 1, 1_000)
-      : condition.field === 'elapsedSeconds' ? finite(actual, 0, allowExtendedElapsed ? Number.MAX_SAFE_INTEGER / 1_000 : ROUTINE_LIMITS.durationSeconds)
-        : integer(actual, 0, MAX_NUMBER);
-    if (!available || typeof actual !== 'number') return { condition: { ...condition }, state: 'unavailable',
-      reason: condition.field === 'inventory' ? `Count for item ${condition.itemId} is unavailable.` : `${condition.field} is unavailable.` };
-    matched = compare(actual, condition.operator, condition.value);
-  }
-  return { condition: { ...condition }, state: matched ? 'matched' : 'unmatched',
-    reason: matched ? 'Condition matched.' : 'Condition did not match.' };
+  return routineConditionEvaluator({ observation, allowExtendedElapsed })(condition);
 }
 
 export interface RuleProgress { runs: number; lastIssued: number | null }
@@ -232,10 +245,14 @@ export function validateRoutineSelectorCheckpoint<Action>(input: unknown,
     startedAt, lastTime, actionsIssued: issued, actionsCompleted: input.actionsCompleted, steps: input.steps };
 }
 
-export function traceRules<Action>(spec: RoutineSpec<Action>, observation: RoutineObservation,
-  progress?: RuleProgress[], now = 0, allowExtendedElapsed = false): RoutineTrace<Action> {
+export interface RoutineTraceInput<Action> extends RoutineConditionContext {
+  spec: RoutineSpec<Action>; progress?: readonly RuleProgress[]; now?: number;
+}
+
+export function traceRules<Action>({ spec, observation, progress, now = 0, allowExtendedElapsed = false }: RoutineTraceInput<Action>): RoutineTrace<Action> {
+  const evaluate = routineConditionEvaluator({ observation, allowExtendedElapsed });
   const rules = spec.rules.map((rule, index): RuleTrace<Action> => {
-    const conditions = rule.conditions.map(condition => evaluateRoutineCondition(condition, observation, allowExtendedElapsed));
+    const conditions = rule.conditions.map(evaluate);
     let state: RuleTrace<Action>['state'] = conditions.some(condition => condition.state === 'unmatched') ? 'unmatched'
       : conditions.some(condition => condition.state === 'unavailable') ? 'unavailable' : 'matched';
     let reason = state === 'matched' ? 'All conditions matched.'
@@ -253,5 +270,5 @@ export function traceRules<Action>(spec: RoutineSpec<Action>, observation: Routi
 // Pure preview: no clock, dispatch, counters, or external resources are touched.
 export function dryRunRoutine<Action>(spec: unknown, observation: RoutineObservation,
   isAction: ActionValidator<Action>, options: Pick<RoutineOptions, 'allowUnlimitedLimits'> = {}): RoutineTrace<Action> {
-  return traceRules(validateRoutineSpec(spec, isAction, options), observation, undefined, 0, options.allowUnlimitedLimits === true);
+  return traceRules({ spec: validateRoutineSpec(spec, isAction, options), observation, allowExtendedElapsed: options.allowUnlimitedLimits === true });
 }

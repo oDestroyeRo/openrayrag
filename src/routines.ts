@@ -103,7 +103,8 @@ export class RoutineRuntime<Action> {
     if (this.actionBudgetReached()) {
       this.finish('completed', 'Routine action budget reached.'); return null;
     }
-    const trace = traceRules(this.spec, { ...observation, elapsedSeconds: (now - this.startedAt) / 1_000 }, this.progress, now, this.allowUnlimitedLimits);
+    const trace = traceRules({ spec: this.spec, observation: { ...observation, elapsedSeconds: (now - this.startedAt) / 1_000 },
+      progress: this.progress, now, allowExtendedElapsed: this.allowUnlimitedLimits });
     if (trace.rule === null) { this.reason = 'Waiting for a rule to match.'; return null; }
     const ruleIndex = this.spec.rules.findIndex(rule => rule.name === trace.rule);
     const progress = this.progress[ruleIndex]!;
@@ -139,7 +140,8 @@ export class RoutineRuntime<Action> {
 
   trace(observation: RoutineObservation): RoutineTrace<Action> {
     if (!this.spec) return { rules: [], action: null, rule: null };
-    const trace = traceRules(this.spec, { ...observation, elapsedSeconds: this.snapshot().elapsedSeconds }, this.progress, this.lastTime, this.allowUnlimitedLimits);
+    const trace = traceRules({ spec: this.spec, observation: { ...observation, elapsedSeconds: this.snapshot().elapsedSeconds },
+      progress: this.progress, now: this.lastTime, allowExtendedElapsed: this.allowUnlimitedLimits });
     // A preview cannot claim an action may dispatch while another action is pending or after Stop.
     if (this.state !== 'running') { trace.action = null; trace.rule = null; }
     return trace;
