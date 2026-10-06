@@ -13,7 +13,7 @@ export interface WarpBinding extends MemoBinding {
   readonly spRevision:Revision<'sp'>; readonly skillsRevision:Revision<'skills'>;
 }
 export type WarpRequestInput = {type:'warpGround';slot:MemoSlot;target:{x:number;y:number};preview:WarpBindingInput} | {type:'warpActivate';preview:WarpBindingInput};
-/** Current evidence proposes activation; request validation owns admission on preparation. */
+/** Current evidence proposes activation; request validation owns admission at dispatch. */
 export interface WarpActivationObservation { readonly type:'warpActivate'; readonly preview:Readonly<WarpBindingInput> }
 export type WarpRequest = Readonly<{type:'warpGround';slot:MemoSlot;target:Readonly<{x:MemoCell;y:MemoCell}>;preview:WarpBinding}> | Readonly<{type:'warpActivate';preview:WarpBinding}>;
 /** Ground is admitted on prepare; activation stays observed until dispatch validation. */
