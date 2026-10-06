@@ -32,7 +32,7 @@ Owner: [protocol.ts](../../src/modules/protocol/protocol.ts), `decode`, `spawn`,
 | S→C ID | Consumed fields | Framing / meaning |
 | --- | --- | --- |
 | 3 | `actor selfId, str map` | Prefix; establishes identity. Any suffix is ignored, not stored. |
-| 6 | `u8 entryType, [pos tossPosition if entryType=3], i32 entitySize, bytes[entitySize], [player appearance], [Walk]` | Entry 0–5; exact nested records, outer prefix. See below. |
+| 6 | `u8 entryType, [pos tossPosition if entryType=3], i32 entitySize, bytes[entitySize], [player or NPC appearance], [Walk]` | Entry 0–5; exact nested records, outer prefix. See below. |
 | 7 | `actor id, Walk` | Exact bytes. |
 | 10 / 20 | `actor id, pos position` | Prefix; position correction / immediate stop. |
 | 11 | `optionalActor source, actor target, bytes[4] ignored, pos position` | Prefix; observed attack, not authoritative HP deduction. |
@@ -93,6 +93,23 @@ i32 ignoredFollowerStateFlags
 ```
 
 Appearance ends exactly at its declared size. Party ID ≥−1; party name ≤128 UTF-16 units; positive ID requires a nonempty name, while ID≤0 requires empty name. Companion retains affiliation, not the rest of the appearance. Older entity-only player fixtures may omit the entire block and therefore leave affiliation unknown.
+
+### NPC display metadata
+
+Kinds 2 (NPC) and 3 (BattleNpc) may append a length-delimited `NpcSpawnParameters` block after the core entity:
+
+```text
+i32 npcSize = 8
+u8 displayType                       // offset 0: Sprite=0, Effect=1, MaskedEffect=2, VendingProxy=3
+u8 effectType                        // offset 1: retained opaque byte
+u8 interactable                      // offset 2: bool 0 or 1
+u8 unmanagedPadding                  // offset 3: opaque; nonzero is valid
+i32 ownerId                          // offset 4: -1 sentinel or nonnegative actor ID
+```
+
+This is an **eight-byte raw unmanaged MemoryPack struct**, with no object schema byte. The [public deployed WASM](../PROTOCOL.md#npc-display-and-player-shop-evidence) establishes the offsets and the vending display branch. A known size-8 record must be complete and have valid display/bool/owner fields; malformed records fail before world application. Entity-only packets, fewer than four optional bytes, and unsupported declared sizes retain the previous outer-prefix behavior with metadata absent. This avoids assigning shop semantics to an unknown layout. Effect and alignment bytes remain opaque. MaskedEffect's area/mask suffix after the block is ignored as before.
+
+Only a kind-2 actor with confirmed display type 3 is a player shop. Kind 4 is `PlayerLikeNpc`; it uses player appearance upstream, which Companion continues to leave opaque for this kind. It remains an ordinary NPC. Outgoing opcode 107 opens the proxy NPC ID, while incoming `vendingViewed.id` is the seller's owner-player ID; these IDs need not match.
 
 ### Walk
 

@@ -122,6 +122,7 @@ body:has(.client-shell) { margin: 0; background: var(--client-bg); }
 .client-shell .you { background: var(--client-accent); }
 .client-shell .mob { background: #fdba74; }
 .client-shell .drop { background: #c4b5fd; }
+.client-shell .legend-dot.player-shop { background: #f9a8d4; border-radius: 0; }
 .client-shell .legend-dot.npc { background: #67e8f9; border-radius: 0; transform: rotate(45deg); }
 .client-shell .navigation-info { margin-top: 12px; }
 .client-shell .map-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

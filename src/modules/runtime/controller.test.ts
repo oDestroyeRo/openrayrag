@@ -38,7 +38,9 @@ function ownPacket(e:Entity,entry:number):BitWriter {
   const name=new TextEncoder().encode(e.name),body=new BitWriter().u8(15).i32(e.id).i32(e.classId).i32(0)
     .i32(~name.length).i32(e.name.length).take(name).u8(e.kind).u8(0).u8(e.dead?3:e.sitting?2:0)
     .i32(e.x).i32(e.y).u8(e.level).i32(e.hp).i32(e.maxHp).i32(e.sp??0).i32(e.maxSp??0).i32(0).u8(0).finish();
-  return new BitWriter().u8(OP.spawn).u8(entry).i32(body.length).take(body);
+  const packet = new BitWriter().u8(OP.spawn).u8(entry).i32(body.length).take(body);
+  if (e.npcSpawn) packet.i32(8).u8(e.npcSpawn.displayType).u8(e.npcSpawn.effectType).u8(e.npcSpawn.interactable ? 1 : 0).u8(231).i32(e.npcSpawn.ownerId);
+  return packet;
 }
 function policy() { return structuredClone(DEFAULT_AUTOMATION); }
 
@@ -922,7 +924,7 @@ describe('persistent recovery and transaction regressions', () => {
     step(150); expect(controller.engine.kills).toBe(0); expect(sent.some(action => action.type === 'pickup')).toBe(false);
   });
   it('confirms a vendor response with an owner ID distinct from its visible proxy without a focus packet', () => {
-    const { controller, packet } = setup(); controller.engine.actors.set(7, { ...player, id: 7, kind: 2 });
+    const { controller, packet } = setup(); controller.engine.actors.set(7, { ...player, id: 7, kind: 2, npcSpawn: { displayType: 3, effectType: 0, interactable: true, ownerId: 999 } });
     controller.perform('command', { type: 'vendingView', id: 7 });
     packet(new BitWriter().u8(WORLD_OP.vendingView).i32(999).string('Vendor').i32(0));
     expect(controller.active).toBe(false); expect(controller.world.viewedVending?.id).toBe(999);
@@ -950,7 +952,7 @@ describe('persistent recovery and transaction regressions', () => {
 
 describe('canceled world receipt reconciliation', () => {
   it('drains a canceled vendor-view response using its retained proxy ownership', () => {
-    const { controller, packet, advance } = setup(); controller.engine.actors.set(7, { ...player, id: 7, kind: 2 });
+    const { controller, packet, advance } = setup(); controller.engine.actors.set(7, { ...player, id: 7, kind: 2, npcSpawn: { displayType: 3, effectType: 0, interactable: true, ownerId: 999 } });
     controller.perform('command', { type: 'vendingView', id: 7 }); controller.stop();
     packet(new BitWriter().u8(WORLD_OP.vendingView).i32(999).string('Vendor').i32(0));
     advance(10_000); controller.world.apply({ type: 'npcEnd' });
@@ -1650,4 +1652,95 @@ it('rejects a settled runtime projection failure without committing any configur
   expect(()=>f.packet(new BitWriter().u8(OP.death).i32(monster.id))).not.toThrow();
   expect(f.controller.snapshot()).toMatchObject({settingsApply:{state:'rejected'},activeSettings:{radius:12}});
   expect(f.controller.engine.settings.radius).toBe(12);
+});
+
+
+describe('separate guarded player shop views', () => {
+  const shop: Entity = { ...player, id: 20, kind: 2, hp: 0, maxHp: 0, name: 'Supply shop',
+    npcSpawn: { displayType: 3, effectType: 0, interactable: true, ownerId: 999 } };
+  function fixture(id = shop.id, selfId = 1) {
+    const f = setup();
+    if (selfId !== 1) f.receive({ type: 'enter', id: selfId, map: 'prt_fild08' }, { type: 'spawn', entity: { ...player, id: selfId } });
+    f.receive({ type: 'spawn', entity: { ...shop, id } });
+    const binding = f.controller.engine.actorActionIdentity(id)!;
+    const request = { type: 'manualVendingView', map: f.controller.engine.map,
+      owner: { world: String(binding.world), id: Number(binding.selfId), incarnation: Number(binding.selfIncarnation) },
+      target: { world: String(binding.world), id, incarnation: Number(binding.targetIncarnation) } };
+    return { ...f, request };
+  }
+
+  it.each([0, 20])('views shop actor %i exactly once and keeps the distinct owner response correlation', id => {
+    const f = fixture(id); expect(f.controller.context().visibleNpcIds).not.toContain(id); expect(f.controller.context().visibleVendorIds).toContain(id);
+    f.controller.perform('command', f.request); f.step(); expect(f.sent).toEqual([{ type: 'vendingView', id }]);
+    f.packet(new BitWriter().u8(WORLD_OP.vendingView).i32(999).string('Supply shop').i32(0));
+    expect(f.controller.active).toBe(false); expect(f.controller.world.viewedVending?.id).toBe(999);
+  });
+
+  it('routes deployed spawn metadata to opcode107 on a map without collision and preserves raw vending view', () => {
+    const sent: Uint8Array[] = [], controller = wireController(packet => sent.push(packet), undefined, () => 100_000);
+    controller.connect(true); controller.receive(new BitWriter().u8(OP.enter).i32(1).string('unmapped_field').finish());
+    controller.receive(ownPacket(player, 1).finish()); controller.receive(ownPacket(shop, 0).finish());
+    const binding = controller.engine.actorActionIdentity(20)!;
+    controller.perform('command', { type: 'manualVendingView', map: 'unmapped_field',
+      owner: { world: binding.world, id: 1, incarnation: binding.selfIncarnation },
+      target: { world: binding.world, id: 20, incarnation: binding.targetIncarnation } });
+    expect(sent).toEqual([Uint8Array.of(107, 20, 0, 0, 0)]);
+    controller.receive(new BitWriter().u8(WORLD_OP.vendingView).i32(999).string('Supply shop').i32(0).finish());
+    controller.receive(new BitWriter().u8(WORLD_OP.npc).u8(3).finish());
+    controller.perform('command', { type: 'vendingView', id: 20 }); expect(sent).toHaveLength(2);
+  });
+
+  it.each(['map', 'world', 'ownerWorld', 'targetLifetime', 'ownerLifetime', 'ownerId', 'selfReplacement', 'shopReplacement', 'removed', 'dead', 'npc', 'playerLike', 'monster'])('rejects a changed %s selection', variant => {
+    const f = fixture(), request = structuredClone(f.request);
+    if (variant === 'map') request.map = 'prontera';
+    if (variant === 'world') request.owner.world = request.target.world = '00000000-0000-0000-0000-000000000000';
+    if (variant === 'ownerWorld') request.owner.world = '00000000-0000-0000-0000-000000000000';
+    if (variant === 'targetLifetime') request.target.incarnation++;
+    if (variant === 'ownerLifetime') request.owner.incarnation++;
+    if (variant === 'ownerId') request.owner.id = 9;
+    if (variant === 'selfReplacement') f.receive({ type: 'spawn', entity: { ...player } });
+    if (variant === 'shopReplacement') f.receive({ type: 'spawn', entity: { ...shop } });
+    if (variant === 'removed') f.receive({ type: 'remove', id: 20, dead: false });
+    if (variant === 'dead') f.controller.engine.actors.get(20)!.dead = true;
+    if (variant === 'npc') f.controller.engine.actors.get(20)!.npcSpawn = undefined;
+    if (variant === 'playerLike') f.controller.engine.actors.get(20)!.kind = 4;
+    if (variant === 'monster') f.controller.engine.actors.get(20)!.kind = 1;
+    expect(() => f.controller.perform('command', request)).toThrow(); expect(f.sent).toEqual([]);
+  });
+
+  it.each(['stale', 'disconnected', 'automation', 'interaction', 'vending', 'cast', 'deadSelf', 'moving'])('retains the %s fence for shop views', variant => {
+    const f = fixture();
+    if (variant === 'stale') f.advance(16_000);
+    if (variant === 'disconnected') f.controller.disconnect();
+    if (variant === 'automation') f.controller.start(settings);
+    if (variant === 'interaction') f.controller.world.apply({ type: 'npcFocus', id: 20, focus: true });
+    if (variant === 'vending') f.controller.world.apply({ type: 'vendingStarted', name: 'Shop', rows: [] });
+    if (variant === 'cast') f.receive({ type: 'castStart', id: 1, skillId: 2, level: 1, position: player, remainingSeconds: 10, flags: 0 });
+    if (variant === 'deadSelf') f.controller.engine.player!.dead = true;
+    if (variant === 'moving') f.receive({ type: 'walk', id: 1, walk: { origin: player, cells: [player, { x: 101, y: 100 }], secondsPerCell: 1, firstSeconds: 1, locked: false } });
+    const before = f.sent.length; expect(() => f.controller.perform('command', f.request)).toThrow(); expect(f.sent).toHaveLength(before);
+  });
+
+  it('rejects both talk paths for vendors and both view paths for ordinary NPCs', () => {
+    const vendor = fixture();
+    expect(() => vendor.controller.perform('command', { ...vendor.request, type: 'manualNpcTalk' })).toThrow();
+    expect(() => vendor.controller.perform('command', { type: 'npcTalk', id: 20 })).toThrow('visible NPC');
+    expect(vendor.sent).toEqual([]);
+    for (const kind of [2, 4]) {
+      const f = fixture(); f.controller.engine.actors.get(20)!.kind = kind; f.controller.engine.actors.get(20)!.npcSpawn = undefined;
+      expect(() => f.controller.perform('command', f.request)).toThrow();
+      expect(() => f.controller.perform('command', { type: 'vendingView', id: 20 })).toThrow('visible vendor');
+      f.controller.perform('command', { ...f.request, type: 'manualNpcTalk' }); expect(f.sent).toEqual([{ type: 'npcTalk', id: 20 }]);
+    }
+  });
+
+  it('keeps confirmed vendor-zero focus usable for explicit purchases', () => {
+    const f = fixture(0);
+    f.receive({ type: 'stats', level: 7, hp: 100, maxHp: 100, zeny: 100 }, { type: 'inventory', items: [], equipment: [], ammoId: -1 });
+    f.controller.perform('command', f.request);
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(0).bool(true));
+    f.packet(new BitWriter().u8(WORLD_OP.vendingView).i32(999).string('Supply shop').i32(1).i32(501).u8(1).i32(501).i16(5).i32(10));
+    expect(() => f.controller.perform('command', { type: 'vendingPurchase', rows: [{ id: 501, count: 1 }] })).not.toThrow();
+    expect(f.sent.at(-1)).toEqual({ type: 'vendingPurchase', rows: [{ id: 501, count: 1 }] });
+  });
 });
