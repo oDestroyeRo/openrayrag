@@ -1,6 +1,8 @@
 import {describe,it,expect} from 'vitest';
 import {BotEngine,type Action} from './engine';
 import {DEFAULT_SETTINGS,DEFAULT_AUTOMATION,validateSettings,validateAutomation} from './settings';
+import { AutomationScheduler } from './automation';
+import { acceptsMonster } from './automation-logic';
 import {ActorObservations,type ActorPredicate} from './actor-observations';
 import {dryRunRoutine,validateRoutineSpec,RoutineRuntime} from './routines';
 import {ProfileStore} from './profiles';
@@ -55,4 +57,24 @@ describe('actor conditions under loadout ownership',()=>{
   t.packet(new BitWriter().u8(33).i32(0));t.step();expect(t.engine.currentTargetId).toBeNull();expect(t.sent.some(action=>action.type==='equip')).toBe(false);
   expect(t.engine.snapshot().ruleConditions.some(rule=>rule.conditions.some(trace=>trace.state==='unavailable'))).toBe(true);
  });
+});
+
+describe('condition aggregation policy', () => {
+  it.each([false, true])('retains routine and automation precedence with reversed conditions=%s', reverse => {
+    const observations = new ActorObservations(() => 1_000);
+    observations.spawn(player); observations.frame();
+    const snapshot = observations.snapshot(1, null, true);
+    const conditions: ActorPredicate[] = [{ ...absent, value: true },
+      { field: 'actorCasting', actor: { scope: 'self' }, operator: 'eq', value: false }];
+    if (reverse) conditions.reverse();
+    const trace = dryRunRoutine(routine(conditions), { actors: snapshot }, isAction);
+    expect(trace.rules[0]!.state).toBe('unmatched');
+    expect(trace.rules[0]!.conditions.map(condition => condition.state).sort()).toEqual(['unavailable', 'unmatched']);
+    const scheduler = new AutomationScheduler(() => {}, () => 1_000);
+    expect(scheduler.conditionState('Recovery', conditions, snapshot)).toBe('unavailable');
+    expect(scheduler.ruleConditions[0]!.conditions).toHaveLength(2);
+    const automation = structuredClone(DEFAULT_AUTOMATION);
+    automation.combat.rules = [{ classId: 4000, action: 'ignore', priority: 0, conditions }];
+    expect(acceptsMonster(automation, monster, player, [4000], false, snapshot)).toBe(false);
+  });
 });

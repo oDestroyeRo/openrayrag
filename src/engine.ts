@@ -10,7 +10,8 @@ import { deathLimitGuidance } from './death-recovery';
 import { AttackStrategyPolicy, engagementIdentity, type StrategyChoice, type AttackStrategySnapshot, type EngagementIdentity } from './attack-strategy';
 import { castReadiness, skillAfterCastSeconds, CAST_PREREQUISITES, BLIND_CONDITION, AUTOMATIC_ATTACK_SKILLS, MANUAL_GROUND_SKILL } from './cast-policy';
 import { fieldGrid, insideLockArea, mapAllowed, mapPolicy, policyIdentity } from './map-policy';
-import { ActorObservations, type ActorObservationSnapshot, type ActorPredicate, type PredicateTrace, type PublishedConditionReport, evaluateActorPredicate, publishConditionReports } from './actor-observations';
+import { ActorObservations, type ActorObservationSnapshot, type ActorPredicate, type PredicateTrace, type PublishedConditionReport, publishConditionReports } from './actor-observations';
+import { actorPredicateEvaluator } from './actor-observations-logic';
 import { type Drop, type Entity, type GameEvent, type Position, type Walk, type LookAction } from './protocol';
 
 import { walkDuration, walkPosition } from './movement';
@@ -1067,7 +1068,7 @@ export class BotEngine {
   private eligible(e: Entity, now: number, acquiring = true): boolean {
     const automation=automationSettings(this.settings);const conditions=monsterRule(automation,e.classId)?.conditions;
     const observations=conditions?.length?this.actorObservation(conditions,this.currentTargetId,e.id):undefined;
-    if(conditions?.length&&(this.combatConditions.has(e.id)||this.combatConditions.size<32))this.combatConditions.set(e.id,{rule:`Monster ${e.classId} · actor ${e.id}`,conditions:conditions.map(condition=>evaluateActorPredicate(condition,observations))});
+    if(conditions?.length&&(this.combatConditions.has(e.id)||this.combatConditions.size<32))this.combatConditions.set(e.id,{rule:`Monster ${e.classId} · actor ${e.id}`,conditions:conditions.map(actorPredicateEvaluator(observations))});
     return this.fieldContains(e) && e.kind === 1 && !e.dead && e.hp > 0 && !!this.observations.context(e.id).incarnation && acceptsMonster(automation,e,this.player!,this.settings.targets,this.isAggressor(e.id),observations)
       && (!acquiring || distance(this.player!, e) <= this.settings.radius) && this.engagementAllowed(e.id)
       && (this.excluded.get(e.id) ?? 0) <= now;

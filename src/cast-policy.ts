@@ -1,7 +1,7 @@
 import data from './data/cast-policy.json';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost } from './game-catalog';
 import type { CharacterState } from './character-state';
-import { evaluateActorPredicate, type ActorObservationSnapshot, type ActorPredicate } from './actor-observations-logic';
+import { actorPredicateEvaluator, type ActorObservationSnapshot, type ActorPredicate } from './actor-observations-logic';
 
 export const CAST_POLICY_PIN = data.pin;
 export const AUTOMATIC_ATTACK_SKILLS = [11,12,16] as const;
@@ -58,8 +58,9 @@ export function castReadiness(skillId:number,level:number,state:CharacterState,o
   const skill=SKILL_CATALOG[skillId];
   if(!skill || !skill.adjustableLevel || skill.maxLevel!==10 || !state.skillsKnown || !Number.isInteger(level) || level<1 || level>10 || state.skillLevel(skillId)<level)
     return {state:'unavailable',reason:'Verified learned or granted skill level is required.'};
+  const evaluate = actorPredicateEvaluator(observations);
   for(const condition of CAST_PREREQUISITES) {
-    const trace=evaluateActorPredicate(condition,observations);
+    const trace=evaluate(condition);
     if(trace.state==='unavailable')return {state:'unavailable',reason:'Skill body-state prerequisites are unavailable: '+trace.reason};
     if(trace.state==='unmatched')return {state:'blocked',reason:'A disabling or hidden status prevents this skill.'};
   }
@@ -70,7 +71,7 @@ export function castReadiness(skillId:number,level:number,state:CharacterState,o
   // Unknown initial server casting is not inferred idle. Our scheduler/motion
   // ownership is checked by the engine; unobserved server gates can silently
   // reject a request, which retains uncertainty at its bounded deadline.
-  const blind=evaluateActorPredicate(BLIND_CONDITION,observations);
+  const blind=evaluate(BLIND_CONDITION);
   if(blind.state==='unavailable')return {state:'unavailable',reason:'Blind state is unavailable; effective skill range is unknown.'};
   const cost=effectiveSpCost(state,skillId,level);
   if(cost===null)return {state:'unavailable',reason:'Effective SP cost needs verified equipment, cards and refinement.'};
@@ -84,8 +85,9 @@ export function castReadiness(skillId:number,level:number,state:CharacterState,o
 export function warpCastReadiness(state:CharacterState,observations:ActorObservationSnapshot|undefined):CastReadiness {
   const level=state.skillsKnown?state.learned.get(55)??0:0;
   if(!Number.isInteger(level)||level<1||level>4)return {state:'unavailable',reason:'Warp Portal requires observed learned level 1–4; granted-only skills are unsupported.'};
-  for(const condition of CAST_PREREQUISITES){const trace=evaluateActorPredicate(condition,observations);if(trace.state!=='matched')return {state:trace.state==='unavailable'?'unavailable':'blocked',reason:'Verified clear body-state prerequisites are required for Warp Portal.'};}
-  const blind=evaluateActorPredicate(BLIND_CONDITION,observations);
+  const evaluate = actorPredicateEvaluator(observations);
+  for(const condition of CAST_PREREQUISITES){const trace=evaluate(condition);if(trace.state!=='matched')return {state:trace.state==='unavailable'?'unavailable':'blocked',reason:'Verified clear body-state prerequisites are required for Warp Portal.'};}
+  const blind=evaluate(BLIND_CONDITION);
   if(blind.state==='unavailable')return {state:'unavailable',reason:'Blind state is unavailable; stationary range cannot be verified.'};
   const cost=effectiveSpCost(state,55,level);
   if(cost===null)return {state:'unavailable',reason:'Effective SP cost needs verified equipment, cards and refinement.'};

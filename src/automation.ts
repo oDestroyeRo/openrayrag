@@ -5,7 +5,7 @@ import { recoveryItemCooldown } from './hp-potions';
 import { skillAfterCastSeconds } from './cast-policy';
 import type { AutomationSettings } from './settings';
 import type { Entity } from './protocol';
-import { evaluateActorPredicate, type ActorObservationSnapshot, type ActorPredicate, type PredicateTrace } from './actor-observations-logic';
+import { actorPredicateEvaluator, type ActorObservationSnapshot, type ActorPredicate, type PredicateTrace } from './actor-observations-logic';
 import type { CharacterState } from './character-state';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost, skillPrerequisites } from './game-catalog';
 import type { ExpandedAction, FeatureEvent, Attributes } from './protocol-feature';
@@ -18,7 +18,7 @@ export class AutomationScheduler {
   readonly ruleConditions: Array<{rule:string;conditions:PredicateTrace[]}>=[];
   conditionState(rule:string,conditions:ActorPredicate[]|undefined,observations:ActorObservationSnapshot|undefined):PredicateTrace['state'] {
     if(!conditions?.length)return 'matched';
-    const traces=conditions.map(condition=>evaluateActorPredicate(condition,observations));
+    const traces=conditions.map(actorPredicateEvaluator(observations));
     if(this.ruleConditions.length<32)this.ruleConditions.push({rule,conditions:traces});
     return traces.some(trace=>trace.state==='unavailable')?'unavailable':traces.some(trace=>trace.state==='unmatched')?'unmatched':'matched';
   }

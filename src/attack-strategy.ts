@@ -1,6 +1,6 @@
 import type { AttackStrategyRule } from './settings';
 import type { ActorObservationSnapshot } from './actor-observations-logic';
-import { evaluateActorPredicate } from './actor-observations-logic';
+import { actorPredicateEvaluator } from './actor-observations-logic';
 import { castReadiness } from './cast-policy';
 import type { CharacterState } from './character-state';
 
@@ -27,6 +27,7 @@ export class AttackStrategyPolicy {
     if(!identity)return {state:'wait',reason:'Attack strategy target identity is unavailable.'};
     const engagement=this.get(identity);
     if(!engagement)return {state:'wait',reason:'Attack strategy lifetime ledger is full; wait for actors to leave.'};
+    const evaluate = actorPredicateEvaluator(observations);
     for(const rule of rules) {
       if(!rule.speciesIds.includes(speciesId)||rule.behavior==='opener'&&engagement.normalStarted)continue;
       const ledger=engagement.rules.get(rule.id);
@@ -36,7 +37,7 @@ export class AttackStrategyPolicy {
         if(rule.behavior==='opener')return {state:'wait',reason:`Waiting for opener ${rule.id} cooldown.`};
         continue;
       }
-      const traces=(rule.conditions??[]).map(condition=>evaluateActorPredicate(condition,observations));
+      const traces=(rule.conditions??[]).map(evaluate);
       if(traces.some(trace=>trace.state==='unavailable'))return {state:'wait',reason:`Strategy ${rule.id} actor conditions are unavailable.`};
       if(traces.some(trace=>trace.state==='unmatched'))continue;
       const ready=castReadiness(rule.skillId,rule.level,state,observations);

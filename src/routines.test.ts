@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { dryRunRoutine, ROUTINE_LIMITS, RoutineRuntime, validateRoutineSelectorCheckpoint, validateRoutineSpec,
   type RoutineCondition, type RoutineObservation, type RoutineOptions, type RoutineRule, type RoutineSpec } from './routines';
 
+import { routineConditionEvaluator, traceRules } from './routines-logic';
+
 type TestAction = { type: 'heal'; itemId: number } | { type: 'stop' };
 const isAction = (value: unknown): value is TestAction => {
   if (!value || typeof value !== 'object') return false;
@@ -484,5 +486,37 @@ describe('routine execution', () => {
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
     expect(runtime.snapshot().state).toBe('failed');
     expect(() => runtime.start(spec())).toThrow(/clock/);
+  });
+});
+
+describe('bound routine evaluation', () => {
+  it('reuses explicit context and detaches traces without changing observations or conditions', () => {
+    const observation = { hpPercent: 40, map: 'prontera', inventory: { 501: 0 }, elapsedSeconds: 90_000 };
+    const conditions: RoutineCondition[] = [hp, { field: 'map', operator: 'eq', value: 'prontera' },
+      { field: 'inventory', itemId: 501, operator: 'eq', value: 0 },
+      { field: 'elapsedSeconds', operator: 'gt', value: 60 }];
+    const before = structuredClone({ observation, conditions });
+    const evaluate = routineConditionEvaluator({ observation, allowExtendedElapsed: true });
+    const traces = conditions.map(evaluate);
+    expect(traces.map(trace => trace.state)).toEqual(['matched', 'matched', 'matched', 'matched']);
+    expect(conditions.map(evaluate)).toEqual(traces);
+    expect(routineConditionEvaluator({ observation })(conditions[3]!).state).toBe('unavailable');
+    traces[0]!.condition.value = 0;
+    expect(evaluate(conditions[0]!).condition.value).toBe(50);
+    expect({ observation, conditions }).toEqual(before);
+  });
+
+  it('keeps ledger indexes attached to declaration order before sorting unary trace inputs', () => {
+    const input = { spec: spec({ rules: [rule({ name: 'first', priority: 1 }), rule({ name: 'second', priority: 20 })] }),
+      observation: { hpPercent: 40 }, progress: [{ runs: 0, lastIssued: null }, { runs: 1, lastIssued: 1_000 }], now: 2_000 };
+    const before = structuredClone(input);
+    const trace = traceRules(input);
+    expect(trace.rules.map(rule => [rule.name, rule.state])).toEqual([['second', 'cooldown'], ['first', 'matched']]);
+    expect(trace.rule).toBe('first');
+    expect(input).toEqual(before);
+    trace.rules[0]!.action.type = 'stop';
+    trace.rules[0]!.conditions[0]!.condition.value = 0;
+    expect(traceRules(input)).toEqual(traceRules(before));
+    expect(input).toEqual(before);
   });
 });

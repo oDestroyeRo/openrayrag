@@ -3,7 +3,7 @@ import type { ActionIdentity } from './actor-identity';
 import type { matchesSkillExecution } from './skill-execution';
 import type { AutomationSettings, LootRule, MonsterRule } from './settings';
 import type { Entity } from './protocol';
-import { evaluateActorPredicate, type ActorObservationSnapshot } from './actor-observations-logic';
+import { actorPredicateEvaluator, type ActorObservationSnapshot } from './actor-observations-logic';
 import type { CharacterState } from './character-state';
 import { SKILL_CATALOG } from './game-catalog';
 import type { ExpandedAction, Attributes } from './protocol-feature';
@@ -14,7 +14,7 @@ export function lootRule(a: AutomationSettings, itemId: number): LootRule | unde
 export function acceptsMonster(a: AutomationSettings, e: Entity, player: Entity, selected: number[], aggressive: boolean, observations?:ActorObservationSnapshot): boolean {
   let rule = monsterRule(a,e.classId);
   if(rule?.conditions?.length) {
-    const traces=rule.conditions.map(condition=>evaluateActorPredicate(condition,observations));
+    const traces=rule.conditions.map(actorPredicateEvaluator(observations));
     if(traces.some(trace=>trace.state==='unavailable'))return false;
     if(traces.some(trace=>trace.state==='unmatched')) {
       if(rule.action==='attack')return false;
