@@ -94,6 +94,28 @@ async function finishResources(cleanups, primaryFailed) {
   if (!primaryFailed && cleanupFailed) throw failure;
 }
 
+// Remove each timeout listener when its operation settles. Racing every chunk
+// against one pending Promise would retain one reaction per chunk until timeout.
+/** @template T @param {Promise<T>} pending @param {AbortSignal} signal @returns {Promise<T>} */
+function beforeDownloadDeadline(pending, signal) {
+  return new Promise((resolve, reject) => {
+    let listening = true;
+    const release = () => {
+      if (listening) { signal.removeEventListener("abort", abort); listening = false; }
+    };
+    const abort = () => { release(); reject(signal.reason); };
+    signal.addEventListener("abort", abort, { once: true });
+    pending.then(value => {
+      release();
+      resolve(value);
+    }, error => {
+      release();
+      reject(error);
+    });
+    if (signal.aborted) abort();
+  });
+}
+
 export function bunInstallCommand(migrate = false, versions = process.versions) {
   requireValue(typeof versions.bun === "string", "Run verification with Bun: bun run release:verify.");
   // Spawn Bun itself, including bun.exe on Windows, without a shell or shim.
@@ -132,15 +154,9 @@ export async function anonymousBytes(url, limit, fetchImpl = fetch, timers = { s
   requireValue(Number.isSafeInteger(limit) && limit > 0, "Invalid public download bound.");
   let current = new URL(url);
   const controller = new AbortController();
-  let timer;
-  const deadline = new Promise((resolve, reject) => {
-    timer = timers.setTimeout(() => {
-      const reason = new DOMException("Public download timed out.", "TimeoutError");
-      controller.abort(reason);
-      reject(reason);
-    }, 180_000);
-  });
-  deadline.catch(() => {});
+  const timer = timers.setTimeout(() => {
+    controller.abort(new DOMException("Public download timed out.", "TimeoutError"));
+  }, 180_000);
   try {
     for (let hop = 0; hop < 6; hop++) {
       controller.signal.throwIfAborted();
@@ -155,7 +171,7 @@ export async function anonymousBytes(url, limit, fetchImpl = fetch, timers = { s
           try { response.body?.cancel().catch(() => {}); } catch {}
         }
       }, () => {});
-      const response = await Promise.race([fetched, deadline]);
+      const response = await beforeDownloadDeadline(fetched, controller.signal);
       let reader, complete = false, failed = false;
       try {
         controller.signal.throwIfAborted();
@@ -170,19 +186,26 @@ export async function anonymousBytes(url, limit, fetchImpl = fetch, timers = { s
         if (declared !== null) {
           requireValue(/^\d+$/.test(declared) && Number(declared) <= limit, "Public response exceeds its declared bound.");
         }
-        const chunks = [];
+        let bytes = Buffer.alloc(0);
         let size = 0;
         reader = response.body?.getReader();
         while (reader) {
           controller.signal.throwIfAborted();
-          const { done, value } = await Promise.race([reader.read(), deadline]);
+          const { done, value } = await beforeDownloadDeadline(reader.read(), controller.signal);
           controller.signal.throwIfAborted();
           if (done) { complete = true; break; }
-          size += value.length;
-          requireValue(size <= limit, "Public response exceeds its byte bound.");
-          chunks.push(value);
+          const nextSize = size + value.length;
+          requireValue(nextSize <= limit, "Public response exceeds its byte bound.");
+          if (nextSize > bytes.length) {
+            const capacity = Math.min(limit, Math.max(nextSize, bytes.length * 2, 64 * 1024));
+            const grown = Buffer.alloc(capacity);
+            grown.set(bytes.subarray(0, size));
+            bytes = grown;
+          }
+          bytes.set(value, size);
+          size = nextSize;
         }
-        return Buffer.concat(chunks);
+        return bytes.subarray(0, size);
       } catch (error) { failed = true; throw error; }
       finally {
         const cancel = () => {
@@ -190,7 +213,7 @@ export async function anonymousBytes(url, limit, fetchImpl = fetch, timers = { s
           const canceled = reader ? reader.cancel() : response.body?.cancel();
           // Failed cleanup must not prolong the operation or replace its cause.
           if (failed) { canceled?.catch(() => {}); return; }
-          return canceled ? Promise.race([canceled, deadline]) : undefined;
+          return canceled ? beforeDownloadDeadline(canceled, controller.signal) : undefined;
         };
         await finishResources(reader ? [cancel, () => reader.releaseLock()] : [cancel], failed);
       }

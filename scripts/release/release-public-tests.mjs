@@ -361,6 +361,28 @@ test("deadline disposes bodies returned late by a transport that ignores cancell
   assert.equal(body.locked, false);
 });
 
+test("tiny and empty download chunks retain one timeout subscription and preserve exact bytes", async () => {
+  let active = 0, peak = 0, delivered = 0, cleared = 0;
+  const expected = Buffer.from(Array.from({ length: 70_000 }, (_, index) => index % 256));
+  const bytes = await anonymousBytes("https://github.com/a", expected.length, async (_url, init) => {
+    const signal = init.signal;
+    const add = signal.addEventListener.bind(signal), remove = signal.removeEventListener.bind(signal);
+    signal.addEventListener = (...args) => { active++; peak = Math.max(peak, active); return add(...args); };
+    signal.removeEventListener = (...args) => { active--; return remove(...args); };
+    return new Response(new ReadableStream({
+      pull(controller) {
+        if (delivered === expected.length * 2) { controller.close(); return; }
+        const index = Math.floor(delivered / 2);
+        controller.enqueue(delivered++ % 2 === 0 ? new Uint8Array(0) : expected.subarray(index, index + 1));
+      },
+    }));
+  }, { setTimeout: () => 1, clearTimeout: () => { cleared++; } });
+  assert.deepEqual(bytes, expected);
+  assert.equal(peak, 1);
+  assert.equal(active, 0);
+  assert.equal(cleared, 1);
+});
+
 test("metadata uses exact read-only gh routes, a cache, and explicit fresh reads", async () => {
   const requests = [];
   const api = githubMetadata(REPOSITORY, (command, args, options) => {
