@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   actorId, itemId, bagId, skillId, speciesId, dropId, partyId, partyMemberId,
-  quantity, percentage, seconds, milliseconds, revision, revisionFor, incarnation, worldId, mapCode, regularItemBagId,
+  quantity, percentage, seconds, minutes, milliseconds, revision, revisionFor, incarnation, worldId, mapCode, regularItemBagId,
   addQuantities, subtractQuantities, incrementRevision, secondsToMilliseconds,
-  millisecondsToSeconds, addMilliseconds, DomainValueError,
+  millisecondsToSeconds, minutesToMilliseconds, addMilliseconds, DomainValueError,
   type ActorId, type ItemId, type BagId, type SkillId, type Quantity,
   type Percentage, type Seconds, type Milliseconds, type Revision,
 } from './domain-values';
@@ -26,6 +26,8 @@ function incompatibleDomains(actor: ActorId, item: ItemId, bag: BagId, skill: Sk
   acceptsQuantity(percent);
   // @ts-expect-error Unit conversions require seconds, not milliseconds.
   secondsToMilliseconds(elapsed);
+  // @ts-expect-error Minute budgets must use their own explicit conversion.
+  minutesToMilliseconds(duration);
   // @ts-expect-error A revision is not a clock duration.
   addMilliseconds(elapsed, version);
   // @ts-expect-error Raw arithmetic loses the validation proof.
@@ -89,9 +91,11 @@ describe('validated domain values', () => {
   it('retains signed fractional wire timing and checks conversion overflow', () => {
     expect(secondsToMilliseconds(seconds(-0.125))).toBe(-125);
     expect(millisecondsToSeconds(milliseconds(125))).toBe(0.125);
+    expect(minutesToMilliseconds(minutes(1.5))).toBe(90000);
     expect(addMilliseconds(milliseconds(1.5), milliseconds(0.5))).toBe(2);
-    for (const construct of [seconds, milliseconds]) for (const value of [NaN, Infinity, -Infinity, '1']) expect(() => construct(value)).toThrow(DomainValueError);
+    for (const construct of [seconds, minutes, milliseconds]) for (const value of [NaN, Infinity, -Infinity, '1']) expect(() => construct(value)).toThrow(DomainValueError);
     expect(() => secondsToMilliseconds(seconds(Number.MAX_VALUE))).toThrow(DomainValueError);
+    expect(() => minutesToMilliseconds(minutes(Number.MAX_VALUE))).toThrow(DomainValueError);
     expect(() => addMilliseconds(milliseconds(Number.MAX_VALUE), milliseconds(Number.MAX_VALUE))).toThrow(DomainValueError);
   });
 

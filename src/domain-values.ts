@@ -19,6 +19,7 @@ export type Quantity = Value<'Quantity'>;
 export type Percentage = Value<'Percentage'>;
 /** Signed finite dimensions: wire deltas can be negative; duration policies add bounds. */
 export type Seconds = Value<'Seconds'>;
+export type Minutes = Value<'Minutes'>;
 export type Milliseconds = Value<'Milliseconds'>;
 export type Revision<Channel extends string = 'unscoped'> = Value<'Revision'> & { readonly [revisionChannel]: Channel };
 
@@ -40,7 +41,7 @@ function bounded<Name extends string>(value: unknown, domain: Name, label: strin
   const result = finite(value, domain, label);
   if (integer && !Number.isInteger(result)) throw new DomainValueError(domain, 'integer', label);
   if (result < minimum || result > maximum) throw new DomainValueError(domain, 'range', label);
-  // The only nominal construction seam: every caller supplies its domain's bounds.
+  // Numeric construction seam: every caller supplies its domain's bounds.
   return result as Value<Name>;
 }
 
@@ -68,6 +69,7 @@ export const mapCode = (value: unknown, label = 'map code'): MapCode => textValu
 export const quantity = (value: unknown, label = 'quantity'): Quantity => bounded(value, 'Quantity', label, 0, Number.MAX_SAFE_INTEGER);
 export const percentage = (value: unknown, label = 'percentage'): Percentage => bounded(value, 'Percentage', label, 0, 100, false);
 export const seconds = (value: unknown, label = 'seconds'): Seconds => bounded(value, 'Seconds', label, -Number.MAX_VALUE, Number.MAX_VALUE, false);
+export const minutes = (value: unknown, label = 'minutes'): Minutes => bounded(value, 'Minutes', label, -Number.MAX_VALUE, Number.MAX_VALUE, false);
 export const milliseconds = (value: unknown, label = 'milliseconds'): Milliseconds => bounded(value, 'Milliseconds', label, -Number.MAX_VALUE, Number.MAX_VALUE, false);
 export function revisionFor<const Channel extends string>(_channel: Channel, value: unknown, label = 'revision'): Revision<Channel> {
   return bounded(value, 'Revision', label, 0, Number.MAX_SAFE_INTEGER) as Revision<Channel>;
@@ -82,5 +84,6 @@ export function incrementRevision<Channel extends string>(value: Revision<Channe
   return bounded(value + 1, 'Revision', 'revision', 0, Number.MAX_SAFE_INTEGER) as Revision<Channel>;
 }
 export const secondsToMilliseconds = (value: Seconds): Milliseconds => milliseconds(value * 1000);
+export const minutesToMilliseconds = (value: Minutes): Milliseconds => milliseconds(value * 60000);
 export const millisecondsToSeconds = (value: Milliseconds): Seconds => seconds(value / 1000);
 export const addMilliseconds = (left: Milliseconds, right: Milliseconds): Milliseconds => milliseconds(left + right);
