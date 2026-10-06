@@ -111,6 +111,28 @@ function setup() {
 }
 
 describe('settings form interface', () => {
+  it('applies complete Setup offline, retaining configured map and targets and clearing the profile once', () => {
+    const f = setup(); f.form.restore(document(settings()));
+    const changed = settings(); changed.map = 'prt_fild07'; changed.targets = [4012]; changed.radius = 14;
+    f.form.applySettings(changed);
+    expect(f.form.snapshot()).toMatchObject({ settings: changed, selectedProfileId: null });
+    expect(f.form.runSettings()).toMatchObject({ map: '', targets: [] });
+    expect(f.changed).toHaveBeenCalledTimes(1);
+    expect(f.recursiveSettings).not.toHaveBeenCalled();
+  });
+
+  it('keeps all retained controls and profile unchanged when any Setup setting fails validation', () => {
+    const f = setup(); f.form.restore(document(settings())); const before = f.form.snapshot();
+    expect(() => f.form.applySettings({ ...settings(), radius: 21 })).toThrow();
+    expect(f.form.snapshot()).toEqual(before); expect(f.changed).not.toHaveBeenCalled();
+  });
+
+  it.each([{ runActive: true }, { controlsLocked: true }])('guards complete Setup applying while the form is owned by %o', owner => {
+    const f = setup(); f.form.restore(document(settings())); const before = f.form.snapshot(); f.context(owner);
+    expect(() => f.form.applySettings({ ...settings(), radius: 14 })).toThrow('Stop automation');
+    expect(f.form.snapshot()).toEqual(before); expect(f.changed).not.toHaveBeenCalled();
+  });
+
   it('retains configured targets before readiness while field settings use only eligible targets', () => {
     const f = setup(); f.form.restore(document(settings()));
     expect(f.form.snapshot()).toMatchObject({ selectedProfileId: 'saved-profile', settings: settings() });

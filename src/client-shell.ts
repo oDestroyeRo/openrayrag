@@ -82,13 +82,18 @@ export function mountClientShell(root: HTMLElement): ClientShell {
         </section>
 
         <section id="client-page-bot" class="client-page" role="tabpanel" aria-labelledby="client-tab-bot" hidden>
-          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Setup</h2><p>Changes save automatically on this computer and restore when you reopen the app.</p></div>
+          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Setup</h2><p>Form and Script edit the same settings. Form changes save automatically; apply script changes before Start.</p></div>
+          <nav class="setup-view-tabs" role="tablist" aria-label="Setup view">
+            <button id="setup-tab-form" type="button" role="tab" data-client-navigation="setup-view" aria-controls="setup-form" aria-selected="true">Form</button>
+            <button id="setup-tab-script" type="button" role="tab" data-client-navigation="setup-view" aria-controls="setup-script" aria-selected="false" tabindex="-1">Script</button>
+          </nav>
+          <div id="setup-form" role="tabpanel" aria-labelledby="setup-tab-form">
           <nav class="client-bot-nav" role="tablist" aria-label="Bot sections">
             <button id="client-bot-tab-combat" type="button" role="tab" data-client-bot-nav="combat" aria-controls="client-bot-combat" aria-selected="true">Combat</button>
             <button id="client-bot-tab-recovery" type="button" role="tab" data-client-bot-nav="recovery" aria-controls="client-bot-recovery" aria-selected="false" tabindex="-1">Recovery</button>
             <button id="client-bot-tab-travel" type="button" role="tab" data-client-bot-nav="travel" aria-controls="client-bot-travel" aria-selected="false" tabindex="-1">Travel</button>
             <button id="client-bot-tab-inventory" type="button" role="tab" data-client-bot-nav="inventory" aria-controls="client-bot-inventory" aria-selected="false" tabindex="-1">Inventory & skills</button>
-            <button id="client-bot-tab-workflows" type="button" role="tab" data-client-bot-nav="workflows" aria-controls="client-bot-workflows" aria-selected="false" tabindex="-1">Macros & limits</button>
+            <button id="client-bot-tab-workflows" type="button" role="tab" data-client-bot-nav="workflows" aria-controls="client-bot-workflows" aria-selected="false" tabindex="-1">Run limits</button>
           </nav>
           <section id="client-bot-combat" class="panel settings feature-panel" data-section="combat" role="tabpanel" aria-labelledby="client-bot-tab-combat">
             <div class="panel-title"><h3 id="client-bot-combat-title" tabindex="-1">Combat</h3></div>
@@ -122,7 +127,9 @@ export function mountClientShell(root: HTMLElement): ClientShell {
             </details>
           </section>
           <section id="client-bot-inventory" class="panel settings feature-panel" data-section="inventory" role="tabpanel" aria-labelledby="client-bot-tab-inventory" hidden><div class="panel-title"><h3 id="client-bot-inventory-title" tabindex="-1">Inventory & skills</h3></div></section>
-          <section id="client-bot-workflows" class="panel settings feature-panel" data-section="workflows" role="tabpanel" aria-labelledby="client-bot-tab-workflows" hidden><div class="panel-title"><h3 id="client-bot-workflows-title" tabindex="-1">Macros & limits</h3></div></section>
+          <section id="client-bot-workflows" class="panel settings feature-panel" data-section="workflows" role="tabpanel" aria-labelledby="client-bot-tab-workflows" hidden><div class="panel-title"><h3 id="client-bot-workflows-title" tabindex="-1">Run limits</h3></div></section>
+          </div>
+          <div id="setup-script" role="tabpanel" aria-labelledby="setup-tab-script" hidden></div>
         </section>
 
         <section id="client-page-manual" class="client-page" role="tabpanel" aria-labelledby="client-tab-manual" hidden>

@@ -1,0 +1,239 @@
+# Compiled macro protocol
+
+The [Bot script editor](MACROS.md) compiles readable settings and rules into the existing validated macro document and settings request. This reference describes that data format, legacy JSON imports, action admission and execution contracts. Saving, applying and previewing never start automation; Start bot is explicit.
+
+## Version 1 document
+
+Every field below is required. Unknown keys, unsupported step types and implicit defaults are rejected. `version` must be the number `1`. All numeric limits are integers unless a condition's table explicitly permits a fractional threshold.
+
+| Document field | Contract |
+| --- | --- |
+| `name` | Nonblank string, at most 64 UTF-16 code units; ASCII control characters and DEL are rejected. |
+| `durationSeconds` | `0` disables the macro duration limit; positive values allow 1–86,400 seconds for the entire macro, including waits and field monitoring. |
+| `maxActions` | `0` disables the issued-step count limit; positive values allow 1–1,000 macro steps, including `farm` and `travel`. Internal combat attacks, movement legs and transaction messages are governed by their own controller limits. |
+| `maxSpend` | 0–2,000,000,000 zeny reserved across all `buy`/`store` steps. |
+| `rules` | 1–32 rule objects. |
+
+The compact serialized document is limited to 65,536 UTF-8 bytes. Captured settings have the same independent bound, and the combined native macro request is limited to 131,072 bytes. Readable source allows 262,144 UTF-8 bytes and 8,192 lines; conversion reports an error if the compiled configuration exceeds admission limits. JSON data must have finite numbers, at most eight nesting levels, at most 16 keys per object and at most 64 entries per array; the specific rule/condition/step limits below are narrower. Comments, trailing commas, functions and expressions are not JSON.
+
+Each rule requires exactly these fields:
+
+| Rule field | Contract |
+| --- | --- |
+| `name` | Same string bounds as the document name; unique within the script. |
+| `priority` | −1,000–1,000; the highest matching eligible priority wins. Equal priorities preserve document order. |
+| `cooldownSeconds` | 0–86,400, measured from sequence selection. |
+| `maxRuns` | `0` permits repeated selection without a rule-run count limit; positive values allow 1–1,000 selections. A selected attempt consumes a finite allowance. |
+| `conditions` | 1–16 conditions, combined with AND. Every condition must match known observations. |
+| `steps` | 1–16 ordered steps. The sequence must fit the remaining `maxActions` allowance before dispatch. |
+
+A selected sequence owns execution until it finishes or fails; a later higher-priority rule does not interrupt it. Conditions select the sequence and are not re-evaluated as a prerequisite for each subsequent step. Each step still rechecks its action-specific state, permissions, resources and ownership.
+
+For continuous execution, set `durationSeconds` and `maxActions` to `0`. Set `maxRuns` to `0` only on rules that should repeat; keep a one-time field setup rule at `1` to avoid repeatedly activating the same field. The editor's **Until stopped** example demonstrates a one-time farm followed by repeatable conditional First Aid. Loading, previewing and saving it never start automation.
+
+These zero limits are independent. A positive duration or count still applies even when another limit is zero. Rule conditions and cooldowns still govern repeated selection. Every step's `timeoutSeconds` remains required and positive: an unconfirmed action can fail without being resent. `maxSpend: 0` still means no spending, rather than unlimited spending. Stop, connection/character changes and configured field health, death, schedule and run limits remain authoritative. Unlimited execution keeps the rule/condition/document size limits and does bounded work on each tick; it does not accumulate action history. Action identities retain their safe-integer precision guard.
+
+## Conditions
+
+Numeric comparisons use `lt` (`<`), `lte` (`≤`), `eq` (`=`), `gte` (`≥`) or `gt` (`>`). Ordinary numeric and map conditions contain exactly `field`, `operator` and `value`; inventory adds `itemId`.
+
+| `field` | Operators and `value` |
+| --- | --- |
+| `hpPercent`, `spPercent`, `weightPercent` | Numeric comparisons; finite number 0–100, including fractions. |
+| `level`, `jobLevel` | Numeric comparisons; integer 1–1,000. `level` is base level. |
+| `zeny` | Numeric comparisons; integer 0–2,147,483,647. |
+| `elapsedSeconds` | Numeric comparisons; finite number 0–86,400. During execution this is the macro's own elapsed clock. |
+| `map` | `eq` or `ne`; map code of 1–64 ASCII letters, digits, underscores or hyphens. |
+| `inventory` | Numeric comparisons; integer count 0–2,147,483,647 and integer `itemId` 1–2,147,483,647. |
+
+For example, `{"field":"level","operator":"gte","value":20}` tests base level; `{"field":"inventory","itemId":501,"operator":"lt","value":5}` tests the observed Red Potion count. Missing inventory is unavailable, rather than zero. Once a complete inventory is known, an absent requested item has a known count of zero.
+
+Observed actor predicates use the same bounded conditions described in [actor observations](ACTOR_OBSERVATIONS.md):
+
+| `field` | Exact condition fields |
+| --- | --- |
+| `actorStatus` | `field`, `actor`, integer `statusId` 1–255, `operator` (`eq`/`ne`), boolean `value`. |
+| `actorCasting` | `field`, `actor`, `operator` (`eq`/`ne`), boolean `value`; optional integer `skillId` 1–255. |
+| `actorHpPercent`, `actorSpPercent` | `field`, `actor`, numeric comparison `operator`, finite `value` 0–100. |
+
+`actor` is exactly `{"scope":"self"}`, `{"scope":"target"}`, or `{"scope":"actor","id":0,"world":"00000000-0000-0000-0000-000000000001","incarnation":1}`. The last form must use an actually observed current binding: nonnegative actor ID up to 2,147,483,647, lowercase hexadecimal world UUID and incarnation 1–2,147,483,647. The example UUID is a shape illustration only. `candidate` scope is not accepted in macro rules.
+
+Unknown, stale, disconnected or replaced actor evidence never matches, including negative conditions. Actor resource evidence expires after 15 seconds; enemy SP is unavailable, while own/current-party SP requires verified evidence. Unsupported status/casting evidence remains unavailable rather than implying absence. A missing target does not stand in for self.
+
+## Steps and admission limits
+
+Every step requires `type` and integer `timeoutSeconds`. The timeout includes preparation and waiting for confirmation, not just transport dispatch. Map codes use the same format as map conditions. Item IDs and farm target class IDs are integers 1–2,147,483,647. Syntax validity does not prove that a map, item, target or skill is supported by the current game state.
+
+| `type` | Additional required fields | Timeout |
+| --- | --- | --- |
+| `farm` | `map`; `targets` containing 1–64 unique monster species/class IDs. | 1–86,400 seconds to activate the field. |
+| `travel` | `map`. | 1–86,400 seconds to verify destination arrival. |
+| `buy` | `serviceId`, `itemId`, `quantity` (1–100,000), `maxSpend` (0–2,000,000,000). | 1–86,400 seconds for the service visit, transaction and confirmed close. |
+| `store` | Same fields as `buy`, plus `keep` (0–100,000). | 1–86,400 seconds for the service visit, transaction and confirmed close. |
+| `useItem` | `itemId`; uses one observed untargeted consumable. | 1–120 seconds. |
+| `skill` | `skillId`, `level` (1–10), `mode` (`self`/`target`). | 1–120 seconds. |
+
+Self skill IDs accept 1–32,767; target skill IDs accept 1–255. Skill 55 (Warp Portal) is excluded from macro steps. These syntax bounds do not bypass learned/granted skill, level, actual SP, motion, range, target lifetime or receipt checks. A target skill uses the verified combat target captured for that step; it does not acquire a replacement or permit arbitrary actor/ground targeting.
+
+`farm` projects the script's map/targets over the settings captured at **Start bot**, retaining their combat, recovery, map policy and limits. Supported map changes use the server's Database teleport, then confirm that field automation is active on the requested map. That confirmation starts ongoing farming; it does not mean farming has finished, and the step timeout is not a farming duration. Conditions continue to select later sequences from fresh observations while the field runs. Party-leader follow cannot own a macro map, and a farm stage conflicting with the captured map permissions or field lock area is rejected.
+
+`travel`, farming map changes, configured destinations, death return and service-map visits share Database travel in both connection modes. The client sends the pinned opcode-64 map request with server-default coordinates (`-999`, `-999`) and `force = false`; scripts cannot specify coordinates or bypass map permissions. Only the 231 maps with pinned collision data are admitted. Same-map movement, leaving portal areas, field-lock entry and NPC approaches still use verified walkable routes. Party-leader rendezvous retains its verified portal route and physical crossing evidence.
+
+A transfer requires the captured living own actor's OutOfSight removal, the requested map, an ordered Ready send and a fresh living own entry spawn on the same connection. An optional clear between departure and map is owned by that trip. Sending alone never completes travel. The request waits for movement, cast and resource receipts and the server's 30-second teleport cooldown. Fresh character arrival anchors that guard, including initial login and manual map changes; a server cooldown warning may extend it. The UI displays the remaining wait and continues automatically. A quiet map retains its unsent trip while waiting for fresh server data. Preparation has a fixed 60-second limit, followed by a 20-second confirmation window after sending. Use at least 60 seconds for a macro map-change step; shorter script deadlines still apply and are never extended. Stop, timeout or a write error retain sent uncertainty and block competing actions until authoritative arrival or reconnect. The bot never repeats a sent teleport or falls back to walking after an uncertain write; late arrival can settle the receipt but cannot restore the canceled/failed macro. A map unsupported by the injected Database transport can use verified physical planning only before dispatch.
+
+An empty selected-target draft uses the first farm step's targets for startup validation. A script with no farm step needs no monster selection and captures combat off when that empty draft would otherwise require targets. These projections leave the saved settings untouched; an explicitly configured combat-off or retaliation policy stays intact.
+
+Another sequence suspends retained field intent until all its steps confirm. Item/skill and NPC transaction sequences can then return to that field through the usual guarded field-resume path. A confirmed `travel` clears retained field intent; use a following `farm` step to activate a field at the destination. A new `farm` replaces the previous field intent. Changing stages does not start a new run or renew session, kill, pickup or death allowances.
+
+### NPC service and spending contracts
+
+`serviceId` must be a built-in catalog ID with the matching opening outcome, not a saved service name or arbitrary NPC ID:
+
+| Step | Current accepted service ID | Location/outcome |
+| --- | --- | --- |
+| `buy` | `tool-dealer-buy` | Prontera Field 5 (`prt_fild05`), verified buy shop opening. |
+| `store` | `kafra-south-storage` | Prontera (`prontera`), verified storage opening. |
+
+The controller resolves the NPC again, checks the exact [service contract](NPC_SERVICES.md), performs the guarded transaction and confirms shop/storage close before completing the macro step. `tool-dealer-sell` and transport service IDs are not accepted for these steps. Current pinned opening fees are zero; actual stock, prices, capacity and economics still require observations.
+
+A buy requests `quantity` additional units. A store requests **at most** `quantity` units and retains at least `keep`, plus higher protected stock/disposition floors from the captured settings. Equipped, selected ammunition, refined/carded, unique and unknown items remain protected. No safely storable excess, insufficient capacity, changed NPC identity or contradictory resource evidence fails the step. Broader JSON quantity bounds do not override narrower shop, stock and transfer validators; in particular, a computed storage keep floor above 32,767 is rejected.
+
+Each step's `maxSpend` must be no greater than document `maxSpend`. Its **full cap is reserved before dispatch**, including any service fee; the combined fee/item expense must fit that step cap. Reservations accumulate and are never refunded after a cheaper purchase, cancellation or sale. A later step whose reservation exceeds the remaining document allowance fails without dispatch. Account for every possible run of each spending rule when choosing the document cap.
+
+## Examples
+
+These are editable proposals, not verified routes or successful game transactions. Check map policy, selected species, learned skills, stock and prices before starting.
+
+### Keep farming until a level rule selects another field
+
+```json
+{
+  "version": 1,
+  "name": "Leveling route",
+  "durationSeconds": 3600,
+  "maxActions": 3,
+  "maxSpend": 0,
+  "rules": [
+    {
+      "name": "First field",
+      "priority": 10,
+      "cooldownSeconds": 10,
+      "maxRuns": 1,
+      "conditions": [{ "field": "level", "operator": "lt", "value": 20 }],
+      "steps": [{ "type": "farm", "map": "prt_fild08", "targets": [4000], "timeoutSeconds": 300 }]
+    },
+    {
+      "name": "Next field",
+      "priority": 20,
+      "cooldownSeconds": 10,
+      "maxRuns": 1,
+      "conditions": [{ "field": "level", "operator": "gte", "value": 20 }],
+      "steps": [
+        { "type": "travel", "map": "prt_fild07", "timeoutSeconds": 600 },
+        { "type": "farm", "map": "prt_fild07", "targets": [4000], "timeoutSeconds": 300 }
+      ]
+    }
+  ]
+}
+```
+
+After the first farm activation confirms, the macro monitors base level while farming continues. At level 20 it settles existing actions/movement, travels and activates the next field. If every rule/action allowance is then exhausted, the confirmed field remains monitored until macro duration ends or Stop; these macro allowances do not replace the configured field-run limits.
+
+### Buy potions, store excess loot and use a potion
+
+```json
+{
+  "version": 1,
+  "name": "Field supplies",
+  "durationSeconds": 3600,
+  "maxActions": 12,
+  "maxSpend": 1200,
+  "rules": [
+    {
+      "name": "Activate field",
+      "priority": 0,
+      "cooldownSeconds": 0,
+      "maxRuns": 1,
+      "conditions": [{ "field": "level", "operator": "gte", "value": 1 }],
+      "steps": [{ "type": "farm", "map": "prt_fild08", "targets": [4000], "timeoutSeconds": 300 }]
+    },
+    {
+      "name": "Buy Red Potions",
+      "priority": 50,
+      "cooldownSeconds": 60,
+      "maxRuns": 2,
+      "conditions": [
+        { "field": "inventory", "itemId": 501, "operator": "lt", "value": 5 },
+        { "field": "zeny", "operator": "gte", "value": 500 }
+      ],
+      "steps": [{ "type": "buy", "serviceId": "tool-dealer-buy", "itemId": 501, "quantity": 5, "maxSpend": 500, "timeoutSeconds": 600 }]
+    },
+    {
+      "name": "Store Jellopy",
+      "priority": 40,
+      "cooldownSeconds": 60,
+      "maxRuns": 2,
+      "conditions": [{ "field": "inventory", "itemId": 909, "operator": "gte", "value": 20 }],
+      "steps": [{ "type": "store", "serviceId": "kafra-south-storage", "itemId": 909, "quantity": 10, "keep": 10, "maxSpend": 100, "timeoutSeconds": 600 }]
+    },
+    {
+      "name": "Use Red Potion",
+      "priority": 100,
+      "cooldownSeconds": 10,
+      "maxRuns": 5,
+      "conditions": [
+        { "field": "hpPercent", "operator": "lt", "value": 60 },
+        { "field": "inventory", "itemId": 501, "operator": "gte", "value": 1 }
+      ],
+      "steps": [{ "type": "useItem", "itemId": 501, "timeoutSeconds": 30 }]
+    }
+  ]
+}
+```
+
+Two buy reservations of 500 and two store reservations of 100 fit the 1,200 document cap. Higher-priority recovery or supply rules can run before the first farm rule if they already match. Once a field is retained, confirmed transaction/item sequences permit the guarded return to it. Store quantities may be smaller because of protected stock floors.
+
+### Use First Aid on self
+
+```json
+{
+  "version": 1,
+  "name": "First Aid",
+  "durationSeconds": 600,
+  "maxActions": 5,
+  "maxSpend": 0,
+  "rules": [
+    {
+      "name": "Recover with First Aid",
+      "priority": 100,
+      "cooldownSeconds": 10,
+      "maxRuns": 5,
+      "conditions": [
+        { "field": "hpPercent", "operator": "lt", "value": 60 },
+        { "field": "spPercent", "operator": "gte", "value": 30 }
+      ],
+      "steps": [{ "type": "skill", "skillId": 2, "level": 1, "mode": "self", "timeoutSeconds": 30 }]
+    }
+  ]
+}
+```
+
+First Aid is skill ID **2**, level 1, with a pinned catalog cost of 4 SP. The percentage condition does not prove enough absolute SP or that the skill is learned; action admission still checks both. This script has no `farm` step and does not start combat. When appended to a farming script, a confirmed self-skill sequence can return to the retained field.
+
+## Stop, failures and run limits
+
+Unknown observations leave a rule unmatched/unavailable; they never fabricate HP, SP, inventory, level or actor state. When no eligible rule matches, the macro waits or monitors its retained field. Exhausting all finite rule/action allowances completes a macro without a retained field; a confirmed retained field continues in monitoring state until a positive duration expires or Stop. A zero duration can monitor that field indefinitely. Macro selection has no lifetime evaluation-count or whole-sequence acknowledgment deadline; the macro owns its finite per-step deadlines. Legacy routines retain their existing finite guards. A backward/unavailable clock fails the macro. Positive duration expiry completes an idle/monitoring macro, but fails an unconfirmed step. Step timeout, rejection or uncertain result fails execution and never automatically retries that request.
+
+Stop cancels local sequence/field intent and future dispatch. It cannot undo an already transmitted attack, purchase, transfer, item use or skill. Existing movement/resource receipts and uncertainty fences remain owned until appropriate authoritative settlement; delayed replies cannot restart a stopped sequence. Official panels and gameplay preserve the macro. Same-character map/world refreshes retain its field and safe unsent travel/service preparation, using fresh collision data and the original trip, step and duration limits. NPC interactions suspend new dispatch until closed. A transition that interrupts a transmitted resource or service action can still fail the macro without replaying the request. Reconnect, disconnect and character/session replacement terminate execution. Verified macro/service travel, supply, escape and death-recovery transitions retain their existing transition owners.
+
+The settings captured at **Start bot** continue to govern field hours, HP/SP recovery, emergency escape, map restrictions and run/death allowances. Farm transitions share the same run counters. A dead character waits for configured guarded respawn/recovery, or for manual revival when respawn is disabled or the death allowance blocks another attempt. Changing script stages does not renew that allowance. Stop and a new explicit Start begin a new run only after pending actions settle and the character is eligible. Time spent waiting still counts toward macro duration and an outstanding step's deadline.
+
+## Saving and restart behavior
+
+**Apply & save** validates and saves the readable Bot script locally and applies its settings through the current settings form. Loading an example, editing, saving and previewing never starts automation. Unsaved edits are marked; select **Apply & save**, or copy the text and select **Discard draft**, before closing. If saved data is invalid, the UI reports the error and keeps that stored document until you explicitly save a valid replacement.
+
+The draft contains readable settings and optional rules, with no credentials, active sequence, run intent, counters or resource receipts. The current settings form remains the persisted settings owner; a clean editor restore refreshes cached setting statements from that form. Reopening/restoring the draft does not resume a macro or its farming, and reconnect does not automatically start it. Review current observations and explicitly select **Start bot** again. Automatic updates use a separate one-shot continuation at a confirmed action boundary, retaining the selected sequence cursor, rule counts, cooldowns, original duration and reserved spend. An uncertain action or unsaved editor changes defer installation. See [automatic updates](AUTO_UPDATES.md).
+
+## Evidence owners
+
+The contract and rule runtime live in `src/macros.ts` and `src/routines.ts`; `src/controller.ts` owns guarded execution and receipts. `src/bot-script.ts` compiles readable source; `src/macro-ui.ts` owns previews and draft persistence. Native validation checks the same request boundary. Local schema/runtime/controller/UI tests and the [feature verification record](LOCAL_FEATURE_VERIFICATION.md) describe available proof. No example above establishes live leveling, travel, NPC economics, item consumption, skill recovery or network-loss recovery.

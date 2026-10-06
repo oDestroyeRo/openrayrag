@@ -44,9 +44,10 @@ function setup() {
   for (const panel of Object.values(sections)) panel.className = 'settings feature-panel';
   manualTools.className = 'feature-panel'; host.append(...Object.values(sections), manualTools, sessionDetails);
   const masterRow = new Element('label'), master = new Element('input'); master.id = 'loot'; master.checked = true; masterRow.append(master); combat.append(masterRow);
-  type PanelMethod = 'rules' | 'workflows' | 'servicePanel' | 'profilePanel' | 'supplyPanel' | 'dispositionPanel' | 'mapPolicyPanel';
+  type PanelMethod = 'setup' | 'rules' | 'workflows' | 'servicePanel' | 'profilePanel' | 'supplyPanel' | 'dispositionPanel' | 'mapPolicyPanel';
   const prototype = FeatureUi.prototype as unknown as Record<PanelMethod, () => void>;
   for (const name of ['rules', 'servicePanel', 'profilePanel', 'supplyPanel'] as const) vi.spyOn(prototype, name).mockImplementation(() => {});
+  vi.spyOn(prototype, 'setup').mockImplementation(() => {});
   vi.spyOn(prototype, 'workflows').mockImplementation(function (this: unknown) {
     Object.assign(this as object, { macroUi: { render: () => {}, lock: () => {}, dirty: false } });
   });

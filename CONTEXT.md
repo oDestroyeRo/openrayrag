@@ -24,8 +24,12 @@ _Avoid_: Character session
 The user’s request to continue field automation subject to its configured limits and unresolved actions. A temporary wait does not itself create a new run or renew its allowances.
 _Avoid_: Running status
 
+**Bot script**:
+A readable configuration containing the retained settings form and optional macro rules. Form and Script are two views of those same choices. Applying a valid draft changes the configuration; saving, converting and previewing never start automation.
+_Avoid_: Separate setup, executable code
+
 **Macro script**:
-A validated, versioned JSON document whose conditions select bounded ordered sequences of existing game actions. The saved document is separate from active execution and credentials; saving or restoring it never starts automation.
+Validated conditions that select bounded ordered sequences of existing game actions. These rules can be authored within a Bot script. Saved rules are separate from active execution and credentials; saving or restoring them never starts automation.
 _Avoid_: Executable code, profile
 
 **Macro field intent**:

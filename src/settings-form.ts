@@ -2,7 +2,7 @@ import { formDocument, type FormDocument } from './current-form';
 import type { FeatureUi } from './feature-ui';
 import { settingsWithFieldMap } from './field-controls';
 import type { MapInfo } from './map-data';
-import { DEFAULT_AUTOMATION, MAX_TARGETS, validateSettings, type Settings } from './settings';
+import { DEFAULT_AUTOMATION, MAX_TARGETS, validateFormSettings, validateSettings, type Settings } from './settings';
 import { MapTargets } from './targets';
 
 type AutomationEditor = Pick<FeatureUi, 'read' | 'write' | 'levelDifference' | 'selectedProfileId' | 'restoreProfileSelection'>;
@@ -66,6 +66,21 @@ export class SettingsForm {
     this.targets.setLevelDifference(this.automation.levelDifference());
     this.targets.clear();
     for (const id of checked.targets) this.targets.select(id, true);
+    this.renderTargets();
+    this.hooks.changed();
+  }
+
+  /** Apply the complete retained configuration, including choices made offline.
+   * Validate before touching DOM controls or the selected profile.
+   */
+  applySettings(settings: Settings): void {
+    const checked = validateFormSettings(settings);
+    const context = this.hooks.context();
+    if (context.runActive || context.controlsLocked) throw new Error('Stop automation and wait for the current request before applying Setup.');
+    this.write(checked);
+    this.automation.restoreProfileSelection(null);
+    this.targets.setLevelDifference(this.automation.levelDifference());
+    this.targets.restore(checked.map, checked.targets);
     this.renderTargets();
     this.hooks.changed();
   }

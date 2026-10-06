@@ -2,20 +2,25 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BotEngine } from './engine';
 import { CompanionController } from './controller';
 import { PersistentFieldRun } from './reconnect';
-import { DEFAULT_SETTINGS } from './settings';
+import { DEFAULT_SETTINGS, type Settings } from './settings';
+import type { BotScriptDocument } from './bot-script';
+import type { MacroUi } from './macro-ui';
 import type { UpdateContinuation } from './update-continuation';
 import type { GameStatus } from './game-status';
 import { searchGrid } from './navigation';
 
-const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
+const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, scriptStorageFails: false, useEditor: false, editor: null as MacroUi | null, setupScript: null as BotScriptDocument['script'], setupSettings: null as Settings | null, syncSetup: vi.fn(), clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, isTauri: () => true }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: ipc.listen }));
 vi.mock('./feature-ui', async () => {
   const { DEFAULT_AUTOMATION } = await import('./settings');
+  const { MacroUi } = await import('./macro-ui');
   return { FeatureUi: class {
     private profile:string|null=null;
     private held=false;
-    constructor(_host: HTMLElement, _hooks: unknown, mounts: { manualTools: HTMLElement }) {
+    constructor(_host: HTMLElement, private readonly hooks: {macroSettings(): Settings;applySetup(settings:Settings):void;setupChanged():void;notify(message:string,error?:boolean):void}, mounts: { manualTools: HTMLElement }) {
+      if(ipc.useEditor)ipc.editor=new MacroUi({settings:()=>hooks.macroSettings(),apply:value=>hooks.applySetup(value),changed:()=>hooks.setupChanged(),notify:hooks.notify},{getItem:()=>null,setItem:()=>{if(ipc.scriptStorageFails)throw new Error('quota');}});
+      if(ipc.editor)_host.append(ipc.editor.root);
       const group=document.createElement('details');group.className='manual-group';group.id='synthetic-manual-group';
       const title=document.createElement('summary');title.textContent='Synthetic manual tool';
       const action=document.createElement('button');action.id='synthetic-manual-action';group.append(title,action);mounts.manualTools.append(group);
@@ -30,7 +35,10 @@ vi.mock('./feature-ui', async () => {
     serviceBlocked(): boolean { return false; }
     warpActivationReady(): boolean { return false; }
     settledForMaintenance(): boolean { return ipc.featureSettled; }
-    hasUnsavedMacro(): boolean { return ipc.macroDirty; }
+    hasUnsavedMacro(): boolean { return ipc.macroDirty || ipc.editor?.unsaved === true; }
+    setupDraftDirty(): boolean { return ipc.macroDirty || ipc.editor?.dirty === true; }
+    syncSetup(settings: Settings): void { ipc.syncSetup(settings); ipc.editor?.syncSettings(settings); }
+    setupDocument(): BotScriptDocument { if (ipc.macroDirty) throw new Error('Apply or discard your Script draft before Start.'); if(ipc.editor)return ipc.editor.configured(); return {settings: ipc.setupSettings ?? this.hooks.macroSettings(), script: ipc.setupScript}; }
     clearMacro():void{ipc.clearMacro();}
     clearSocial():void{}
     clearMemo():void{}
@@ -48,7 +56,7 @@ class Element {
   ownerDocument = { createElement: (tag:string) => new Element(this.elements,tag) };
   get tagName():string{return this.tag.toUpperCase();}
   classList = { toggle() {}, add() {}, remove() {} };
-  listeners = new Map<string, Array<(event: { preventDefault(): void;target?:Element }) => unknown>>();
+  listeners = new Map<string, Array<(event: { preventDefault(): void;stopPropagation():void;target?:Element }) => unknown>>();
   markup = '';
   constructor(private readonly elements: Map<string, Element>, readonly tag='div') {}
   set innerHTML(html: string) {
@@ -87,17 +95,17 @@ class Element {
     clearRect() {}, fillText() {}, createImageData(width: number, height: number) { return { data: new Uint8ClampedArray(width * height * 4) }; }, putImageData() {}, drawImage() {},
     beginPath() {}, lineTo() {}, moveTo() {}, stroke() {}, arc() {}, fill() {},
   }; }
-  addEventListener(type: string, callback: (event: { preventDefault(): void;target?:Element }) => unknown): void {
+  addEventListener(type: string, callback: (event: { preventDefault(): void;stopPropagation():void;target?:Element }) => unknown): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), callback]);
   }
   closest(selector:string):Element|null{return selector.includes('.settings')?this:null;}
   async emit(type: string,target?:Element): Promise<void> {
-    for (const callback of this.listeners.get(type) ?? []) callback({ preventDefault() {},target });
+    for (const callback of this.listeners.get(type) ?? []) callback({ preventDefault() {},stopPropagation(){},target });
     for (let i = 0; i < 12; i++) await Promise.resolve();
   }
 }
 type SavedProfile={username:string;characterSlot:number;autoLogin:boolean;mode?:'botOnly'|'gameClient'};
-async function fixture(saved: SavedProfile | null | Promise<SavedProfile|null> = null, readFails = false, savedForm:unknown=null, continuation:unknown=null, updateStopped=false) {
+async function fixture(saved: SavedProfile | null | Promise<SavedProfile|null> = null, readFails = false, savedForm:unknown=null, continuation:unknown=null, updateStopped=false,useEditor=false) {
   const elements = new Map<string, Element>(), root = new Element(elements), main = new Element(elements,'main');
   elements.set('main',main);elements.set('.client-toolbar',new Element(elements,'header'));elements.set('.client-skip-link',new Element(elements,'a'));
   vi.useFakeTimers(); vi.stubGlobal('document', {
@@ -106,7 +114,7 @@ async function fixture(saved: SavedProfile | null | Promise<SavedProfile|null> =
     getElementById: (id: string) => elements.get(id), createElement: (tag:string) => new Element(elements,tag),
   });
   vi.stubGlobal('innerWidth',1100);vi.stubGlobal('innerHeight',880);
-  ipc.featureSettled=true;ipc.macroDirty=false;ipc.clearMacro.mockClear();ipc.invoke.mockReset(); ipc.listen.mockClear();
+  ipc.featureSettled=true;ipc.macroDirty=false;ipc.useEditor=useEditor;ipc.scriptStorageFails=false;ipc.editor=null;ipc.setupScript=null;ipc.setupSettings=null;ipc.syncSetup.mockClear();ipc.clearMacro.mockClear();ipc.invoke.mockReset(); ipc.listen.mockClear();
   ipc.invoke.mockImplementation(async (command: string,args?:{document?:{revision:number}}) => {
     if(command==='current_form')return savedForm;
     if(command==='save_current_form')return args?.document?.revision;
@@ -505,7 +513,7 @@ it('defers the actual main updater for an unsaved macro and permits installation
  });
  await vi.advanceTimersByTimeAsync(15000);
  expect(f.calls('update_reserve')).toEqual([]);expect(f.calls('update_install')).toEqual([]);
- expect(f.get('update-status').textContent).toBe('Update waits for your macro draft. Save or clear it first.');
+ expect(f.get('update-status').textContent).toBe('Update waits for your Script draft. Apply & save or Discard draft first.');
  ipc.macroDirty=false;await vi.advanceTimersByTimeAsync(15000);
  expect(f.calls('update_reserve')).toHaveLength(1);expect(f.calls('update_install')).toEqual([['update_install',{nonce:'d'.repeat(32)}]]);
  expect(f.calls('control_bot')).toEqual([]);
@@ -658,4 +666,113 @@ it('a mode draft emits no login or settings save and legacy saved profiles retai
  const before=f.calls('save_current_form').length;f.get('connection-mode').value='botOnly';await f.get('connection-mode').emit('change');
  expect(f.calls('login_game')).toEqual([]);expect(f.calls('save_current_form')).toHaveLength(before);
  await f.get('signin-form').emit('submit');expect(f.calls('login_game')[0]?.[1]).toMatchObject({request:{mode:'botOnly'}});expect(f.get('connection-mode').disabled).toBe(true);
+});
+
+it('uses the applied script and its compiled settings through the global Start owner', async () => {
+  const f = await fixture(); await publishStatus(readyStatus('script-start'));
+  const { macroExample } = await import('./macro-ui');
+  const script = macroExample('leveling', {map:'prt_fild07',targets:[4012]});
+  const settings = { ...structuredClone(DEFAULT_SETTINGS), map:'prt_fild07', targets:[4012], radius:17 };
+  ipc.setupScript = script; ipc.setupSettings = settings;
+  await f.get('start').emit('click'); await settleMain();
+  const request = f.calls('control_bot').find(call => call[1]?.action === 'macro')?.[1]?.request;
+  expect(request).toEqual({script,settings});
+  expect(f.calls('control_bot').some(call => call[1]?.action === 'start')).toBe(false);
+});
+
+it('keeps a settings-only setup on the existing projected field Start path', async () => {
+  const settings = { ...structuredClone(DEFAULT_SETTINGS), map:'prt_fild08', targets:[4000,4007], radius:17 };
+  const f = await fixture(null,false,{version:1,revision:2,selectedProfileId:null,settings});
+  const status = readyStatus('plain-start'); status.player!.level = 1;
+  await publishStatus(status); await f.get('start').emit('click'); await settleMain();
+  const request = f.calls('control_bot').find(call => call[1]?.action === 'start')?.[1];
+  expect(request?.settings).toMatchObject({map:'prt_fild08',targets:[4000],radius:17});
+  expect(f.calls('control_bot').some(call => call[1]?.action === 'macro')).toBe(false);
+});
+
+it('never sends a Start request while a Script draft is unapplied', async () => {
+  const settings = { ...structuredClone(DEFAULT_SETTINGS), map:'prt_fild08', targets:[4000] };
+  const f = await fixture(null,false,{version:1,revision:2,selectedProfileId:null,settings}); await publishStatus(readyStatus('draft-start'));
+  ipc.macroDirty = true; await f.get('start').emit('click'); await settleMain();
+  expect(f.calls('control_bot').some(call => ['start','macro'].includes(call[1]?.action))).toBe(false);
+});
+
+it('restores native retained settings during a manual Script draft without overwriting its text or touching native CurrentForm', async () => {
+  let restore!: (value:unknown) => void;
+  const pending = new Promise<unknown>(resolve => { restore = resolve; });
+  const f = await fixture(null,false,pending,null,false,true);
+  const source = f.get('macro-document');
+  source.value = source.value.replace('set radius = 12', 'set radius = 14'); await source.emit('input');
+  const manual = source.value;
+  const settings = { ...structuredClone(DEFAULT_SETTINGS), map:'prt_fild08', targets:[4000], radius:18 };
+  restore({version:1,revision:4,selectedProfileId:null,settings}); await settleMain();
+  expect(source.value).toBe(manual); expect(f.get('radius').value).toBe('18');
+  expect(f.calls('save_current_form').at(-1)?.[1]?.document.settings.radius).toBe(18);
+  expect(ipc.editor?.dirty).toBe(true); expect(f.get('radius').disabled).toBe(true);
+  const root = ipc.editor!.root as unknown as Element;
+  const discard = root.children.flatMap(node=>node.children).find(node=>node.textContent==='Discard draft')!;
+  await discard.emit('click'); await settleMain();
+  expect(f.get('macro-document').value).toContain('set radius = 18'); expect(ipc.editor?.dirty).toBe(false);
+});
+
+it('validates and applies a Script draft offline through Main without any game commands or implicit Start', async () => {
+  const f = await fixture(null,false,null,null,false,true);
+  const source = f.get('macro-document');
+  source.value = '# my field\nscript "Poring"\nset map = prt_fild08\nset targets = [4000]\nset radius = 17'; await source.emit('input');
+  const root = ipc.editor!.root as unknown as Element;
+  const apply = root.children.flatMap(node=>node.children).find(node=>node.textContent==='Apply & save')!;
+  await apply.emit('click'); await settleMain(); await vi.advanceTimersByTimeAsync(350);
+  expect(f.get('radius').value).toBe('17'); expect(ipc.editor?.configured().settings).toMatchObject({map:'prt_fild08',targets:[4000],radius:17});
+  expect(source.value).toContain('# my field');
+  expect(f.calls('control_bot')).toHaveLength(0); expect(f.calls('login_game')).toHaveLength(0);
+  expect(f.calls('save_current_form').at(-1)?.[1]?.document.settings).toMatchObject({map:'prt_fild08',targets:[4000],radius:17});
+});
+
+it('cancels Close for an unapplied Script draft and permits Close after explicit Discard', async () => {
+  const f = await fixture(null,false,null,null,false,true); const source = f.get('macro-document');
+  source.value += '\n# still editing'; await source.emit('input'); const before = source.value;
+  await requestClose(); expect(f.calls('settings_close_complete')).toEqual([]);
+  expect(f.calls('settings_close_cancel')).toEqual([['settings_close_cancel',{token:closeToken}]]);
+  expect(f.root).toHaveProperty('inert',false); expect(source.value).toBe(before);
+  expect(f.get('setup-tab-form').disabled).toBe(false); expect(f.get('setup-tab-script').disabled).toBe(false);
+  expect(f.get('notice').textContent).toContain('Apply & save');
+  const root = ipc.editor!.root as unknown as Element;
+  const discard = root.children.flatMap(node=>node.children).find(node=>node.textContent==='Discard draft')!;
+  await discard.emit('click'); await requestClose(); expect(f.calls('settings_close_complete')).toHaveLength(1);
+});
+
+it('keeps failed script saves from Close and discards only unsaved rules while retaining native-applied settings', async () => {
+  const f = await fixture(null,false,null,null,false,true); ipc.scriptStorageFails = true;
+  const source = f.get('macro-document');
+  source.value = 'script "Potion"\nset map = prt_fild08\nset targets = [4000]\nset radius = 17\nrule "Potion"\nwhen hpPercent < 60\nuse item 501 timeout 30s\nend'; await source.emit('input');
+  const root = ipc.editor!.root as unknown as Element;
+  const button = (label:string)=>root.children.flatMap(node=>node.children).find(node=>node.textContent===label)!;
+  await button('Apply & save').emit('click'); expect(ipc.editor?.unsaved).toBe(true); expect(f.get('radius').value).toBe('17');
+  await requestClose(); expect(f.calls('settings_close_complete')).toHaveLength(0); expect(f.root).toHaveProperty('inert',false);
+  const copy = source.value; expect(copy).toContain('rule "Potion"');
+  source.value += '\n# another edit after failed Save'; await source.emit('input'); expect(ipc.editor?.dirty).toBe(true);
+  await button('Discard draft').emit('click'); expect(ipc.editor?.unsaved).toBe(false);
+  expect(ipc.editor?.configured().script).toBeNull(); expect(f.get('radius').value).toBe('17');
+  await requestClose(); expect(f.calls('settings_close_complete')).toHaveLength(1);
+  expect(f.calls('save_current_form').at(-1)?.[1]?.document.settings.radius).toBe(17);
+});
+
+it('blocks macro Start when current Form edits are invalid instead of using older compiled settings', async () => {
+  const settings = { ...structuredClone(DEFAULT_SETTINGS), map:'prt_fild08', targets:[4000] };
+  const f = await fixture(null,false,{version:1,revision:2,selectedProfileId:null,settings});
+  const {macroExample} = await import('./macro-ui');ipc.setupScript=macroExample('item');ipc.setupSettings=settings;
+  await publishStatus(readyStatus('invalid-script-settings')); expect(f.get('start').disabled).toBe(false);
+  f.get('radius').value='';await f.main.emit('input',f.get('radius'));
+  expect(f.get('start').disabled).toBe(true);expect(f.get('config-help').textContent).toContain('Invalid settings');
+  await f.get('start').emit('click');expect(f.calls('control_bot').some(call=>['start','macro'].includes(call[1]?.action))).toBe(false);
+});
+
+it('keeps item/skill macro Start available without collision data while ordinary field Start remains disabled', async () => {
+  const settings = { ...structuredClone(DEFAULT_SETTINGS), map:'unknown', targets:[] };
+  const f = await fixture(null,false,{version:1,revision:2,selectedProfileId:null,settings});
+  const status = readyStatus('no-grid');status.map='unknown';status.mapInfo={code:'unknown',name:'Unknown map',source:'observed',monsters:[]};
+  await publishStatus(status); expect(f.get('start').disabled).toBe(true);
+  const {macroExample} = await import('./macro-ui');ipc.setupScript=macroExample('item');ipc.setupSettings=settings;
+  await publishStatus(status);expect(f.get('start').disabled).toBe(false);
+  await f.get('start').emit('click');expect(f.calls('control_bot').find(call=>call[1]?.action==='macro')?.[1]?.request.script).toEqual(ipc.setupScript);
 });
