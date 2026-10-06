@@ -67,7 +67,7 @@ async function validatorSnapshot() {
     "release.config.mjs", "release-policy-history.json", "release-migration.json",
     "tools/release/package.json", "tools/release/bun.lock", "tools/release/bunfig.toml",
     "scripts/release-policy.mjs", "scripts/release-publication.mjs", "scripts/release-source-policy.mjs",
-    "scripts/release-reservation-policy.mjs", "scripts/release_policy.py", "scripts/semantic-release-policy.mjs",
+    "scripts/release-reservation-policy.mjs", "scripts/release_policy.py", "scripts/semantic-release-policy.mjs", "scripts/tooling-domain-values.mjs",
   ];
   const files = new Map(await Promise.all(names.map(async name =>
     [name, await readFile(new URL(`../${name}`, import.meta.url))])));

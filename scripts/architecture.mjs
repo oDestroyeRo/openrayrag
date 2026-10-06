@@ -54,6 +54,7 @@ export async function scriptViolations(file, source, roles, directory = root) {
 }
 
 export async function checkArchitecture(directory = root) {
+  /** @type {import("./tooling-domain-values.mjs").ArchitectureInventoryDto} */
   const roles = JSON.parse(await readFile(join(directory, 'architecture.json'), 'utf8'));
   const files = await sourceFiles(directory);
   const violations = inventoryViolations(files, roles);

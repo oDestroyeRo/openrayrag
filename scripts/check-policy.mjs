@@ -1,6 +1,7 @@
 import { filter, map, pipe, sort } from 'remeda';
 
 // Pure source-check planning. Discovery and process execution belong to check.mjs.
+/** @param {string} platform @param {readonly string[]} scriptNames @returns {readonly import('./tooling-domain-values.mjs').VerificationStep[]} */
 export function createVerificationPlan(platform, scriptNames) {
   if (!['darwin', 'linux', 'win32'].includes(platform)) throw new Error('Unsupported desktop platform.');
   const scripts = pipe(scriptNames,
@@ -9,6 +10,7 @@ export function createVerificationPlan(platform, scriptNames) {
     map(name => `scripts/${name}`));
   if (!scripts.length) throw new Error('No script tests found.');
   const cargo = ['--locked', '--manifest-path', 'src-tauri/Cargo.toml'];
+  /** @type {import("./tooling-domain-values.mjs").VerificationStep[]} */
   const steps = [
     { tool: 'bun', args: ['install', '--cwd', 'tools/release', '--frozen-lockfile', '--ignore-scripts'], report: 'release-tools.log' },
     { tool: 'bun', args: ['run', 'typecheck:release'], report: 'release-types.log' },
@@ -31,6 +33,7 @@ export function createVerificationPlan(platform, scriptNames) {
   return steps;
 }
 
+/** @param {import('./tooling-domain-values.mjs').VerificationStep} step @param {string} platform @param {string} bunExecutable @returns {import('./tooling-domain-values.mjs').ProcessInvocation} */
 export function createInvocation(step, platform, bunExecutable) {
   return { file: step.tool === 'bun' ? bunExecutable : step.tool === 'python' ? (platform === 'win32' ? 'python' : 'python3') : step.tool, args: step.args };
 }

@@ -21,7 +21,9 @@ const stateKey=(map,p)=>`${map}:${p.x}:${p.y}`;
 function eager(planner,edges,same,fromMap,from,toMap,walls,policy){
  if(!allowed(policy,toMap)||!planner.mapCells(fromMap)||!planner.mapCells(toMap)||!planner.search(fromMap,from,null,walls))return null;
  if(fromMap===toMap)return {score:0,hops:0};
- let frontier=new Map([[stateKey(fromMap,from),{map:fromMap,p:from,score:0}]]),best=null;
+ let frontier=new Map([[stateKey(fromMap,from),{map:fromMap,p:from,score:0}]]);
+ /** @type {{score: number, hops: number} | null} */
+ let best=null;
  for(let hop=0;hop<=64&&frontier.size;hop++){
   const next=new Map();
   for(const node of frontier.values()){
@@ -52,6 +54,7 @@ for(let run=0;run<250;run++){
  for(const target of names)for(const walls of [false,true]){
   const from={x:1,y:1},expected=eager(planner,edges,same,'a',from,target,walls,policy),route=await planner.routeBetweenMapsAsync('a',from,target,walls,policy,{scheduler});
   assert.deepEqual(route,planner.routeBetweenMaps('a',from,target,walls,policy),'Synchronous exact route, cells, escape and ties');
+  /** @type {{score: number, hops: number} | null} */
   let actual=null;if(route){let map='a',p=from,score=0;for(const step of route){assert(allowed(policy,step.portal.toMap));const path=planner.search(map,p,step.portal,walls);assert(path);score+=path.cost+200+(find(policy.penalties,r=>r.map===map)?.cost??0);map=step.portal.toMap;p=step.portal.arrival;}
     if(route.length)score+=planner.search(map,p,null,walls).cost;actual={score,hops:route.length};reachable++;
   }

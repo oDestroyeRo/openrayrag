@@ -1,4 +1,6 @@
 import { filter, map, sort } from "remeda";
+import { workflowRunId, workflowAttemptText, publicReleaseValues } from "./tooling-domain-values.mjs";
+import { fileBytes } from "./release-policy.mjs";
 // Public artifact proof only. Never publishes, installs or starts the application.
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,9 +18,10 @@ export { HELP, parseOptions, releaseSnapshot, validateArtifactProduction } from 
 
 const compareNames = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 
+/** @param {import("./tooling-domain-values.mjs").PublicMetadataApi} api @param {import("./tooling-domain-values.mjs").SourceWorkflowDto} originalRun @param {import("./tooling-domain-values.mjs").PublicationJobsDto} originalJobs @param {import("./tooling-domain-values.mjs").PublicOptions} options @returns {Promise<import("./tooling-domain-values.mjs").PublicationEvidence>} */
 export async function publicationEvidence(api, originalRun, originalJobs, options) {
   if (hasSuccessfulPublisher(originalRun, originalJobs, options))
-    return { runId: String(originalRun.id), runAttempt: String(originalRun.run_attempt), recoveredOriginalArtifact: false };
+    return { runId: workflowRunId(originalRun.id), runAttempt: workflowAttemptText(originalRun.run_attempt), recoveredOriginalArtifact: false };
   // Rerunning only a failed publisher may omit previously successful assembly
   // jobs from this attempt. Its restore step revalidates the original marker,
   // ZIP digest and signed payload; original build/assembly proof remains separate.
@@ -31,39 +34,43 @@ export async function publicationEvidence(api, originalRun, originalJobs, option
     const first = candidate.id === originalRun.id ? originalRun.run_attempt + 1 : 1;
     for (let attempt = candidate.run_attempt; attempt >= first && checked < MAX_PUBLICATION_ATTEMPTS; attempt--) {
       checked++;
-      const runId = String(candidate.id);
+      const runId = workflowRunId(candidate.id);
       const run = attempt === candidate.run_attempt ? candidate : await api(`/actions/runs/${runId}/attempts/${attempt}`);
       requireValue(matchesSource(run) && run.id === candidate.id && run.run_attempt === attempt, "Publication attempt has a different source or identity.");
       if (run.status !== "completed" || run.conclusion !== "success") continue;
       const jobs = await api(`/actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`);
       if (hasSuccessfulPublisher(run, jobs, options))
-        return { runId, runAttempt: String(attempt), recoveredOriginalArtifact: true };
+        return { runId, runAttempt: workflowAttemptText(attempt), recoveredOriginalArtifact: true };
     }
   }
   throw new Error(`No successful exact-source publication with original artifact restoration found within ${MAX_PUBLICATION_ATTEMPTS} attempts.`);
 }
 
+/** @param {import("./tooling-domain-values.mjs").PublicVerificationIo} io @param {Awaited<ReturnType<typeof verifySource>>} source @param {import("./tooling-domain-values.mjs").ReleaseDto} release @param {Map<string, Buffer>} files @param {boolean} [final] */
 async function checkMovingFeeds(io, source, release, files, final = false) {
   const latest = await io.api("/releases/latest", { fresh: final });
   requireValue(latest.id === release.id && latest.tag_name === release.tag_name && !latest.draft && !latest.prerelease, "Selected release is no longer the public latest stable release.");
   for (const name of ["latest.json", "latest-semver.json"]) {
     const url = source.core.ENDPOINT.replace(/latest\.json$/, name);
     const bytes = await io.download(url, source.core.MAX_UPDATER_METADATA);
-    requireValue(bytes.equals(files.get(name)), `Moving updater feed differs: ${name}.`);
+    requireValue(bytes.equals(fileBytes(files, name)), `Moving updater feed differs: ${name}.`);
     await io.write(`${final ? "final-" : ""}public-${name}`, bytes);
   }
 }
 
+/** @param {import("./tooling-domain-values.mjs").PublicOptions} options @param {import("./tooling-domain-values.mjs").PublicVerificationIo} io */
 export async function verifyPublishedRelease(options, io) {
   const source = await (io.verifySource ?? verifySource)(options, io);
   const { core, identity, planner, plan } = source;
   requireValue(await peelTag(io.api, options.tag) === options.sourceSha, "Public release tag targets a different source.");
-  const release = await io.api(`/releases/tags/${options.tag}`);
-  const marker = core.releaseMetadata(release);
-  requireValue(!release.draft && marker.schemaVersion === 3 && marker.sourceSha === options.sourceSha &&
+  const releaseDto = await io.api(`/releases/tags/${options.tag}`);
+  const marker = source.core.releaseMetadata(releaseDto);
+
+  requireValue(!releaseDto.draft && marker.schemaVersion === 3 && marker.sourceSha === options.sourceSha &&
     marker.version === identity.version && marker.firstParentCount === identity.firstParentCount &&
     marker.planSha256 === planner.planSha256(plan), "Public release marker differs from the reserved semantic source.");
-  const snapshot = releaseSnapshot(release);
+  const snapshot = releaseSnapshot(releaseDto);
+  const release = publicReleaseValues(releaseDto);
   const names = sort(core.expectedNames(identity.version, marker.schemaVersion), compareNames);
   requireValue(release.assets.length === names.length && sort(map(release.assets, a => a.name), compareNames).join("|") === names.join("|"), "Public release asset set differs.");
   let total = 0;
@@ -76,7 +83,7 @@ export async function verifyPublishedRelease(options, io) {
   requireValue(total <= Math.min(MAX_PUBLIC_TOTAL, core.MAX_RELEASE_BUNDLE), "Public bundle exceeds its byte bound.");
   const files = new Map();
   for (const asset of release.assets) {
-    const bytes = await io.download(asset.browser_download_url, Math.min(asset.size, core.MAX_RELEASE_ASSET));
+    const bytes = await io.download(asset.browser_download_url ?? "", Math.min(asset.size, core.MAX_RELEASE_ASSET));
     requireValue(bytes.length === asset.size && (!asset.digest || asset.digest === `sha256:${core.sha256(bytes)}`), `Public asset size/digest differs: ${asset.name}.`);
     files.set(asset.name, bytes);
     await io.write(asset.name, bytes);
@@ -93,7 +100,7 @@ export async function verifyPublishedRelease(options, io) {
   ]);
   validateArtifactProduction(run, jobs, artifact, provenance, marker, options);
   const publication = await publicationEvidence(io.api, run, jobs, options);
-  const assets = map(release.assets, a => ({ name: a.name, size: a.size, sha256: core.sha256(files.get(a.name)) }));
+  const assets = map(release.assets, a => ({ name: a.name, size: a.size, sha256: core.sha256(fileBytes(files, a.name)) }));
   const zip = await io.verifyZip({ assets, artifactId: marker.artifact.id, artifactDigest: marker.artifact.digest, limit: total + 1024 * 1024 });
   requireValue(zip.zipDigest === marker.artifact.digest && zip.publicAssetCount === assets.length, "Actions ZIP proof differs from public assets.");
   if (options.latest) await checkMovingFeeds(io, source, release, files);
@@ -163,6 +170,7 @@ export async function main(args = process.argv.slice(2)) {
     });
     console.log(`PASS: ${result.tag} from ${result.sourceSha}. Report: ${join(folder, "final-verification.json")}`);
   } catch (error) {
+    if (!(error instanceof Error)) throw error;
     await write("failure.json", JSON.stringify({ verified: false, message: error.message }) + "\n");
     throw error;
   }

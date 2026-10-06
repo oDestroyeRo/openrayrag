@@ -1,7 +1,9 @@
 import { filter, map, sort } from "remeda";
+import { publicOptionsValues } from "./tooling-domain-values.mjs";
 
 // Pure public release metadata, workflow evidence and option contracts.
 const REPOSITORY = "oDestroyeRo/openrayrag";
+/** @param {unknown} ok @param {string} message @returns {asserts ok} */
 function requireValue(ok, message) { if (!ok) throw new Error(message); }
 const compareAssetRows = (a, b) => {
   const left = String(a), right = String(b);
@@ -29,8 +31,11 @@ from a later attempt or a separate exact-source dispatch; its identity is record
 separately. Discovery checks at most 20 attempts from 100 recent same-source runs.
 `;
 
+/** @param {readonly string[]} args @returns {import("./tooling-domain-values.mjs").PublicCommand} */
 export function parseOptions(args) {
+  /** @type {import("./tooling-domain-values.mjs").PublicOptionsDto} */
   const options = { repository: REPOSITORY, latest: false, skipNative: false };
+  /** @type {Map<string, "sourceSha" | "tag" | "repository" | "runId" | "runAttempt">} */
   const keys = new Map([["--source", "sourceSha"], ["--tag", "tag"], ["--repo", "repository"], ["--run-id", "runId"], ["--run-attempt", "runAttempt"]]);
   const seen = new Set();
   for (let i = 0; i < args.length; i++) {
@@ -41,19 +46,23 @@ export function parseOptions(args) {
     if (["--latest", "--skip-native"].includes(flag)) {
       options[flag === "--latest" ? "latest" : "skipNative"] = true;
     } else {
-      requireValue(keys.has(flag) && typeof args[i + 1] === "string" && !args[i + 1].startsWith("--"), `Unknown argument or missing value: ${flag}.`);
-      options[keys.get(flag)] = args[++i];
+      const key = keys.get(flag);
+      requireValue(key && typeof args[i + 1] === "string" && !args[i + 1].startsWith("--"), `Unknown argument or missing value: ${flag}.`);
+      options[key] = args[++i];
     }
   }
   requireValue(options.repository === REPOSITORY, "Only the authoritative release repository is supported.");
   requireValue(/^[a-f0-9]{40}$/.test(options.sourceSha ?? ""), "Expected a full lowercase source SHA.");
   requireValue(/^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(options.tag ?? ""), "Expected a canonical stable release tag.");
-  for (const key of ["runId", "runAttempt"])
+  /** @type {readonly ("runId" | "runAttempt")[]} */
+  const runKeys = ["runId", "runAttempt"];
+  for (const key of runKeys)
     requireValue(options[key] === undefined || /^[1-9]\d*$/.test(options[key]), `Invalid ${key}.`);
   requireValue(!options.runAttempt || options.runId, "--run-attempt requires --run-id.");
-  return options;
+  return publicOptionsValues(options);
 }
 
+/** @param {import("./tooling-domain-values.mjs").ReleaseDto} release */
 export function releaseSnapshot(release) {
   requireValue(Array.isArray(release.assets), "Missing release assets.");
   return JSON.stringify({
@@ -64,6 +73,7 @@ export function releaseSnapshot(release) {
   });
 }
 
+/** @param {Pick<import("./tooling-domain-values.mjs").PublicOptions, "sourceSha">} options @returns {(run: import("./tooling-domain-values.mjs").SourceWorkflowDto) => boolean} */
 export function sourceWorkflowMatches({ sourceSha }) {
   return run => Number.isSafeInteger(run.id) && run.id > 0 &&
     Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0 &&
@@ -71,20 +81,27 @@ export function sourceWorkflowMatches({ sourceSha }) {
     ["push", "workflow_dispatch"].includes(run.event) && run.path === ".github/workflows/release.yml";
 }
 
+/** @param {import("./tooling-domain-values.mjs").SourceWorkflowDto} run @param {import("./tooling-domain-values.mjs").PublicOptions} options */
 export function sameSourceWorkflow(run, options) {
   return sourceWorkflowMatches(options)(run);
 }
 
+/** @param {string} name @returns {(job: import("./tooling-domain-values.mjs").PublicationJobDto) => boolean} */
 const jobNamed = name => job => typeof job.name === "string" && job.name.split(" / ").at(-1) === name;
-const platformBuilder = platform => job => job.name.split(" / ").at(-1).startsWith(`release-platforms (${platform},`);
+/** @param {string} platform @returns {(job: import("./tooling-domain-values.mjs").PublicationJobDto) => boolean} */
+const platformBuilder = platform => job => (job.name.split(" / ").at(-1) ?? "").startsWith(`release-platforms (${platform},`);
+/** @param {string} name @returns {(step: {name: string, conclusion: string | null}) => boolean} */
 const successfulStepNamed = name => step => step.name === name && step.conclusion === "success";
 
+/** @param {import("./tooling-domain-values.mjs").PublicationJobsDto} jobs @param {string} name */
 function namedJobs(jobs, name) {
   requireValue(Array.isArray(jobs.jobs) && jobs.total_count === jobs.jobs.length, "Incomplete hosted job list.");
   return filter(jobs.jobs, jobNamed(name));
 }
+/** @param {import("./tooling-domain-values.mjs").PublicationJobDto | undefined} job */
 const completed = job => job?.status === "completed" && job.conclusion === "success";
 
+/** @param {import("./tooling-domain-values.mjs").SourceWorkflowDto} run @param {import("./tooling-domain-values.mjs").PublicationJobsDto} jobs @param {import("./tooling-domain-values.mjs").ActionsArtifactDto} artifact @param {import("./tooling-domain-values.mjs").Provenance} provenance @param {import("./tooling-domain-values.mjs").ReleaseMetadata} marker @param {import("./tooling-domain-values.mjs").PublicOptions} options */
 export function validateArtifactProduction(run, jobs, artifact, provenance, marker, options) {
   requireValue(sameSourceWorkflow(run, options) && String(run.id) === provenance.runId &&
     String(run.run_attempt) === provenance.runAttempt && run.status === "completed", "Artifact-producing workflow source, attempt or completed state differs.");
@@ -104,6 +121,7 @@ export function validateArtifactProduction(run, jobs, artifact, provenance, mark
     artifact.workflow_run?.head_sha === options.sourceSha, "Actions artifact metadata differs or has expired.");
 }
 
+/** @param {import("./tooling-domain-values.mjs").SourceWorkflowDto} run @param {import("./tooling-domain-values.mjs").PublicationJobsDto} jobs @param {import("./tooling-domain-values.mjs").PublicOptions} options */
 export function hasSuccessfulPublisher(run, jobs, options) {
   const publisher = namedJobs(jobs, "publish");
   return sameSourceWorkflow(run, options) && run.status === "completed" && run.conclusion === "success" &&

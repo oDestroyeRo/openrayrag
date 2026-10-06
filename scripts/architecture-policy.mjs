@@ -2,15 +2,17 @@
 import { createScanner, SyntaxKind } from 'typescript/unstable/ast';
 import { filter, flatMap, map, pipe } from 'remeda';
 
+/** @type {readonly import("./tooling-domain-values.mjs").ArchitectureRole[]} */
 export const ROLES = ['logic', 'effects', 'orchestration'];
 
+/** @param {readonly string[]} files @param {import("./tooling-domain-values.mjs").ArchitectureInventoryDto} roles */
 export function inventoryViolations(files, roles) {
   const actual = new Set(files);
   return [
     ...pipe(files, filter(file => !Object.hasOwn(roles, file)), map(file => `${file}: missing architecture role`)),
     ...flatMap(Object.entries(roles), ([file, role]) => !actual.has(file)
       ? [`${file}: stale architecture entry`]
-      : !ROLES.includes(role) ? [`${file}: unknown architecture role ${role}`] : []),
+      : !ROLES.some(known => known === role) ? [`${file}: unknown architecture role ${role}`] : []),
   ];
 }
 
@@ -40,6 +42,7 @@ const AMBIENT = ['window', 'document', 'globalThis', 'self', 'localStorage', 'se
 // esbuild substitutes only unbound globals, so a parameter named document is safe.
 export const logicGlobalDefines = Object.fromEntries([...AMBIENT, 'Date', 'Math'].map(name => [name, `__architecture_effect_${name}`]));
 
+/** @param {string} file @param {string | undefined} role @param {readonly import("./tooling-domain-values.mjs").ArchitectureDependency[]} imports @param {import("./tooling-domain-values.mjs").ArchitectureInventoryDto} roles */
 export function dependencyViolations(file, role, imports, roles) {
   if (role === 'orchestration') return [];
   return imports.flatMap(({ path, external, kind }) => {
@@ -99,6 +102,7 @@ export function scriptEffectViolations(file, code, markedGlobals = false) {
     }
     if (end < 0 || !PACKAGE_OPERATIONS.has(tokens[end].value)) continue;
     const library = tokens[end].value, operations = PACKAGE_OPERATIONS.get(library);
+    if (!operations) continue;
     if (tokens[i + 1]?.text !== '{') { failures.add(`unrestricted ${library} import`); continue; }
     for (let j = i + 2; j < end && tokens[j].text !== '}'; j++) {
       if (tokens[j].kind === SyntaxKind.Identifier && tokens[j - 1]?.text !== 'as' && !operations.has(tokens[j].text)) failures.add(`effect-capable ${library} operation ${tokens[j].text}`);

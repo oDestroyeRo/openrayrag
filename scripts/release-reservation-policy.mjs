@@ -1,3 +1,4 @@
+import { reservationRefValues } from './tooling-domain-values.mjs';
 import { sort } from "remeda";
 // Pure reservation encoding, ref validation and complete ledger contracts.
 import { canonicalJson } from "../release.config.mjs";
@@ -35,9 +36,11 @@ const compareKeys = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const baseOf = ({ sourceSha, version, tag }) => ({ sourceSha, version, tag });
 const sameBase = (a, b) => canonicalJson(a) === canonicalJson(baseOf(b));
 
+/** @param {import('./tooling-domain-values.mjs').ReleasePlan} plan */
 export function planRefName(plan) {
   return `${PLAN_REF_PREFIX}v${stableVersion(plan.version)}`;
 }
+/** @param {import('./tooling-domain-values.mjs').ReleasePlan} plan */
 export function serializeReservation(plan) {
   validatePlan(plan);
   return (
@@ -46,6 +49,7 @@ export function serializeReservation(plan) {
   );
 }
 
+/** @param {Pick<import('./tooling-domain-values.mjs').ReservationContext, "history" | "bridge">} context */
 export function validateContext({ history, bridge }) {
   requireValue(
     Array.isArray(history) &&
@@ -65,6 +69,7 @@ export function validateContext({ history, bridge }) {
     "Release bridge differs from current first-parent history.",
   );
 }
+/** @param {Pick<import('./tooling-domain-values.mjs').ReservationContext, "history" | "bridge">} ctx @param {readonly import('./tooling-domain-values.mjs').ReleasePlan[]} plans */
 export function validateLedger(ctx, plans) {
   validateContext(ctx);
   requireValue(
@@ -78,7 +83,7 @@ export function validateLedger(ctx, plans) {
     versions = new Set();
   const bases = new Map([[ctx.bridge.sourceSha, ctx.bridge]]);
   let previous = ctx.bridge;
-  /** @type {string | null} */
+  /** @type {import('./tooling-domain-values.mjs').PlanDigest | null} */
   let predecessorHash = null;
   for (const plan of sorted) {
     validatePlan(plan);
@@ -95,7 +100,7 @@ export function validateLedger(ctx, plans) {
       "Reserved source must follow its predecessor and release bridge.",
     );
     requireValue(
-      compareVersions(plan.version, previous.version) > 0,
+      compareVersions(plan.version, stableVersion(previous.version)) > 0,
       "Reserved versions must increase with first-parent history.",
     );
     requireValue(
@@ -103,7 +108,7 @@ export function validateLedger(ctx, plans) {
       "Reservation analysis base differs from its predecessor.",
     );
     requireValue(
-      plan.version === bumpVersion(previous.version, plan.releaseType),
+      plan.version === bumpVersion(stableVersion(previous.version), plan.releaseType),
       "Reservation version differs from its predecessor and release type.",
     );
     requireValue(
@@ -123,6 +128,7 @@ export function validateLedger(ctx, plans) {
   }
   return sorted;
 }
+/** @param {import('./tooling-domain-values.mjs').ReservationRefDto} ref @param {string} [expectedName] @returns {import('./tooling-domain-values.mjs').ReservationRef} */
 export function validateRef(ref, expectedName) {
   requireValue(
     ref !== null &&
@@ -142,8 +148,9 @@ export function validateRef(ref, expectedName) {
     ref.object?.type === "tag" && validSha(ref.object.sha),
     "Release plan ref must point to an annotated tag object.",
   );
-  return ref;
+  return reservationRefValues(ref);
 }
+/** @param {string} message @returns {import('./tooling-domain-values.mjs').ReleasePlan} */
 export function parseReservation(message) {
   requireValue(
     typeof message === "string" &&
@@ -162,7 +169,7 @@ export function parseReservation(message) {
     envelope.schemaVersion === 1,
     "Unsupported release reservation envelope.",
   );
-  validatePlan(envelope.plan);
+  envelope.plan = validatePlan(envelope.plan);
   requireValue(
     envelope.planSha256 === planSha256(envelope.plan),
     "Release reservation plan hash differs.",

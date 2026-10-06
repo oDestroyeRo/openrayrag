@@ -8,12 +8,14 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
+import { isBenchmarkCancellation } from './benchmark-policy.mjs';
 import { createContext, runInContext } from 'node:vm';
 export async function runBenchmark(args = process.argv.slice(2)) {
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const folder=await mkdtemp(join(tmpdir(),'rayrag-responsive-'));
 const entry="export {TravelPlanner} from './src/travel.ts';export {DEFAULT_MAP_POLICY} from './src/map-policy.ts';";
 const round=n=>+n.toFixed(3), results=[];
+/** @param {import("./tooling-domain-values.mjs").ResponsiveRouteApi} api @param {"legacy" | "weighted"} mode @param {string} destination @param {boolean} warm @returns {Promise<import("./tooling-domain-values.mjs").ResponsiveRouteSample>} */
 async function measure(api,mode,destination,warm){
   const planner=new api.TravelPlanner(), policy={...api.DEFAULT_MAP_POLICY,mode},from={x:169,y:193};
   const oracle=new api.TravelPlanner().routeBetweenMaps('prt_fild08',from,destination,true,policy);
@@ -35,17 +37,21 @@ async function cancellation(api){
     await planner.routeBetweenMapsAsync('prt_fild08',{x:169,y:193},'payon',true,{...api.DEFAULT_MAP_POLICY,mode:'weighted'},
       {signal:abort.signal,onSlice:()=>{if(++slices===3){requestedAt=performance.now();setTimeout(()=>{cancelledAt=performance.now();abort.abort();},0);}}});
     throw new Error('Expected cancellation.');
-  }catch(error){if(error.name!=='AbortError')throw error;return{totalMs:round(performance.now()-start),inputSchedulingDelayMs:round(cancelledAt-requestedAt),cancellationLatencyMs:round(performance.now()-cancelledAt),slices};}
+  }catch(error){if(!isBenchmarkCancellation(error))throw error;return{totalMs:round(performance.now()-start),inputSchedulingDelayMs:round(cancelledAt-requestedAt),cancellationLatencyMs:round(performance.now()-cancelledAt),slices};}
 }
 try{
   const esm=join(folder,'native-module.mjs'),iife=join(folder,'injected-iife.js');
-  for(const [outfile,format] of [[esm,'esm'],[iife,'iife']])await build({stdin:{contents:entry,resolveDir:root},bundle:true,platform:'browser',target:'safari16',format,outfile,globalName:'RouteBenchmark',logLevel:'silent'});
+  /** @type {readonly [string, import('esbuild').Format][]} */
+  const artifacts=[[esm,'esm'],[iife,'iife']];
+  for(const [outfile,format] of artifacts)await build({stdin:{contents:entry,resolveDir:root},bundle:true,platform:'browser',target:'safari16',format,outfile,globalName:'RouteBenchmark',logLevel:'silent'});
   const native=await import(pathToFileURL(esm).href);
   const context=createContext({performance,setTimeout,clearTimeout,structuredClone,atob,AbortController});
   runInContext(await readFile(iife,'utf8'),context);const injected=context.RouteBenchmark;
   for(const [runtime,api] of [['native-module-artifact',native],['injected-iife-artifact',injected]]){
     const rows=[];
-    for(const mode of ['legacy','weighted'])for(const destination of ['prontera','payon','geffen'])for(const warm of [false,true])rows.push(await measure(api,mode,destination,warm));
+    /** @type {readonly ('legacy' | 'weighted')[]} */
+    const modes = ['legacy','weighted'];
+    for(const mode of modes)for(const destination of ['prontera','payon','geffen'])for(const warm of [false,true])rows.push(await measure(api,mode,destination,warm));
     results.push({runtime,rows,cancellation:await cancellation(api)});
   }
   console.log(JSON.stringify({host:`Bun ${process.versions.bun}`,sliceBudgetMs:8,results},null,2));

@@ -1,4 +1,5 @@
 import { filter, find, map, sort } from "remeda";
+import { fileDigest } from './tooling-domain-values.mjs';
 
 // Pure ELF and loader comparison. File and tool effects stay in appimage-proof.
 import { createHash } from 'node:crypto';
@@ -13,19 +14,24 @@ const pointerSections = new Map([
   [0x6ffffef5n, ['.gnu.hash']], [0x6ffffff0n, ['.gnu.version']],
   [0x6ffffffen, ['.gnu.version_r']],
 ]);
-export const requireValue = (ok, message) => { if (!ok) throw new Error(message); };
-export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+/** @param {unknown} ok @param {string} message @returns {asserts ok} */
+export function requireValue(ok, message) { if (!ok) throw new Error(message); }
+/** @param {Buffer} bytes @returns {import('./tooling-domain-values.mjs').FileDigest} */
+export const sha256 = bytes => fileDigest(createHash('sha256').update(bytes).digest('hex'));
 
+/** @param {bigint} value @param {string} label */
 function boundedInteger(value, label) {
   requireValue(value <= BigInt(Number.MAX_SAFE_INTEGER), `ELF ${label} overflows a safe integer.`);
   return Number(value);
 }
+/** @param {Buffer} bytes @param {number} offset @param {number} size @param {string} label */
 function range(bytes, offset, size, label) {
   requireValue(offset >= 0 && size >= 0 && offset <= bytes.length && size <= bytes.length - offset,
     `ELF ${label} is truncated or out of bounds.`);
   return bytes.subarray(offset, offset + size);
 }
 
+/** @param {Buffer} bytes */
 function parseElf(bytes) {
   requireValue(Buffer.isBuffer(bytes) && bytes.length <= MAX_BYTES, 'ELF exceeds the bounded file size.');
   range(bytes, 0, 64, 'header');
@@ -46,6 +52,7 @@ function parseElf(bytes) {
     'Unsupported ELF program table.');
   const phOffset = boundedInteger(bytes.readBigUInt64LE(32), 'program table offset');
   range(bytes, phOffset, phCount * 56, 'program table');
+  /** @type {import("./tooling-domain-values.mjs").ElfProgram[]} */
   const programs = [];
   for (let index = 0; index < phCount; index++) {
     const at = phOffset + index * 56;
@@ -69,9 +76,11 @@ function parseElf(bytes) {
   }
   requireValue(programs.some(program => program.type === 1 && program.flags & 1),
     'ELF requires an executable LOAD segment.');
+  /** @type {import("./tooling-domain-values.mjs").ElfSectionDraft[]} */
   const sections = [];
   for (let index = 0; index < count; index++) {
     const at = table + index * 64;
+    /** @type {import("./tooling-domain-values.mjs").ElfSectionDraft} */
     const section = {
       index, nameOffset: bytes.readUInt32LE(at), type: bytes.readUInt32LE(at + 4),
       flags: bytes.readBigUInt64LE(at + 8), address: bytes.readBigUInt64LE(at + 16),
@@ -90,8 +99,9 @@ function parseElf(bytes) {
   requireValue(sections[0].type === 0 && sections[0].size === 0 && sections[0].flags === 0n,
     'ELF null section is invalid.');
   const names = sections[namesIndex];
-  requireValue(names.type === 3 && names.contents?.length > 0 && names.contents[0] === 0,
+  requireValue(names.type === 3 && names.contents && names.contents.length > 0 && names.contents[0] === 0,
     'ELF section names are invalid.');
+  /** @type {Map<string, import("./tooling-domain-values.mjs").ElfSectionDraft>} */
   const byName = new Map();
   for (const section of sections) {
     requireValue(section.nameOffset < names.size, 'ELF section name offset is out of bounds.');
@@ -108,20 +118,23 @@ function parseElf(bytes) {
           `ELF ${section.name} metadata is invalid.`);
         if (section.name === '.dynamic') requireValue(section.entrySize === 16n && section.size % 16 === 0,
           'ELF dynamic entry layout is invalid.');
-        else requireValue(section.contents[0] === 0 && section.contents.at(-1) === 0,
+        else requireValue(section.contents && section.contents[0] === 0 && section.contents.at(-1) === 0,
           'ELF dynamic strings are invalid.');
       }
     }
   }
-  for (const [name, flags] of [['.text', 6n], ['.rodata', 2n]]) {
+  /** @type {readonly [string, bigint][]} */
+  const requiredSections = [['.text', 6n], ['.rodata', 2n]];
+  for (const [name, flags] of requiredSections) {
     const section = byName.get(name);
     requireValue(section?.type === 1 && (section.flags & 7n) === flags && section.size > 0,
       `ELF requires a real nonempty ${name} section.`);
   }
-  for (const name of metadata.keys()) requireValue(byName.get(name)?.flags & ALLOC, `ELF requires allocated ${name}.`);
+  for (const name of metadata.keys()) requireValue((byName.get(name)?.flags ?? 0n) & ALLOC, `ELF requires allocated ${name}.`);
   return { bytes, sections, byName, programs, phOffset, phSize: phCount * 56, table };
 }
 
+/** @param {ReturnType<typeof parseElf>} elf @param {number} index */
 function linkedName(elf, index) {
   requireValue(index < elf.sections.length, 'ELF section reference is out of bounds.');
   return index === 0 ? null : elf.sections[index].name;
@@ -194,7 +207,7 @@ function dynamicString(elf, value) {
   return { at, end, bytes: strings.subarray(at, end) };
 }
 function dynamicPointer(elf, tag, value) {
-  for (const name of pointerSections.get(tag)) {
+  for (const name of pointerSections.get(tag) ?? []) {
     const section = elf.byName.get(name);
     if (section && value >= section.address && value < section.address + BigInt(section.size))
       return `${name}:${value - section.address}`;
@@ -245,9 +258,11 @@ function compareLinkerMetadata(original, deployed) {
 }
 
 const relocatableNames = new Set(['.dynamic', '.dynstr', '.interp', ...[...pointerSections.values()].flat()]);
-const relocatable = section => relocatableNames.has(section.name) || section.type === 7;
+const relocatable = section => typeof section.name === 'string' && relocatableNames.has(section.name) || section.type === 7;
+/** @param {bigint} value @param {bigint} alignment */
 const roundUp = (value, alignment) => (value + alignment - 1n) / alignment * alignment;
 const sameFields = (a, b, fields) => fields.every(field => a[field] === b[field]);
+/** @param {ReturnType<typeof parseElf>['sections'][number]} section @param {ReturnType<typeof parseElf>['programs'][number]} program */
 function mappedBy(section, program) {
   return section.address >= program.address
     && section.address + BigInt(section.size) <= program.address + BigInt(program.memorySize)
@@ -289,6 +304,7 @@ function mappedHeader(elf, program, name) {
     `ELF loader header does not map ${name}.`);
   return `${program.type}:${program.flags}:${program.alignment}:${name}`;
 }
+/** @param {ReturnType<typeof parseElf>} elf @param {ReturnType<typeof parseElf>} [original] */
 function canonicalHeaders(elf, original = elf) {
   const result = [];
   for (const program of filter(elf.programs, program => program.type !== 1)) {
@@ -390,6 +406,7 @@ function compareProgramMappings(original, deployed) {
     'ELF program loader headers differ.');
 }
 
+/** @param {Buffer} originalBytes @param {Buffer} deployedBytes */
 export function compareElfIdentity(originalBytes, deployedBytes) {
   const original = parseElf(originalBytes), deployed = parseElf(deployedBytes);
   requireValue(original.bytes.subarray(0, 32).equals(deployed.bytes.subarray(0, 32))
@@ -416,6 +433,7 @@ export function compareElfIdentity(originalBytes, deployedBytes) {
   return sort(map(before, section => section.name), (a, b) => a < b ? -1 : a > b ? 1 : 0);
 }
 
+/** @param {import('./tooling-domain-values.mjs').DynamicIdentity} original @param {import('./tooling-domain-values.mjs').DynamicIdentity} deployed */
 export function compareDynamicIdentity(original, deployed) {
   requireValue(Array.isArray(original.needed) && Array.isArray(deployed.needed)
     && original.needed.length === deployed.needed.length

@@ -1,10 +1,12 @@
 // Pure native package configuration and executable contracts.
+/** @type {Readonly<Record<import("./tooling-domain-values.mjs").PackagePlatform, import("./tooling-domain-values.mjs").PackagePlatformSpec>>} */
 export const platforms = {
   macos: { os:'darwin', arch:'arm64', target:'aarch64-apple-darwin', bundles:'app,dmg' },
   windows: { os:'win32', arch:'x64', target:'x86_64-pc-windows-msvc', bundles:'nsis' },
   linux: { os:'linux', arch:'x64', target:'x86_64-unknown-linux-gnu', bundles:'deb,appimage' },
 };
 function requireValue(ok, message) { if (!ok) throw new Error(message); }
+/** @param {Buffer} bytes @param {import('./tooling-domain-values.mjs').PackageTarget} target */
 export function assertArchitecture(bytes, target) {
   if (target === platforms.windows.target) {
     requireValue(bytes.length >= 64 && bytes.toString('ascii',0,2)==='MZ','Missing Windows executable header.');
@@ -16,6 +18,7 @@ export function assertArchitecture(bytes, target) {
       && bytes[4]===2 && bytes[5]===1 && bytes.readUInt16LE(18)===62,'Application is not Linux x64.');
   } else throw new Error('Unsupported executable target.');
 }
+/** @param {import('./tooling-domain-values.mjs').PackagePlatform} platform @param {boolean} smoke */
 export function packageConfig(platform, smoke) {
   requireValue(Object.hasOwn(platforms,platform),'Unsupported package platform.');
   return {
@@ -23,6 +26,7 @@ export function packageConfig(platform, smoke) {
     bundle:{createUpdaterArtifacts:false,targets:platforms[platform].bundles.split(',')},
   };
 }
+/** @param {import('./tooling-domain-values.mjs').PackagePlatform} platform @param {boolean} smoke */
 export function packageBuildArgs(platform, smoke) {
   const spec = platforms[platform];
   const config = packageConfig(platform, smoke);

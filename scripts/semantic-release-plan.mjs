@@ -2,6 +2,7 @@
 // when planning needs the pinned engines; pure contracts remain importable alone.
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { planningInputValues, releaseTypeValue, releaseTagFor } from './tooling-domain-values.mjs';
 import {
   RELEASE_POLICY, validatePlanningInput, analyzerVersion, finalizePlan,
 } from "./semantic-release-policy.mjs";
@@ -9,6 +10,7 @@ export * from "./semantic-release-policy.mjs";
 
 const logger = Object.freeze({ log() {} });
 
+/** @returns {Promise<{analyzer: Analyzer, notesGenerator: NotesGenerator}>} */
 async function loadReleaseEngines() {
   // Use the isolated locked tools install and the plugins' public exports.
   const toolRequire = createRequire(new URL("../tools/release/package.json", import.meta.url));
@@ -19,14 +21,21 @@ async function loadReleaseEngines() {
   return { analyzer: analyzerModule.analyzeCommits, notesGenerator: notesModule.generateNotes };
 }
 
-/** @param {any} input
- * @param {{cwd?: string, analyzer?: any, notesGenerator?: any}} [options]
+/** @typedef {(config: object, context: {cwd: string, logger: {log: () => void}, commits: readonly import('./tooling-domain-values.mjs').Commit[]}) => Promise<unknown>} Analyzer */
+/** @typedef {(config: object, context: {cwd: string, logger: {log: () => void}, commits: readonly import('./tooling-domain-values.mjs').Commit[], options: {repositoryUrl: string}, lastRelease: {gitHead: import('./tooling-domain-values.mjs').SourceCommitSha, gitTag: import('./tooling-domain-values.mjs').ReleaseTag}, nextRelease: {gitHead: import('./tooling-domain-values.mjs').SourceCommitSha, gitTag: import('./tooling-domain-values.mjs').ReleaseTag, version: import('./tooling-domain-values.mjs').StableReleaseVersion}}) => Promise<string>} NotesGenerator */
+/** @param {import('./tooling-domain-values.mjs').PlanningInputDto} rawInput
+ * @param {{cwd?: string, analyzer?: Analyzer, notesGenerator?: NotesGenerator}} [options]
+ * @returns {Promise<Readonly<{state: 'skip', reason: string, plan?: never}> | Readonly<{state: 'release', plan: import('./tooling-domain-values.mjs').ReleasePlan, reason?: never}>>}
  */
 export async function planRelease(
-  input,
+  rawInput,
   { cwd = fileURLToPath(new URL("../tools/release/", import.meta.url)), analyzer, notesGenerator } = {},
 ) {
-  const { analysisBase, notesBase } = validatePlanningInput(input, cwd);
+  validatePlanningInput(rawInput, cwd);
+  const input = planningInputValues(rawInput);
+  const sourceBase = input.reservation ?? input.published;
+  const analysisBase = { sourceSha: sourceBase.sourceSha, version: sourceBase.version, tag: sourceBase.tag };
+  const notesBase = { sourceSha: input.published.sourceSha, version: input.published.version, tag: input.published.tag };
   if (analyzer === undefined || notesGenerator === undefined) {
     const engines = await loadReleaseEngines();
     if (analyzer === undefined) analyzer = engines.analyzer;
@@ -37,14 +46,15 @@ export async function planRelease(
     logger,
     commits: structuredClone(input.analysisCommits),
   };
-  const releaseType = await analyzer(
+  const analyzed = await analyzer(
     structuredClone(RELEASE_POLICY.analyzer),
     context,
   );
-  if (releaseType === null)
+  if (analyzed === null)
     return { state: "skip", reason: "No releasable changes." };
+  const releaseType = releaseTypeValue(analyzed, 'Invalid analyzer release type.');
   const version = analyzerVersion(analysisBase, releaseType);
-  const tag = `v${version}`;
+  const tag = releaseTagFor(version);
   const date = input.source.pubDate.slice(0, 10);
   const notes = await notesGenerator(
     {

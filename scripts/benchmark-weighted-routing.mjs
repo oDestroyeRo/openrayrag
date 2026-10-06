@@ -19,6 +19,7 @@ const scheduler={now:()=>performance.now(),schedule:callback=>{let cancelled=fal
 const folder=await mkdtemp(join(tmpdir(),'rayrag-weighted-oracle-'));
 
 let seed=2532;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/2**32;};
+/** @returns {import("./tooling-domain-values.mjs").RouteOptimum | null} */
 function outcome(planner,route,fromMap,from,walls,policy){
   if(!route)return null;let score=0,map=fromMap,p=from;
   for(const step of route){const path=planner.search(map,p,step.portal,walls);if(!path)throw new Error('Returned approach is not physically reachable.');score=score+path.cost+200+(find(policy.penalties,r=>r.map===map)?.cost??0);map=step.portal.toMap;p=step.portal.arrival;}

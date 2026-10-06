@@ -1,6 +1,7 @@
-import { filter, fromEntries, map, pipe, sort } from "remeda";
+import { filter, map, pipe, sort } from "remeda";
 // Deterministic release contracts. Inputs are bytes, metadata and source history.
 import { createHash, createPublicKey, verify } from "node:crypto";
+import { sourceCommitSha, firstParentCount, fileDigest, releaseTagFor, artifactIdentityValues, platformReceiptValues, provenanceValues, releaseMetadataValues } from './tooling-domain-values.mjs';
 import {
   stableVersion,
   compareVersions,
@@ -28,7 +29,8 @@ export const BUN_VERSION = "1.4.2",
 // Retained for verification/recovery of immutable releases made before Bun.
 const LEGACY_NODE_VERSION = "26.10.0";
 export const ENDPOINT = `https://github.com/${REPOSITORY}/releases/latest/download/latest.json`;
-export const sha256 = (data) => createHash("sha256").update(data).digest("hex");
+/** @param {string | NodeJS.ArrayBufferView} data @returns {import('./tooling-domain-values.mjs').FileDigest} */
+export const sha256 = (data) => fileDigest(createHash("sha256").update(data).digest("hex"));
 /**
  * @param {unknown} ok
  * @param {string} message
@@ -46,6 +48,7 @@ export function exactKeys(value, keys, label) {
     `Invalid ${label} fields.`,
   );
 }
+/** @param {string} version @returns {import('./tooling-domain-values.mjs').FirstParentCount} */
 export function countOf(version) {
   requireValue(
     typeof version === "string" && /^0\.2\.[1-9]\d*$/.test(version),
@@ -53,15 +56,10 @@ export function countOf(version) {
   );
   const count = Number(version.slice(4));
   requireValue(Number.isSafeInteger(count), "Invalid version count.");
-  return count;
+  return firstParentCount(count, "Invalid version count.");
 }
-export function validSha(sha) {
-  requireValue(
-    typeof sha === "string" && /^[a-f0-9]{40}$/.test(sha),
-    "Invalid source SHA.",
-  );
-  return sha;
-}
+export const validSha = sourceCommitSha;
+/** @param {readonly string[]} history @param {import('./tooling-domain-values.mjs').SourceCommitSha} sha @param {string} pubDate @returns {import('./tooling-domain-values.mjs').ReleaseIdentity} */
 export function identity(history, sha, pubDate) {
   validSha(sha);
   requireValue(
@@ -80,13 +78,15 @@ export function identity(history, sha, pubDate) {
     typeof pubDate === "string" && new Date(pubDate).toISOString() === pubDate,
     "Invalid source date.",
   );
+  const version = stableVersion(`0.2.${index + 1}`);
   return {
-    version: `0.2.${index + 1}`,
-    tag: `v0.2.${index + 1}`,
+    version,
+    tag: releaseTagFor(version),
     sourceSha: sha,
     pubDate,
   };
 }
+/** @param {import('./tooling-domain-values.mjs').StableReleaseVersion} version */
 export function assetNames(version) {
   stableVersion(version);
   const base = `Rayrag_Companion_${version}_aarch64`;
@@ -99,6 +99,7 @@ export function assetNames(version) {
     appimage: `Rayrag_Companion_${version}_x86_64.AppImage`,
   };
 }
+/** @param {import('./tooling-domain-values.mjs').StableReleaseVersion} version @param {number} [schemaVersion] */
 export function expectedNames(version, schemaVersion = 2) {
   requireValue(
     [1, 2, 3].includes(schemaVersion),
@@ -212,9 +213,10 @@ export function verifyUpdaterSignature(data, signature, publicKey, version) {
   );
 }
 const compareNames = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
-const fileRecordFor = files => name => fileRecord(name, files.get(name));
+const fileRecordFor = files => name => fileRecord(name, fileBytes(files, name));
 const jsonBuffer = (value) =>
   Buffer.from(JSON.stringify(value, null, 2) + "\n");
+/** @param {Buffer | undefined} bytes @param {string} label */
 export function parseJson(bytes, label) {
   requireValue(
     Buffer.isBuffer(bytes) && bytes.length <= 128 * 1024,
@@ -234,6 +236,12 @@ export function parseJson(bytes, label) {
 function fileRecord(name, bytes) {
   return { name, bytes: bytes.length, sha256: sha256(bytes) };
 }
+/** @param {Map<string, Buffer>} files @param {string} name @returns {Buffer} */
+export function fileBytes(files, name) {
+  const bytes = files.get(name);
+  requireValue(bytes !== undefined, "Missing release file.");
+  return bytes;
+}
 function checksums(files) {
   return Buffer.from(
     pipe([...files],
@@ -245,6 +253,7 @@ function checksums(files) {
 }
 const numericId = (value) =>
   typeof value === "string" && /^[1-9]\d{0,19}$/.test(value);
+/** @param {import('./tooling-domain-values.mjs').ArtifactIdentityDto} artifact @returns {import('./tooling-domain-values.mjs').ArtifactIdentity} */
 export function validateArtifact(artifact) {
   exactKeys(artifact, ["id", "runId", "digest"], "workflow artifact");
   requireValue(
@@ -253,8 +262,9 @@ export function validateArtifact(artifact) {
       /^sha256:[a-f0-9]{64}$/.test(artifact.digest),
     "Invalid original workflow artifact identity.",
   );
-  return artifact;
+  return artifactIdentityValues(artifact);
 }
+/** @param {import('./tooling-domain-values.mjs').StableReleaseVersion} version @param {import('./tooling-domain-values.mjs').PackageTarget} target */
 export function platformNames(version, target) {
   const n = assetNames(version);
   requireValue(
@@ -267,6 +277,7 @@ export function platformNames(version, target) {
       ? [n.windows]
       : sort([n.appimage, n.deb], compareNames);
 }
+/** @param {import('./tooling-domain-values.mjs').PlatformReceiptDto} receipt @param {import('./tooling-domain-values.mjs').PackageIdentity} id @param {import('./tooling-domain-values.mjs').BuildDto} build @param {import('./tooling-domain-values.mjs').PackageTarget} target */
 function validateBuildIdentity(receipt, id, build, target) {
   exactKeys(
     receipt,
@@ -298,6 +309,7 @@ function validateBuildIdentity(receipt, id, build, target) {
     "Platform package verification is incomplete.",
   );
 }
+/** @param {Map<string, Buffer>} files @param {import('./tooling-domain-values.mjs').PackageIdentity} id @param {import('./tooling-domain-values.mjs').BuildDto} build @param {import('./tooling-domain-values.mjs').PackageTarget} target @returns {import('./tooling-domain-values.mjs').PlatformReceiptDto} */
 export function platformReceipt(files, id, build, target) {
   return {
     schemaVersion: 1,
@@ -310,6 +322,7 @@ export function platformReceipt(files, id, build, target) {
     checks: [...PLATFORM_CHECKS],
   };
 }
+/** @param {string} name @param {Buffer} bytes @param {import('./tooling-domain-values.mjs').StableReleaseVersion} version */
 export function validateInstaller(name, bytes, version) {
   requireValue(
     Buffer.isBuffer(bytes) &&
@@ -389,6 +402,7 @@ export function validateInstaller(name, bytes, version) {
     );
   } else throw new Error("Unexpected platform installer name.");
 }
+/** @param {Map<string, Buffer>} files @param {import('./tooling-domain-values.mjs').PackageIdentity} id @param {import('./tooling-domain-values.mjs').BuildDto} build @param {import('./tooling-domain-values.mjs').PackageTarget} target @returns {import('./tooling-domain-values.mjs').PlatformReceipt} */
 export function validatePlatformBuild(files, id, build, target) {
   requireValue(
     files instanceof Map && [WINDOWS_TARGET, LINUX_TARGET].includes(target),
@@ -403,7 +417,7 @@ export function validatePlatformBuild(files, id, build, target) {
   const receipt = parseJson(files.get("platform-build.json"), "platform build");
   validateBuildIdentity(receipt, id, build, target);
   for (const name of names)
-    validateInstaller(name, files.get(name), id.version);
+    validateInstaller(name, fileBytes(files, name), id.version);
   requireValue(
     JSON.stringify(receipt.files) ===
       JSON.stringify(
@@ -411,8 +425,9 @@ export function validatePlatformBuild(files, id, build, target) {
       ),
     "Platform package hashes or sizes differ.",
   );
-  return receipt;
+  return platformReceiptValues(receipt);
 }
+/** @param {import('./tooling-domain-values.mjs').ReleaseIdentity} id @param {Map<string, Buffer>} payload @param {import('./tooling-domain-values.mjs').BuildDto} build @param {string} publicKey @returns {Map<string, Buffer>} */
 export function createBundle(id, payload, build, publicKey) {
   const names = assetNames(id.version);
   const schemaVersion = build.schemaVersion ?? 2;
@@ -431,9 +446,9 @@ export function createBundle(id, payload, build, publicKey) {
     "Incomplete build payload.",
   );
   const files = new Map(payload),
-    signature = files.get(names.signature).toString("utf8").trim();
+    signature = fileBytes(files, names.signature).toString("utf8").trim();
   verifyUpdaterSignature(
-    files.get(names.archive),
+    fileBytes(files, names.archive),
     signature,
     publicKey,
     id.version,
@@ -490,6 +505,7 @@ export function createBundle(id, payload, build, publicKey) {
   validateBundle(files, id, publicKey);
   return files;
 }
+/** @param {Map<string, Buffer>} files @param {import('./tooling-domain-values.mjs').ReleaseIdentity} id @param {string} publicKey @returns {import('./tooling-domain-values.mjs').Provenance} */
 export function validateBundle(files, id, publicKey) {
   const names = assetNames(id.version);
   requireValue(files instanceof Map, "Release asset set must be a map.");
@@ -511,17 +527,17 @@ export function validateBundle(files, id, publicKey) {
     ...(p.schemaVersion === 3 ? ["latest-semver.json"] : []),
   ])
     requireValue(
-      Buffer.isBuffer(files.get(name)) &&
-        files.get(name).length <= MAX_UPDATER_METADATA,
+      Buffer.isBuffer(fileBytes(files, name)) &&
+        fileBytes(files, name).length <= MAX_UPDATER_METADATA,
       "Updater metadata exceeds the installed client bound.",
     );
   const latest = parseJson(
-    files.get(p.schemaVersion === 3 ? "latest-semver.json" : "latest.json"),
+    fileBytes(files, p.schemaVersion === 3 ? "latest-semver.json" : "latest.json"),
     "updater feed",
   );
   if (p.schemaVersion === 3) {
     requireValue(
-      files.get("latest.json").equals(legacyFeed()),
+      fileBytes(files, "latest.json").equals(legacyFeed()),
       "Legacy bridge feed changed.",
     );
     validatePlan(p.releasePlan);
@@ -531,7 +547,7 @@ export function validateBundle(files, id, publicKey) {
         p.releasePlan.pubDate === id.pubDate &&
         p.releasePlan.firstParentCount === id.firstParentCount &&
         (!id.releasePlan ||
-          planSha256(p.releasePlan) === planSha256(id.releasePlan)),
+          planSha256(p.releasePlan) === planSha256(validatePlan(id.releasePlan))),
       "Bundle plan differs from its reserved source/version.",
     );
   }
@@ -558,11 +574,11 @@ export function validateBundle(files, id, publicKey) {
     "Updater URL is not the immutable versioned archive.",
   );
   requireValue(
-    platform.signature === files.get(names.signature).toString("utf8").trim(),
+    platform.signature === fileBytes(files, names.signature).toString("utf8").trim(),
     "Manifest and detached signatures differ.",
   );
   verifyUpdaterSignature(
-    files.get(names.archive),
+    fileBytes(files, names.archive),
     platform.signature,
     publicKey,
     id.version,
@@ -637,15 +653,16 @@ export function validateBundle(files, id, publicKey) {
       );
       if (receipt.target !== TARGET)
         for (const name of platformNames(id.version, receipt.target))
-          validateInstaller(name, files.get(name), id.version);
+          validateInstaller(name, fileBytes(files, name), id.version);
     }
   }
   requireValue(
-    files.get("SHA256SUMS").equals(checksums(files)),
+    fileBytes(files, "SHA256SUMS").equals(checksums(files)),
     "Release checksums differ.",
   );
-  return p;
+  return provenanceValues(p);
 }
+/** @param {import('./tooling-domain-values.mjs').ReleaseIdentity} id @param {import('./tooling-domain-values.mjs').ArtifactIdentity} artifact @param {number} [schemaVersion] */
 export function releaseBody(id, artifact, schemaVersion = 2) {
   validateArtifact(artifact);
   requireValue(
@@ -660,8 +677,9 @@ export function releaseBody(id, artifact, schemaVersion = 2) {
     schemaVersion >= 2
       ? " Download the Windows NSIS installer, Linux DEB or AppImage for those systems; their updater remains disabled."
       : "";
-  return `Rayrag Companion ${id.version} for ${platforms}.\n\nBootstrap: download the DMG for macOS.${installers} Existing updater-enabled macOS clients use the signed archive. Apple signing is ad-hoc; this build is not notarized.\n\n${schemaVersion === 3 ? validatePlan(id.releasePlan).notes + "\n\n" : ""}Source: ${id.sourceSha}\n\n<!-- rayrag-release:${JSON.stringify({ schemaVersion, version: id.version, sourceSha: id.sourceSha, artifact, ...(schemaVersion === 3 ? { firstParentCount: sourceCount(id), planSha256: planSha256(id.releasePlan) } : {}) })} -->`;
+  return `Rayrag Companion ${id.version} for ${platforms}.\n\nBootstrap: download the DMG for macOS.${installers} Existing updater-enabled macOS clients use the signed archive. Apple signing is ad-hoc; this build is not notarized.\n\n${schemaVersion === 3 ? validatePlan(id.releasePlan).notes + "\n\n" : ""}Source: ${id.sourceSha}\n\n<!-- rayrag-release:${JSON.stringify({ schemaVersion, version: id.version, sourceSha: id.sourceSha, artifact, ...(schemaVersion === 3 ? { firstParentCount: sourceCount(id), planSha256: planSha256(validatePlan(id.releasePlan)) } : {}) })} -->`;
 }
+/** @param {import('./tooling-domain-values.mjs').ReleaseDto} release @returns {import('./tooling-domain-values.mjs').ReleaseMetadata} */
 export function releaseMetadata(release) {
   requireValue(
     plain(release) &&
@@ -715,17 +733,19 @@ export function releaseMetadata(release) {
   } else countOf(meta.version);
   validSha(meta.sourceSha);
   validateArtifact(meta.artifact);
-  return meta;
+  return releaseMetadataValues(meta);
 }
+/** @param {import('./tooling-domain-values.mjs').ReleaseIdentity} id @returns {import('./tooling-domain-values.mjs').FirstParentCount} */
 export function sourceCount(id) {
   if (!id.releasePlan && id.firstParentCount === undefined)
     return countOf(id.version);
   requireValue(
-    Number.isSafeInteger(id.firstParentCount) && id.firstParentCount > 0,
+    typeof id.firstParentCount === 'number' && Number.isSafeInteger(id.firstParentCount) && id.firstParentCount > 0,
     "Invalid release source ordinal.",
   );
-  return id.firstParentCount;
+  return firstParentCount(id.firstParentCount, "Invalid release source ordinal.");
 }
+/** @param {import('./tooling-domain-values.mjs').ReleaseIdentity} id @param {{readonly count: import('./tooling-domain-values.mjs').FirstParentCount, readonly version: import('./tooling-domain-values.mjs').StableReleaseVersion}} latest */
 export function isNewer(id, latest) {
   const order = Math.sign(sourceCount(id) - latest.count),
     semantic = Math.sign(compareVersions(id.version, latest.version));
@@ -735,14 +755,13 @@ export function isNewer(id, latest) {
   );
   return order > 0;
 }
-export const migrationBridge = Object.freeze(
-  fromEntries(
-    map(["sourceSha", "firstParentCount", "version", "tag"], (key) => [
-      key,
-      migration.bridge[key],
-    ]),
-  ),
-);
+/** @type {import('./tooling-domain-values.mjs').ReleaseBridgeDto} */
+export const migrationBridge = Object.freeze({
+  sourceSha: migration.bridge.sourceSha,
+  firstParentCount: migration.bridge.firstParentCount,
+  version: migration.bridge.version,
+  tag: migration.bridge.tag,
+});
 export function legacyFeed() {
   const bytes = jsonBuffer(migration.legacyFeed);
   const bridge = migrationBridge;
@@ -752,13 +771,14 @@ export function legacyFeed() {
       sha256(bytes) === migration.bridge.feedSha256 &&
       migration.legacyFeed.version === bridge.version &&
       migration.legacyFeed.platforms?.["darwin-aarch64"]?.url ===
-        `https://github.com/${REPOSITORY}/releases/download/${bridge.tag}/${assetNames(bridge.version).archive}`,
+        `https://github.com/${REPOSITORY}/releases/download/${bridge.tag}/${assetNames(stableVersion(bridge.version)).archive}`,
     "Invalid frozen bridge feed.",
   );
   validSha(bridge.sourceSha);
   return bytes;
 }
 
+/** @param {readonly string[]} history @param {import('./tooling-domain-values.mjs').ReleaseDto} release */
 export function validateReleaseAncestry(history, release) {
   const meta = releaseMetadata(release),
     n = meta.schemaVersion === 3 ? meta.firstParentCount : countOf(meta.version);

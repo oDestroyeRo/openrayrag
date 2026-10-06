@@ -1,3 +1,4 @@
+import { workflowRunId, workflowJobId, pullRequestNumber, hostedJobValues } from './tooling-domain-values.mjs';
 import { find } from 'remeda';
 // Read-only hosted status; one owner can watch a run without repeated full logs.
 import { execFile } from 'node:child_process';
@@ -9,7 +10,7 @@ import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
 import {
-  repository, statuses, requireValue, id, createPullRequestStatus, validateRun,
+  repository, statuses, requireValue, id, createPullRequestStatus, parseHostedRun,
   createRunSnapshot, parseOptions,
 } from './hosted-status-policy.mjs';
 export { parseOptions } from './hosted-status-policy.mjs';
@@ -19,20 +20,21 @@ export async function readApi(path, binary = false, execute = exec) {
   const { stdout } = await execute('gh', ['api', '--hostname', 'github.com', `repos/${repository}/${path}`, ...(binary ? ['--allow-escape-sequences'] : [])], {
     encoding: binary ? 'buffer' : 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 60_000, windowsHide: true,
   });
-  return binary ? stdout : JSON.parse(stdout);
+  return binary ? stdout : JSON.parse(stdout.toString());
 }
 
+/** @param {import('./tooling-domain-values.mjs').PullRequestNumber} number @param {import('./tooling-domain-values.mjs').SourceCommitSha} expectedSha @param {typeof exec} [execute] */
 export async function pullRequestStatus(number, expectedSha, execute = exec) {
-  const { stdout } = await execute('gh', ['pr', 'view', id(number), '--repo', repository, '--json', 'headRefOid,state,mergeStateStatus,reviewDecision,statusCheckRollup'], {
+  const { stdout } = await execute('gh', ['pr', 'view', pullRequestNumber(number), '--repo', repository, '--json', 'headRefOid,state,mergeStateStatus,reviewDecision,statusCheckRollup'], {
     encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: 60_000, windowsHide: true, shell: false,
   });
-  return createPullRequestStatus(number, JSON.parse(stdout), expectedSha);
+  return createPullRequestStatus(number, JSON.parse(stdout.toString()), expectedSha);
 }
 
+/** @param {import('./tooling-domain-values.mjs').WorkflowRunId} runId @param {typeof readApi} [read] @param {import('./tooling-domain-values.mjs').SourceCommitSha} [expectedSha] */
 export async function snapshot(runId, read = readApi, expectedSha) {
-  runId = id(runId);
-  const run = await read(`actions/runs/${runId}`);
-  validateRun(runId, run, expectedSha);
+  runId = workflowRunId(runId);
+  const run = parseHostedRun(runId, await read(`actions/runs/${runId}`), expectedSha);
   const jobs = [];
   let count;
   for (let page = 1; page <= 5; page++) {
@@ -42,7 +44,7 @@ export async function snapshot(runId, read = readApi, expectedSha) {
     requireValue(response.total_count === count, 'Job listing changed during the snapshot; refresh once.');
     for (const job of response.jobs) {
       requireValue(typeof job.name === 'string' && job.name.length <= 512 && statuses.has(job.status), 'Unexpected job metadata.');
-      jobs.push({ id: id(job.id), name: job.name, status: job.status, conclusion: job.conclusion ?? null });
+      jobs.push(hostedJobValues({ id: workflowJobId(job.id), name: job.name, status: job.status, conclusion: job.conclusion ?? null }));
     }
     if (jobs.length === count) break;
     requireValue(response.jobs.length === 100 && jobs.length < count, 'Incomplete job listing.');
@@ -50,10 +52,11 @@ export async function snapshot(runId, read = readApi, expectedSha) {
   return createRunSnapshot(runId, run, jobs, count);
 }
 
+/** @param {import('./tooling-domain-values.mjs').RunSnapshot} state @param {import('./tooling-domain-values.mjs').WorkflowJobId} jobId @param {typeof readApi} [read] */
 export async function saveFailedLog(state, jobId, read = readApi) {
-  jobId = id(jobId);
+  jobId = workflowJobId(jobId);
   const job = find(state.jobs, candidate => candidate.id === jobId);
-  requireValue(job?.status === 'completed' && ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure'].includes(job.conclusion), 'Select a completed failing job from this run attempt.');
+  requireValue(job?.status === 'completed' && job.conclusion !== null && ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure'].includes(job.conclusion), 'Select a completed failing job from this run attempt.');
   const bytes = await read(`actions/jobs/${jobId}/logs`, true);
   requireValue(Buffer.isBuffer(bytes) && bytes.length <= 16 * 1024 * 1024, 'Unexpected or oversized job log.');
   const directory = await mkdtemp(join(tmpdir(), 'rayrag-hosted-log-'));
@@ -64,11 +67,12 @@ export async function saveFailedLog(state, jobId, read = readApi) {
   return { jobId, path, bytes: bytes.length };
 }
 
+/** @param {Readonly<import('./tooling-domain-values.mjs').HostedOptions>} options @param {{read?: typeof readApi, readPullRequest?: typeof pullRequestStatus, output?: (value: string) => void, wait?: (milliseconds: number) => Promise<void>, maxSnapshots?: number}} [effects] */
 export async function watchRun(options, { read = readApi, readPullRequest = pullRequestStatus, output = console.log, wait = milliseconds => new Promise(done => setTimeout(done, milliseconds)), maxSnapshots = 160 } = {}) {
   let previous;
   for (let index = 0; index < maxSnapshots; index++) {
-    const state = await snapshot(options.runId, read, options.expectedSha);
-    if (options.pullRequest) state.pullRequest = await readPullRequest(options.pullRequest, state.sourceSha);
+    let state = await snapshot(options.runId, read, options.expectedSha);
+    if (options.pullRequest) state = { ...state, pullRequest: await readPullRequest(options.pullRequest, state.sourceSha) };
     const encoded = JSON.stringify(state);
     if (encoded !== previous) output(encoded);
     previous = encoded;

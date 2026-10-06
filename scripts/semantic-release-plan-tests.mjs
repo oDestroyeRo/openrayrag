@@ -540,6 +540,7 @@ test("reviewed historical plans survive a future policy snapshot without trustin
       join(folder, "scripts/semantic-release-policy.mjs"),
       await readFile(new URL("./semantic-release-policy.mjs", import.meta.url)),
     );
+    await writeFile(join(folder, "scripts/tooling-domain-values.mjs"), await readFile(new URL("./tooling-domain-values.mjs", import.meta.url)));
     const configSource = await readFile(
       new URL("../release.config.mjs", import.meta.url),
       "utf8",
@@ -617,7 +618,7 @@ test("pure release contracts and injected planning work without installing relea
       join(folder, "node_modules/remeda"),
       process.platform === "win32" ? "junction" : "dir",
     );
-    for (const name of ["semantic-release-policy", "semantic-release-plan", "release-policy", "release-reservation-policy", "release-source-policy"]) {
+    for (const name of ["tooling-domain-values", "semantic-release-policy", "semantic-release-plan", "release-policy", "release-reservation-policy", "release-source-policy"]) {
       await writeFile(join(folder, `scripts/${name}.mjs`), await readFile(new URL(`./${name}.mjs`, import.meta.url)));
     }
     for (const name of ["release.config.mjs", "release-policy-history.json", "release-migration.json"]) {

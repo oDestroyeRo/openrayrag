@@ -1,4 +1,5 @@
 import { filter } from 'remeda';
+import { sourceCommitSha } from './tooling-domain-values.mjs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -7,10 +8,13 @@ const workflowPath = '.github/workflows/release.yml';
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 // All inputs are API metadata. No PR code, artifacts or package hooks execute here.
+/** @param {{request: import("./tooling-domain-values.mjs").DependabotRequest, runId: string | number | undefined, dryRun?: boolean, pause?: (milliseconds: number) => Promise<void>}} options @returns {Promise<import("./tooling-domain-values.mjs").DependabotOutcome>} */
 export async function mergeDependabotUpdate({ request, runId, dryRun = false, pause = delay }) {
   if (!/^\d+$/.test(String(runId))) throw new Error('A numeric desktop CI run ID is required');
+  /** @type {`/repos/${string}`} */
   const root = `/repos/${repository}`;
-  const run = await request('GET', `${root}/actions/runs/${runId}`);
+  const run = structuredClone(await request('GET', `${root}/actions/runs/${runId}`));
+  /** @param {string} reason @returns {Extract<import('./tooling-domain-values.mjs').DependabotOutcome, {outcome: 'ignored'}>} */
   const ignored = reason => ({ outcome: 'ignored', reason, runId });
   if (run.repository?.full_name !== repository || run.head_repository?.full_name !== repository ||
       run.path !== workflowPath || run.event !== 'pull_request') return ignored('unrelated CI run');
@@ -21,11 +25,11 @@ export async function mergeDependabotUpdate({ request, runId, dryRun = false, pa
   const candidates = run.pull_requests?.length ? run.pull_requests :
     await request('GET', `${root}/commits/${run.head_sha}/pulls?per_page=100`);
   const associated = filter(candidates, pr =>
-    pr.base?.ref === 'main' && pr.base?.repo?.id === run.repository.id &&
-    pr.head?.repo?.id === run.repository.id && pr.head?.sha === run.head_sha);
+    pr.base?.ref === 'main' && pr.base?.repo?.id === run.repository?.id &&
+    pr.head?.repo?.id === run.repository?.id && pr.head?.sha === run.head_sha);
   if (associated.length !== 1) return ignored('no unique matching main PR');
   const number = associated[0].number;
-  let pr = await request('GET', `${root}/pulls/${number}`);
+  let pr = structuredClone(await request('GET', `${root}/pulls/${number}`));
   let rejection = rejectionReason(pr, run.head_sha);
   if (rejection) return ignored(rejection);
 
@@ -37,7 +41,7 @@ export async function mergeDependabotUpdate({ request, runId, dryRun = false, pa
   // mergeable:null means GitHub is computing it, rather than a rejected merge.
   for (let attempt = 0; !pr.merged && pr.mergeable === null && attempt < 3; attempt++) {
     await pause(1_000);
-    pr = await request('GET', `${root}/pulls/${number}`);
+    pr = structuredClone(await request('GET', `${root}/pulls/${number}`));
     rejection = rejectionReason(pr, run.head_sha);
     if (rejection) return ignored(rejection);
   }
@@ -67,10 +71,13 @@ export async function mergeDependabotUpdate({ request, runId, dryRun = false, pa
   // after a merge succeeded but this API call failed. It builds current main;
   // the existing release pipeline reconciles duplicates and concurrent advances.
   await request('POST', `${root}/actions/workflows/release.yml/dispatches`, { ref: 'main' });
-  return { outcome: 'release-dispatched', number, runId, headSha: run.head_sha, mergeSha };
+  return { outcome: 'release-dispatched', number, runId, headSha: run.head_sha, mergeSha: sourceCommitSha(mergeSha) };
 }
 
-async function githubRequest(method, path, body) {
+/** @type {import("./tooling-domain-values.mjs").DependabotRequest}
+ * @param {"GET" | "PUT" | "POST"} method @param {string} path @param {unknown} [body]
+ */
+const githubRequest = async (method, path, body = undefined) => {
   const token = process.env.GITHUB_TOKEN;
   if (!token) throw new Error('GITHUB_TOKEN is required');
   const response = await fetch(`https://api.github.com${path}`, {
@@ -85,8 +92,8 @@ async function githubRequest(method, path, body) {
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`GitHub ${method} ${path} failed (${response.status})`);
-  return response.status === 204 ? undefined : response.json();
-}
+  return response.status === 204 ? undefined : JSON.parse(await response.text());
+};
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
@@ -95,6 +102,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       request: githubRequest, runId: process.env.RUN_ID, dryRun: process.env.DRY_RUN === 'true',
     })));
   } catch (error) {
+    if (!(error instanceof Error)) throw error;
     console.error(error.message);
     process.exitCode = 1;
   }
