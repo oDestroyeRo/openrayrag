@@ -255,6 +255,18 @@ export class FeatureUi {
   private readonly spPotions: RecoveryItemUi;
   private readonly recoveryResource = document.createElement('select');
   private macroUi!: MacroUi;
+  private displaySettings: (() => Settings) | undefined;
+  /** Display and lock consumers share a synchronous SettingsForm projection.
+   * Action callbacks outside this scope always read current DOM settings.
+   */
+  withSettings<T>(settings: () => Settings, render: () => T): T {
+    const previous = this.displaySettings;
+    this.displaySettings = settings;
+    try { return render(); } finally { this.displaySettings = previous; }
+  }
+  private automationSettings(): AutomationSettings {
+    return this.displaySettings?.().automation ?? this.read();
+  }
   private routePreview: { abort: AbortController; identity: string; settings: string; output: HTMLElement; current?: () => string; evidence?: string } | null = null;
   private previewIdentity(): string {
     const p = object(this.status.player), observations = object(this.status.actorObservations);
@@ -340,10 +352,10 @@ export class FeatureUi {
     this.dispositionPanel();this.supplyPanel();this.mapPolicyPanel();
     this.social = new SocialUi(action => this.hooks.social(action), (message, error) => this.hooks.notify(message, error)); this.mounts.manualTools.append(this.social.root);
     this.memo = new MemoUi(request=>this.hooks.memo(request),(message,error)=>this.hooks.notify(message,error));this.mounts.manualTools.append(this.memo.root);
-    this.socket=new SocketUi(request=>this.hooks.socketPreview?.(request)??Promise.reject(new Error('Socket preview unavailable.')),request=>this.hooks.socket?.(request)??Promise.reject(new Error('Socket action unavailable.')),(message,error)=>this.hooks.notify(message,error),()=>this.read());this.socket.root.classList.add('manual-group');this.mounts.manualTools.append(this.socket.root);
+    this.socket=new SocketUi(request=>this.hooks.socketPreview?.(request)??Promise.reject(new Error('Socket preview unavailable.')),request=>this.hooks.socket?.(request)??Promise.reject(new Error('Socket action unavailable.')),(message,error)=>this.hooks.notify(message,error),()=>this.automationSettings());this.socket.root.classList.add('manual-group');this.mounts.manualTools.append(this.socket.root);
     this.host.addEventListener('input',()=>{this.socket.policyChanged();this.refine.policyChanged();});this.host.addEventListener('change',()=>{this.socket.policyChanged();this.refine.policyChanged();});
-    this.refine = new RefineUi(() => this.read(), request => this.hooks.refinePreview?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), request => this.hooks.refine?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), promptToken => this.hooks.refineAdvance?.(promptToken) ?? Promise.reject(new Error('Refining transport unavailable.')), (message, error) => this.hooks.notify(message, error)); this.mounts.manualTools.append(this.refine.root);
-    this.warp=new WarpUi(request=>this.hooks.warp?this.hooks.warp(request):Promise.reject(new Error('Warp request transport unavailable.')),(message,error)=>this.hooks.notify(message,error),request=>this.hooks.warpPreview?.(request)??Promise.reject(new Error('Warp preview unavailable.')),()=>this.read(),()=>this.hooks.warpCancel?.()??Promise.reject(new Error('Warp cancel unavailable.')));this.mounts.manualTools.append(this.warp.root);
+    this.refine = new RefineUi(() => this.automationSettings(), request => this.hooks.refinePreview?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), request => this.hooks.refine?.(request) ?? Promise.reject(new Error('Refining transport unavailable.')), promptToken => this.hooks.refineAdvance?.(promptToken) ?? Promise.reject(new Error('Refining transport unavailable.')), (message, error) => this.hooks.notify(message, error)); this.mounts.manualTools.append(this.refine.root);
+    this.warp=new WarpUi(request=>this.hooks.warp?this.hooks.warp(request):Promise.reject(new Error('Warp request transport unavailable.')),(message,error)=>this.hooks.notify(message,error),request=>this.hooks.warpPreview?.(request)??Promise.reject(new Error('Warp preview unavailable.')),()=>this.automationSettings(),()=>this.hooks.warpCancel?.()??Promise.reject(new Error('Warp cancel unavailable.')));this.mounts.manualTools.append(this.warp.root);
     this.host.addEventListener('input',()=>this.warp.policyChanged());this.host.addEventListener('change',()=>this.warp.policyChanged());
     for (const [id,catalog] of [['itemId',ITEM_CATALOG],['skillId',SKILL_CATALOG]] as const) {
       const list=document.createElement('datalist');list.id=`${id}-catalog`;
@@ -738,7 +750,7 @@ export class FeatureUi {
     this.refine.render(s);
     this.warp.render(s);
     const conditionState=this.host.querySelector<HTMLElement>('#actor-condition-state')!;const traces=Array.isArray(s.ruleConditions)?s.ruleConditions:[];conditionState.hidden=traces.length===0;conditionState.textContent=traces.slice(0,32).map(entry=>{const rule=object(entry);const conditions=Array.isArray(rule.conditions)?rule.conditions:[];return text(rule.rule)+(rule.truncated===true?' · additional evidence omitted':'')+conditions.map(condition=>{const trace=object(condition);return '\n  '+text(trace.state)+' · '+text(trace.reason);}).join('');}).join('\n');
-    if(this.dispositionPlan){try{const settings=this.read();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
+    if(this.dispositionPlan){try{const settings=this.automationSettings();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
     const follow=object(s.partyFollow);this.host.querySelector<HTMLElement>('#party-follow-state')!.textContent=follow.state&&follow.state!=='disabled'?`${text(follow.state)} · ${text(follow.reason)}${follow.destination?' · '+text(follow.destination):''} · ${Math.ceil(number(follow.remainingSeconds)??0)}s remaining`:'';
     const supply=object(s.supply),supplyOutput=this.host.querySelector<HTMLElement>('#supply-preview')!;
     const supplyText=`${text(supply.state)} · ${text(supply.reason)} · ${number(supply.actions)??0} commands · ${number(supply.spent)??0}z spent / ${number(supply.reserved)??0}z reserved · ${number(supply.remainingTrips)??0} trips left`;
@@ -751,7 +763,7 @@ export class FeatureUi {
     try {
       let telemetry='';
       if(['planning','walking','transition','complete','failed','cancelled'].includes(text(travel.state)))telemetry=policySummary(validateMapPolicy(travel.policy??DEFAULT_MAP_POLICY),this.hooks.map())+'\n'+text(travel.state)+' · '+text(travel.purpose)+' · '+text(travel.reason);
-      else {const policy=mapPolicy(this.hooks.settings());if(policy.lockArea&&typeof player.x==='number'&&typeof player.y==='number')telemetry=policySummary(policy,this.hooks.map())+'\n'+(insideLockArea(policy,this.hooks.map(),{x:player.x,y:player.y})?'Inside field lock area.':'Outside field lock area; field actions wait.');}
+      else {const policy=mapPolicy(this.displaySettings?.() ?? this.hooks.settings());if(policy.lockArea&&typeof player.x==='number'&&typeof player.y==='number')telemetry=policySummary(policy,this.hooks.map())+'\n'+(insideLockArea(policy,this.hooks.map(),{x:player.x,y:player.y})?'Inside field lock area.':'Outside field lock area; field actions wait.');}
       if(telemetry&&policyOutput.dataset.telemetry!==telemetry)policyOutput.textContent=telemetry;
       policyOutput.dataset.telemetry=telemetry;
     }catch(error){policyOutput.textContent='Map policy: '+(error instanceof Error?error.message:'Validate the current settings.');delete policyOutput.dataset.telemetry;}

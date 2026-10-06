@@ -230,4 +230,24 @@ describe('clientless shared-controller runtime',()=>{
   expect(f.runtime.snapshot().connected).toBe(false);expect(f.runtime.snapshot().player).toBeNull();
   expect(f.invoke.mock.calls.some(([n,args])=>n==='bridge_status'&&(args as {status:{connected:boolean}}).status.connected===false)).toBe(true);
  });
+ it('applies each accepted mixed-burst frame and ticks before the next native frame',async()=>{
+  const f=fixture();await f.ready();
+  const tick=vi.spyOn(f.runtime.controller,'tick'),observed:number[]=[];
+  const frames=[spawn({...player,id:2,classId:4000,kind:1,name:'Poring'},0),
+   new BitWriter().u8(OP.move).i32(2).position({x:103,y:100}).finish(),
+   new BitWriter().u8(OP.tracking).u16(1).i32(2).i16(103).i16(100).u8(1).finish(),resources()];
+  for(let burst=0;burst<3;burst++)for(const frame of frames){await f.frame(frame);observed.push(tick.mock.calls.length);}
+  expect(observed).toEqual(Array.from({length:12},(_,index)=>index+1));
+  expect(f.runtime.controller.engine.entities.get(2)).toMatchObject({id:2,x:103,y:100});
+  expect(f.runtime.snapshot()).toMatchObject({connected:true,compatible:true,player:{id:0,hp:100,sp:200}});
+  f.step(1200);f.runtime.perform('command',{type:'sit',sitting:false});await flush();
+  expect(f.writes()).toEqual([[2],[...featureCommand({type:'sit',sitting:false})]]);
+ });
+ it.each([Uint8Array.of(OP.spawn),Uint8Array.of(102,2),new BitWriter().u8(OP.tracking).u16(0).u8(0).finish()])('closes on malformed owned packets and never applies a later frame',async packet=>{
+  const f=fixture();await f.ready();const writes=f.writes();
+  await f.frame(packet);
+  expect(f.runtime.snapshot()).toMatchObject({connected:false,player:null});
+  expect(f.runtime.controller.engine.reason).toBe('Unverified game packet. Update Companion before reconnecting.');
+  await f.frame(spawn({...player,id:1,name:'Stale'}));expect(f.runtime.snapshot().player).toBeNull();expect(f.writes()).toEqual(writes);
+ });
 });

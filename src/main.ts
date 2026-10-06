@@ -11,7 +11,7 @@ import { ReconnectPolicy, PersistentFieldRun } from './reconnect';
 import { RunIntentDispatch } from './run-intent-dispatch';
 import { UpdateContinuationOwner, type UpdateAccount, type UpdateContinuation } from './update-continuation';
 import { validStatus, statusHeartbeatFresh, type GameStatus } from './game-status';
-import { SettingsForm } from './settings-form';
+import { SettingsForm, type SettingsFormProjection } from './settings-form';
 import { normalAttackProfile } from './combat';
 import { canStartField } from './field-controls';
 import { mountClientShell } from './client-shell';
@@ -252,13 +252,13 @@ function message(text: string, error = false): void {
   element('notice').textContent = text;
   element('notice').classList.toggle('error', error);
 }
-function updateButtons(): void {
+function updateButtons(projection: SettingsFormProjection = form.project()): void {
   syncGameView();
   const navigation = new Set(shell.main.querySelectorAll<HTMLButtonElement>('button[data-client-page-nav], button[data-client-bot-nav], button[data-client-inspector-nav], button[data-client-navigation], #client-manual-index > button'));
   for (const button of navigation) button.disabled = false;
   let dashboardSettings: Settings | null = null;
   let formError: unknown = null;
-  try { dashboardSettings = form.snapshot().settings; } catch (error) { formError = error; /* Keep invalid drafts editable on Setup. */ }
+  try { dashboardSettings = projection.snapshot().settings; } catch (error) { formError = error; /* Keep invalid drafts editable on Setup. */ }
   if (dashboardSettings) features.syncSetup(dashboardSettings);
   const fresh = Date.now() - receivedAt < 7000;
   const dashboard = clientDashboard(latest, { fieldRequested: fieldRun.requested, held: features.active(), limitReason: fieldRun.limitReason, loginBusy, fresh }, dashboardSettings, latest?.mapInfo);
@@ -267,8 +267,7 @@ function updateButtons(): void {
   element('client-account-label').textContent = latest?.connected && latest.compatible && latest.player ? 'Account' : 'Connect account';
   startButton.hidden = dashboard.state === 'RUNNING';
   element('death-cap').textContent = dashboardSettings ? clientDeathCap(dashboardSettings.automation?.respawn) : '—';
-  if(!closeRegistered||closeBusy||updateBusy){botConsole.lock(true,closeBusy?'Saving current settings before closing.':!closeRegistered?'Preparing saved settings.':'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.lock(true,true,true);if(updateBusy&&!closeBusy)stopButton.disabled=dispatches.stopping||updateContinuation.stopped;return;}
-  form.refresh();
+  if(!closeRegistered||closeBusy||updateBusy){botConsole.lock(true,closeBusy?'Saving current settings before closing.':!closeRegistered?'Preparing saved settings.':'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.withSettings(projection.runSettings,()=>features.lock(true,true,true));if(updateBusy&&!closeBusy)stopButton.disabled=dispatches.stopping||updateContinuation.stopped;return;}
   if (features.setupDraftDirty()) for (const id of ['radius', 'min-hp', 'loot', 'random-walk', 'route-step', 'route-time', 'attack-distance', 'attack-time', 'avoid-walls']) element<HTMLInputElement>(id).disabled = true;
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
   let checked:Settings|null = null;
@@ -276,7 +275,7 @@ function updateButtons(): void {
   try {
     if (!dashboardSettings) throw formError ?? new Error('Finish valid Form settings before Start.');
     const document = features.setupDocument(); scripted = document.script !== null;
-    checked=document.script ? macroBaseSettings(document.settings, document.script) : validateSettings(form.runSettings()); configHelp.textContent='';
+    checked=document.script ? macroBaseSettings(document.settings, document.script) : validateSettings(projection.runSettings()); configHelp.textContent='';
   }
   catch(error) { configHelp.textContent=(ready || !dashboardSettings) && error instanceof Error ? error.message : ''; }
   // Rules keep the existing macro admission gate; ordinary field runs still
@@ -297,7 +296,7 @@ function updateButtons(): void {
   element<HTMLSelectElement>('connection-mode').disabled = !accountReady || gameOpen || busy || dispatches.stopping || loginBusy;
   element<HTMLInputElement>('auto-login').disabled = busy || dispatches.stopping || loginBusy || !element<HTMLInputElement>('remember-login').checked;
   element<HTMLInputElement>('auto-reconnect').disabled = busy || dispatches.stopping || loginBusy || !sessionLoginAvailable;
-  features.lock(busy || dispatches.stopping || loginBusy || runActive(),busy || dispatches.stopping || loginBusy || !ready || runActive(),busy || dispatches.stopping || loginBusy || !ready || features.serviceBlocked(),busy || dispatches.stopping || loginBusy || !ready || fieldRun.requested);
+  features.withSettings(projection.runSettings,()=>features.lock(busy || dispatches.stopping || loginBusy || runActive(),busy || dispatches.stopping || loginBusy || !ready || runActive(),busy || dispatches.stopping || loginBusy || !ready || features.serviceBlocked(),busy || dispatches.stopping || loginBusy || !ready || fieldRun.requested));
 }
 
 function showSavedLogin(profile: SavedLogin | null): void {
@@ -406,9 +405,9 @@ function render(s: GameStatus): void {
   if (sessionLoginAvailable !== s.reconnectAvailable) { sessionLoginAvailable = s.reconnectAvailable; configureReconnect(); }
   reconnect.observe(s.connected, !!s.player, s.login.phase, Date.now(), s.login.message);
   fieldRun.observe(s); holdAtRunLimit();
-  form.refresh();
-  features.render(s);
   if (['complete','failed','cancelled'].includes(s.login.phase)) loginBusy = false;
+  const projection = form.project();
+  features.withSettings(projection.runSettings,()=>features.render(s));
   if(!updateBusy&&!closeBusy&&!loginBusy&&!dispatches.stopping){
     void updateContinuation.resume(s,accountSelection(),fieldRun).then(resumed=>{
       if(resumed){configureReconnect();message('Update complete. Continuing with the same settings and remaining limits.');updateButtons();}
@@ -439,7 +438,7 @@ function render(s: GameStatus): void {
   message(reason,
     s.login.phase === 'failed' || s.connected && !s.compatible);
   activityLog.render(s.log);
-  botConsole.render(s); updateButtons(); resumeFieldRun(s);
+  botConsole.render(s); updateButtons(projection); resumeFieldRun(s);
 }
 if (!native) message('Browser preview · Launch the desktop app with bun run app:dev to connect.');
 if (native) {
@@ -461,7 +460,6 @@ if (native) {
     else reconnect.cancel();
     sessionLoginAvailable = false; previousSession = undefined;
     gameOpen = false; latest = null; receivedAt = 0; loginBusy = false;
-    form.refresh();
     element('status').textContent = 'OFFLINE'; element('status').classList.remove('active'); element('status').dataset.state = 'OFFLINE';
     element('character').textContent='No character connected'; element('location').textContent='Connect an account to load your character.';
     element('character').title='No character connected'; element('location').title='Connect an account to load your character.';

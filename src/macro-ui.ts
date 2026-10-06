@@ -1,7 +1,7 @@
 import { dryRunMacro, macroInventoryItemIds, validateMacroScript, type MacroScript } from './macros';
 import type { RoutineObservation } from './routines';
 import { automationSettings, DEFAULT_SETTINGS, validateSettings, type Settings } from './settings';
-import { formatBotScript, parseBotScript, replaceBotScriptSettings, type BotScriptDocument } from './bot-script';
+import { formatBotScript, parseBotScript, updateBotScriptSettings, type BotScriptDocument } from './bot-script';
 
 const STORAGE_KEY = 'rayrag.companion.setup-script.v1';
 const LEGACY_STORAGE_KEY = 'rayrag.companion.macro.v1';
@@ -106,12 +106,12 @@ export class MacroDraft {
     const key = JSON.stringify(settings);
     if (key === this.settingsKey) return;
     const dirty = this.dirty;
-    const applied = replaceBotScriptSettings(this.appliedText, settings);
-    const saved = this.appliedText === this.savedText ? applied : replaceBotScriptSettings(this.savedText, settings);
-    const document = parseBotScript(applied);
-    this.appliedText = applied; this.savedText = saved;
+    const applied = updateBotScriptSettings(this.appliedText, settings);
+    const saved = this.appliedText === this.savedText ? applied : updateBotScriptSettings(this.savedText, settings);
+    const retained = structuredClone(settings);
+    this.appliedText = applied.text; this.savedText = saved.text;
     if (!dirty) this.text = this.appliedText;
-    this.retainedSettings = structuredClone(settings); this.appliedDocument = document; this.settingsKey = key;
+    this.retainedSettings = retained; this.appliedDocument = applied.document; this.settingsKey = key;
   }
   /** Called only after complete validation and the SettingsForm admission guard. */
   apply(document: BotScriptDocument): void {

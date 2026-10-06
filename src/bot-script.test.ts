@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import cases from './data/macro-script-cases.json';
-import { BOT_SCRIPT_LIMITS, BotScriptError, formatBotScript, parseBotScript, replaceBotScriptSettings } from './bot-script';
+import { BOT_SCRIPT_LIMITS, BotScriptError, formatBotScript, parseBotScript, replaceBotScriptSettings, updateBotScriptSettings } from './bot-script';
 import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_LOADOUT, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT,
   DEFAULT_SETTINGS, validateFormSettings, type Settings } from './settings';
 import { validateMacroScript, type MacroScript } from './macros';
@@ -282,6 +282,30 @@ describe('bot script diagnostics and boundaries', () => {
 });
 
 describe('synchronizing the graphical settings view', () => {
+  it('returns matching validated source and document while preserving authored rules and detached settings', () => {
+    const source = '# retained\r\nscript "Field #1" # title\r\nset radius = 12 # radius note\r\nduration\t1h\r\nrule "Farm"\r\n  when level >= 1 # condition\r\n  farm prt_fild08 targets [4000] timeout 5m # action\r\nend\r\n';
+    const retained = populatedSettings();
+    delete retained.automation!.escape;
+    const before = structuredClone(retained);
+    const updated = updateBotScriptSettings(source, retained);
+    expect(updated.text).toBe(replaceBotScriptSettings(source, retained));
+    expect(updated.document).toEqual(parseBotScript(updated.text));
+    expect(updated.document.settings).not.toHaveProperty('automation.escape');
+    expect(updated.text.slice(updated.text.indexOf('duration'))).toBe(source.slice(source.indexOf('duration')));
+    expect(updated.text).toContain('# radius note\r\n');
+    updated.document.settings.targets.reverse(); updated.document.settings.automation!.follow.name = 'Changed';
+    expect(retained).toEqual(before);
+  });
+  it('returns a matching readable document for legacy imports and rejects invalid external source', () => {
+    const retained = populatedSettings(), script = macro();
+    const updated = updateBotScriptSettings(JSON.stringify(script), retained);
+    expect(updated.text).toMatch(/^script /);
+    expect(updated.document).toEqual({ settings: retained, script });
+    expect(updated.document).toEqual(parseBotScript(updated.text));
+    expect(() => updateBotScriptSettings('script "Bad"\nset radius = nope', retained)).toThrow('Line 2:');
+    expect(() => updateBotScriptSettings('script "Valid"', { ...retained, radius: 30 })).toThrow(BotScriptError);
+    expect(() => updateBotScriptSettings(`script "Large"\n#${'x'.repeat(BOT_SCRIPT_LIMITS.authoringBytes)}`, retained)).toThrow('source is too large');
+  });
   it('replaces settings while preserving every rule/limit line and all comments', () => {
     const source = '# My notes\r\nscript "Field #1" # title\r\nset map = prt_fild08 # selected map\r\nset targets = [4000]\r\n# routing note\r\nset radius = 12\r\nduration 1h # allowance\r\nrule "Farm"\r\n  when level >= 1 # condition\r\n  farm prt_fild08 targets [4000] timeout 5m # action\r\nend\r\n';
     const updated = replaceBotScriptSettings(source, populatedSettings());

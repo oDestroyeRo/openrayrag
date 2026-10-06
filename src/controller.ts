@@ -18,7 +18,7 @@ import { ManualMemo, type MemoContext, type MemoSnapshot } from './memo';
 import type { MemoSlot } from './memo-protocol';
 import { canMemoMap } from './memo-map-catalog';
 import { BotEngine, OWN_CAST_WAIT_REASON, type Action, type Snapshot } from './engine';
-import { decode } from './protocol';
+import { decode, type GameEvent } from './protocol';
 import { validateExpandedAction, type ExpandedAction } from './protocol-feature';
 import { validateSettings, automationSettings, type Settings, type AutomationSettings } from './settings';
 import { decodeWorld, validateWorldAction, type WorldAction, type WorldEvent } from './world-protocol';
@@ -46,6 +46,33 @@ import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type Es
 
 export type ControllerAction = ExpandedAction | WorldAction;
 export type { ControllerUpdateCheckpoint } from './controller-update';
+/** Detached initialization facts; decoded entities remain owned by the controller. */
+export interface PacketObservation {
+  readonly opcode: number;
+  readonly enter: boolean;
+  readonly map: boolean;
+  readonly clear: boolean;
+  readonly fullResources: boolean;
+  readonly memoSlots: boolean;
+  readonly spawns: readonly {readonly id: number; readonly kind: number; readonly entryType: number | undefined}[];
+}
+function packetObservation(opcode: number, events: GameEvent[]): PacketObservation {
+  let enter = false, map = false, clear = false, inventory = false, skills = false, stats = false, memoSlots = false;
+  const spawns: Array<PacketObservation['spawns'][number]> = [];
+  for (const event of events) {
+    switch (event.type) {
+      case 'enter': enter = true; break;
+      case 'map': map = true; break;
+      case 'clear': clear = true; break;
+      case 'inventory': inventory = true; break;
+      case 'skills': skills = true; break;
+      case 'stats': stats = true; break;
+      case 'memoSlots': memoSlots = true; break;
+      case 'spawn': spawns.push(Object.freeze({id:event.entity.id,kind:event.entity.kind,entryType:event.entryType})); break;
+    }
+  }
+  return Object.freeze({opcode,enter,map,clear,fullResources:inventory&&skills&&stats,memoSlots,spawns:Object.freeze(spawns)});
+}
 export interface CompanionSnapshot extends Snapshot {
   runRequested: boolean; state: 'running' | 'waiting' | 'idle';
   world: WorldSnapshot; workflow: WorkflowSnapshot; routine: RoutineSnapshot; macro: MacroSnapshot; travel: TravelSnapshot; service: ServiceSnapshot;
@@ -838,10 +865,14 @@ export class CompanionController {
     }
     this.engine.reason = reason; this.engine.note(reason);
   }
-  receive(data: Uint8Array, connectionGeneration = this.connectionEpoch): void {
-    if (connectionGeneration !== this.connectionEpoch) return;
+  receive(data: Uint8Array, connectionGeneration = this.connectionEpoch,
+    beforeApply?: (observation: PacketObservation) => void): PacketObservation | null {
+    if (connectionGeneration !== this.connectionEpoch) return null;
     // Decode both owners before applying either so malformed packets cannot leak partial state.
     const events = decode(data); const worldEvents = decodeWorld(data) ?? [];
+    const observation = packetObservation(data[0]!, events);
+    beforeApply?.(observation);
+    if (connectionGeneration !== this.connectionEpoch) return null;
     if(this.databaseTravel)for(const event of events){
       const wait=databaseTeleportWait(event);
       if(wait!==null)this.databaseTeleportUntil=Math.max(this.databaseTeleportUntil,this.now()+wait+1_000);
@@ -1044,6 +1075,7 @@ export class CompanionController {
     }
     this.captureActionFailure();
     this.tick(); // React to authoritative changes without waiting for the polling interval.
+    return observation;
   }
   private observeCart(pending: Pending, events: WorldEvent[]): void {
     if (!pending.cart || pending.action.type !== 'cart') return;

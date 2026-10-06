@@ -363,6 +363,27 @@ function initializedResources(ore?:number):Uint8Array {
  f.u8(0);
  for(let i=0;i<10;i++)f.i32(0);return f.i32(-1).finish();
 }
+it('applies each accepted mixed-burst frame and ticks before the next game-client frame',async()=>{
+ const f=await fixture(false);await f.packet(new BitWriter().u8(OP.enter).i32(0).string('prt_fild08').finish());
+ await f.packet(skillResources(true));await f.packet(new BitWriter().u8(94).u8(0).u8(0).u8(0).u8(0).finish());
+ f.socket.send(Uint8Array.of(2));await f.packet(spawn(player,1));
+ const tick=vi.spyOn(f.c,'tick'),observed:number[]=[];
+ const frames=[spawn(monster),new BitWriter().u8(OP.move).i32(2).position({x:103,y:100}).finish(),
+  new BitWriter().u8(OP.tracking).u16(1).i32(2).i16(103).i16(100).u8(1).finish(),skillResources(true)];
+ for(let burst=0;burst<3;burst++)for(const frame of frames){await f.packet(frame);observed.push(tick.mock.calls.length);}
+ expect(observed).toEqual(Array.from({length:12},(_,index)=>index+1));
+ expect(f.c.engine.entities.get(2)).toMatchObject({id:2,x:103,y:100});
+ expect(f.c.snapshot()).toMatchObject({connected:true,compatible:true,player:{id:0,hp:100,sp:200}});
+ await f.step(1200);f.page.__RAYRAG__!.perform('command',{type:'sit',sitting:false});
+ expect(f.socket.writes.map(value=>[...new Uint8Array(value as ArrayBuffer)])).toEqual([[2],[...featureCommand({type:'sit',sitting:false})]]);
+});
+it.each([Uint8Array.of(OP.spawn),Uint8Array.of(102,2),new BitWriter().u8(OP.tracking).u16(0).u8(0).finish()])('latches malformed owned packets and never applies a later game-client frame',async packet=>{
+ const f=await fixture(),writes=[...f.socket.writes],previous=f.c.engine.player?.hp;
+ await f.packet(packet);expect(f.c.engine.compatible).toBe(false);
+ expect(f.c.engine.reason).toMatch(/^Packet (6|102|60): (Truncated packet|Unknown tracking trailer)\./);
+ await f.packet(new BitWriter().u8(OP.heal).i32(0).i32(0).i32(95).i32(100).finish());
+ expect(f.c.engine.player?.hp).toBe(previous);expect(f.socket.writes).toEqual(writes);
+});
 it('reconciles official uncertainty only after closed old transport and complete first new initialization',async()=>{
  const f=await fixture();vi.spyOn(f.c,'settledForMaintenance').mockReturnValue(true);
  f.socket.send(featureCommand({type:'useItem',itemId:501}));

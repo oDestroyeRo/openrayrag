@@ -7,6 +7,10 @@ import { MapTargets } from './targets';
 
 type AutomationEditor = Pick<FeatureUi, 'read' | 'write' | 'levelDifference' | 'selectedProfileId' | 'restoreProfileSelection'>;
 type FormSnapshot = Omit<FormDocument, 'version' | 'revision'>;
+export interface SettingsFormProjection {
+  runSettings(): Settings;
+  snapshot(): FormSnapshot;
+}
 export interface SettingsFormContext {
   sessionId: string;
   mapInfo: MapInfo;
@@ -43,9 +47,37 @@ export class SettingsForm {
   }
 
   snapshot(): FormSnapshot {
-    const value = this.read(this.targets.map, this.targets.configuredIds);
-    const settings = { ...value, map: value.automation?.mapPolicy?.lockArea?.map ?? (this.targets.configuredMap || value.map) };
-    const document = formDocument({ version: 1, revision: 0, settings, selectedProfileId: this.automation.selectedProfileId() });
+    return this.checkedSnapshot({ settings: this.retainedSettings(this.read(this.targets.map, this.targets.configuredIds)), selectedProfileId: this.automation.selectedProfileId() });
+  }
+
+  /** One synchronous display pass shares a current DOM read and observation
+   * refresh. Commands and saves use the fresh standalone methods above.
+   * Read lazily so FeatureUi has accepted the status before locks are projected.
+   */
+  project(): SettingsFormProjection {
+    let current: { field: Settings; retained: FormSnapshot } | undefined;
+    let read = false, error: unknown;
+    const value = () => {
+      if (!read) {
+        read = true;
+        try {
+          this.refresh();
+          const field = this.read(this.targets.map, this.targets.ids);
+          current = { field: settingsWithFieldMap(field), retained: { settings: this.retainedSettings(field), selectedProfileId: this.automation.selectedProfileId() } };
+        } catch (failure) { error = failure; }
+      }
+      if (!current) throw error;
+      return current;
+    };
+    return { runSettings: () => value().field, snapshot: () => this.checkedSnapshot(value().retained) };
+  }
+
+  private retainedSettings(value: Settings): Settings {
+    return { ...value, targets: this.targets.configuredIds, map: value.automation?.mapPolicy?.lockArea?.map ?? (this.targets.configuredMap || value.map) };
+  }
+
+  private checkedSnapshot(value: FormSnapshot): FormSnapshot {
+    const document = formDocument({ version: 1, revision: 0, ...value });
     return { settings: document.settings, selectedProfileId: document.selectedProfileId };
   }
 

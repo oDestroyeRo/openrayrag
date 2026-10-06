@@ -111,6 +111,38 @@ function setup() {
 }
 
 describe('settings form interface', () => {
+  it('projects one observed pass coherently while later DOM writes remain fresh for commands and the next pass', () => {
+    const f = setup(); f.form.restore(document(settings()));
+    f.context({ sessionId: 'session', mapInfo: map, level: 1, targetsLocked: false });
+    const pass = f.form.project();
+    expect(pass.snapshot()).toMatchObject({ selectedProfileId: 'saved-profile', settings: { map: map.code, targets: [4000, 4007], radius: 17 } });
+    expect(pass.runSettings()).toMatchObject({ map: map.code, targets: [4000], radius: 17 });
+    f.field('radius').value = '13';
+    expect(pass.runSettings().radius).toBe(17);
+    expect(f.form.runSettings().radius).toBe(13);
+    expect(f.form.project().snapshot().settings.radius).toBe(13);
+    expect(f.target('Poring').checked).toBe(true);
+    expect(f.changed).not.toHaveBeenCalled();
+    expect(f.recursiveSettings).not.toHaveBeenCalled();
+  });
+
+  it('keeps invalid drafts editable and observes automation corrections and full restores on the next pass without events', () => {
+    const f = setup(); f.form.restore(document(settings())); f.observe();
+    const distance = f.host.querySelector('[data-setting="follow.distance"]')!;
+    distance.value = '0';
+    const invalid = f.form.project();
+    expect(() => invalid.snapshot()).toThrow('Invalid automation');
+    expect(f.field('radius').disabled).toBe(false);
+    expect(distance.value).toBe('0');
+    distance.value = '6';
+    expect(() => invalid.runSettings()).toThrow('Invalid automation');
+    expect(f.form.runSettings().automation?.follow.distance).toBe(6);
+    expect(f.form.project().snapshot().settings.automation?.follow.distance).toBe(6);
+    f.form.restore(document({ ...settings(), radius: 8 }, null));
+    expect(f.form.project().snapshot()).toMatchObject({ selectedProfileId: null, settings: { radius: 8, targets: [4000, 4007] } });
+    expect(f.changed).not.toHaveBeenCalled();
+  });
+
   it('applies complete Setup offline, retaining configured map and targets and clearing the profile once', () => {
     const f = setup(); f.form.restore(document(settings()));
     const changed = settings(); changed.map = 'prt_fild07'; changed.targets = [4012]; changed.radius = 14;

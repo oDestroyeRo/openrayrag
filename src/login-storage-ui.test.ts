@@ -30,6 +30,7 @@ vi.mock('./feature-ui', async () => {
     restoreProfileSelection(id:string|null){this.profile=id;}
     write():void{}
     levelDifference(){return 1;}
+    withSettings<T>(_settings:()=>Settings,render:()=>T):T{return render();}
     render(status:{refine?:{blocked?:boolean}}):void{this.held=status.refine?.blocked===true;}
     active(): boolean { return this.held; }
     serviceBlocked(): boolean { return false; }
