@@ -50,6 +50,28 @@ Frunk is the shared composition library for native Rust logic. Use its typed tra
 
 These libraries apply across application and tooling domains. Data-only schemas, scalar arithmetic, byte codecs, performance-sensitive search loops and effect adapters retain their language-native implementation when no library composition is involved. A dependency import in every file is not an architectural requirement. Generated and vendored code stays with its owning generator or upstream source.
 
+## Applying the seven levels
+
+Use the levels to choose an abstraction that earns its place in the domain. The existing architecture supplies functions, immutable calculations and higher-order composition; further refactors should make valid states and execution contracts clearer.
+
+| Level | Application in this project |
+| --- | --- |
+| 1. Functions and immutability | Explicit observations enter pure decisions; orchestration owns state changes and effect ordering. |
+| 2. Higher-order functions | Context-bound unary evaluators and Remeda transformations compose repeated decisions. |
+| 3. Algebraic data types | Rust enums and TypeScript discriminated unions represent mutually exclusive lifecycle states and outcomes. |
+| 4. Typed errors and effects | Rust `Result`/`Option` and tagged failure causes retain machine-readable meaning; adapters preserve existing public errors. |
+| 5. Abstract execution | Small domain traits and capability interfaces have production and deterministic test implementations. |
+| 6. Composition | Frunk accumulates independent validation. Condition-state monoids combine bounded traces with explicit identity and priority rules. |
+| 7. Programs and interpreters | The native replacement program runs against its effect trait; route generators run through synchronous and cooperative interpreters. |
+
+Keep diagnostic text as a projection of a typed cause. Receipt retirement must depend on whether the server rejected an action, rather than on the spelling of its display message. Tagged outcomes distinguish successful `undefined` results from arbitrary thrown values; cleanup preserves an already established failure.
+
+An effect interface describes the operations available to a domain program. Its interpreter performs those operations; the program still belongs to orchestration. Pure transition functions return the next state or a request for an effect, with generated tokens supplied by the caller. Keep locks and resource lifetime with their existing owner across the entire operation, including rollback and cleanup.
+
+Composition has laws and domain-specific priorities. Both condition folds use `matched` as the identity and associative combination. Automation and attack strategies give `unavailable` priority; routine selection gives `unmatched` priority. Evaluate the same diagnostic traces before folding, and retain existing short-circuit evaluation where it is part of the contract.
+
+Use higher-level encodings when multiple real interpreters or repeated traversals benefit. The replacement trait is a domain-specific, final-style program, and planning generators are suspended computations. These do not require a general Free-monad runtime or higher-kinded type emulation. Add recursion schemes only for an existing recursive model whose repeated traversals become simpler; runtime conditions remain bounded flat lists with the current wire schema.
+
 ## Enforcement and proof
 
 `architecture.json` records a role for every first-party JavaScript, TypeScript, Python and Rust production source under `src`, `src-tauri/src`, `scripts` and `tools`, plus root configuration and the native build entrypoint. Tests, generated output, static data and vendored upstream code have separate ownership and are excluded from the role inventory. Code beside static data remains covered. New production source must be classified; removed source must be removed from the inventory.
