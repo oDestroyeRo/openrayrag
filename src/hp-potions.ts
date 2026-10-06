@@ -1,4 +1,5 @@
-import type { ReadonlyData } from './settings';
+import { seconds, type ItemId, type Seconds } from './domain-values';
+import type { ReadonlyData, AutomationPolicy } from './settings';
 import { DEFAULT_RECOVERY_ITEMS, RECOVERY_ITEM_IDS, isRecoveryItem, recoveryItemIds, validateRecoveryItems, type RecoveryItemSettings } from './recovery-items';
 
 // Keep the existing settings field and exports compatible with saved profiles.
@@ -10,9 +11,9 @@ export function validateHpPotions(value: unknown): HpPotionSettings { return val
 export function hpPotionIds(policy: ReadonlyData<HpPotionSettings> | undefined): readonly number[] { return recoveryItemIds(policy, 'hp'); }
 
 /** Late receipts hold the run through item and active HP/SP cooldowns. */
-export function recoveryItemCooldown(policy: ReadonlyData<{ items: {itemId: number; cooldownSeconds: number}[]; hpPotions?: HpPotionSettings; spPotions?: RecoveryItemSettings }>, itemId: number): number {
+export function recoveryItemCooldown(policy: Pick<AutomationPolicy,'items'|'hpPotions'|'spPotions'>, itemId: ItemId): Seconds {
   const advanced = policy.items.find(rule => rule.itemId === itemId);
   const shared = policy.hpPotions && policy.hpPotions.mode !== 'off' && isHpPotion(itemId) ? policy.hpPotions.cooldownSeconds : 0;
   const spShared = policy.spPotions && policy.spPotions.mode !== 'off' && isRecoveryItem(itemId, 'sp') ? policy.spPotions.cooldownSeconds : 0;
-  return Math.max(advanced?.cooldownSeconds ?? 1, shared, spShared);
+  return seconds(Math.max(advanced?.cooldownSeconds ?? 1, shared, spShared));
 }

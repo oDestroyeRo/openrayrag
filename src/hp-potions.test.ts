@@ -1,3 +1,5 @@
+import { itemId as domainItemId } from './domain-values';
+import { validateAutomation } from './settings';
 import { describe, expect, it } from 'vitest';
 import cases from './data/hp-potion-cases.json';
 import catalog from './data/recovery-item-catalog.json';
@@ -67,44 +69,44 @@ describe('HP potion settings contract', () => {
 describe('automatic HP potion use', () => {
   it('follows selected order, then falls back only after the confirmed spend and shared cooldown', () => {
     const f = fixture(), a = policy();
-    const first = f.scheduler.next(a, player, f.state, null).action!;
+    const first = f.scheduler.next(validateAutomation(a), player, f.state, null).action!;
     expect(first).toEqual({ type: 'useItem', itemId: 501 });
     f.scheduler.submit(first, f.state);
-    expect(f.scheduler.next(a, player, f.state, null)).toEqual({});
+    expect(f.scheduler.next(validateAutomation(a), player, f.state, null)).toEqual({});
     expect(f.consume(504).state).toBe('ignored');
     expect(f.consume(501).state).toBe('confirmed');
-    f.advance(4999); expect(f.scheduler.next(a, player, f.state, null)).toEqual({});
-    f.advance(1); expect(f.scheduler.next(a, player, f.state, null).action).toEqual({ type: 'useItem', itemId: 504 });
+    f.advance(4999); expect(f.scheduler.next(validateAutomation(a), player, f.state, null)).toEqual({});
+    f.advance(1); expect(f.scheduler.next(validateAutomation(a), player, f.state, null).action).toEqual({ type: 'useItem', itemId: 504 });
   });
   it('uses any carried HP potion while skipping reserved, SP and status items', () => {
     const f = fixture([[569, 1], [501, 1], [504, 2], [505, 30], [506, 30]]), a = policy();
     a.hpPotions.mode = 'any'; a.hpPotions.minStock = 1;
-    expect(f.scheduler.next(a, player, f.state, null).action).toEqual({ type: 'useItem', itemId: 504 });
+    expect(f.scheduler.next(validateAutomation(a), player, f.state, null).action).toEqual({ type: 'useItem', itemId: 504 });
     f.state.inventory.clear();
-    expect(f.scheduler.next(a, player, f.state, null)).toEqual({});
+    expect(f.scheduler.next(validateAutomation(a), player, f.state, null)).toEqual({});
   });
   it('honors preference changes, HP threshold, Off and complete inventory readiness', () => {
     const f = fixture(), a = policy(); a.hpPotions.itemIds = [504, 501];
-    expect(f.scheduler.next(a, player, f.state, null).action).toEqual({ type: 'useItem', itemId: 504 });
-    expect(f.scheduler.next(a, { ...player, hp: 61 }, f.state, null)).toEqual({});
+    expect(f.scheduler.next(validateAutomation(a), player, f.state, null).action).toEqual({ type: 'useItem', itemId: 504 });
+    expect(f.scheduler.next(validateAutomation(a), { ...player, hp: 61 }, f.state, null)).toEqual({});
     f.state.inventoryKnown = false;
-    expect(f.scheduler.next(a, player, f.state, null).failure).toContain('full inventory');
-    a.hpPotions.mode = 'off'; expect(f.scheduler.next(a, player, f.state, null)).toEqual({});
+    expect(f.scheduler.next(validateAutomation(a), player, f.state, null).failure).toContain('full inventory');
+    a.hpPotions.mode = 'off'; expect(f.scheduler.next(validateAutomation(a), player, f.state, null)).toEqual({});
   });
   it('keeps advanced conditions, reserve and cooldown authoritative for their item IDs', () => {
     const f = fixture(), a = policy();
     a.items = [{ itemId: 501, resource: 'hp', belowPercent: 60, minStock: 0, cooldownSeconds: 20,
       conditions: [{ field: 'actorHpPercent', actor: { scope: 'self' }, operator: 'lte', value: 10 }] }];
-    expect(f.scheduler.next(a, player, f.state, null).action).toEqual({ type: 'useItem', itemId: 504 });
-    a.items[0]!.conditions = undefined;
-    const first = f.scheduler.next(a, player, f.state, null).action!;
+    expect(f.scheduler.next(validateAutomation(a), player, f.state, null).action).toEqual({ type: 'useItem', itemId: 504 });
+    delete a.items[0]!.conditions;
+    const first = f.scheduler.next(validateAutomation(a), player, f.state, null).action!;
     expect(first).toEqual({ type: 'useItem', itemId: 501 });
     f.scheduler.submit(first, f.state); f.consume(501);
-    f.advance(1000); expect(f.scheduler.next(a, player, f.state, null)).toEqual({});
-    expect(recoveryItemCooldown(a, 501)).toBe(20);
-    expect(recoveryItemCooldown(a, 504)).toBe(5);
+    f.advance(1000); expect(f.scheduler.next(validateAutomation(a), player, f.state, null)).toEqual({});
+    expect(recoveryItemCooldown(validateAutomation(a), domainItemId(501))).toBe(20);
+    expect(recoveryItemCooldown(validateAutomation(a), domainItemId(504))).toBe(5);
     a.items[0]!.cooldownSeconds = 1; a.hpPotions.cooldownSeconds = 10; a.hpPotions.itemIds = [504];
-    expect(recoveryItemCooldown(a, 501)).toBe(10);
+    expect(recoveryItemCooldown(validateAutomation(a), domainItemId(501))).toBe(10);
   });
   it('protects active potion reserves for transfers and macro consumption', () => {
     const a = policy(); a.hpPotions.minStock = 3;

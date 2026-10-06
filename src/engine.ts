@@ -20,7 +20,8 @@ import { type Drop, type Entity, type GameEvent, type Position, type Walk, type 
 import { walkDuration, walkPosition } from './movement';
 import { GridNavigator, routeSegment, searchGrid, distance, minimumRouteCost, type NavigationSummary, type WalkGrid } from './navigation';
 
-import { automationSettings, DEFAULT_SETTINGS, validateSettings, validateFormSettings, type ValidatedFormSettings, type SettingsInput as Settings, type AutomationSettingsInput as AutomationSettings } from './settings';
+import { automationSettings, validateAutomation, DEFAULT_SETTINGS, validateSettings, validateFormSettings, type ValidatedFormSettings, type SettingsInput as Settings, type AutomationSettingsInput as AutomationSettings } from './settings';
+import { admitDrop, type DomainDrop } from './automation-logic';
 import { acceptsMonster, acceptsLoot, inSchedule, monsterRule, lootRule, effectiveSkillLevel, AutomationScheduler, type AutomationTask, type ActionResult, type ActionReceipts } from './automation';
 import { CharacterState, type CharacterSnapshot, type StatefulEntity } from './character-state';
 import { validateExpandedAction, type ExpandedAction, type FeatureEvent } from './protocol-feature';
@@ -65,7 +66,7 @@ const OWN_LOOT_HISTORY = 30000;
 const MAX_OWN_KILLS = 64;
 const MAX_NEW_DROPS = 256;
 const MAX_DROP_ENGAGEMENTS = 8;
-type DropIdentity = Pick<Drop,'itemId'|'count'|'x'|'y'>;
+type DropIdentity = Pick<DomainDrop,'itemId'|'count'|'x'|'y'>;
 const sameDrop = (a:DropIdentity|undefined,b:DropIdentity):boolean => !!a&&a.itemId===b.itemId&&a.count===b.count&&a.x===b.x&&a.y===b.y;
 const cell = (p: Position): Position => ({ x: Math.floor(p.x), y: Math.floor(p.y) });
 interface RouteTask { followIdentity?:string; engagement?:EngagementIdentity|null; strategy?:Extract<StrategyChoice,{state:'cast'}>; type: 'skill' | 'search' | 'attack' | 'pickup' | 'follow' | 'waypoint' | 'travel'; id?: number; destination: Position; cells: Position[]; since: number | null; attackRange?: number }
@@ -82,7 +83,7 @@ export class BotEngine {
   playerId: number | null = null;
   map = '';
   readonly entities = new Map<number, Entity>();
-  readonly drops = new Map<number, Drop>();
+  readonly drops = new Map<number, DomainDrop>();
   readonly log: LogEntry[] = [];
   attacks = 0; kills = 0; looted = 0;
   settings: ValidatedFormSettings | ManualEngineSettings = validateFormSettings(DEFAULT_SETTINGS);
@@ -676,18 +677,19 @@ export class BotEngine {
       }
       case 'stats': if (this.player) { this.player.hp = e.hp; this.player.maxHp = e.maxHp; this.player.level = e.level; } break;
       case 'drop': {
-        const previous=this.drops.get(e.drop.id);
-        if(previous&&!sameDrop(previous,e.drop)) {
+        const drop=admitDrop(e.drop);
+        const previous=this.drops.get(drop.id);
+        if(previous&&!sameDrop(previous,drop)) {
           // A reused/contradictory drop ID cannot inherit the old correlation
           // or receipt credit. Keep a sent pickup owned until its normal reply
           // or timeout; do not immediately retry the changed ground item.
-          this.dropCreatedAt.delete(e.drop.id);
-          this.excluded.set(e.drop.id,this.now()+30000);
-          if(this.pending?.type==='pickup'&&this.pending.id===e.drop.id)this.pending.dropIdentity=undefined;
-          if(this.route?.type==='pickup'&&this.route.id===e.drop.id)this.cancelRoute();
+          this.dropCreatedAt.delete(drop.id);
+          this.excluded.set(drop.id,this.now()+30000);
+          if(this.pending?.type==='pickup'&&this.pending.id===drop.id)this.pending.dropIdentity=undefined;
+          if(this.route?.type==='pickup'&&this.route.id===drop.id)this.cancelRoute();
         }
-        if(!this.drops.has(e.drop.id)&&e.drop.isNew&&(this.running||this.killedAt.length>0&&sameActionIdentity(this.lootOwner,this.actorActionIdentity())))this.observeNewDrop(e.drop);
-        this.drops.set(e.drop.id, e.drop); break;
+        if(!this.drops.has(drop.id)&&drop.isNew&&(this.running||this.killedAt.length>0&&sameActionIdentity(this.lootOwner,this.actorActionIdentity())))this.observeNewDrop(drop);
+        this.drops.set(drop.id, drop); break;
       }
       case 'pickup':
         {const owner=this.pending?.type==='pickup'?this.pending:this.updatePending?.type==='pickup'?this.updatePending:null;
@@ -968,7 +970,7 @@ export class BotEngine {
     this.killedAt=this.killedAt.filter(k=>now>=k.at&&now-k.at<OWN_LOOT_HISTORY);
     for(const [id,evidence]of this.dropCreatedAt)if(now<evidence.at||now-evidence.at>=OWN_LOOT_HISTORY)this.dropCreatedAt.delete(id);
   }
-  private observeNewDrop(drop:Drop):void {
+  private observeNewDrop(drop:DomainDrop):void {
     this.pruneLootEvidence();this.lootOwner=this.actorActionIdentity();if(!this.lootOwner)return;
     const engagements:ActionIdentity[]=[];
     const include=(identity:ActionIdentity|null|undefined)=>{
@@ -984,7 +986,7 @@ export class BotEngine {
     this.dropCreatedAt.set(drop.id,{at:this.now(),drop:{itemId:drop.itemId,count:drop.count,x:drop.x,y:drop.y},engagements});
     if(this.dropCreatedAt.size>MAX_NEW_DROPS)this.dropCreatedAt.delete(this.dropCreatedAt.keys().next().value!);
   }
-  private ownsDrop(drop:Drop):boolean {
+  private ownsDrop(drop:DomainDrop):boolean {
     const evidence=this.dropCreatedAt.get(drop.id);if(!evidence||!sameDrop(evidence.drop,drop))return false;
     return this.killedAt.some(k=>distance(k,drop)<=3&&(evidence.at>=k.at
       ||k.at-evidence.at<=PRE_DEATH_DROP_WINDOW&&evidence.engagements.some(identity=>sameActionIdentity(identity,k.identity))));
@@ -1586,7 +1588,7 @@ export class BotEngine {
   settledForMaintenance(): boolean { this.advanceMovement(); return !this.updatePending&&this.observedOwnCastSettled()&&!this.partySupport?.busy()&&!this.running&&!this.retreatOwned&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled; }
   /** Death recovery owns only the existing posture scheduler, never field decisions. */
   recoveryOnly(settings: Settings): { complete: boolean; reason: string } {
-    const p=this.player,a=automationSettings(settings);
+    const p=this.player,a=validateAutomation(automationSettings(settings));
     if(!p||p.dead||!this.actorActionIdentity())return {complete:false,reason:'Waiting for a ready living character before recovery.'};
     if(!this.idleForActions())return {complete:false,reason:'Waiting for the recovery posture and movement to settle.'};
     const next=this.automation.recover(a,p,this.character);
@@ -1613,7 +1615,7 @@ export class BotEngine {
     if(action.type==='skill') {
       const requestedLevel=action.level;
       if(this.character.skillLevel(domainSkillId(action.skillId))<requestedLevel)throw new Error('An active learned or granted skill is required.');
-      action={...action,level:effectiveSkillLevel(action.skillId,requestedLevel,this.character)};
+      action={...action,level:effectiveSkillLevel(domainSkillId(action.skillId),requestedLevel,this.character)};
       const skill=SKILL_CATALOG[action.skillId],cost=skillCost(action.skillId,action.level);
       if(!this.character.skillsKnown||this.character.skillLevel(domainSkillId(action.skillId))<action.level||!skill||skill.target===0||cost===null)throw new Error('An active learned or granted skill is required.');
       const supported=(AUTOMATIC_ATTACK_SKILLS as readonly number[]).includes(action.skillId)||action.skillId===MANUAL_GROUND_SKILL;

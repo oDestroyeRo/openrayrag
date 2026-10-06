@@ -1,8 +1,8 @@
-import { bagId as domainBagId } from './domain-values';
+import { bagId as domainBagId, quantity, revisionFor, secondsToMilliseconds, type Revision } from './domain-values';
 import type { CharacterState } from './character-state';
 import type { Entity } from './protocol';
 import type { FeatureEvent } from './protocol-feature';
-import type { AutomationSettingsInput as AutomationSettings, ReadonlyData, EquipmentRule } from './settings';
+import type { AutomationPolicy as AutomationSettings } from './settings';
 
 import { WEAPON_CATALOG, AMMO_CATALOG, slots, type Vector, type LoadoutSnapshot, type EquipmentConditionState, type LoadoutChange, identity, key, bag, vector, matches, resolve, permitted, equipVector, selectAmmo } from './loadout-logic';
 
@@ -12,7 +12,7 @@ export { type AmmoInfo, WEAPON_CATALOG, AMMO_CATALOG, type LoadoutSnapshot, type
 export class LoadoutPolicy {
   private prior:Vector|null=null;
   private expected:Vector|null=null;
-  private pending:{before:Vector;change:LoadoutChange;revision:number}|null=null;
+  private pending:{before:Vector;change:LoadoutChange;revision:Revision<'equipment'>}|null=null;
   private restoring=false;
   private equipmentConditionOwned=false;
   private lastChange=-Infinity;
@@ -21,10 +21,10 @@ export class LoadoutPolicy {
   private holdReason='';
   private fault='';
   private ammoFault=false;
-  private reserve=0;
+  private reserve=quantity(0);
   private ammoConfig:{a:AutomationSettings;p:Entity}|null=null;
-  private faultInventoryRevision=0;
-  private uncertain:{before:Vector;expected:Vector;revision:number}|null=null;
+  private faultInventoryRevision=revisionFor('inventory',0);
+  private uncertain:{before:Vector;expected:Vector;revision:Revision<'equipment'>}|null=null;
   constructor(private readonly now:()=>number) {}
   reset(preserveUncertainty=false):void {this.cancel();this.firing=false;this.holdSince=null;this.holdReason='';this.fault='';this.ammoFault=false;this.expected=null;if(!preserveUncertainty)this.uncertain=null;this.lastChange=-Infinity;}
   cancel():void {if(this.pending)this.uncertain={before:this.pending.before,expected:this.pending.change.expected,revision:this.pending.revision};this.prior=null;this.pending=null;this.restoring=false;this.equipmentConditionOwned=false;}
@@ -92,10 +92,10 @@ export class LoadoutPolicy {
   }
   snapshot(a:AutomationSettings,state:CharacterState):LoadoutSnapshot {
     const ammo=state.ammoId>0?state.inventory.get(domainBagId(state.ammoId)):undefined;
-    return {state:this.uncertain?'fault':this.fault?'fault':this.holdSince!==null?'holding':!a.loadout.enabled?'off':this.pending?(this.restoring?'restoring':'switching'):'ready',reason:this.uncertain?'Waiting for authoritative reconciliation of the canceled equipment request.':this.fault||this.holdReason,ammoItemId:ammo?.itemId??null,stock:state.inventoryKnown?ammo?.count??0:null,priorCaptured:this.prior!==null};
+    return {state:this.uncertain?'fault':this.fault?'fault':this.holdSince!==null?'holding':!a.loadout.enabled?'off':this.pending?(this.restoring?'restoring':'switching'):'ready',reason:this.uncertain?'Waiting for authoritative reconciliation of the canceled equipment request.':this.fault||this.holdReason,ammoItemId:ammo?.itemId??null,stock:state.inventoryKnown?ammo?.count??quantity(0):null,priorCaptured:this.prior!==null};
   }
   next(a:AutomationSettings,p:Entity,state:CharacterState,enemy:Entity|null,
-    conditionState:(rule:ReadonlyData<EquipmentRule>)=>EquipmentConditionState=rule=>rule.conditions?.length?'unavailable':'matched'):{change?:LoadoutChange;failure?:string} {
+    conditionState:(rule:AutomationSettings['equipment'][number])=>EquipmentConditionState=rule=>rule.conditions?.length?'unavailable':'matched'):{change?:LoadoutChange;failure?:string} {
     this.reserve=a.loadout.minAmmoStock;this.ammoConfig={a,p};
     if(!a.loadout.enabled||this.pending||this.blocked)return {};
     try {
@@ -109,7 +109,7 @@ export class LoadoutPolicy {
       const weaponId=state.equipment[4]??0,weaponItem=weaponId>0?state.inventory.get(domainBagId(weaponId)):undefined,weapon=weaponItem?WEAPON_CATALOG[weaponItem.itemId]:undefined;
       const ammoCondition=!!enemy&&weapon?.weaponClass===12&&a.loadout.autoAmmo;
       if(!this.restoring&&this.prior&&!rule&&(this.equipmentConditionOwned||!ammoCondition)&&a.loadout.restore==='conditionEnd')this.restoring=true;
-      if(this.now()-this.lastChange<a.loadout.cooldownSeconds*1000)return {};
+      if(this.now()-this.lastChange<secondsToMilliseconds(a.loadout.cooldownSeconds))return {};
       if(this.restoring&&this.prior){
         // Clear changed slot groups before restoring: source default equip has no
         // explicit slot and can choose offhand/accessory2 based on current state.

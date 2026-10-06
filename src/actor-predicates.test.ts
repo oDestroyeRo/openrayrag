@@ -76,6 +76,6 @@ describe('condition aggregation policy', () => {
     expect(scheduler.ruleConditions[0]!.conditions).toHaveLength(2);
     const automation = structuredClone(DEFAULT_AUTOMATION);
     automation.combat.rules = [{ classId: 4000, action: 'ignore', priority: 0, conditions }];
-    expect(acceptsMonster(automation, monster, player, [4000], false, snapshot)).toBe(false);
+    expect(acceptsMonster(validateAutomation(automation), monster, player, [4000], false, snapshot)).toBe(false);
   });
 });

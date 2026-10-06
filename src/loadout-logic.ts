@@ -1,10 +1,11 @@
-import { bagId as domainBagId } from './domain-values';
+import type { DomainInventoryItem as InventoryItem } from './character-state-logic';
+import { bagId as domainBagId, itemId as domainItemId, type ItemId, type BagId, type Quantity } from './domain-values';
 import { filter, pipe, sort } from 'remeda';
 import catalog from './data/weapon-catalog.json';
 import type { CharacterState } from './character-state';
 import type { Entity } from './protocol';
-import type { ExpandedAction, InventoryItemInput as InventoryItem } from './protocol-feature';
-import type { AutomationSettingsInput as AutomationSettings } from './settings';
+import type { ExpandedAction } from './protocol-feature';
+import type { AutomationPolicy as AutomationSettings } from './settings';
 interface Weapon { code:string; range:number; weaponClass:number; minLevel:number; jobs:number[]|null; twoHanded:boolean }
 
 interface Armor { code:string; position:string; headPosition:string; minLevel:number; jobs:number[]|null }
@@ -19,11 +20,12 @@ const armor: Readonly<Record<number,Armor>> = catalog.equipment;
 
 export const slots = [0,1,2,3,4,5,6,7,8,9,13];
 
-type Identity = { itemId:number; type:1|2; guid?:string };
+export type EquipmentIdentity = {readonly itemId:ItemId;readonly type:1|2;readonly guid?:string};
+type Identity = EquipmentIdentity;
 
 export type Vector = Array<Identity|null>;
 
-export interface LoadoutSnapshot { state:'off'|'ready'|'switching'|'restoring'|'holding'|'fault'; reason:string; ammoItemId:number|null; stock:number|null; priorCaptured:boolean }
+export interface LoadoutSnapshot { state:'off'|'ready'|'switching'|'restoring'|'holding'|'fault'; reason:string; ammoItemId:ItemId|null; stock:Quantity|null; priorCaptured:boolean }
 
 export type EquipmentConditionState = 'matched' | 'unmatched' | 'unavailable';
 
@@ -36,13 +38,13 @@ export function identity(item:InventoryItem): Identity {
 
 export function key(id:Identity|null):string { return id ? `${id.type}:${id.itemId}:${id.guid??''}` : ''; }
 
-export function bag(state:CharacterState,slot:number):number { return slot===13?Math.max(0,state.ammoId):state.equipment[slot]??0; }
+export function bag(state:CharacterState,slot:number):BagId|0 {const value=slot===13?Math.max(0,state.ammoId):state.equipment[slot]??0;return value===0?0:domainBagId(value);}
 
 export function vector(state:CharacterState):Vector {
   if(!state.inventoryKnown||state.equipment.length<10)throw new Error('A full equipment and inventory update is required.');
   return slots.map(slot=>{const id=bag(state,slot);if(!id)return null;const item=state.inventory.get(domainBagId(id));
     // Exhausted regular ammo can remain equipped on the server.
-    if(!item&&slot===13&&AMMO_CATALOG[id])return {itemId:id,type:1};
+    if(!item&&slot===13&&AMMO_CATALOG[id])return {itemId:domainItemId(id),type:1};
     if(!item)throw new Error('Equipped item is absent from verified inventory.');if(item.type===2&&[...state.inventory.values()].filter(i=>i.type===2&&i.guid===item.guid).length!==1)throw new Error('Unique equipment identity is ambiguous.');return identity(item);});
 }
 
@@ -53,7 +55,7 @@ export function resolve(state:CharacterState,id:Identity):InventoryItem|null {
   return found.length===1&&found[0]!.itemId===id.itemId?found[0]!:null;
 }
 
-export function permitted(itemId:number,p:Entity):string|null {
+export function permitted(itemId:ItemId,p:Entity):string|null {
   const info=WEAPON_CATALOG[itemId]??armor[itemId];
   if(!info)return `Equipment ${itemId} requirements are not verified.`;
   if(info.jobs===null)return `Equipment ${itemId} job requirements are unknown.`;
@@ -80,10 +82,10 @@ export function equipVector(state:CharacterState,p:Entity,item:InventoryItem):Ve
   next[index]=identity(item);return next;
 }
 
-export function selectAmmo(state:CharacterState,p:Entity,a:AutomationSettings):InventoryItem|null {
+export function selectAmmo(state:CharacterState,p:Entity,a:Pick<AutomationSettings,'loadout'>):InventoryItem|null {
   if(!state.inventoryKnown)throw new Error('Ammo stock is unknown.');
   for(const preference of a.loadout.ammoPreferences)if(!AMMO_CATALOG[preference.itemId]||AMMO_CATALOG[preference.itemId]!.ammoType!==0)throw new Error(`Preferred ammo ${preference.itemId} is not a verified arrow.`);
-  const preference=(id:number)=>{const i=a.loadout.ammoPreferences.findIndex(v=>v.itemId===id);return i<0?a.loadout.ammoPreferences.length:i;};
+  const preference=(id:ItemId)=>{const i=a.loadout.ammoPreferences.findIndex(v=>v.itemId===id);return i<0?a.loadout.ammoPreferences.length:i;};
   const candidates=pipe([...state.inventory.values()],
     filter(i=>i.type===1&&AMMO_CATALOG[i.itemId]?.ammoType===0&&p.level>=AMMO_CATALOG[i.itemId]!.minLevel&&i.count>a.loadout.minAmmoStock),
     sort((x,y)=>preference(x.itemId)-preference(y.itemId)||(x.bagId===state.ammoId?-1:0)-(y.bagId===state.ammoId?-1:0)||x.itemId-y.itemId||x.bagId-y.bagId));

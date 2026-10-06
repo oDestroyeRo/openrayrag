@@ -1,4 +1,4 @@
-import { itemId as domainItemId, skillId as domainSkillId } from './domain-values';
+import { itemId as domainItemId, skillId as domainSkillId, milliseconds, quantity, seconds, secondsToMilliseconds, type Seconds } from './domain-values';
 import { map } from 'remeda';
 import { foldConditions, unavailableFirstConditions } from './condition-logic';
 import { sameActionIdentity, type ActionIdentity } from './actor-identity';
@@ -6,7 +6,7 @@ import { isRecoveryItem, recoveryItemIds } from './recovery-items';
 import { matchesSkillExecution } from './skill-execution';
 import { recoveryItemCooldown } from './hp-potions';
 import { skillAfterCastSeconds } from './cast-policy';
-import type { AutomationSettingsInput as AutomationSettings } from './settings';
+import type { AutomationPolicy as AutomationSettings } from './settings';
 import type { Entity } from './protocol';
 import { actorPredicateEvaluator, type ActorObservationSnapshot, type ActorPredicate, type PredicateTrace } from './actor-observations-logic';
 import type { CharacterState } from './character-state';
@@ -57,7 +57,7 @@ export class AutomationScheduler {
   /** Late readback drains uncertainty without confirming a retired caller's step.
    * Unlike active confirmation, item readback may be a complete inventory.
    * Its caller-wide pause does not stamp the scheduler's active cooldown clocks. */
-  reconcileReceipt(events:ReadonlyArray<FeatureEvent|{type:string}>,state:CharacterState,playerId:number|null,policy:AutomationSettings):number|null {
+  reconcileReceipt(events:ReadonlyArray<FeatureEvent|{type:string}>,state:CharacterState,playerId:number|null,policy:AutomationSettings):Seconds|null {
     const receipt=this.captured;
     if(!receipt||this.pending||receipt.identity&&!sameActionIdentity(receipt.identity,this.identity?.(receipt.action)))return null;
     const action=receipt.action;
@@ -71,9 +71,9 @@ export class AutomationScheduler {
     // Ordinary canceled casts retain their original deadline; Party Heal's
     // specialized owner alone uses reconcileSkill to drain that fence early.
     if(execution)this.settleSkill(execution.motionSeconds,skillAfterCastSeconds(execution.skillId));
-    const seconds=action.type==='useItem'?recoveryItemCooldown(policy,action.itemId)
-      :action.type==='skill'?policy.skills.find(rule=>rule.skillId===action.skillId)?.cooldownSeconds??1:0;
-    this.discardReceipt();return seconds;
+    const cooldown=action.type==='useItem'?recoveryItemCooldown(policy,domainItemId(action.itemId))
+      :action.type==='skill'?policy.skills.find(rule=>rule.skillId===action.skillId)?.cooldownSeconds??seconds(1):seconds(0);
+    this.discardReceipt();return cooldown;
   }
   settleSkill(motionSeconds:number,afterCastSeconds:number):void {
     this.settlingUntil=Math.max(this.settlingUntil,this.now()+Math.max(0,motionSeconds,afterCastSeconds)*1000);
@@ -92,10 +92,10 @@ export class AutomationScheduler {
   submit(action: ExpandedAction, state: CharacterState, equipmentReceipt?: (state: CharacterState)=>boolean, afterCastSeconds=0, reservation?:{receipt:typeof matchesSkillExecution; reserved:(sequence:number,identity:ActionIdentity)=>void; retainReceipt?:false}): void {
     if (this.busy) throw new Error('Wait for the current action confirmation.');
     const identity=this.identity?.(action);if(this.identity&&!identity)throw new Error('A current observed own and target identity is required.');
-    const count = action.type === 'useItem' ? state.count(domainItemId(action.itemId)) : 0;
+    const count = action.type === 'useItem' ? state.count(domainItemId(action.itemId)) : quantity(0);
     const skillLevel = action.type === 'allocateSkill' ? state.learned.get(domainSkillId(action.skillId)) ?? 0 : 0;
-    const since=this.now();
-    this.pending = { sequence:++this.sequence,...(identity?{identity}:{}),action,since,equipmentReceipt,skillReceipt:reservation?.receipt,afterCastSeconds,deadline:since+actionConfirmationTimeout(action),inventory:state.inventoryRevision,equipment:state.equipmentRevision,
+    const since=milliseconds(this.now()),deadline=milliseconds(since+actionConfirmationTimeout(action));
+    this.pending = { sequence:++this.sequence,...(identity?{identity}:{}),action,since,equipmentReceipt,skillReceipt:reservation?.receipt,afterCastSeconds,deadline,inventory:state.inventoryRevision,equipment:state.equipmentRevision,
       stats:state.statsRevision,skills:state.skillsRevision,count,skillLevel,attributes:state.stats?.attributes?.slice() as Attributes ?? null };
     this.captured=reservation?.retainReceipt===false?null:this.pending;
     this.outcome={sequence:this.sequence,status:'pending',reason:`Waiting for ${action.type} confirmation.`};
@@ -177,7 +177,7 @@ export class AutomationScheduler {
       const resource=r.resource==='hp'?hp:sp;
       if(resource===null)return {failure:`${r.resource.toUpperCase()} is unavailable for item rules.`};
       if(resource<=r.belowPercent&&ITEM_CATALOG[r.itemId]?.useType!==1)return {failure:`Item ${r.itemId} is not an untargeted usable item.`};
-      if(resource<=r.belowPercent&&state.count(domainItemId(r.itemId))>r.minStock&&now-(this.cooldown.get(`item:${r.itemId}`)??-Infinity)>=r.cooldownSeconds*1000)return {action:{type:'useItem',itemId:r.itemId}};
+      if(resource<=r.belowPercent&&state.count(r.itemId)>r.minStock&&now-(this.cooldown.get(`item:${r.itemId}`)??-Infinity)>=secondsToMilliseconds(r.cooldownSeconds))return {action:{type:'useItem',itemId:r.itemId}};
     }
     for(const resource of ['hp','sp'] as const) {
       const potions=resource==='hp'?a.hpPotions:a.spPotions,percent=resource==='hp'?hp:sp;
@@ -185,13 +185,13 @@ export class AutomationScheduler {
       if(percent===null)return {failure:`${resource.toUpperCase()} is unavailable for ${resource.toUpperCase()} recovery items.`};
       if(percent<=potions.belowPercent) {
         if(!state.inventoryKnown)return {failure:`Inventory is unavailable; ${resource.toUpperCase()} recovery items need a full inventory update.`};
-        if(now-(this.cooldown.get(`${resource}-potions`)??-Infinity)>=potions.cooldownSeconds*1000) {
+        if(now-(this.cooldown.get(`${resource}-potions`)??-Infinity)>=secondsToMilliseconds(potions.cooldownSeconds)) {
           const itemId=recoveryItemIds(potions,resource).find(id=> {
             if(a.items.some(rule=>rule.itemId===id))return false;
             const otherResource=resource==='hp'?'sp':'hp',other=resource==='hp'?a.spPotions:a.hpPotions;
-            if(other&&other.mode!=='off'&&isRecoveryItem(id,otherResource)&&now-(this.cooldown.get(`${otherResource}-potions`)??-Infinity)<other.cooldownSeconds*1000)return false;
+            if(other&&other.mode!=='off'&&isRecoveryItem(id,otherResource)&&now-(this.cooldown.get(`${otherResource}-potions`)??-Infinity)<secondsToMilliseconds(other.cooldownSeconds))return false;
             const reserve=Math.max(potions.minStock,recoveryItemIds(other,otherResource).includes(id)?other!.minStock:0);
-            return state.count(domainItemId(id))>reserve;
+            return state.count(id)>reserve;
           });
           if(itemId!==undefined)return {action:{type:'useItem',itemId}};
         }
@@ -203,8 +203,8 @@ export class AutomationScheduler {
       if(sp===null)return {failure:'SP is unavailable for skill rules.'};
       const catalog=SKILL_CATALOG[r.skillId],level=effectiveSkillLevel(r.skillId,r.level,state),cost=skillCost(r.skillId,level);
       if(!catalog||catalog.target===0||cost===null||(r.target==='enemy'&&![1,3].includes(catalog.target))||(r.target==='self'&&![2,3,5].includes(catalog.target)))return {failure:`Skill ${r.skillId} targeting or level is unavailable.`};
-      if(state.skillLevel(domainSkillId(r.skillId))<r.level)return {failure:`Skill ${r.skillId} level ${r.level} is not learned or granted.`};
-      if(hp!==null&&hp<=r.hpBelowPercent&&sp>=r.spAbovePercent&&(state.stats?.sp??0)>=cost&&now-(this.cooldown.get(`skill:${r.skillId}`)??-Infinity)>=r.cooldownSeconds*1000) {
+      if(state.skillLevel(r.skillId)<r.level)return {failure:`Skill ${r.skillId} level ${r.level} is not learned or granted.`};
+      if(hp!==null&&hp<=r.hpBelowPercent&&sp>=r.spAbovePercent&&(state.stats?.sp??0)>=cost&&now-(this.cooldown.get(`skill:${r.skillId}`)??-Infinity)>=secondsToMilliseconds(r.cooldownSeconds)) {
         if(r.target==='self')return {action:{type:'skill',mode:'self',skillId:r.skillId,level}};
         if(enemy&&distanceBetween(p,enemy)<=1)return {action:{type:'skill',mode:'target',skillId:r.skillId,level,target:enemy.id}};
       }

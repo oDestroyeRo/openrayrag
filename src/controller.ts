@@ -25,7 +25,7 @@ import { canMemoMap } from './memo-map-catalog';
 import { BotEngine, OWN_CAST_WAIT_REASON, type Action, type Snapshot } from './engine';
 import { decode, type GameEvent } from './protocol';
 import { validateExpandedAction, type ExpandedAction } from './protocol-feature';
-import { validateSettings, automationSettings, settingsDraft, automationDraft, type SettingsInput as Settings, type AutomationSettingsInput as AutomationSettings } from './settings';
+import { validateSettings, automationSettings, settingsDraft, automationDraft, type RunSettings, type SettingsInput as Settings, type AutomationSettingsInput as AutomationSettings } from './settings';
 import { decodeWorld, validateWorldAction, type WorldAction, type WorldEvent } from './world-protocol';
 import { WorldState, type WorldSnapshot } from './world-state';
 import { NpcWorkflow, validateWorkflowSpec, worldActionBlockers, type WorkflowContext, type WorkflowSnapshot, type WorkflowStep, createVendingReceipt, confirmVendingReceipt, type VendingReceipt } from './workflows';
@@ -158,7 +158,7 @@ export class CompanionController {
   private travelSettings: Settings | null = null;
   private returnSettings: Settings | null = null;
   private returning = false;
-  private requestedSettings: Settings | null = null;
+  private requestedSettings: RunSettings | null = null;
   private retryAt = 0;
   private retries = 0;
   private yieldUntil = 0;
@@ -583,7 +583,7 @@ export class CompanionController {
     this.tick();
   }
   /** Explicit run initialization happens once; stage projections only resume it. */
-  private beginRun(settings: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard): void {
+  private beginRun(settings: RunSettings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard): void {
     const context=this.supplyContext();
     this.partyHeal.newRun();
     this.supply.configure(settings,context,supplyGuard);
@@ -1467,7 +1467,7 @@ export class CompanionController {
     this.waitingReason=this.engine.reason=this.partyFollow.snapshot().reason;
     return true;
   }
-  private macroFieldSettings(step: Extract<MacroStep,{type:'farm'}>, base=this.macroBase!): Settings {
+  private macroFieldSettings(step: Extract<MacroStep,{type:'farm'}>, base=this.macroBase!): RunSettings {
     const policy=mapPolicy(base);
     if(!mapAllowed(policy,step.map)||policy.lockArea&&policy.lockArea.map!==step.map)throw new Error('Macro field conflicts with the configured map policy or lock area.');
     const projected=settingsDraft(base),automation=automationDraft(automationSettings(base));

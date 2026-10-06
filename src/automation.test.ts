@@ -1,3 +1,4 @@
+import { validateAutomation } from './settings';
 import { actionIdentity } from './actor-identity';
 import { itemId as domainItemId } from './domain-values';
 import {describe,it,expect} from 'vitest';
@@ -68,7 +69,7 @@ describe('automation condition precedence',()=>{
   automation.combat.rules=[{classId:4000,action:'ignore',priority:0,conditions}];
   // A known-false ignore rule would normally leave selection in control;
   // missing evidence must still prevent admission regardless of its position.
-  expect(acceptsMonster(automation,monster,player,[4000],false,snapshot)).toBe(false);
+  expect(acceptsMonster(validateAutomation(automation),monster,player,[4000],false,snapshot)).toBe(false);
   expect({snapshot,conditions}).toEqual(before);
  });
 });
@@ -139,7 +140,7 @@ describe('captured action receipts',()=>{
    state.apply(inventory(3),1);scheduler.reset();
   },()=>now);
   scheduler.submit({type:'useItem',itemId:501},state);
-  expect(scheduler.reconcileReceipt([],state,1,DEFAULT_AUTOMATION)).toBe(1);
+  expect(scheduler.reconcileReceipt([],state,1,validateAutomation(DEFAULT_AUTOMATION))).toBe(1);
   expect(scheduler.receipt).toBeNull();expect(scheduler.result.status).toBe('failed');
   expect(scheduler.busy).toBe(true);now+=6000;expect(scheduler.busy).toBe(false);
  });
@@ -148,10 +149,10 @@ describe('captured action receipts',()=>{
   const scheduler=new AutomationScheduler(()=>{},()=>now);scheduler.submit({type:'useItem',itemId:501},state);
   const readback=inventory(3);state.apply(readback,1);
   expect(scheduler.observe(readback,state,1).state).toBe('ignored');
-  expect(scheduler.reconcileReceipt([readback],state,1,DEFAULT_AUTOMATION)).toBeNull();
+  expect(scheduler.reconcileReceipt([readback],state,1,validateAutomation(DEFAULT_AUTOMATION))).toBeNull();
   now+=6000;expect(scheduler.timeout()).toContain('No server confirmation');
   expect(scheduler.retireReceipt(true)).toBe('uncertain');
-  expect(scheduler.reconcileReceipt([readback],state,1,DEFAULT_AUTOMATION)).toBe(1);
+  expect(scheduler.reconcileReceipt([readback],state,1,validateAutomation(DEFAULT_AUTOMATION))).toBe(1);
   expect(scheduler.result.status).toBe('failed');
  });
  it('retains transmitted resource uncertainty when sending throws',()=>{
@@ -159,23 +160,23 @@ describe('captured action receipts',()=>{
   const scheduler=new AutomationScheduler(()=>{throw new Error('Socket write failed.');},()=>1000);
   expect(()=>scheduler.submit({type:'useItem',itemId:501},state)).toThrow('Socket write failed');
   expect(scheduler.retireReceipt(true)).toBe('uncertain');state.apply(inventory(3),1);
-  expect(scheduler.reconcileReceipt([],state,1,DEFAULT_AUTOMATION)).toBe(1);
+  expect(scheduler.reconcileReceipt([],state,1,validateAutomation(DEFAULT_AUTOMATION))).toBe(1);
  });
  it('keeps late skill identity, exact execution, motion and the canceled deadline',()=>{
   let now=1000,identity=actionIdentity({world:'00000000-0000-0000-0000-000000000001',selfId:0,selfIncarnation:1,targetId:2,targetIncarnation:1});
   const state=new CharacterState(),scheduler=new AutomationScheduler(()=>{},()=>now,()=>identity);
   scheduler.submit({type:'skill',mode:'target',skillId:3,level:1,target:2},state,undefined,1);scheduler.reset();
   const response:SkillResult={type:'skillResult',mode:'target',source:0,target:2,skillId:3,level:1,motionSeconds:2,position:{x:100,y:100},indirect:false};
-  identity=actionIdentity({...identity,targetId:2,targetIncarnation:2});expect(scheduler.reconcileReceipt([response],state,0,DEFAULT_AUTOMATION)).toBeNull();
-  identity=actionIdentity({...identity,targetIncarnation:1});expect(scheduler.reconcileReceipt([{...response,target:3}],state,0,DEFAULT_AUTOMATION)).toBeNull();
-  expect(scheduler.reconcileReceipt([response],state,0,DEFAULT_AUTOMATION)).toBe(1);
+  identity=actionIdentity({...identity,targetId:2,targetIncarnation:2});expect(scheduler.reconcileReceipt([response],state,0,validateAutomation(DEFAULT_AUTOMATION))).toBeNull();
+  identity=actionIdentity({...identity,targetIncarnation:1});expect(scheduler.reconcileReceipt([{...response,target:3}],state,0,validateAutomation(DEFAULT_AUTOMATION))).toBeNull();
+  expect(scheduler.reconcileReceipt([response],state,0,validateAutomation(DEFAULT_AUTOMATION))).toBe(1);
   expect(scheduler.result.status).toBe('failed');now+=29999;expect(scheduler.busy).toBe(true);now++;expect(scheduler.busy).toBe(false);
  });
  it('applies configured late after-cast motion even when an active rule used the default',()=>{
   let now=1000;const state=new CharacterState(),scheduler=new AutomationScheduler(()=>{},()=>now);
   scheduler.submit({type:'skill',mode:'ground',skillId:19,level:1,position:{x:100,y:100}},state);scheduler.reset();now+=30000;
   const response:SkillResult={type:'skillResult',mode:'ground',source:1,skillId:19,level:1,motionSeconds:0,position:{x:100,y:100},targetPosition:{x:100,y:100},indirect:false};
-  expect(scheduler.reconcileReceipt([response],state,1,DEFAULT_AUTOMATION)).toBe(1);
+  expect(scheduler.reconcileReceipt([response],state,1,validateAutomation(DEFAULT_AUTOMATION))).toBe(1);
   now+=1499;expect(scheduler.busy).toBe(true);now++;expect(scheduler.busy).toBe(false);
  });
 });
