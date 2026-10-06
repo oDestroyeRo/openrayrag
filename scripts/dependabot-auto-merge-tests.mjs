@@ -83,7 +83,7 @@ test('unrelated, failed, stale, fork, human, draft and protected PRs never write
     'overlong title': f => { f.pr.title = 'chore(deps): ' + 'x'.repeat(256); },
     'actions with release type': f => { f.pr.head.ref = 'dependabot/github_actions/actions/checkout-7'; },
     'runtime with ci type': f => { f.pr.title = 'ci(deps): bump example'; },
-    'release tools with runtime scope': f => { f.pr.head.ref = 'dependabot/npm_and_yarn/tools/release/release-tools-minor-patch'; },
+    'release tools with runtime scope': f => { f.pr.head.ref = 'dependabot/bun/tools/release/release-tools-minor-patch'; },
     'changed head': f => { f.pr.head.sha = merge; },
     'draft': f => { f.pr.draft = true; },
     'closed unmerged': f => { f.pr.state = 'closed'; },
@@ -108,9 +108,9 @@ test('unrelated, failed, stale, fork, human, draft and protected PRs never write
 test('merge commits preserve the validated Dependabot Conventional Commit title', async () => {
   for (const [branch, title] of [
     ['dependabot/github_actions/actions/checkout-7.0.1', 'ci(deps): bump actions/checkout to 7.0.1'],
-    ['dependabot/npm_and_yarn/tools/release/release-tools-minor-patch', 'chore(deps-dev): bump release tools'],
-    ['dependabot/npm_and_yarn/vite-8.3.2', 'chore(deps-dev): bump vite to 8.3.2'],
-    ['dependabot/npm_and_yarn/tauri-apps/api-2.12.1', 'chore(deps): bump @tauri-apps/api to 2.12.1'],
+    ['dependabot/bun/tools/release/release-tools-minor-patch', 'chore(deps-dev): bump release tools'],
+    ['dependabot/bun/vite-8.3.2', 'chore(deps-dev): bump vite to 8.3.2'],
+    ['dependabot/bun/tauri-apps/api-2.12.1', 'chore(deps): bump @tauri-apps/api to 2.12.1'],
     ['dependabot/cargo/example-2.0.0', 'chore(deps): bump example to 2.0.0'],
   ]) {
     const f = fixture(); f.pr.head.ref = branch; f.pr.title = title;
@@ -198,11 +198,13 @@ test('privileged completion workflow executes trusted main code without PR artif
     assert.ok(job.if.includes(condition));
   }
   assert.deepEqual(job.permissions, { contents: 'write', 'pull-requests': 'write', actions: 'write' });
-  assert.equal(job.steps.length, 2);
+  assert.equal(job.steps.length, 3);
   assert.match(job.steps[0].uses, /^actions\/checkout@v\d+\.\d+\.\d+$/);
   assert.deepEqual(job.steps[0].with, { ref: '${{ github.sha }}', 'persist-credentials': false });
-  assert.equal(job.steps[1].run, 'node scripts/dependabot-auto-merge.mjs');
-  assert.equal(job.steps[1].env.GITHUB_TOKEN, '${{ github.token }}');
+  assert.equal(job.steps[1].uses, 'oven-sh/setup-bun@v2.2.0');
+  assert.equal(job.steps[1].with['bun-version-file'], '.bun-version');
+  assert.equal(job.steps[2].run, 'bun scripts/dependabot-auto-merge.mjs');
+  assert.equal(job.steps[2].env.GITHUB_TOKEN, '${{ github.token }}');
   assert.ok(!JSON.stringify(workflow).includes('secrets.'));
   assert.equal(job.environment, undefined);
 });

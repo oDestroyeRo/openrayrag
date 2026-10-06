@@ -5,7 +5,7 @@ import { FeatureUi } from './feature-ui';
 import { NpcServiceStore } from './npc-service-store';
 
 // This small DOM fixture exercises the real panel callbacks without loading the
-// account-bearing app entrypoint or adding a browser dependency to Node tests.
+// account-bearing app entrypoint or adding a browser dependency to frontend tests.
 class Element {
   children: Element[] = [];
   textContent = '';

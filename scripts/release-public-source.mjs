@@ -3,15 +3,29 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { REPOSITORY, privateEnvironment, requireValue, runReadOnly, npmInstallCommand } from "./release-public-io.mjs";
+import { REPOSITORY, privateEnvironment, requireValue, runReadOnly, bunInstallCommand } from "./release-public-io.mjs";
 
 const SOURCE_FILES = [
   "scripts/release-core.mjs", "scripts/release-native.py",
   "scripts/semantic-release-plan.mjs", "scripts/release-reservations.mjs",
   "scripts/release-planning.mjs", "scripts/release.mjs",
   "release.config.mjs", "release-policy-history.json", "release-migration.json",
-  "tools/release/package.json", "tools/release/package-lock.json", "tools/release/.npmrc",
+  "tools/release/package.json",
 ];
+
+export function sourceDependencyFiles(sourceSha, git) {
+  const files = git(["ls-tree", "--name-only", sourceSha, "--",
+    "tools/release/bun.lock", "tools/release/bunfig.toml",
+    "tools/release/package-lock.json", "tools/release/.npmrc",
+  ]).toString("utf8").trim().split("\n").filter(Boolean);
+  const allowed = new Set(["tools/release/bun.lock", "tools/release/bunfig.toml",
+    "tools/release/package-lock.json", "tools/release/.npmrc"]);
+  requireValue(files.every(name => allowed.has(name)) && new Set(files).size === files.length,
+    "Unexpected source dependency files.");
+  requireValue(files.includes("tools/release/bun.lock") || files.includes("tools/release/package-lock.json"),
+    "Selected source has no supported dependency lock.");
+  return files;
+}
 
 export async function peelTag(api, tag, fresh = false) {
   let object = (await api(`/git/ref/tags/${tag}`, { fresh })).object;
@@ -35,15 +49,22 @@ export function commitsBetween(git, base, source) {
 }
 
 export async function loadSourceValidators(folder, sourceSha, git) {
-  for (const name of SOURCE_FILES) {
+  const dependencyFiles = sourceDependencyFiles(sourceSha, git);
+  for (const name of [...SOURCE_FILES, ...dependencyFiles]) {
     const destination = join(folder, name);
     await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
     await writeFile(destination, git(["show", `${sourceSha}:${name}`]), { flag: "wx", mode: 0o600 });
   }
-  const npm = npmInstallCommand();
-  runReadOnly(npm.file, npm.args, {
-    cwd: join(folder, "tools/release"), env: privateEnvironment(dirname(folder)),
-  });
+  const directory = join(folder, "tools/release");
+  if (!dependencyFiles.includes("tools/release/bunfig.toml"))
+    await writeFile(join(directory, "bunfig.toml"), "[install]\npeer = false\n", { flag: "wx", mode: 0o600 });
+  const options = { cwd: directory, env: privateEnvironment(dirname(folder)) };
+  if (!dependencyFiles.includes("tools/release/bun.lock")) {
+    const migration = bunInstallCommand(true);
+    runReadOnly(migration.file, migration.args, options);
+  }
+  const install = bunInstallCommand();
+  runReadOnly(install.file, install.args, options);
   const [core, planner, reservations, tags] = await Promise.all([
     "release-core", "semantic-release-plan", "release-reservations", "release",
   ].map(name => import(pathToFileURL(join(folder, `scripts/${name}.mjs`)).href)));

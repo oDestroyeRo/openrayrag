@@ -18,9 +18,9 @@ test('main PRs and merge queue always run all native platform lanes',()=>{
   assert.deepEqual(quality.strategy.matrix.include.map(x=>[x.platform,x.target]),Object.entries(platforms).map(([name,s])=>[name,s.target]));
   assert.equal(quality.if,undefined);
   const source=quality.steps.map(x=>x.run||'').join('\n');
-  for(const command of ['npm ci','npm run check','ci-platform.mjs build'])assert.ok(source.includes(command),command);
+  for(const command of ['bun install --frozen-lockfile','bun run check','ci-platform.mjs build'])assert.ok(source.includes(command),command);
   assert.ok(source.includes('xvfb-run'));
-  assert.ok(source.indexOf('npm ci') < source.indexOf('npm run check'));
+  assert.ok(source.indexOf('bun install --frozen-lockfile') < source.indexOf('bun run check'));
   assert.ok(!source.includes('cargo test')); // One owning source-check entry point.
   const smoke=quality.steps.filter(step=>step.run?.includes('scripts/ci-platform.mjs build'));
   assert.equal(smoke.length,2);
@@ -96,16 +96,16 @@ test('parallel production builders join before source-bound bundle verification 
     'platform-linux-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
   ]);
   assert.equal(downloads[0].with.path,'src-tauri/target/aarch64-apple-darwin/release/bundle');
-  const prepare=assemble.steps.findIndex(step=>step.run==='node scripts/release.mjs prepare');
+  const prepare=assemble.steps.findIndex(step=>step.run==='bun scripts/release.mjs prepare');
   for(const step of downloads)assert.ok(assemble.steps.indexOf(step)<prepare);
-  assert.ok(assemble.steps.slice(0,prepare).some(step=>step.run==='node scripts/release.mjs stamp'));
+  assert.ok(assemble.steps.slice(0,prepare).some(step=>step.run==='bun scripts/release.mjs stamp'));
   assert.ok(assemble.steps.slice(0,prepare).some(step=>step.run?.includes('rustup toolchain install')));
-  assert.ok(assemble.steps.some(step=>step.if==="needs.reconcile.outputs.state == 'reuse'"&&step.run==='node scripts/release.mjs restore'));
+  assert.ok(assemble.steps.some(step=>step.if==="needs.reconcile.outputs.state == 'reuse'"&&step.run==='bun scripts/release.mjs restore'));
   for(const name of ['artifact-id','artifact-run-id','artifact-digest']) {
     assert.ok(assemble.outputs[name].includes(`needs.reconcile.outputs.${name}`));
   }
   assert.ok(!JSON.stringify(assemble).includes('secrets.'));
-  const restore=publish.steps.find(step=>step.run==='node scripts/release.mjs restore');
+  const restore=publish.steps.find(step=>step.run==='bun scripts/release.mjs restore');
   assert.equal(restore.env.RELEASE_ARTIFACT_ID,'${{ needs.assemble.outputs.artifact-id }}');
   assert.equal(restore.env.RELEASE_ARTIFACT_RUN_ID,'${{ needs.assemble.outputs.artifact-run-id }}');
   assert.equal(restore.env.RELEASE_ARTIFACT_DIGEST,'${{ needs.assemble.outputs.artifact-digest }}');
@@ -133,7 +133,7 @@ test('one reusable main release call queues the entire trusted lifecycle without
 test('every active release stage installs policy tools and receives the same reserved plan before effects',()=>{
   const {reconcile}=release.jobs;
   const preflight=reconcile.steps.find(step=>step.id==='preflight');
-  assert.equal(preflight.run,'npm ci --prefix tools/release\nnode scripts/release.mjs preflight\n');
+  assert.equal(preflight.run,'bun install --cwd tools/release --frozen-lockfile --ignore-scripts\nbun scripts/release.mjs preflight\n');
   const upload=reconcile.steps.find(step=>step.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(upload.if,"steps.preflight.outputs.state != 'skip'");
   assert.equal(upload.with.name,planName);
@@ -145,9 +145,9 @@ test('every active release stage installs policy tools and receives the same res
     const {steps}=release.jobs[name];
     const plan=steps.find(step=>step.uses?.startsWith('actions/download-artifact@')&&step.with.name===planName);
     assert.ok(plan,name);assert.equal(plan.with.path,'.');assert.equal(plan.if,undefined);
-    const install=steps.findIndex(step=>step.run==='npm ci --prefix tools/release');
+    const install=steps.findIndex(step=>step.run==='bun install --cwd tools/release --frozen-lockfile --ignore-scripts');
     assert.ok(install>=0,name);
-    for(const step of steps.filter(step=>step.run?.includes('node scripts/release.mjs')||step.run?.includes('node scripts/ci-platform.mjs'))){
+    for(const step of steps.filter(step=>step.run?.includes('bun scripts/release.mjs')||step.run?.includes('bun scripts/ci-platform.mjs'))){
       assert.ok(steps.indexOf(plan)<steps.indexOf(step),name);
       assert.ok(install<steps.indexOf(step),name);
     }

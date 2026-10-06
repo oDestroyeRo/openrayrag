@@ -17,12 +17,12 @@ A successful preview grants no execution authority. Service previews additionall
 Run from the repository root:
 
 ```sh
-npm run check
+bun run check
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-node scripts/benchmark-map-policy.mjs ec34f05323221789cb4f438d157d0c4c2abb520d --incremental
-node scripts/test-weighted-routing-oracle.mjs
-node scripts/benchmark-responsive-routing.mjs
-npm run app:build
+bun scripts/benchmark-map-policy.mjs ec34f05323221789cb4f438d157d0c4c2abb520d --incremental
+bun scripts/test-weighted-routing-oracle.mjs
+bun scripts/benchmark-responsive-routing.mjs
+bun run app:build
 codesign --verify --deep --strict --verbose=2 'src-tauri/target/release/bundle/macos/Rayrag Companion.app'
 ```
 
@@ -30,7 +30,7 @@ The default oracle compares all 3,004 complete results with the pre-change revis
 
 `route-planning.test.ts` uses injected scheduler/clock boundaries to cancel during each planning phase and tests admission bounds, rejection and delayed callbacks. `travel-planning.test.ts` tests ownership before first yield, duplicate/manual/resource/service arbitration, invalidation before installation and dispatch, actor ID zero, and Stop with delayed results. `route-preview.test.ts` checks preview replacement and stale snapshots without command effects. `game-status.test.ts` uses actual controller snapshots and the production native predicate/heartbeat freshness function.
 
-`benchmark-responsive-routing.mjs` measures cold/repeated Payon, Geffen and Prontera controls for both legacy and weighted policies. It reports total time, longest uninterrupted slice, scheduling delay, timer delay and cancellation latency, and checks complete route identity. Its ESM and Safari-targeted IIFE artifacts run under Node; the IIFE runs in a VM context. These are artifact measurements, not native WebKit or live gameplay results. VM totals are not a speed comparison with the browser, and yielding does not promise lower total computation time.
+`benchmark-responsive-routing.mjs` measures cold/repeated Payon, Geffen and Prontera controls for both legacy and weighted policies. It reports total time, longest uninterrupted slice, scheduling delay, timer delay and cancellation latency, and checks complete route identity. Its ESM and Safari-targeted IIFE artifacts now run under Bun; the IIFE runs in a VM context. These are artifact measurements, not native WebKit or live gameplay results. VM totals are not a speed comparison with the browser, and yielding does not promise lower total computation time.
 
 ## Recorded artifact measurements
 
@@ -54,7 +54,7 @@ A separate input/Stop run recorded text input while `planning` at 217 ms and Sto
 ## Offline native UI proof
 
 ```sh
-node scripts/build-responsive-fixture.mjs /tmp/rayrag-responsive-fixture
+bun scripts/build-responsive-fixture.mjs /tmp/rayrag-responsive-fixture
 ```
 
 Serve the generated directory and open `index.html` in the runtime being verified. The fixture imports the actual planner/controller and uses an in-memory sender. It opens no socket. Start a cold weighted Payon plan, edit **Input check** while the state is `planning`, and press **Stop fixture plan**. Separate short visible rows record input state, Stop latency, slice/scheduling maxima and command types. **Measure cold and repeated** displays twelve individual timing rows and a completed-count/current-case summary without starting movement. Stop also cancels the measurement run, and failed runs display the error. The `window.routePlanningFixture.state()` and `window.routePlanningMeasurements` values contain the same data; inspection through visible controls is sufficient. Record the runtime and exact source/artifact with the output.

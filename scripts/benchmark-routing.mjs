@@ -1,4 +1,4 @@
-// Run: node scripts/benchmark-routing.mjs [baseline-ref]
+// Run: bun scripts/benchmark-routing.mjs [baseline-ref]
 // Setup/map analysis is excluded. Both revisions use the same deterministic inputs.
 // Only engine/navigation come from the ref; other dependencies use this working tree.
 import { deepStrictEqual } from 'node:assert';
@@ -97,5 +97,5 @@ try{
   const before=await bundle('before',baseline),after=await bundle('after');
   const beforeResults=measure(before),afterResults=measure(after);
   for(let i=0;i<beforeResults.length;i++)deepStrictEqual(afterResults[i].outcome,beforeResults[i].outcome,beforeResults[i].scenario);
-  console.log(JSON.stringify({baseline,node:process.version,before:beforeResults.map(compact),after:afterResults.map(compact)},null,2));
+  console.log(JSON.stringify({baseline,bun:process.versions.bun,before:beforeResults.map(compact),after:afterResults.map(compact)},null,2));
 }finally{await rm(folder,{recursive:true,force:true});}

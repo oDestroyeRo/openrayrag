@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /** Launch only a CI-feature package with temporary data; never use a real account. */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -133,7 +133,7 @@ export async function nativeSmoke(binary, outputFile) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2);
   if (args.length !== 4 || args[0] !== '--binary' || args[2] !== '--output') {
-    console.error('Usage: node scripts/native-smoke.mjs --binary <CI-feature executable> --output <result.json>');
+    console.error('Usage: bun scripts/native-smoke.mjs --binary <CI-feature executable> --output <result.json>');
     process.exitCode = 1;
   } else {
     await nativeSmoke(args[1], args[3]).catch(error => { console.error(error.message); process.exitCode = 1; });

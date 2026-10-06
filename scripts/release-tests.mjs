@@ -296,6 +296,24 @@ test("complete bundle uses immutable tag archive and signature contents", () => 
   assert.deepEqual(Object.keys(latest.platforms), ["darwin-aarch64"]);
   assert.equal(JSON.parse(files.get("provenance.json")).platforms.length, 3);
 });
+test("new bundles record Bun while immutable Node releases remain verifiable", () => {
+  const files = bundle();
+  assert.deepEqual(validateBundle(files, id(2), publicKey).toolchain, { bun: "1.4.2", rust: "1.98.1" });
+  changeJson(files, "provenance.json", p => { p.toolchain = { node: "26.10.0", rust: "1.98.1" }; });
+  files.set("SHA256SUMS", Buffer.from(files.get("SHA256SUMS").toString()
+    .replace(/[a-f0-9]{64}  provenance\.json/, `${sha256(files.get("provenance.json"))}  provenance.json`)));
+  assert.deepEqual(validateBundle(files, id(2), publicKey).toolchain, { node: "26.10.0", rust: "1.98.1" });
+  for (const toolchain of [
+    { bun: "1.4.1", rust: "1.98.1" },
+    { node: "26.3.0", rust: "1.98.1" },
+    { bun: "1.4.2", node: "26.10.0", rust: "1.98.1" },
+    { bun: "1.4.2", rust: "1.99.0" },
+    { other: "1.4.2", rust: "1.98.1" },
+  ]) {
+    changeJson(files, "provenance.json", p => { p.toolchain = toolchain; });
+    assert.throws(() => validateBundle(files, id(2), publicKey), /toolchain/);
+  }
+});
 test("legacy six-asset bundles remain valid without Windows or Linux receipts", () => {
   const files = bundle(2, "legacy dmg", 1);
   assert.equal(validateBundle(files, id(2), publicKey).schemaVersion, 1);
@@ -641,7 +659,7 @@ test("native verification failure prevents any write", async () => {
   assert.equal(api.events.length, 0);
 });
 for (const ending of ["\n", "\r\n"])
-  test(`CI stamping synchronizes all five files with ${ending.length === 2 ? "CRLF" : "LF"} and leaves dependency versions alone`, async () => {
+  test(`CI stamping synchronizes app versions without changing the dependency lock with ${ending.length === 2 ? "CRLF" : "LF"} and leaves dependency versions alone`, async () => {
     const root = await mkdtemp(join(tmpdir(), "rayrag-stamp-test-"));
     try {
       await mkdir(join(root, "src-tauri"));
@@ -651,13 +669,7 @@ for (const ending of ["\n", "\r\n"])
           version: "0.1.0",
           dependencies: { test: "9.0.0" },
         }),
-        "package-lock.json": json({
-          version: "0.1.0",
-          packages: {
-            "": { version: "0.1.0" },
-            "node_modules/test": { version: "9.0.0" },
-          },
-        }),
+        "bun.lock": '{\n  "lockfileVersion": 2,\n  "workspaces": {"": {"name": "rayrag-companion", "dependencies": {"test": "9.0.0",},},},\n  "packages": {},\n}\n',
         "src-tauri/tauri.conf.json": json({
           version: "0.1.0",
           identifier: "com.rayrag.companion",
@@ -674,11 +686,8 @@ for (const ending of ["\n", "\r\n"])
       );
       await stampVersions(root, "0.2.7");
       await stampVersions(root, "0.2.7");
-      assert.equal(
-        JSON.parse(await readFile(join(root, "package-lock.json"))).packages[""]
-          .version,
-        "0.2.7",
-      );
+      assert.equal(await readFile(join(root, "bun.lock"), "utf8"), files["bun.lock"].replaceAll("\n", ending));
+      assert.equal(JSON.parse(await readFile(join(root, "package.json"))).version, "0.2.7");
       assert.match(
         await readFile(join(root, "src-tauri/Cargo.lock"), "utf8"),
         /name = "test"\nversion = "9.0.0"/,
@@ -741,7 +750,7 @@ test("workflow uses versioned actions, separates signing from PR checks and queu
       `Missing platform ${target}`,
     );
   assert.match(quality, /fail-fast: false/);
-  assert.match(quality, /node scripts\/ci-platform\.mjs build/);
+  assert.match(quality, /bun scripts\/ci-platform\.mjs build/);
   assert.match(quality, /--smoke/);
   assert.match(
     await readFile(new URL("./ci-platform.mjs", import.meta.url), "utf8"),
@@ -768,7 +777,7 @@ test("workflow uses versioned actions, separates signing from PR checks and queu
   assert.match(production, /path: platform-bundles\/windows/);
   assert.match(production, /path: platform-bundles\/linux/);
   assert.match(source, /ref: \$\{\{ github.sha \}\}/);
-  assert.match(quality, /npm run check/);
+  assert.match(quality, /bun run check/);
   assert.match(production, /--bundles app,dmg --ci -- --locked/);
 });
 

@@ -1,17 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   REPOSITORY, anonymousBytes, githubMetadata, privateWriter, privateEnvironment,
-  createReportDirectory, downloadActionsZip, runReadOnly, npmInstallCommand,
+  createReportDirectory, downloadActionsZip, runReadOnly, bunInstallCommand,
 } from "./release-public-io.mjs";
 import { parseOptions, releaseSnapshot, verifyPublishedRelease, publicationEvidence } from "./release-public.mjs";
-import { peelTag, commitsBetween, verifySource } from "./release-public-source.mjs";
+import { peelTag, commitsBetween, verifySource, sourceDependencyFiles } from "./release-public-source.mjs";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 
@@ -27,23 +27,36 @@ test("read-only process execution keeps metacharacters literal even when a calle
   assert.equal(output.toString("utf8"), literal);
 });
 
-test("source dependency installation uses the launching npm CLI without a command shell", () => {
-  for (const [platform, cli] of [["win32", "C:\\Program Files\\Node & Tools\\node_modules\\npm\\bin\\npm-cli.js"], ["darwin", "/opt/node & tools/npm/bin/npm-cli.js"]]) {
-    const command = npmInstallCommand({ npm_execpath: cli }, platform);
-    assert.equal(command.file, process.execPath);
-    assert.deepEqual(command.args, [cli, "ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
-  }
-  for (const cli of [undefined, "npm.cmd", "relative/npm-cli.js", "/tmp/npx-cli.js"])
-    assert.throws(() => npmInstallCommand({ npm_execpath: cli }, "darwin"), /npm run release:verify/);
+test("source dependency installation and historical lock migration use Bun without a command shell", () => {
+  const command = bunInstallCommand();
+  assert.equal(command.file, process.execPath);
+  assert.deepEqual(command.args, ["install", "--frozen-lockfile", "--ignore-scripts", "--omit=peer", "--no-env-file", "--config=bunfig.toml", "--registry=https://registry.npmjs.org/"]);
+  assert.deepEqual(bunInstallCommand(true).args.slice(0, 3), ["install", "--lockfile-only", "--save-text-lockfile"]);
+  assert.throws(() => bunInstallCommand(false, {}), /Bun/);
 });
 
-test("CLI rejects missing npm launch context before creating evidence or downloading", () => {
+test("CLI help requires Bun and works without an npm launch context", () => {
   const env = { ...process.env };
   delete env.npm_execpath;
-  assert.throws(() => execFileSync(process.execPath,
-    [fileURLToPath(new URL("./release-public.mjs", import.meta.url)), "--source", sourceSha, "--tag", "v1.8.4", "--skip-native"],
-    { env, stdio: ["ignore", "pipe", "pipe"] }), error =>
-    error.status === 1 && error.stdout.length === 0 && /npm run release:verify/.test(error.stderr.toString("utf8")));
+  const output = execFileSync(process.execPath,
+    [fileURLToPath(new URL("./release-public.mjs", import.meta.url)), "--help"],
+    { env, stdio: ["ignore", "pipe", "pipe"] }).toString("utf8");
+  assert.match(output, /Requires Git, Bun, Python/);
+  assert.doesNotMatch(output, /Requires .*npm/);
+});
+
+test("selected source extraction supports original npm locks and current Bun locks, and rejects unexpected files", () => {
+  for (const names of [
+    ["tools/release/package-lock.json", "tools/release/.npmrc"],
+    ["tools/release/bun.lock", "tools/release/bunfig.toml"],
+  ]) {
+    assert.deepEqual(sourceDependencyFiles(sourceSha, args => {
+      assert.deepEqual(args.slice(0, 4), ["ls-tree", "--name-only", sourceSha, "--"]);
+      return Buffer.from(names.join("\n") + "\n");
+    }), names);
+  }
+  for (const text of ["", "tools/release/package.json", "tools/release/bun.lock\ntools/release/bun.lock"])
+    assert.throws(() => sourceDependencyFiles(sourceSha, () => Buffer.from(text)));
 });
 
 test("CLI accepts dynamic canonical source/tag/run inputs and makes latest opt-in", () => {
@@ -119,12 +132,34 @@ test("private reports are exclusive and sanitized child environments remove cred
     await assert.rejects(write("evidence.json", "replacement"), { code: "EEXIST" });
     assert.equal(await readFile(join(folder, "evidence.json"), "utf8"), "first");
     await assert.rejects(write("../escape", "bad"), /file name/);
-    const env = privateEnvironment(folder, { PATH: "tools", GH_TOKEN: "synthetic", COOKIE: "synthetic", NODE_OPTIONS: "synthetic", GIT_CONFIG_COUNT: "1", TAURI_SIGNING_PRIVATE_KEY: "synthetic" });
+    const env = privateEnvironment(folder, { PATH: "tools", GH_TOKEN: "synthetic", COOKIE: "synthetic", NODE_OPTIONS: "synthetic", GIT_CONFIG_COUNT: "1", TAURI_SIGNING_PRIVATE_KEY: "synthetic", BUN_OPTIONS: "--preload=synthetic", BUN_CONFIG_VERBOSE_FETCH: "1", BUN_INSTALL_CACHE_DIR: "unsafe-cache", BUN_INSTALL_REGISTRY: "https://unsafe.invalid" });
     assert.equal(env.PATH, "tools");
     assert.equal(env.GH_TOKEN, undefined);
     assert.equal(env.NODE_OPTIONS, undefined);
     assert.equal(env.GIT_CONFIG_COUNT, undefined);
+    assert.equal(env.BUN_OPTIONS, undefined);
+    assert.equal(env.BUN_CONFIG_VERBOSE_FETCH, undefined);
+    assert.equal(env.BUN_INSTALL_REGISTRY, undefined);
+    assert.equal(env.BUN_INSTALL_CACHE_DIR, join(folder, "bun-cache"));
+    assert.equal(env.XDG_CONFIG_HOME, folder);
     assert.equal(env.GIT_CONFIG_GLOBAL, join(folder, "empty-config"));
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
+test("source installs ignore inherited global Bun configuration", async () => {
+  const folder = await createReportDirectory();
+  try {
+    const inherited = join(folder, "inherited"), project = join(folder, "project");
+    await mkdir(inherited);
+    await mkdir(project);
+    await writeFile(join(inherited, ".bunfig.toml"), '[install]\nminimumReleaseAge = "invalid inherited setting"\n');
+    await writeFile(join(project, "package.json"), '{"name":"isolated-proof","private":true}');
+    await writeFile(join(project, "bunfig.toml"), '[install]\npeer = false\n');
+    const command = bunInstallCommand(true);
+    const environment = { ...process.env, XDG_CONFIG_HOME: inherited };
+    assert.throws(() => execFileSync(command.file, command.args, { cwd: project, env: environment, stdio: "pipe" }));
+    runReadOnly(command.file, command.args, { cwd: project, env: privateEnvironment(folder, environment) });
+    assert.equal(await readFile(join(folder, ".bunfig.toml"), "utf8"), "");
   } finally { await rm(folder, { recursive: true, force: true }); }
 });
 

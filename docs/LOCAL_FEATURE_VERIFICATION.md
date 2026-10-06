@@ -164,7 +164,7 @@ The first local packaging command reached updater signing and failed because the
 
 ## Implemented feature coverage
 
-The full `npm run check` command runs build/typechecking, all Vitest suites, native Rust tests, and Clippy. These suites exercise the supported subsets; they do not establish complete feature coverage or live-game proof.
+The full `bun run check` command runs build/typechecking, all Vitest suites, native Rust tests, and Clippy. These suites exercise the supported subsets; they do not establish complete feature coverage or live-game proof.
 
 | Feature group | Local suites and behavior checked |
 | --- | --- |
@@ -185,7 +185,7 @@ The full `npm run check` command runs build/typechecking, all Vitest suites, nat
 | Settings, profiles and routines | SettingsForm/current-form/profile, profiles, routines, UI and native persistence: strict schemas, round trips, restoration without starting a bot and finite automation budgets. |
 | Conditional macro scripts | Macro core/controller/UI/native suites: level/job/HP/SP/inventory/actor conditions, retained farming, travel identities, guarded catalog buying/storage, consumables/skills, ordered confirmations, finite spending/action limits and local draft saving. |
 | Bot console and character monitor | Bot console, shell/status and game-status tests: HP/SP/EXP/weight observations, drafts/focus, inventory actions, route/target overlays and immediate action locks. |
-| Updates and releases | Maintenance, bridge input and Rust maintenance/updater/install tests; separate Node/Python release helpers: leases, cancellation, artifact bounds, signatures, source identity and publication order. |
+| Updates and releases | Maintenance, bridge input and Rust maintenance/updater/install tests; separate Bun/Python release helpers: leases, cancellation, artifact bounds, signatures, source identity and publication order. |
 
 ## Clientless connection checks
 

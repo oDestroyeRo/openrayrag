@@ -29,19 +29,18 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@v7.0.0
+      - uses: oven-sh/setup-bun@v2.2.0
         if: matrix.language == 'rust'
         with:
-          node-version: "26.10.0"
-          package-manager-cache: false
+          bun-version-file: .bun-version
       - name: Prepare Rust extraction and generated bridge
         if: matrix.language == 'rust'
         run: |
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev
-          npm ci
-          npm run bridge
+          bun install --frozen-lockfile
+          bun run bridge
       - uses: github/codeql-action/init@v4.38.2
         with:
           languages: ${{ matrix.language }}
@@ -50,6 +49,26 @@ jobs:
       - uses: github/codeql-action/analyze@v4.38.2
         with:
           category: /language:${{ matrix.language }}
+
+  bun-audit:
+    name: Bun dependency audit
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: .bun-version
+      # Audit both full locks: GitHub dependency review does not index bun.lock.
+      - name: Audit desktop dependencies
+        run: bun audit --audit-level=high
+      - name: Audit isolated release dependencies
+        working-directory: tools/release
+        # The same isolated exception is guarded by the official-engine tests.
+        run: bun audit --audit-level=high --ignore=GHSA-vfj7-8cjw-p6xm
 
   dependency-review:
     name: Dependency review
@@ -74,7 +93,7 @@ jobs:
 
   verify:
     name: Security / required
-    needs: [codeql, dependency-review]
+    needs: [codeql, dependency-review, bun-audit]
     if: always()
     runs-on: ubuntu-22.04
     timeout-minutes: 5
@@ -84,8 +103,10 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           CODEQL_RESULT: ${{ needs.codeql.result }}
           DEPENDENCY_RESULT: ${{ needs.dependency-review.result }}
+          BUN_AUDIT_RESULT: ${{ needs.bun-audit.result }}
         run: |
           test "$CODEQL_RESULT" = success
+          test "$BUN_AUDIT_RESULT" = success
           if [[ "$EVENT_NAME" == pull_request || "$EVENT_NAME" == merge_group ]]; then
             test "$DEPENDENCY_RESULT" = success
           else

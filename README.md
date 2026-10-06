@@ -4,20 +4,20 @@ A Tauri v2 desktop client for automatic sign-in, character selection, combat, lo
 
 ## Run
 
-CI uses Node.js 26.10.0 and Rust 1.98.1. Native releases target Apple Silicon macOS 13+, Windows x64 and Linux x64. Install the platform-specific build dependencies in [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Windows/Linux use manual release installers; automatic updates remain available on Apple Silicon macOS. See [desktop CI](docs/DESKTOP_CI.md).
+Local development and CI use Bun 1.4.2 (pinned in `.bun-version`) and Rust 1.98.1. Native releases target Apple Silicon macOS 13+, Windows x64 and Linux x64. Install the platform-specific build dependencies in [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Windows/Linux use manual release installers; automatic updates remain available on Apple Silicon macOS. See [desktop CI](docs/DESKTOP_CI.md).
 
 ```sh
-npm ci
-npm run app:dev
+bun install --frozen-lockfile
+bun run app:dev
 ```
 
 Build a local application:
 
 ```sh
-npm run app:build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
+bun run app:build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
-Windows builds an NSIS installer; Linux builds Debian and AppImage packages. On macOS the output is `src-tauri/target/release/bundle/macos/Rayrag Companion.app`. It uses an [ad-hoc signature](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing) for local use and is not notarized. `npm run dev` previews the controller in a browser; native game control requires the Tauri app.
+Windows builds an NSIS installer; Linux builds Debian and AppImage packages. On macOS the output is `src-tauri/target/release/bundle/macos/Rayrag Companion.app`. It uses an [ad-hoc signature](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing) for local use and is not notarized. `bun run dev` previews the controller in a browser; native game control requires the Tauri app.
 
 The release profile leaves build dependencies unstripped to work around a macOS proc-macro loading failure in Homebrew Rust 1.98.1. Application optimization remains enabled.
 
@@ -129,9 +129,9 @@ Under **Workflows & social → Social**, each Send button requests one message o
 ## Verification
 
 ```sh
-npm run check
+bun run check
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-npm run app:build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
+bun run app:build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
 `check` builds the frontend and injected bridge, typechecks TypeScript, runs behavioral/protocol/login tests and Rust boundary tests, and runs Clippy. Tests use synthetic events and a public monster fixture; no unattended account test is bundled. Local-login persistence tests use isolated synthetic temporary directories, never the real saved profile or Keychain:
@@ -143,7 +143,7 @@ cargo test --manifest-path src-tauri/Cargo.toml login::
 Compare route work and local decision time against the version before the targeting optimization:
 
 ```sh
-node scripts/benchmark-routing.mjs 9f7ee0e
+bun scripts/benchmark-routing.mjs 9f7ee0e
 ```
 
 The benchmark compares the engine/navigation revisions with identical deterministic fixtures and shared dependencies, excluding map setup. It checks matching outcomes and reports searches, cell checks and median local timings. Published Field 8 acquisition and synthetic wall/detour cases are separate from live game or network latency.

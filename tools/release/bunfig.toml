@@ -1,0 +1,6 @@
+[install]
+# Pure planning plugins do not need the semantic-release publishing host.
+peer = false
+
+[run]
+bun = true

@@ -53,10 +53,9 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v7.0.0
+      - uses: oven-sh/setup-bun@v2.2.0
         with:
-          node-version: "26.10.0"
-          cache: npm
+          bun-version-file: .bun-version
       - name: Install the tested Rust toolchain
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target ${{ matrix.target }} --component clippy,rustfmt
       - uses: Swatinem/rust-cache@v2.9.2
@@ -74,16 +73,16 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf libfuse2 xvfb dbus-daemon
       - name: Verify source and covered behavior (no signing secrets)
         run: |
-          npm ci
-          npm run check
+          bun install --frozen-lockfile
+          bun run check
       - name: Build, inspect, and smoke secret-free platform installers
         if: matrix.platform != 'linux'
-        run: node scripts/ci-platform.mjs build ${{ matrix.platform }} --smoke
+        run: bun scripts/ci-platform.mjs build ${{ matrix.platform }} --smoke
       - name: Build, inspect, and smoke Linux packages under Xvfb
         if: matrix.platform == 'linux'
         env:
           WEBKIT_DISABLE_DMABUF_RENDERER: "1"
-        run: xvfb-run -a node scripts/ci-platform.mjs build linux --smoke
+        run: xvfb-run -a bun scripts/ci-platform.mjs build linux --smoke
       - uses: actions/upload-artifact@v7.0.1
         if: always()
         with:

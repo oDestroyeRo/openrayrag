@@ -2,7 +2,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { chmod, mkdtemp, open, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, posix, win32 } from "node:path";
+import { join } from "node:path";
 
 export const REPOSITORY = "oDestroyeRo/openrayrag";
 export const MAX_METADATA = 16 * 1024 * 1024;
@@ -16,7 +16,7 @@ export function requireValue(ok, message) {
 
 export function privateEnvironment(folder, environment = process.env) {
   const clean = Object.fromEntries(Object.entries(environment).filter(([key]) =>
-    !/TOKEN|PASSWORD|SECRET|AUTH|COOKIE|GITHUB|GH_|TAURI_SIGNING|GIT_|NPM_CONFIG|NODE_OPTIONS|NODE_PATH/i.test(key),
+    !/TOKEN|PASSWORD|SECRET|AUTH|COOKIE|GITHUB|GH_|TAURI_SIGNING|GIT_|NPM_CONFIG|NODE_OPTIONS|NODE_PATH|^BUN_/i.test(key),
   ));
   return {
     ...clean,
@@ -25,14 +25,16 @@ export function privateEnvironment(folder, environment = process.env) {
     NPM_CONFIG_USERCONFIG: join(folder, "empty-config"),
     NPM_CONFIG_GLOBALCONFIG: join(folder, "empty-global-config"),
     NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/",
-    NPM_CONFIG_CACHE: join(folder, "npm-cache"),
+    // Bun merges global package-manager config even with an explicit --config.
+    XDG_CONFIG_HOME: folder,
+    BUN_INSTALL_CACHE_DIR: join(folder, "bun-cache"),
   };
 }
 
 export async function createReportDirectory() {
   const folder = await mkdtemp(join(tmpdir(), "rayrag-public-proof-"));
   await chmod(folder, 0o700);
-  for (const name of ["empty-config", "empty-global-config"])
+  for (const name of ["empty-config", "empty-global-config", ".bunfig.toml", ".npmrc"])
     await writeFile(join(folder, name), "", { flag: "wx", mode: 0o600 });
   return folder;
 }
@@ -57,13 +59,15 @@ export function runReadOnly(command, args, options = {}) {
   }
 }
 
-export function npmInstallCommand(environment = process.env, platform = process.platform) {
-  const path = platform === "win32" ? win32 : posix;
-  const cli = environment.npm_execpath;
-  requireValue(typeof cli === "string" && path.isAbsolute(cli) && path.basename(cli) === "npm-cli.js",
-    "Run verification through npm run release:verify.");
-  // Use the launching npm's JavaScript entry point, including on Windows.
-  return { file: process.execPath, args: [cli, "ci", "--ignore-scripts", "--no-audit", "--no-fund"] };
+export function bunInstallCommand(migrate = false, versions = process.versions) {
+  requireValue(typeof versions.bun === "string", "Run verification with Bun: bun run release:verify.");
+  // Spawn Bun itself, including bun.exe on Windows, without a shell or shim.
+  // Historical npm locks are imported only inside this private proof directory.
+  return { file: process.execPath, args: [
+    "install", ...(migrate ? ["--lockfile-only", "--save-text-lockfile"] : ["--frozen-lockfile"]),
+    "--ignore-scripts", "--omit=peer", "--no-env-file", "--config=bunfig.toml",
+    "--registry=https://registry.npmjs.org/",
+  ] };
 }
 
 export function githubMetadata(repository = REPOSITORY, execute = runReadOnly) {

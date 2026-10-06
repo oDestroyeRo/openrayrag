@@ -35,7 +35,7 @@ test('native security is shared by PR, merge queue, main release and daily scans
   assert.equal(init.with.queries, 'security-extended');
   const setup = security.jobs.codeql.steps.find(step => step.run?.includes('rustup'));
   assert.equal(setup.if, "matrix.language == 'rust'");
-  assert.ok(setup.run.includes('npm run bridge'));
+  assert.ok(setup.run.includes('bun run bridge'));
   assert.ok(setup.run.includes('libwebkit2gtk-4.1-dev'));
 });
 
@@ -54,6 +54,19 @@ test('dependency review covers development, runtime and unknown packages on PRs 
   assert.notEqual(review.with['vulnerability-check'], false);
 });
 
+test('Bun audits both complete locks with the exception confined to isolated release tools', () => {
+  const job = security.jobs['bun-audit'];
+  assert.equal(job.if, undefined);
+  const setup = job.steps.find(step => step.uses?.startsWith('oven-sh/setup-bun@'));
+  assert.equal(setup.with['bun-version-file'], '.bun-version');
+  const audits = job.steps.filter(step => step.run);
+  assert.deepEqual(audits.map(step => [step['working-directory'] ?? '.', step.run]), [
+    ['.', 'bun audit --audit-level=high'],
+    ['tools/release', 'bun audit --audit-level=high --ignore=GHSA-vfj7-8cjw-p6xm'],
+  ]);
+  assert.equal(security.jobs.verify.steps[0].env.BUN_AUDIT_RESULT, '${{ needs.bun-audit.result }}');
+});
+
 test('required gates reject failed, cancelled, skipped or missing applicable security checks', () => {
   const outcomes = ['success', 'failure', 'cancelled', 'skipped', ''];
   for (const quality of outcomes) for (const scans of outcomes) {
@@ -63,13 +76,13 @@ test('required gates reject failed, cancelled, skipped or missing applicable sec
   }
   const gate = security.jobs.verify;
   assert.equal(gate.if, 'always()');
-  assert.deepEqual(gate.needs, ['codeql', 'dependency-review']);
+  assert.deepEqual(gate.needs, ['codeql', 'dependency-review', 'bun-audit']);
   for (const event of ['pull_request', 'merge_group', 'push', 'schedule', 'workflow_dispatch']) {
-    for (const scans of outcomes) for (const review of outcomes) {
+    for (const scans of outcomes) for (const review of outcomes) for (const audit of outcomes) {
       const applicable = event === 'pull_request' || event === 'merge_group';
       assert.equal(succeeds(gate.steps[0].run, {
-        EVENT_NAME: event, CODEQL_RESULT: scans, DEPENDENCY_RESULT: review,
-      }), scans === 'success' && review === (applicable ? 'success' : 'skipped'));
+        EVENT_NAME: event, CODEQL_RESULT: scans, DEPENDENCY_RESULT: review, BUN_AUDIT_RESULT: audit,
+      }), scans === 'success' && audit === 'success' && review === (applicable ? 'success' : 'skipped'));
     }
   }
 });
@@ -103,7 +116,7 @@ test('versioned actions and scan permissions preserve the release trust boundary
 test('Dependabot checks all shipped ecosystems every calendar day without bypassing CI', () => {
   assert.equal(dependabot.version, 2);
   assert.deepEqual(dependabot.updates.map(update => [update['package-ecosystem'], update.directory]), [
-    ['npm', '/'], ['npm', '/tools/release'], ['cargo', '/src-tauri'], ['github-actions', '/'],
+    ['bun', '/'], ['bun', '/tools/release'], ['cargo', '/src-tauri'], ['github-actions', '/'],
   ]);
   for (const update of dependabot.updates) {
     assert.deepEqual(update.schedule, { interval: 'cron', cronjob: '17 9 * * *', timezone: 'Asia/Bangkok' });
@@ -121,10 +134,10 @@ test('Dependabot checks all shipped ecosystems every calendar day without bypass
 });
 
 test('the braces advisory exception cannot reach the desktop dependency graph or publisher plugins', async () => {
-  const root = JSON.parse(await readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  const root = Bun.JSONC.parse(await readFile(new URL('../bun.lock', import.meta.url), 'utf8'));
   for (const path of Object.keys(root.packages)) {
-    assert.doesNotMatch(path, /(?:^|\/)node_modules\/(?:braces|micromatch)(?:\/|$)/, path);
-    assert.doesNotMatch(path, /(?:^|\/)node_modules\/@semantic-release\//, path);
+    assert.doesNotMatch(path, /(?:^|\/)(?:braces|micromatch)(?:\/|$)/, path);
+    assert.doesNotMatch(path, /(?:^|\/)@semantic-release\//, path);
   }
   const manifest = JSON.parse(await readFile(new URL('../tools/release/package.json', import.meta.url), 'utf8'));
   assert.equal(manifest.dependencies, undefined);
@@ -133,24 +146,24 @@ test('the braces advisory exception cannot reach the desktop dependency graph or
     'conventional-changelog-conventionalcommits', 'semver',
   ]);
   assert.equal(manifest.overrides['conventional-changelog-writer'], '9.2.1');
-  const lock = JSON.parse(await readFile(new URL('../tools/release/package-lock.json', import.meta.url), 'utf8'));
+  const lock = Bun.JSONC.parse(await readFile(new URL('../tools/release/bun.lock', import.meta.url), 'utf8'));
   for (const path of Object.keys(lock.packages)) {
-    assert.doesNotMatch(path, /(?:^|\/)node_modules\/(?:semantic-release|@semantic-release\/(?:npm|github|git))(?:\/|$)/, path);
+    assert.doesNotMatch(path, /(?:^|\/)(?:semantic-release|@semantic-release\/(?:npm|github|git))(?:\/|$)/, path);
   }
-  const npmrc = (await readFile(new URL('../tools/release/.npmrc', import.meta.url), 'utf8'))
-    .split(/\r?\n/).map(line => line.trim()).filter(line => line && !/^[#;]/.test(line));
-  assert.deepEqual(npmrc, ['legacy-peer-deps=true']);
+  const config = Bun.TOML.parse(await readFile(new URL('../tools/release/bunfig.toml', import.meta.url), 'utf8'));
+  assert.equal(config.install.peer, false);
+  assert.equal(config.run.bun, true);
 });
 
 test('required quality checks execute the installed official-engine zero-braces guard', async () => {
   const guard = await readFile(new URL('./semantic-release-plan-tests.mjs', import.meta.url), 'utf8');
   assert.ok(guard.includes('official engines never call vulnerable braces walkers and use only trusted matcher patterns'));
   const quality = desktop.jobs.quality.steps.map(step => step.run ?? '').join('\n');
-  assert.ok(quality.includes('npm run check'));
+  assert.ok(quality.includes('bun run check'));
   const { verificationPlan } = await import('./check.mjs');
   const plan = await verificationPlan();
-  const install = plan.findIndex(step => step.tool === 'npm' && step.args.join(' ').startsWith('ci --prefix tools/release'));
-  const tests = plan.findIndex(step => step.tool === 'node' && step.args.includes('scripts/semantic-release-plan-tests.mjs'));
+  const install = plan.findIndex(step => step.tool === 'bun' && step.args.join(' ').startsWith('install --cwd tools/release --frozen-lockfile'));
+  const tests = plan.findIndex(step => step.tool === 'bun' && step.args.includes('./scripts/semantic-release-plan-tests.mjs'));
   assert.ok(install >= 0 && tests > install);
   assert.deepEqual(desktop.jobs.verify.needs, ['quality', 'security']);
   assert.equal(desktop.jobs.release.needs, 'verify');
