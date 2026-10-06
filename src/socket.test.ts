@@ -1,6 +1,6 @@
 import { validateFormSettings } from './settings';
 import { admitInventoryItem, inventoryItemDraft } from './character-state-logic';
-import { bagId as domainBagId } from './domain-values';
+import { bagId as domainBagId, itemId, quantity, revisionFor } from './domain-values';
 import {describe,expect,it} from 'vitest';
 import {ManualSocket,SOCKET_METADATA,type SocketContext} from './socket';
 import {socketCommand,validateSocketEnvelope,type SocketAction} from './socket-protocol';
@@ -19,8 +19,8 @@ const card=():InventoryItem=>({bagId:4002,itemId:4002,type:1,count:3});
 function setup(sendThrow=false){
   let now=1000;const sent:SocketAction[]=[],state=new CharacterState();
   state.apply({type:'inventory',items:[weapon(),card(),{bagId:501,itemId:501,type:1,count:5}],equipment:Array(10).fill(0),ammoId:-1},1);
-  const context:SocketContext={ready:true,settled:true,character:'Test',identity:'world:1:1',readbackKey:'world:1:1',connection:1,map:'prontera',inventoryKnown:true,equipmentKnown:true,
-    inventoryRevision:state.inventoryRevision,equipmentRevision:state.equipmentRevision,inventory:state.inventory,equipment:state.equipment,ammoId:-1,floors:new Map([[4002,1]])};
+  const context:SocketContext={ready:true,settled:true,character:'Test',identity:'world:1:1',readbackKey:'world:1:1',connection:revisionFor('connection',1),map:'prontera',inventoryKnown:true,equipmentKnown:true,
+    inventoryRevision:state.inventoryRevision,equipmentRevision:state.equipmentRevision,inventory:state.inventory,equipment:state.equipment,ammoId:-1,floors:new Map([[itemId(4002),quantity(1)]])};
   const c=()=>({...context,inventory:state.inventory,inventoryKnown:state.inventoryKnown,inventoryRevision:state.inventoryRevision,
     equipmentRevision:state.equipmentRevision,equipment:state.equipment,ammoId:state.ammoId});
   const owner=new ManualSocket(a=>{sent.push(a);if(sendThrow)throw Error('write');},()=>now,()=> 'a'.repeat(32));
@@ -85,7 +85,7 @@ describe('manual one-card socket boundaries',()=>{
     if(condition==='regularTarget')t.type=1;if(condition==='unknownClass')t.itemId=501;
     s.state.inventory.set(domainBagId(20001),admitInventoryItem(t));
     if(condition==='incompatible')s.state.inventory.set(domainBagId(4002),admitInventoryItem({...card(),bagId:4002,itemId:4001}));
-    if(condition==='uniqueCard')s.state.inventory.set(domainBagId(4002),admitInventoryItem({...card(),type:2}));if(condition==='reserve')s.context.floors=new Map([[4002,3]]);
+    if(condition==='uniqueCard')s.state.inventory.set(domainBagId(4002),admitInventoryItem({...card(),type:2}));if(condition==='reserve')s.context.floors=new Map([[itemId(4002),quantity(3)]]);
     if(condition==='missingBag')s.state.inventory.delete(domainBagId(20001));if(condition==='equipped')s.state.equipment[9]=20001;if(condition==='ammo')s.state.ammoId=20001;
     expect(()=>s.prepare()).toThrow();expect(s.sent).toEqual([]);
   });
@@ -97,7 +97,7 @@ describe('manual one-card socket boundaries',()=>{
     if(change==='inventoryRevision')s.state.inventoryRevision++;if(change==='equipmentRevision')s.state.equipmentRevision++;
     const changed={...inventoryItemDraft(t)};
     if(change==='guid')changed.guid='b'.repeat(32);if(change==='itemId')changed.itemId=1101;if(change==='count')changed.count=2;if(change==='refine')changed.refine=5;
-    if(change==='flags')changed.flags=2;if(change==='slots')changed.slots=[4002,4002,0,0];s.state.inventory.set(t.bagId,admitInventoryItem(changed));if(change==='reserve')s.context.floors=new Map([[4002,2]]);
+    if(change==='flags')changed.flags=2;if(change==='slots')changed.slots=[4002,4002,0,0];s.state.inventory.set(t.bagId,admitInventoryItem(changed));if(change==='reserve')s.context.floors=new Map([[itemId(4002),quantity(2)]]);
     if(change==='identity')s.context.identity='new';if(change==='connection')s.context.connection++;if(change==='map')s.context.map='other';
     if(change==='dead')s.context.ready=false;if(change==='unsettled')s.context.settled=false;if(change==='unknownInventory')s.state.inventoryKnown=false;
     if(change==='unknownEquipment')s.context.equipmentKnown=false;
@@ -160,7 +160,7 @@ describe('manual one-card socket boundaries',()=>{
     expect(s.owner.busy).toBe(true);s.context.character='Other';s.observe({type:'inventory',items:[weapon(),card()],equipment:[],ammoId:-1});expect(s.owner.busy).toBe(true);
   });
   it('can reconcile initialization inventory observed before the own spawn without inventing an outcome',()=>{
-    const s=setup();s.dispatch();s.context.connection=2;s.context.ready=false;s.context.identity='';s.context.readbackKey='new-enter';s.context.character='';s.owner.tick(s.c());
+    const s=setup();s.dispatch();s.context.connection=revisionFor('connection',2);s.context.ready=false;s.context.identity='';s.context.readbackKey='new-enter';s.context.character='';s.owner.tick(s.c());
     s.observe({type:'inventory',items:[weapon(),card()],equipment:Array(10).fill(0),ammoId:-1});expect(s.owner.busy).toBe(true);
     s.context.identity='new-world:1:1';s.context.character='Test';s.context.ready=true;s.owner.tick(s.c());
     expect(s.owner.snapshot(s.c()).state).toBe('reconciled');expect(s.sent).toHaveLength(1);expect(()=>s.prepare()).toThrow('already sent');

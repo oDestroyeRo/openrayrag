@@ -1,3 +1,5 @@
+import { admitInventoryItem } from './character-state-logic';
+import { milliseconds } from './domain-values';
 import type { GameEvent } from './protocol';
 import type { InventoryItemInput as InventoryItem } from './protocol-feature';
 import { validateSocketRequest, validateSocketSelection, type SocketAction } from './socket-protocol';
@@ -24,7 +26,7 @@ export class ManualSocket {
     if((SOCKET_METADATA[item.itemId]!.mask&SOCKET_METADATA[source.itemId]!.mask)===0)throw new Error('This card does not match the target equipment mask.');
     const slot=t.slots.slice(0,t.capacity).indexOf(0),fingerprint=JSON.stringify([item.guid,item.itemId,item.flags,item.refine,item.slots,source.itemId]);
     if(this.attempted.has(fingerprint)||this.attempted.size>=200)throw new Error('This exact socket attempt was already sent or the session attempt limit was reached. It cannot be replayed.');
-    this.prepared={view:{...selection,previewToken:this.token(),target:t,card:s,slot,cost:1},target:clone(item),card:clone(source),context:binding(c),reserve:s.reserve,fingerprint};
+    this.prepared={view:{...selection,previewToken:this.token(),target:t,card:s,slot,cost:1},target:admitInventoryItem(item),card:admitInventoryItem(source),context:binding(c),reserve:s.reserve,fingerprint};
     this.state='preview';this.reason=`Consume 1 ${s.name}; fill slot ${slot+1} of ${t.name}. Installed cards cannot be removed by this action.`;
   }
   dispatch(input:unknown,c:SocketContext):void {
@@ -33,8 +35,8 @@ export class ManualSocket {
     if(this.busy||!p||request.previewToken!==p.view.previewToken||request.targetBagId!==p.target.bagId||request.cardBagId!==p.card.bagId
       ||binding(c)!==p.context||!same(c.inventory.get(p.target.bagId),p.target)||!same(c.inventory.get(p.card.bagId),p.card)
       ||(c.floors.get(p.card.itemId)??0)!==p.reserve||!target(p.target,c)||!card(p.card,c))throw new Error('Socket preview is stale. Request a new preview.');
-    this.receipt={prepared:p,inventory:new Map([...c.inventory].map(([id,i])=>[id,clone(i)])),equipment:[...c.equipment],ammoId:c.ammoId,
-      character:c.character,identity:c.identity,connection:c.connection,map:c.map,deadline:this.now()+10_000,cardSeen:false,targetSeen:false,canceled:false,dirty:false};
+    this.receipt={prepared:p,inventory:new Map([...c.inventory].map(([id,i])=>[id,admitInventoryItem(i)])),equipment:[...c.equipment],ammoId:c.ammoId,
+      character:c.character,identity:c.identity,connection:c.connection,map:c.map,deadline:milliseconds(this.now()+10_000),cardSeen:false,targetSeen:false,canceled:false,dirty:false};
     this.attempted.add(p.fingerprint);this.prepared=null;this.state='pending';this.reason='One socket request sent. Waiting for the exact card decrement and target mutation; no retry.';
     try{this.send({type:'socket',targetBagId:request.targetBagId,cardBagId:request.cardBagId});}
     catch{this.cancel('Socket write is uncertain. The request will not be retried.');throw new Error(this.reason);}

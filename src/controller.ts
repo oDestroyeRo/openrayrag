@@ -1,4 +1,4 @@
-import { quantity } from './domain-values';
+import { quantity, revisionFor, type ItemId, type Quantity } from './domain-values';
 import { skillId as domainSkillId, itemId as domainItemId, bagId as domainBagId } from './domain-values';
 import { filter, map } from 'remeda';
 import { fieldIdentityWaitReason, fieldResumeDecision } from './controller-field-policy';
@@ -136,7 +136,7 @@ export class CompanionController {
   private supplyCloseSent=false; private supplyReturnApproach=false;private supplyServiceStarted=false;private supplyServiceContract:string|null=null;private supplyStorageFull:SupplyPhaseEvidence['storageFull']=null;private sendingSupply=false;
   private readonly dispositionMetadata=publishedDispositionMetadata();
   readonly socket: ManualSocket;
-  private socketFloors:ReadonlyMap<number,number>|null=null;
+  private socketFloors:ReadonlyMap<ItemId,Quantity>|null=null;
   private socketInitialization:{key:string;identity:string|null}|null=null;
   readonly social: ManualSocial;
   readonly memo: ManualMemo;
@@ -423,7 +423,7 @@ export class CompanionController {
   private initializationResourceRevision(strong:boolean):string|null {
     if(!this.engine.observedOwnCastSettled()||this.engine.retreatOwned||this.partyFollow.ownsTravel||this.partyHeal.busy||this.partyHeal.awaitingSpReadback||!this.movementSettled())return null;
     const c=this.refineContext();
-    const revisions=[c.connection,c.inventoryRevision,c.equipmentRevision,c.currencyRevision];
+    const revisions:number[]=[c.connection,c.inventoryRevision,c.equipmentRevision,c.currencyRevision];
     if(strong)revisions.push(this.engine.character.spRevision,this.engine.character.skillsRevision);
     return c.inventory&&c.equipment&&c.zeny!==null?JSON.stringify(revisions):null;
   }
@@ -619,7 +619,7 @@ export class CompanionController {
   private serviceContext(): ServiceContext {
     return { ...this.context(), player:this.engine.player, actors:[...this.engine.actors.values()], connection:this.connectionEpoch, inventoryKnown:this.engine.character.inventoryKnown };
   }
-  private socketContext(floors:ReadonlyMap<number,number>=this.socketFloors??socketStockFloors(automationSettings(this.engine.settings))): SocketContext {
+  private socketContext(floors:ReadonlyMap<ItemId,Quantity>=this.socketFloors??socketStockFloors(automationSettings(this.engine.settings))): SocketContext {
     const e=this.engine,c=e.character,p=e.player,actor=e.actorActionIdentity();
     const stationary=this.movementSettled();
     const identity=actor?JSON.stringify([actor.world,actor.selfId,actor.selfIncarnation]):'';
@@ -630,7 +630,7 @@ export class CompanionController {
         &&!this.social.busy&&!this.escape.busy&&!this.supply.ownsField&&!this.supply.uncertain&&!this.service.active&&!this.travel.active
         &&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)&&e.featureActionsSettled&&e.idleForActions()
         &&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil&&this.heartbeatHealthy&&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending,
-      character:p?.name??'',identity,readbackKey,connection:this.connectionEpoch,map:e.map,inventoryKnown:c.inventoryKnown,
+      character:p?.name??'',identity,readbackKey,connection:revisionFor('connection',this.connectionEpoch),map:e.map,inventoryKnown:c.inventoryKnown,
       equipmentKnown:c.inventoryKnown&&c.equipmentRevision>0,inventoryRevision:c.inventoryRevision,equipmentRevision:c.equipmentRevision,
       inventory:c.inventory,equipment:c.equipment,ammoId:c.ammoId,floors};
   }
@@ -667,10 +667,10 @@ export class CompanionController {
     const init=this.refineInitialization;if(init&&identity&&init.identity===null)init.identity=identity;
     const readbackKey=identity?(init?.identity===identity?init.key:identity):init?.identity===null?init.key:null;
     return {ready:!!p&&!p.dead&&!!identity&&e.connected&&e.compatible&&this.heartbeatHealthy&&this.now()-this.lastFrame<=15000,
-      settled:!this.warp.blocked&&this.refineRuntimeSettled(),identity,character:p?.name??null,readbackKey,connection:this.connectionEpoch,map:e.map,
+      settled:!this.warp.blocked&&this.refineRuntimeSettled(),identity,character:p?.name??null,readbackKey,connection:revisionFor('connection',this.connectionEpoch),map:e.map,
       npcId,npcIdentity,npcGeneration:this.refineNpcGeneration,npcMode:this.world.npc.mode,promptToken:npcIdentity?this.refinePromptToken:null,
       inventory:c.inventoryKnown?[...c.inventory.values()]:null,equipment:c.inventoryKnown?[...c.equipment,c.ammoId]:null,
-      zeny:c.stats?.zeny??null,inventoryRevision:c.inventoryRevision,equipmentRevision:c.equipmentRevision,currencyRevision:this.supplyCurrencyRevision,activityRevision:this.refineActivityRevision};
+      zeny:c.stats?.zeny??null,inventoryRevision:c.inventoryRevision,equipmentRevision:c.equipmentRevision,currencyRevision:revisionFor('currency',this.supplyCurrencyRevision),activityRevision:revisionFor('activity',this.refineActivityRevision)};
   }
   private socialContext(): SocialContext {
     const p = this.engine.player, c = this.engine.character;
@@ -707,7 +707,7 @@ export class CompanionController {
     const binding=base.actorId!==null&&base.incarnation!==null?{world:base.world,actorId:base.actorId,incarnation:base.incarnation,connectionEpoch:base.connectionEpoch,revision:memo.revision,map:base.map,x:base.x,y:base.y,generation:this.warp.revision,level,inventoryRevision:c.inventoryRevision,equipmentRevision:c.equipmentRevision,spRevision:c.spRevision,skillsRevision:c.skillsRevision}:null;
     return {ready:base.ready,idle:base.idle&&!this.partyFollow.ownsTravel&&!this.partyHeal.busy&&!this.partyHeal.awaitingSpReadback&&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture&&!this.memo.blocked,character:p?.name??'',connection:this.connectionEpoch,binding,slots:memo.slots,
       unavailable:!castSettled?OWN_CAST_WAIT_REASON:readiness.state==='ready'?null:readiness.reason,sp:c.stats?.sp??null,gems:c.inventoryKnown?c.count(domainItemId(717)):null,
-      reserve:Math.max(0,...dispositionStockFloors(policy).filter(row=>row.itemId===717).map(row=>row.count),...(policy.disposition?.rules??[]).filter(row=>row.itemId===717).map(row=>row.keep)),
+      reserve:quantity(Math.max(0,...dispositionStockFloors(policy).filter(row=>row.itemId===717).map(row=>row.count),...(policy.disposition?.rules??[]).filter(row=>row.itemId===717).map(row=>row.keep))),
       cost:readiness.state==='ready'?readiness.profile.spCost:null,resourcesReady:c.inventoryKnown&&c.equipment.length===10&&c.spRevision>0,
       groundAllowed:target=>castSettled&&readiness.state==='ready'&&this.engine.manualWarpGroundAllowed(target,readiness.profile.range,policy)};
   }

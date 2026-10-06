@@ -1,31 +1,35 @@
+import { itemId, quantity, regularItemBagId, type BagId, type ItemId, type Quantity, type Revision, type Milliseconds } from './domain-values';
 import { sort } from 'remeda';
-import { inventoryItemDraft } from './character-state-logic';
+import { inventoryItemDraft, type DomainInventoryItem } from './character-state-logic';
 import catalog from './data/socket-catalog.json';
 import type { InventoryItemInput as InventoryItem } from './protocol-feature';
-import type { SocketSelection } from './socket-protocol';
+import type { SocketSelection, SocketSelectionInput } from './socket-protocol';
 export interface SocketMetadata { code:string; name:string; itemClass:number; mask:number; capacity:number }
 
 export const SOCKET_METADATA: Readonly<Record<string,SocketMetadata>> = catalog.items;
 
 export interface SocketContext {
-  ready:boolean; settled:boolean; character:string; identity:string; connection:number; map:string;
+  ready:boolean; settled:boolean; character:string; identity:string; connection:Revision<'connection'>; map:string;
   readbackKey:string|null;
-  inventoryKnown:boolean; equipmentKnown:boolean; inventoryRevision:number; equipmentRevision:number;
-  inventory:ReadonlyMap<number,InventoryItem>; equipment:readonly number[]; ammoId:number;
-  floors:ReadonlyMap<number,number>;
+  inventoryKnown:boolean; equipmentKnown:boolean; inventoryRevision:Revision<'inventory'>; equipmentRevision:Revision<'equipment'>;
+  inventory:ReadonlyMap<BagId,DomainInventoryItem>; equipment:readonly number[]; ammoId:number;
+  floors:ReadonlyMap<ItemId,Quantity>;
 }
 
-export interface SocketTarget { bagId:number; itemId:number; name:string; refine:number; slots:number[]; capacity:number }
+export interface SocketTarget { readonly bagId:BagId;readonly itemId:ItemId;readonly name:string;readonly refine:number;readonly slots:readonly (ItemId|0)[];readonly capacity:number }
 
-export interface SocketCard { bagId:number; itemId:number; name:string; count:number; reserve:number }
+export interface SocketCard { readonly bagId:BagId;readonly itemId:ItemId;readonly name:string;readonly count:Quantity;readonly reserve:Quantity }
 
-export interface SocketPreview extends SocketSelection {
+export interface SocketPlan extends SocketSelection {
   previewToken:string; target:SocketTarget; card:SocketCard; slot:number; cost:1;
 }
 
+export type SocketTargetSnapshot = Omit<SocketTarget,'bagId'|'itemId'|'slots'> & {bagId:number;itemId:number;slots:readonly number[]};
+export type SocketCardSnapshot = Omit<SocketCard,'bagId'|'itemId'|'count'|'reserve'> & {bagId:number;itemId:number;count:number;reserve:number};
+export interface SocketPreview extends SocketSelectionInput {previewToken:string;target:SocketTargetSnapshot;card:SocketCardSnapshot;slot:number;cost:1}
 export interface SocketSnapshot {
   state:'idle'|'preview'|'pending'|'confirmed'|'uncertain'|'reconciled'; pending:boolean; reason:string;
-  targets:SocketTarget[]; cards:SocketCard[]; preview:SocketPreview|null;
+  targets:SocketTargetSnapshot[]; cards:SocketCardSnapshot[]; preview:SocketPreview|null;
 }
 
 export const clone=inventoryItemDraft;
@@ -42,18 +46,18 @@ function unique(i:InventoryItem):boolean {
     &&i.slots.every(v=>Number.isSafeInteger(v)&&v>=0&&v<=2147483647);
 }
 
-export function target(i:InventoryItem,c:SocketContext):SocketTarget|null {
+export function target(i:DomainInventoryItem,c:SocketContext):SocketTarget|null {
   const m=SOCKET_METADATA[i.itemId];
   if(!m||![2,3].includes(m.itemClass)||m.capacity<1||m.capacity>4||!unique(i)||(i.flags!&1)!==0
     ||c.equipment.includes(i.bagId)||c.ammoId===i.bagId||i.slots!.slice(m.capacity).some(v=>v!==0)
     ||i.slots!.some(v=>v!==0&&(SOCKET_METADATA[v]?.itemClass!==5||(SOCKET_METADATA[v]!.mask&m.mask)===0))
     ||!i.slots!.slice(0,m.capacity).includes(0))return null;
-  return {bagId:i.bagId,itemId:i.itemId,name:m.name,refine:i.refine!,slots:i.slots!.slice(),capacity:m.capacity};
+  return {bagId:i.bagId,itemId:i.itemId,name:m.name,refine:i.refine!,slots:i.slots!.map(value=>value===0?0:itemId(value)),capacity:m.capacity};
 }
 
-export function card(i:InventoryItem,c:SocketContext,enforceReserve=true):SocketCard|null {
-  const m=SOCKET_METADATA[i.itemId],reserve=c.floors.get(i.itemId)??0;
-  return m?.itemClass===5&&i.type===1&&i.bagId===i.itemId&&i.count>0&&(!enforceReserve||i.count>reserve)
+export function card(i:DomainInventoryItem,c:SocketContext,enforceReserve=true):SocketCard|null {
+  const m=SOCKET_METADATA[i.itemId],reserve=c.floors.get(i.itemId)??quantity(0);
+  return m?.itemClass===5&&i.type===1&&i.bagId===regularItemBagId(i.itemId)&&i.count>0&&(!enforceReserve||i.count>reserve)
     ?{bagId:i.bagId,itemId:i.itemId,name:m.name,count:i.count,reserve}:null;
 }
 
@@ -69,10 +73,10 @@ export function requireContext(c:SocketContext):void {
   if(!c.inventoryKnown||!c.equipmentKnown||c.inventory.size>200)throw new Error('Wait for authoritative inventory and equipment.');
 }
 
-export interface Prepared { view:SocketPreview; target:InventoryItem; card:InventoryItem; context:string; reserve:number; fingerprint:string }
+export interface Prepared { view:SocketPlan; target:DomainInventoryItem; card:DomainInventoryItem; context:string; reserve:Quantity; fingerprint:string }
 
-export interface Receipt { prepared:Prepared; inventory:Map<number,InventoryItem>; equipment:number[]; ammoId:number;
-  character:string; identity:string; connection:number; map:string; deadline:number; cardSeen:boolean; targetSeen:boolean; canceled:boolean; dirty:boolean;
-  fresh?:{key:string;connection:number;inventoryRevision:number;equipmentRevision:number} }
+export interface Receipt { prepared:Prepared; inventory:Map<BagId,DomainInventoryItem>; equipment:number[]; ammoId:number;
+  character:string; identity:string; connection:Revision<'connection'>; map:string; deadline:Milliseconds; cardSeen:boolean; targetSeen:boolean; canceled:boolean; dirty:boolean;
+  fresh?:{key:string;connection:Revision<'connection'>;inventoryRevision:Revision<'inventory'>;equipmentRevision:Revision<'equipment'>} }
 
 export const binding=(c:SocketContext):string=>JSON.stringify([c.character,c.identity,c.connection,c.map,c.inventoryRevision,c.equipmentRevision,sort([...c.floors], ([a],[b])=>a-b)]);

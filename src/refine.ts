@@ -1,6 +1,7 @@
+import { milliseconds, type Revision } from './domain-values';
 import catalog from './data/socket-catalog.json';
 import type { GameEvent } from './protocol';
-import { validateRefineRequest, type RefineRequest, type RefinePacket } from './refine-protocol';
+import { validateRefineRequest, type ValidatedRefineRequest, type RefinePacket } from './refine-protocol';
 
 import { REFINE_WINDOW_MS, type RefineContext, type RefineSnapshot, type Prepared, type Receipt, cloneItem, sameItem, contextKey, lifetime, targetAllowed, prepare } from './refine-logic';
 
@@ -11,7 +12,7 @@ export class ManualRefine {
   private state:RefineSnapshot['state']='idle'; private reason='Open the refining dialogue manually, then preview one unequipped item.';
   private prepared:Prepared|null=null; private receipt:Receipt|null=null;
   private officialOwner:{character:string|null}|null=null;
-  private readback:{identity:string;inventoryRevision:number|null;equipmentRevision:number|null;currencyRevision:number|null}|null=null;
+  private readback:{identity:string;inventoryRevision:Revision<'inventory'>|null;equipmentRevision:Revision<'equipment'>|null;currencyRevision:Revision<'currency'>|null}|null=null;
   constructor(private readonly send:(packet:RefinePacket)=>void,private readonly now=Date.now,private readonly token=()=>crypto.randomUUID().replaceAll('-','')){}
   get busy():boolean { return this.state==='pending'; }
   get blocked():boolean { return this.receipt!==null||this.officialOwner!==null; }
@@ -26,11 +27,11 @@ export class ManualRefine {
   dispatch(input:unknown,c:RefineContext):void {
     if(this.blocked)throw new Error('Wait for the previous refine transaction to reconcile.');
     this.tick(c);
-    const request:RefineRequest=validateRefineRequest(input),previous=this.prepared;
+    const request:ValidatedRefineRequest=validateRefineRequest(input),previous=this.prepared;
     if(!previous||request.previewToken!==previous.display.token)throw new Error('Generate a new refine preview.');
     const current=prepare(request,c,previous.display.token);
     if(current.key!==previous.key){this.invalidate();throw new Error('The refine preview changed. Generate a new preview.');}
-    this.receipt={...structuredClone(current),since:this.now(),cancelled:false,oreSeen:false,currencySeen:false,mutation:null,tainted:false};
+    this.receipt={...structuredClone(current),since:milliseconds(this.now()),cancelled:false,oreSeen:false,currencySeen:false,mutation:null,tainted:false};
     this.prepared=null;this.readback=null;this.state='pending';this.reason='Sent one attempt. Waiting for exact ore, zeny and equipment readback.';
     try{this.send({targetBagId:current.item.bagId,oreItemId:current.ore.itemId,catalystBagId:0});}
     catch{this.cancel('Socket write was uncertain. No retry will be sent.');throw new Error(this.reason);}

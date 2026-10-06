@@ -1,3 +1,5 @@
+import { itemId as domainItemId, quantity, revisionFor, incrementRevision } from './domain-values';
+import { admitInventoryItem, type DomainInventoryItem } from './character-state-logic';
 import {describe,it,expect} from 'vitest';
 import {ManualRefine,refineMetadata,type RefineContext} from './refine';
 import {DEFAULT_AUTOMATION} from './settings';
@@ -5,17 +7,19 @@ import type {GameEvent} from './protocol';
 import type {InventoryItem} from './protocol-feature';
 import type {RefinePacket} from './refine-protocol';
 const item:InventoryItem={bagId:700,itemId:1201,type:2,count:1,flags:0,refine:0,guid:'01'.repeat(16),slots:[0,0,0,0]};
+type FixtureItem = {-readonly [K in keyof Omit<DomainInventoryItem,'slots'>]: DomainInventoryItem[K]} & {slots?:number[]};
+function fixtureItem(item:InventoryItem):FixtureItem {return {...admitInventoryItem(item),slots:item.slots?.slice()};}
 const policy=structuredClone(DEFAULT_AUTOMATION);
-function fixture(start=0,itemId=1201){let now=1000;const sent:RefinePacket[]=[];const target={...structuredClone(item),itemId,refine:start},meta=refineMetadata(itemId)!;
- const context:Omit<RefineContext,'inventory'> & {inventory:InventoryItem[]|null}={ready:true,settled:true,identity:'own-life',character:'Synthetic',readbackKey:'session-initialization',connection:1,map:'prt_in',npcId:0,npcIdentity:'npc-life',npcGeneration:2,npcMode:'refine',promptToken:'bb'.repeat(16),
-  inventory:[target,{bagId:meta.oreItemId,itemId:meta.oreItemId,type:1,count:3}],equipment:Array(14).fill(0),zeny:100000,inventoryRevision:1,equipmentRevision:1,currencyRevision:1,activityRevision:1};
+function fixture(start=0,itemId=1201){let now=1000;const sent:RefinePacket[]=[];const target={...structuredClone(item),itemId,refine:start},meta=refineMetadata(domainItemId(itemId))!;
+ const context:Omit<RefineContext,'inventory'|'equipment'> & {inventory:FixtureItem[]|null;equipment:number[]|null}={ready:true,settled:true,identity:'own-life',character:'Synthetic',readbackKey:'session-initialization',connection:revisionFor('connection',1),map:'prt_in',npcId:0,npcIdentity:'npc-life',npcGeneration:2,npcMode:'refine',promptToken:'bb'.repeat(16),
+  inventory:[fixtureItem(target),fixtureItem({bagId:meta.oreItemId,itemId:meta.oreItemId,type:1,count:3})],equipment:Array(14).fill(0),zeny:100000,inventoryRevision:revisionFor('inventory',1),equipmentRevision:revisionFor('equipment',1),currencyRevision:revisionFor('currency',1),activityRevision:revisionFor('activity',1)};
  const owner=new ManualRefine(packet=>sent.push(packet),()=>now,()=> 'aa'.repeat(16));
  const input={targetBagId:target.bagId,catalystBagId:0 as const,policy,maxSpend:10000,minZeny:0};
  const preview=()=>{owner.preview(input,context);return{...input,previewToken:owner.snapshot(context).preview!.token};};
  const send=()=>owner.dispatch(preview(),context);
- const observe=(e:GameEvent)=>{if(e.type==='inventoryDelta'){const row=context.inventory!.find(row=>row.bagId===e.bagId);if(row)row.count-=e.change;context.inventoryRevision++;}
-  if(e.type==='inventoryItem'){const at=context.inventory!.findIndex(row=>row.bagId===e.item.bagId);if(at>=0)context.inventory![at]=structuredClone(e.item);context.inventoryRevision++;}
-  if(e.type==='currency'){context.zeny=e.zeny;context.currencyRevision++;} owner.observe([e],context);};
+ const observe=(e:GameEvent)=>{if(e.type==='inventoryDelta'){const row=context.inventory!.find(row=>row.bagId===e.bagId);if(row)row.count=quantity(row.count-e.change);context.inventoryRevision=incrementRevision(context.inventoryRevision);}
+  if(e.type==='inventoryItem'){const at=context.inventory!.findIndex(row=>row.bagId===e.item.bagId);if(at>=0)context.inventory![at]=fixtureItem(e.item);context.inventoryRevision=incrementRevision(context.inventoryRevision);}
+  if(e.type==='currency'){context.zeny=e.zeny;context.currencyRevision=incrementRevision(context.currencyRevision);} owner.observe([e],context);};
  const ore=():GameEvent=>({type:'inventoryDelta',add:false,bagId:meta.oreItemId,change:1,weight:0});
  const currency=():GameEvent=>({type:'currency',zeny:100000-meta.zenyCost});
  const mutation=(delta=1):GameEvent=>({type:'inventoryItem',item:{...structuredClone(target),refine:start+delta}});
@@ -27,23 +31,23 @@ describe('single no-catalyst refine owner',()=>{
   expect(f.owner.snapshot(f.context).state).toBe('improved');expect(f.sent).toEqual([{targetBagId:700,oreItemId:1010,catalystBagId:0}]);});
  it('distinguishes permitted downgrade and rejects a downgrade at a guaranteed source threshold',()=>{const risky=fixture(7);risky.send();risky.observe(risky.mutation(-1));risky.observe(risky.ore());risky.observe(risky.currency());expect(risky.owner.snapshot(risky.context).state).toBe('downgraded');
   const safe=fixture(1);safe.send();safe.observe(safe.ore());safe.observe(safe.currency());safe.observe(safe.mutation(-1));expect(safe.owner.snapshot(safe.context).state).toBe('uncertain');});
- it.each([1,2,3,4,0])('publishes correct rank %s resource and source threshold metadata',rank=>{const ids=[1201,1250,1119,1136,2101];const id=ids[rank===0?4:rank-1]!;const meta=refineMetadata(id)!;expect(meta.rank).toBe(rank);
+ it.each([1,2,3,4,0])('publishes correct rank %s resource and source threshold metadata',rank=>{const ids=[1201,1250,1119,1136,2101];const id=ids[rank===0?4:rank-1]!;const meta=refineMetadata(domainItemId(id))!;expect(meta.rank).toBe(rank);
   expect([meta.oreItemId,meta.zenyCost]).toEqual(({1:[1010,200],2:[1011,1000],3:[984,5000],4:[984,10000],0:[985,2000]} as Record<number,number[]>)[rank]);expect(meta.thresholds).toHaveLength(10);expect(meta.thresholds[0]).toBe(100);});
  it.each(['equipped','unknown','nonrefinable','plus10','guid','cards','missingOre','insufficientOre','budget','zeny','floor','reserve','dispositionBudget','mode','npc','unsettled','unready'] as const)('rejects %s before transport',kind=>{const f=fixture();
-  if(kind==='equipped')f.context.equipment![12]=700;else if(kind==='unknown')f.context.inventory![0]!.itemId=999999;
-  else if(kind==='nonrefinable')f.context.inventory![0]!.itemId=2601;else if(kind==='plus10')f.context.inventory![0]!.refine=10;
+  if(kind==='equipped')f.context.equipment![12]=700;else if(kind==='unknown')f.context.inventory![0]!.itemId=domainItemId(999999);
+  else if(kind==='nonrefinable')f.context.inventory![0]!.itemId=domainItemId(2601);else if(kind==='plus10')f.context.inventory![0]!.refine=10;
   else if(kind==='guid')delete f.context.inventory![0]!.guid;else if(kind==='cards')delete f.context.inventory![0]!.slots;
-  else if(kind==='missingOre')f.context.inventory!.pop();else if(kind==='insufficientOre')f.context.inventory![1]!.count=0;
+  else if(kind==='missingOre')f.context.inventory!.pop();else if(kind==='insufficientOre')f.context.inventory![1]!.count=quantity(0);
   else if(kind==='budget')f.input.maxSpend=199;else if(kind==='zeny')f.context.zeny=199;else if(kind==='reserve')f.input.minZeny=100000;
   else if(kind==='floor')f.input.policy={...structuredClone(policy),items:[{itemId:1010,resource:'hp',belowPercent:50,minStock:3,cooldownSeconds:1}]};
   else if(kind==='dispositionBudget')f.input.policy={...structuredClone(policy),disposition:{rules:[],maxSpend:199}};
   else if(kind==='mode')f.context.npcMode='dialog';else if(kind==='npc')f.context.npcIdentity=null;else if(kind==='unsettled')f.context.settled=false;else f.context.ready=false;
   expect(()=>f.send()).toThrow();expect(f.sent).toEqual([]);});
  it.each(['revision','sameRevisionMutation','policy','npcLife','ownLife','equipment','currency','npcGeneration','activity'] as const)('invalidates preview for %s',kind=>{const f=fixture(),request=f.preview();
-  if(kind==='revision')f.context.inventoryRevision++;else if(kind==='sameRevisionMutation')f.context.inventory![0]!.slots![0]=4001;
+  if(kind==='revision')f.context.inventoryRevision=incrementRevision(f.context.inventoryRevision);else if(kind==='sameRevisionMutation')f.context.inventory![0]!.slots![0]=4001;
   else if(kind==='policy')request.policy={...structuredClone(policy),items:[{itemId:1010,resource:'hp',belowPercent:50,minStock:1,cooldownSeconds:1}]};
-  else if(kind==='npcLife')f.context.npcIdentity='new';else if(kind==='ownLife')f.context.identity='new';else if(kind==='equipment')f.context.equipmentRevision++;
-  else if(kind==='currency')f.context.currencyRevision++;else if(kind==='activity')f.context.activityRevision++;else f.context.npcGeneration++;
+  else if(kind==='npcLife')f.context.npcIdentity='new';else if(kind==='ownLife')f.context.identity='new';else if(kind==='equipment')f.context.equipmentRevision=incrementRevision(f.context.equipmentRevision);
+  else if(kind==='currency')f.context.currencyRevision=incrementRevision(f.context.currencyRevision);else if(kind==='activity')f.context.activityRevision=incrementRevision(f.context.activityRevision);else f.context.npcGeneration++;
   expect(()=>f.owner.dispatch(request,f.context)).toThrow();expect(f.sent).toEqual([]);});
  it.each(['costOnly','wrongGuid','wrongCards','wrongFlags','wrongCount','wrongBag','wrongDelta','unchanged','extraDebit','duplicateMutation','duplicateOre'] as const)('does not confirm %s',kind=>{const f=fixture();f.send();f.observe(f.ore());f.observe(f.currency());
   const e=f.mutation();if(e.type!=='inventoryItem')throw new Error();
