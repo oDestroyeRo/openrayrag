@@ -954,7 +954,8 @@ export class CompanionController {
     }
     for(const event of events){
       const movementOwner=movementReceipts.get(event);
-      const ownedMovementReceipt=!!movementOwner&&!!memoActor&&movementOwner.world===memoActor.world
+      const movementWorld:string|undefined=movementOwner?.world;
+      const ownedMovementReceipt=!!movementOwner&&!!memoActor&&movementWorld===memoActor.world
         &&movementOwner.id===memoActor.selfId&&movementOwner.incarnation===memoActor.selfIncarnation;
       if(event.type==='walk'&&event.id===memoPlayer?.id){
         this.memoMovementUnknown=true;const end=event.walk.cells.at(-1);

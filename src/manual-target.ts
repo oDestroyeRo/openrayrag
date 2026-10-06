@@ -8,7 +8,7 @@ import type { Position } from './protocol';
 
 import { type ManualTargetRequest, manualTargetSettings, manualAmmoGuard, type ManualPreviewContext, sameActionIdentity, manualStateBlocker } from './manual-target-logic';
 
-export { type ManualTargetPolicy, type ManualTargetRequest, type ManualTargetSnapshot, IDLE_MANUAL_TARGET, validateActionIdentity, validateManualTargetPolicy, manualTargetPolicy, validateManualTargetRequest, manualTargetSettings, manualEngineSettings, type ManualEngineSettings, manualAmmoGuard, type ManualPreviewContext, sameActionIdentity, manualStateBlocker } from './manual-target-logic';
+export { type ManualTargetPolicy, type ManualTargetRequestInput, type ManualTargetRequest, type ManualTargetSnapshot, IDLE_MANUAL_TARGET, validateActionIdentity, validateManualTargetPolicy, manualTargetPolicy, validateManualTargetRequest, manualTargetSettings, manualEngineSettings, type ManualEngineSettings, manualAmmoGuard, type ManualPreviewContext, sameActionIdentity, manualStateBlocker } from './manual-target-logic';
 
 export function previewManualTarget(request:ManualTargetRequest,c:ManualPreviewContext,gridFor:(map:string)=>WalkGrid|null=searchGrid):Position[] {
   const p=c.player,policy=request.policy,area=policy.mapPolicy??DEFAULT_MAP_POLICY;

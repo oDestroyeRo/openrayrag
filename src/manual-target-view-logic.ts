@@ -1,5 +1,6 @@
 import { filter, find, map, pipe } from 'remeda';
 import { validActorSnapshot } from './actor-observations-logic';
+import { checkedEngagementIdentity } from './attack-strategy-logic';
 import type { CharacterSnapshot } from './character-state-logic';
 import { manualTargetPolicy, validateManualTargetRequest, type ManualPreviewContext, type ManualTargetRequest } from './manual-target-logic';
 import type { Entity, Position } from './protocol';
@@ -42,7 +43,7 @@ export function manualTargetView(status: Record<string, unknown>, settings: Sett
   const target = observed ? (status.monsters as Entity[] ?? []).find(actor => actor.id === observed.id) ?? null : null;
   const world = object(status.world), npc = object(world.npc);
   return { request, context: { map: status.map, player, owner: request.owner, target,
-    targetIdentity: observed ? { world: actors.world, id: observed.id, incarnation: observed.incarnation } : null,
+    targetIdentity: request.command.type==='attack' ? checkedEngagementIdentity(request.command.target) : null,
     character: status.character as CharacterSnapshot, observations: { ...actors, candidateId: target?.id ?? null },
     interactionBusy: world.vending != null || npc.id != null || typeof npc.mode === 'string' && npc.mode !== 'idle' } };
 }

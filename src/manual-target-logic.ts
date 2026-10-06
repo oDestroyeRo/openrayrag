@@ -1,5 +1,5 @@
-import { bagId as domainBagId, speciesId, type SpeciesId } from './domain-values';
-import type { EngagementIdentity } from './attack-strategy-logic';
+import { bagId as domainBagId, speciesId, worldId, type SpeciesId } from './domain-values';
+import { checkedEngagementIdentity, type EngagementIdentity, type UuidEngagementIdentity } from './attack-strategy-logic';
 import type { ActorObservationSnapshot } from './actor-observations-logic';
 import type { CharacterSnapshot } from './character-state-logic';
 import type { CharacterState } from './character-state';
@@ -15,11 +15,16 @@ export interface ManualTargetPolicy {
   monsterRules:ReadonlyData<MonsterRule>[]; minAmmoStock:number; mapPolicy?:MapPolicy;
 }
 
-export interface ManualTargetRequest {
-  type:'manualTarget'; map:string; owner:EngagementIdentity;
-  command:{type:'walk';destination:Position}|{type:'attack';target:EngagementIdentity};
+/** Editable/wire DTO. Only the parser admits its actor lifetime identities. */
+export interface ManualTargetRequestInput {
+  type:'manualTarget'; map:string; owner:{world:string;id:number;incarnation:number};
+  command:{type:'walk';destination:Position}|{type:'attack';target:{world:string;id:number;incarnation:number}};
   timeoutSeconds:number; policy:ManualTargetPolicy;
 }
+export type ManualTargetRequest = Omit<ManualTargetRequestInput,'owner'|'command'> & {
+  readonly owner:UuidEngagementIdentity;
+  readonly command:{type:'walk';destination:Position}|{type:'attack';target:UuidEngagementIdentity};
+};
 
 export interface ManualTargetSnapshot {
   sequence:number; kind:'walk'|'attack'|null;
@@ -38,10 +43,10 @@ const keys=(v:unknown,allowed:string[]):Record<string,unknown>=>{
 
 const integer=(v:unknown,min:number,max:number):boolean=>typeof v==='number'&&Number.isInteger(v)&&v>=min&&v<=max;
 
-export function validateActionIdentity(value:unknown):EngagementIdentity {
+export function validateActionIdentity(value:unknown):UuidEngagementIdentity {
   const v=keys(value,['world','id','incarnation']);
   if(typeof v.world!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v.world)||!integer(v.id,0,0x7fffffff)||!integer(v.incarnation,1,0x7fffffff))throw new Error('Invalid observed actor identity.');
-  return structuredClone(value) as EngagementIdentity;
+  return checkedEngagementIdentity({world:worldId(v.world),id:v.id,incarnation:v.incarnation});
 }
 
 export function validateManualTargetPolicy(value:unknown):ManualTargetPolicy {
@@ -66,15 +71,18 @@ export function validateManualTargetRequest(value:unknown):ManualTargetRequest {
   if(v.type!=='manualTarget'||typeof v.map!=='string'||!mapDimensions(v.map)||!integer(v.timeoutSeconds,1,120))throw new Error('Invalid manual command map or deadline.');
   const owner=validateActionIdentity(v.owner),policy=validateManualTargetPolicy(v.policy);
   const command=keys(v.command,['type',...(keys(v.command,['type','destination','target']).type==='walk'?['destination']:['target'])]);
+  let admittedCommand:ManualTargetRequest['command'];
   if(command.type==='walk'){
     const destination=keys(command.destination,['x','y']),grid=mapDimensions(v.map)!;
     if(!integer(destination.x,0,grid.width-1)||!integer(destination.y,0,grid.height-1))throw new Error('Destination is outside the current map.');
+    admittedCommand={type:'walk',destination:{x:destination.x as number,y:destination.y as number}};
   } else if(command.type==='attack'){
     const target=validateActionIdentity(command.target);
     if(target.world!==owner.world)throw new Error('Target belongs to another world.');
+    admittedCommand={type:'attack',target};
   } else throw new Error('Unknown manual target command.');
   if(policy.mapPolicy?.lockArea&&policy.mapPolicy.lockArea.map!==v.map)throw new Error('Manual commands require the current lock map.');
-  return structuredClone({...v,owner,policy}) as ManualTargetRequest;
+  return {type:'manualTarget',map:v.map,owner,command:admittedCommand,timeoutSeconds:v.timeoutSeconds as number,policy};
 }
 
 /** Detached settings let existing physical route owners share exactly one navigator. */

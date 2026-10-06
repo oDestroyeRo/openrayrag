@@ -10,7 +10,8 @@ import type { PartyActorBinding } from './party-actors';
 import { resourceFresh } from './actor-resources';
 import {actionIdentity,sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { deathLimitGuidance } from './death-recovery';
-import { AttackStrategyPolicy, engagementIdentity, type StrategyChoice, type AttackStrategySnapshot, type EngagementIdentity } from './attack-strategy';
+import { AttackStrategyPolicy } from './attack-strategy';
+import { checkedEngagementIdentity, engagementIdentity, type StrategyChoice, type AttackStrategySnapshot, type EngagementIdentity } from './attack-strategy-logic';
 import { castReadiness, skillAfterCastSeconds, CAST_PREREQUISITES, BLIND_CONDITION, AUTOMATIC_ATTACK_SKILLS, MANUAL_GROUND_SKILL } from './cast-policy';
 import { fieldGrid, insideLockArea, mapAllowed, mapPolicy, policyIdentity } from './map-policy';
 import { ActorObservations, type ActorObservationSnapshot, type ActorPredicate, type PredicateTrace, type PublishedConditionReport, publishConditionReports } from './actor-observations';
@@ -1394,8 +1395,8 @@ export class BotEngine {
   }
   retreatMovementReceiptOwner(event:GameEvent):EngagementIdentity|null {
     const owner=this.retreatTask?.identity;if(!owner||!this.retreatOwnCurrent())return null;
-    if(event.type==='stop'&&event.id===owner.selfId)return {world:owner.world,id:owner.selfId,incarnation:owner.selfIncarnation};
-    if(event.type==='walk'&&event.id===owner.selfId&&!event.walk.locked&&event.walk.cells.length<=21&&walkDuration(event.walk)<=15000&&this.navigation()?.validRoute(event.walk.cells))return {world:owner.world,id:owner.selfId,incarnation:owner.selfIncarnation};
+    if(event.type==='stop'&&event.id===owner.selfId)return checkedEngagementIdentity({world:owner.world,id:owner.selfId,incarnation:owner.selfIncarnation});
+    if(event.type==='walk'&&event.id===owner.selfId&&!event.walk.locked&&event.walk.cells.length<=21&&walkDuration(event.walk)<=15000&&this.navigation()?.validRoute(event.walk.cells))return checkedEngagementIdentity({world:owner.world,id:owner.selfId,incarnation:owner.selfIncarnation});
     return null;
   }
   get retreatOwned():boolean {this.advanceMovement();this.retreatSettlement();return !!this.retreatTask;}
@@ -1440,7 +1441,7 @@ export class BotEngine {
     this.reason=task.reason;if(task.phase==='cancelled')return;
     const p=this.player,target=this.entities.get(task.identity.targetId!),policy=retreatSettings(this.settings),profile=normalAttackProfile(this.character),nav=this.navigation();
     if(!p||!target||!sameActionIdentity(task.identity,this.actorActionIdentity(target.id))||!this.eligible(target,now,false)||!nav?.safe(p)||!policy.enabled||profile.sourceRange===null||profile.range<=1||policy.desiredDistance>profile.range){this.cancelRetreat('Retreat target, field or verified range changed.');return;}
-    const blocker=manualStateBlocker('attack',{owner:{world:task.identity.world,id:task.identity.selfId,incarnation:task.identity.selfIncarnation},character:this.character,observedOwnCastSettled:this.observedOwnCastSettled(),observations:this.actorObservation()});
+    const blocker=manualStateBlocker('attack',{owner:checkedEngagementIdentity({world:task.identity.world,id:task.identity.selfId,incarnation:task.identity.selfIncarnation}),character:this.character,observedOwnCastSettled:this.observedOwnCastSettled(),observations:this.actorObservation()});
     if(blocker){this.cancelRetreat(blocker);return;}
     const ammo=manualAmmoGuard({minAmmoStock:automationSettings(this.settings).loadout.minAmmoStock},p,this.character);
     if(ammo){this.cancelRetreat(ammo);return;}
@@ -1471,7 +1472,7 @@ export class BotEngine {
   /** A shortened field walk is authoritative only for its captured own lifetime and verified ground. */
   fieldMovementReceiptOwner(event:GameEvent,captured:ActionIdentity|null):EngagementIdentity|null {
     if(!captured||!sameActionIdentity(captured,this.actorActionIdentity()))return null;
-    const owner={world:captured.world,id:captured.selfId,incarnation:captured.selfIncarnation};
+    const owner=checkedEngagementIdentity({world:captured.world,id:captured.selfId,incarnation:captured.selfIncarnation});
     if(event.type==='stop'&&event.id===owner.id)return owner;
     if(event.type==='walk'&&event.id===owner.id&&!event.walk.locked&&event.walk.cells.length>0&&event.walk.cells.length<=21
       &&walkDuration(event.walk)<=15000&&this.navigation()?.validRoute(event.walk.cells))return owner;
@@ -1481,9 +1482,9 @@ export class BotEngine {
   manualMovementReceiptOwner(event:GameEvent):EngagementIdentity|null {
     const owner=this.manualTask?.request.owner??this.manualReceiptOwner;
     if(!owner||!sameManualIdentity(owner,this.player?this.manualActorIdentity(this.player.id):null))return null;
-    if(event.type==='stop'&&event.id===owner.id)return {...owner};
+    if(event.type==='stop'&&event.id===owner.id)return checkedEngagementIdentity(owner);
     if(event.type==='walk'&&event.id===owner.id&&!event.walk.locked&&event.walk.cells.length<=21
-      &&walkDuration(event.walk)<=15000&&this.navigation()?.validRoute(event.walk.cells))return {...owner};
+      &&walkDuration(event.walk)<=15000&&this.navigation()?.validRoute(event.walk.cells))return checkedEngagementIdentity(owner);
     return null;
   }
   private manualReceiptCurrent():boolean {return !!this.manualReceiptOwner&&sameManualIdentity(this.manualReceiptOwner,this.player?this.manualActorIdentity(this.player.id):null);}
@@ -1500,7 +1501,7 @@ export class BotEngine {
   /** Actual visible lifetime, rather than a name or reusable entity ID. */
   manualActorIdentity(id:number):EngagementIdentity|null {
     const actor=this.entities.get(id)??this.actors.get(id),binding=this.actorActionIdentity(id);
-    return actor&&!actor.dead&&actor.hp>0&&binding?{world:binding.world,id,incarnation:binding.targetIncarnation!}:null;
+    return actor&&!actor.dead&&actor.hp>0&&binding?checkedEngagementIdentity({world:binding.world,id,incarnation:binding.targetIncarnation!}):null;
   }
   private manualContext(request:ManualTargetRequest) {
     const targetId=request.command.type==='attack'?request.command.target.id:null;
@@ -1520,7 +1521,7 @@ export class BotEngine {
     this.navigation();this.routeStep=request.policy.routeStep;
     this.runIntent=false;this.lastTick=since;this.lastAction=0;this.routeFailures=0;
     this.manualTask={request,since,attackSent:false,attackObserved:false,acceptedAttack:false,acceptedWalk:false};
-    this.manualStatus={sequence:this.manualStatus.sequence+1,kind:request.command.type,state:request.command.type==='walk'?'walking':'approaching',active:true,settling:false,reason:'Manual command admitted; waiting for verified execution.',map:request.map,goal:request.command.type==='walk'?{...request.command.destination}:cell(this.entities.get(request.command.target.id)!),target:request.command.type==='attack'?{...request.command.target}:null,elapsedSeconds:0,remainingSeconds:request.timeoutSeconds};
+    this.manualStatus={sequence:this.manualStatus.sequence+1,kind:request.command.type,state:request.command.type==='walk'?'walking':'approaching',active:true,settling:false,reason:'Manual command admitted; waiting for verified execution.',map:request.map,goal:request.command.type==='walk'?{...request.command.destination}:cell(this.entities.get(request.command.target.id)!),target:request.command.type==='attack'?checkedEngagementIdentity(request.command.target):null,elapsedSeconds:0,remainingSeconds:request.timeoutSeconds};
     if(request.command.type==='attack')this.pursue('attack',request.command.target.id,this.manualStatus.goal!,cells);
     else if(cells.length===1){this.finishManual('complete','Character is already at the verified destination.',false);return;}
     else this.route={type:'travel',destination:{...request.command.destination},cells,since:null};
@@ -1531,8 +1532,8 @@ export class BotEngine {
     this.manualRetiredMovement=!!this.leg||!!this.ownMotion()||this.awaitsImplicitWalk();
     if(this.leg?.acceptedUntil===null)this.manualWalkFence=true;
     this.fenceUnacknowledgedLeg();
-    if(task.attackSent&&task.request.command.type==='attack')this.manualAttackFence={world:task.request.owner.world,target:{...task.request.command.target},accepted:task.acceptedAttack,stopRetried:false};
-    if(this.manualRetiredMovement||this.manualWalkFence||this.manualAttackFence)this.manualReceiptOwner={...task.request.owner};
+    if(task.attackSent&&task.request.command.type==='attack')this.manualAttackFence={world:task.request.owner.world,target:checkedEngagementIdentity(task.request.command.target),accepted:task.acceptedAttack,stopRetried:false};
+    if(this.manualRetiredMovement||this.manualWalkFence||this.manualAttackFence)this.manualReceiptOwner=checkedEngagementIdentity(task.request.owner);
     this.manualTask=null;this.pending=null;this.route=null;this.leg=null;this.runIntent=false;
     this.manualStatus={...this.manualStatus,state,active:false,reason,elapsedSeconds:Math.max(0,(this.now()-task.since)/1000),remainingSeconds:0};
     this.reason=reason;this.note(reason);
@@ -1694,7 +1695,7 @@ export class BotEngine {
     return {
       connected: this.connected, compatible: this.compatible, running: this.running, reason: this.reason,
       retreat:{...this.retreatStatus,state:!retreatSettings(this.settings).enabled&&!this.retreatTask?'off':this.retreatStatus.state,settling:!!this.retreatTask&&this.retreatTask.phase==='cancelled',reason:(this.retreatTask?.reason??this.retreatStatus.reason)+(this.retreatTask?.phase==='cancelled'?' Waiting for '+(!this.retreatOwnCurrent()?'a fresh connection after the own lifetime changed':this.retreatTask.walkPending?'authoritative Walk or Stop readback':!this.retreatTask.cleared?'authoritative target clear':'accepted movement to settle')+'; no retreat is retried.':''),destination:this.retreatStatus.destination?{...this.retreatStatus.destination}:null},
-      manualTarget:{...this.manualStatus,settling:!this.manualTask&&this.manualTargetOwned,reason:this.manualStatus.reason+(!this.manualTask&&this.manualTargetOwned?' Waiting for authoritative '+(this.manualReceiptOwner&&!this.manualReceiptCurrent()?'fresh connection after the character lifetime changed':this.manualAttackFence?'attack acceptance and target clear':this.manualWalkFence?'Walk or Stop acknowledgment':'accepted movement to finish')+'; nothing is retried.':''),goal:this.manualStatus.goal?{...this.manualStatus.goal}:null,target:this.manualStatus.target?{...this.manualStatus.target}:null},
+      manualTarget:{...this.manualStatus,settling:!this.manualTask&&this.manualTargetOwned,reason:this.manualStatus.reason+(!this.manualTask&&this.manualTargetOwned?' Waiting for authoritative '+(this.manualReceiptOwner&&!this.manualReceiptCurrent()?'fresh connection after the character lifetime changed':this.manualAttackFence?'attack acceptance and target clear':this.manualWalkFence?'Walk or Stop acknowledgment':'accepted movement to finish')+'; nothing is retried.':''),goal:this.manualStatus.goal?{...this.manualStatus.goal}:null,target:this.manualStatus.target?checkedEngagementIdentity(this.manualStatus.target):null},
       partyEngagement:this.partyEngagements.snapshot(automationSettings(this.settings).combat.partyEngagement===true),
       map: this.map, player: this.player ? { ...this.player } : null,
       monsters: [...this.entities.values()].filter(e => e.kind === 1).slice(0,150),
