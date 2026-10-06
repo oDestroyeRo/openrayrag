@@ -1,9 +1,17 @@
 //! Deterministic close-save lifecycle. Tokens and native shutdown enter from orchestration.
+use crate::domain_values::CloseToken;
 use serde::Serialize;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct Request {
     pub(crate) token: String,
+}
+impl From<&CloseToken> for Request {
+    fn from(token: &CloseToken) -> Self {
+        Self {
+            token: token.as_str().into(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,7 +26,7 @@ pub(crate) enum Lifecycle {
     Unregistered,
     Ready,
     Pending {
-        request: Request,
+        token: CloseToken,
         intent: Intent,
     },
     Completing,
@@ -27,7 +35,7 @@ pub(crate) enum Lifecycle {
 pub(crate) enum RequestPlan {
     Allow,
     GenerateToken(Intent),
-    Reuse { request: Request, intent: Intent },
+    Reuse { token: CloseToken, intent: Intent },
 }
 
 pub(crate) struct Completion<'a> {
@@ -56,7 +64,7 @@ impl Lifecycle {
 
     pub(crate) fn pending_request(&self) -> Option<Request> {
         match self {
-            Self::Pending { request, .. } => Some(request.clone()),
+            Self::Pending { token, .. } => Some(Request::from(token)),
             _ => None,
         }
     }
@@ -68,10 +76,10 @@ impl Lifecycle {
             Self::Unregistered | Self::Completing => RequestPlan::Allow,
             Self::Ready => RequestPlan::GenerateToken(intent),
             Self::Pending {
-                request,
+                token,
                 intent: current,
             } => RequestPlan::Reuse {
-                request: request.clone(),
+                token: token.clone(),
                 intent: if matches!(intent, Intent::Quit(_)) {
                     intent
                 } else {
@@ -81,13 +89,13 @@ impl Lifecycle {
         }
     }
 
-    pub(crate) fn pending(request: Request, intent: Intent) -> Self {
-        Self::Pending { request, intent }
+    pub(crate) fn pending(token: CloseToken, intent: Intent) -> Self {
+        Self::Pending { token, intent }
     }
 
     pub(crate) fn cancel(&self, token: &str) -> Self {
         match self {
-            Self::Pending { request, .. } if request.token == token => Self::Ready,
+            Self::Pending { token: owned, .. } if owned.as_str() == token => Self::Ready,
             _ => self.clone(),
         }
     }
@@ -101,7 +109,7 @@ impl Lifecycle {
             return Err(CompletionError::RevisionMismatch);
         }
         match self {
-            Self::Pending { request, intent } if request.token == confirmation.token => {
+            Self::Pending { token, intent } if token.as_str() == confirmation.token => {
                 Ok((Self::Completing, *intent))
             }
             _ => Err(CompletionError::RequestMismatch),
@@ -121,12 +129,7 @@ mod tests {
     use super::*;
 
     fn pending(token: &str, intent: Intent) -> Lifecycle {
-        Lifecycle::pending(
-            Request {
-                token: token.into(),
-            },
-            intent,
-        )
+        Lifecycle::pending(CloseToken::try_from(token.to_owned()).unwrap(), intent)
     }
 
     fn confirmation(token: &str, saved_revision: Option<u64>, revision: u64) -> Completion<'_> {
@@ -154,9 +157,15 @@ mod tests {
             Lifecycle::Ready.request_plan(Intent::Close),
             RequestPlan::GenerateToken(Intent::Close)
         ));
-        let state = pending("owned", Intent::Close);
+        let state = pending("00000000-0000-4000-8000-000000000001", Intent::Close);
         assert_eq!(state.register(), state);
-        let (completed, intent) = state.complete(confirmation("owned", Some(1), 1)).unwrap();
+        let (completed, intent) = state
+            .complete(confirmation(
+                "00000000-0000-4000-8000-000000000001",
+                Some(1),
+                1,
+            ))
+            .unwrap();
         assert_eq!(intent, Intent::Close);
         assert_eq!(completed, Lifecycle::Completing);
         assert_eq!(completed.register(), Lifecycle::Completing);
@@ -166,43 +175,57 @@ mod tests {
             RequestPlan::Allow
         ));
         assert_eq!(
-            completed.complete(confirmation("owned", Some(1), 1)),
+            completed.complete(confirmation(
+                "00000000-0000-4000-8000-000000000001",
+                Some(1),
+                1
+            )),
             Err(CompletionError::RequestMismatch)
         );
-        assert_eq!(state, pending("owned", Intent::Close));
+        assert_eq!(
+            state,
+            pending("00000000-0000-4000-8000-000000000001", Intent::Close)
+        );
     }
 
     #[test]
     fn duplicate_requests_reuse_the_token_and_latest_quit_promotes_close() {
-        let mut state = pending("owned", Intent::Close);
+        let mut state = pending("00000000-0000-4000-8000-000000000001", Intent::Close);
         for (requested, expected) in [
             (Intent::Close, Intent::Close),
             (Intent::Quit(7), Intent::Quit(7)),
             (Intent::Close, Intent::Quit(7)),
             (Intent::Quit(9), Intent::Quit(9)),
         ] {
-            let RequestPlan::Reuse { request, intent } = state.request_plan(requested) else {
+            let RequestPlan::Reuse { token, intent } = state.request_plan(requested) else {
                 panic!("pending request must reuse its token");
             };
-            assert_eq!(request.token, "owned");
+            assert_eq!(token.as_str(), "00000000-0000-4000-8000-000000000001");
             assert_eq!(intent, expected);
-            state = Lifecycle::pending(request, intent);
+            state = Lifecycle::pending(token, intent);
         }
         assert_eq!(
             serde_json::to_value(state.pending_request().unwrap()).unwrap(),
-            serde_json::json!({"token":"owned"})
+            serde_json::json!({"token":"00000000-0000-4000-8000-000000000001"})
         );
         assert_eq!(
-            state.complete(confirmation("owned", Some(2), 2)).unwrap().1,
+            state
+                .complete(confirmation(
+                    "00000000-0000-4000-8000-000000000001",
+                    Some(2),
+                    2
+                ))
+                .unwrap()
+                .1,
             Intent::Quit(9)
         );
     }
 
     #[test]
     fn saved_revision_errors_precede_token_errors_and_do_not_change_pending_authority() {
-        let state = pending("owned", Intent::Quit(0));
+        let state = pending("00000000-0000-4000-8000-000000000001", Intent::Quit(0));
         for saved in [None, Some(1)] {
-            for token in ["owned", "unknown"] {
+            for token in ["00000000-0000-4000-8000-000000000001", "unknown"] {
                 assert_eq!(
                     state.complete(confirmation(token, saved, 2)),
                     Err(CompletionError::RevisionMismatch)
@@ -214,26 +237,49 @@ mod tests {
             Err(CompletionError::RequestMismatch)
         );
         assert_eq!(
-            state.complete(confirmation("owned", Some(2), 2)).unwrap(),
+            state
+                .complete(confirmation(
+                    "00000000-0000-4000-8000-000000000001",
+                    Some(2),
+                    2
+                ))
+                .unwrap(),
             (Lifecycle::Completing, Intent::Quit(0))
         );
-        assert_eq!(state, pending("owned", Intent::Quit(0)));
+        assert_eq!(
+            state,
+            pending("00000000-0000-4000-8000-000000000001", Intent::Quit(0))
+        );
     }
 
     #[test]
     fn cancel_and_failed_native_close_allow_only_a_fresh_handshake() {
-        let state = pending("owned", Intent::Close);
+        let state = pending("00000000-0000-4000-8000-000000000001", Intent::Close);
         assert_eq!(state.cancel("unknown"), state);
-        assert_eq!(state.cancel("owned"), Lifecycle::Ready);
+        assert_eq!(
+            state.cancel("00000000-0000-4000-8000-000000000001"),
+            Lifecycle::Ready
+        );
         assert_eq!(Lifecycle::Completing.completion_failed(), Lifecycle::Ready);
         assert_eq!(state.completion_failed(), state);
-        let retry = pending("retry", Intent::Quit(0));
+        let retry = pending("00000000-0000-4000-8000-000000000002", Intent::Quit(0));
         assert_eq!(
-            retry.complete(confirmation("owned", Some(1), 1)),
+            retry.complete(confirmation(
+                "00000000-0000-4000-8000-000000000001",
+                Some(1),
+                1
+            )),
             Err(CompletionError::RequestMismatch)
         );
         assert_eq!(
-            retry.complete(confirmation("retry", Some(1), 1)).unwrap().1,
+            retry
+                .complete(confirmation(
+                    "00000000-0000-4000-8000-000000000002",
+                    Some(1),
+                    1
+                ))
+                .unwrap()
+                .1,
             Intent::Quit(0)
         );
     }

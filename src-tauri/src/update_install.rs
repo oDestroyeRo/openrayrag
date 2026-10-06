@@ -1,8 +1,10 @@
 //! Bounded signed archive validation and a same-volume replacement with rollback.
 //! This does not invoke the plugin's privileged macOS installer.
+#[cfg(test)]
+pub(crate) use crate::update_install_logic::verify;
+pub(crate) use crate::update_install_logic::MAX_ARCHIVE;
 #[cfg(target_os = "macos")]
 use crate::update_install_logic::{self as policy, safe_path};
-pub(crate) use crate::update_install_logic::{verify, MAX_ARCHIVE};
 #[cfg(target_os = "macos")]
 use std::{
     fs,
@@ -226,7 +228,10 @@ fn lock_cache(cache: &Path) -> io::Result<crate::login::local_store::FileLock> {
     // Keep acquired operation ownership through the entire install transaction.
     crate::login::local_store::FileLock::acquire(lock)
 }
-pub(crate) fn install(bytes: &[u8], version: &str) -> Result<(), String> {
+pub(crate) fn install(
+    archive: &crate::update_install_logic::VerifiedArchive,
+) -> Result<(), String> {
+    let (bytes, version) = (archive.bytes(), archive.version());
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
         let _ = (bytes, version);

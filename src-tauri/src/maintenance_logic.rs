@@ -1,4 +1,5 @@
-//! Verified game identity schema shared by admission and continuation policy.
+//! Raw game identity observation/transport schema. Continuation admission owns
+//! its stricter checked identity view; bridge observations retain their contract.
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

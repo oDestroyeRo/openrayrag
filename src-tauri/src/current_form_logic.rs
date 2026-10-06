@@ -1,5 +1,6 @@
 //! Settings document schema and persistence policy, without storage effects.
 use crate::automation::Settings;
+use crate::domain_values::{FormRevision, FormVersion, ProfileId};
 use frunk::{prelude::IntoValidated, HList, Validated};
 use serde::{Deserialize, Serialize};
 
@@ -24,32 +25,42 @@ enum MetadataField {
     Revision,
     SelectedProfile,
 }
-type MetadataValidation<'a> = Validated<HList!(u8, u64, Option<&'a str>), MetadataField>;
+type MetadataValidation<'a> =
+    Validated<HList!(FormVersion, FormRevision, Option<ProfileId<'a>>), MetadataField>;
+
+#[derive(Debug, frunk::Generic)]
+struct FormMetadata<'a> {
+    version: FormVersion,
+    revision: FormRevision,
+    selected_profile_id: Option<ProfileId<'a>>,
+}
 
 impl FormDocument {
     fn validated_metadata(&self) -> MetadataValidation<'_> {
-        let selected = self.selected_profile_id.as_deref();
-        (self.version == 1)
-            .then_some(self.version)
-            .ok_or(MetadataField::Version)
+        FormVersion::try_from(self.version)
+            .map_err(|_| MetadataField::Version)
             .into_validated()
-            + (self.revision <= 9_007_199_254_740_991)
-                .then_some(self.revision)
-                .ok_or(MetadataField::Revision)
-            + (!selected.is_some_and(|id| {
-                id.is_empty()
-                    || id.len() > 64
-                    || !id
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-            }))
-            .then_some(selected)
-            .ok_or(MetadataField::SelectedProfile)
+            + FormRevision::try_from(self.revision).map_err(|_| MetadataField::Revision)
+            + self
+                .selected_profile_id
+                .as_deref()
+                .map(ProfileId::try_from)
+                .transpose()
+                .map_err(|_| MetadataField::SelectedProfile)
+    }
+    fn metadata(&self) -> Result<FormMetadata<'_>, String> {
+        self.validated_metadata()
+            .into_result()
+            .map(frunk::from_generic)
+            .map_err(|_| ERROR.into())
+    }
+    pub(crate) fn checked_revision(&self) -> Result<FormRevision, String> {
+        Ok(self.metadata()?.revision)
     }
     pub fn validate(&self) -> Result<(), String> {
         // Settings validation remains behind metadata admission, so malformed
         // documents cannot expand the nested validation work.
-        self.validated_metadata().into_result().map_err(|_| ERROR)?;
+        self.metadata()?;
         self.settings.validate_form().map_err(|_| ERROR.into())
     }
 }
@@ -82,12 +93,13 @@ pub(crate) fn encode(document: &FormDocument) -> Result<Vec<u8>, String> {
 }
 
 pub(crate) fn validate_revision(
-    incoming: &FormDocument,
+    incoming: FormRevision,
     previous: &FormDocument,
     encoded: &[u8],
 ) -> Result<(), String> {
-    if incoming.revision < previous.revision
-        || incoming.revision == previous.revision && !matches_encoded(previous, encoded)?
+    let previous_revision = previous.checked_revision()?;
+    if incoming < previous_revision
+        || incoming == previous_revision && !matches_encoded(previous, encoded)?
     {
         return Err(ERROR.into());
     }
@@ -163,14 +175,34 @@ mod tests {
     fn revision_policy_accepts_replays_and_rejects_stale_or_conflicting_forms() {
         let previous = document(3);
         let replay = document(3);
-        validate_revision(&replay, &previous, &encode(&replay).unwrap()).unwrap();
+        validate_revision(
+            replay.checked_revision().unwrap(),
+            &previous,
+            &encode(&replay).unwrap(),
+        )
+        .unwrap();
         let stale = document(2);
-        assert!(validate_revision(&stale, &previous, &encode(&stale).unwrap()).is_err());
+        assert!(validate_revision(
+            stale.checked_revision().unwrap(),
+            &previous,
+            &encode(&stale).unwrap()
+        )
+        .is_err());
         let mut conflict = document(3);
         conflict.selected_profile_id = Some("another-profile".into());
-        assert!(validate_revision(&conflict, &previous, &encode(&conflict).unwrap()).is_err());
+        assert!(validate_revision(
+            conflict.checked_revision().unwrap(),
+            &previous,
+            &encode(&conflict).unwrap()
+        )
+        .is_err());
         conflict.revision = 4;
-        validate_revision(&conflict, &previous, &encode(&conflict).unwrap()).unwrap();
+        validate_revision(
+            conflict.checked_revision().unwrap(),
+            &previous,
+            &encode(&conflict).unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]

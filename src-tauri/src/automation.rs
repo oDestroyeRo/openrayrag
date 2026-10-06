@@ -1,3 +1,4 @@
+use crate::domain_values::{Percentage, RecoveryTimeoutSeconds};
 use frunk::{hlist_pat, prelude::IntoValidated, HList, Validated};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,6 +25,51 @@ pub(crate) struct Settings {
     attack_max_route_time: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     automation: Option<AutomationSettings>,
+}
+
+/// Run admission has stricter rules than authoring/persisting a form. The raw
+/// schema retains serde defaults; this borrowed domain view cannot deserialize
+/// or reconstruct unchecked fields and lives through native script assembly.
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(crate) struct RunSettings<'a>(&'a Settings);
+impl<'a> TryFrom<&'a Settings> for RunSettings<'a> {
+    type Error = String;
+    fn try_from(value: &'a Settings) -> Result<Self, Self::Error> {
+        value.validate()?;
+        Ok(Self(value))
+    }
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(crate) struct DeathResume<'a>(&'a DeathRecoveryGuard);
+impl<'a> TryFrom<&'a DeathRecoveryGuard> for DeathResume<'a> {
+    type Error = String;
+    fn try_from(value: &'a DeathRecoveryGuard) -> Result<Self, Self::Error> {
+        value.validate()?;
+        Ok(Self(value))
+    }
+}
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(crate) struct SupplyResume<'a>(&'a SupplyResumeGuard);
+impl<'a> TryFrom<&'a SupplyResumeGuard> for SupplyResume<'a> {
+    type Error = String;
+    fn try_from(value: &'a SupplyResumeGuard) -> Result<Self, Self::Error> {
+        value.validate()?;
+        Ok(Self(value))
+    }
+}
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(crate) struct EscapeResume<'a>(&'a EscapeResumeGuard);
+impl<'a> TryFrom<&'a EscapeResumeGuard> for EscapeResume<'a> {
+    type Error = String;
+    fn try_from(value: &'a EscapeResumeGuard) -> Result<Self, Self::Error> {
+        value.validate()?;
+        Ok(Self(value))
+    }
 }
 
 impl Settings {
@@ -83,7 +129,7 @@ impl Settings {
         {
             return Err("Choose selected monsters or disable selected combat.".into());
         }
-        if automation.recovery.enabled && automation.recovery.hp_start <= self.min_hp_percent {
+        if automation.recovery.enabled && !automation.recovery.starts_above(self.min_hp_percent) {
             return Err("Recovery HP start must be above the emergency HP stop limit.".into());
         }
         Ok(())
@@ -748,37 +794,70 @@ struct Recovery {
     sp_end: u8,
     timeout_seconds: u16,
 }
-type RecoveryValidation = Validated<HList!(u8, u8, u8, u8, u16), &'static str>;
+type RecoveryValidation = Validated<
+    HList!(
+        Percentage,
+        Percentage,
+        Percentage,
+        Percentage,
+        RecoveryTimeoutSeconds
+    ),
+    &'static str,
+>;
+
+#[derive(Debug)]
+enum RecoveryError {
+    Bounds,
+    Hysteresis,
+}
+// A policy is constructed only after both range and cross-field checks; no
+// Generic/Deserialize implementation can rebuild an inverted hysteresis pair.
+struct RecoveryPolicy {
+    hp_start: Percentage,
+}
+impl RecoveryPolicy {
+    fn starts_above(&self, emergency: Percentage) -> bool {
+        self.hp_start > emergency
+    }
+}
+
+fn recovery_percentage(
+    value: u8,
+    min: u8,
+    max: u8,
+    field: &'static str,
+) -> Result<Percentage, &'static str> {
+    if !(min..=max).contains(&value) {
+        return Err(field);
+    }
+    Percentage::try_from(value).map_err(|_| field)
+}
 
 impl Recovery {
     fn validated_bounds(&self) -> RecoveryValidation {
-        (1..=95)
-            .contains(&self.hp_start)
-            .then_some(self.hp_start)
-            .ok_or("hpStart")
-            .into_validated()
-            + (2..=100)
-                .contains(&self.hp_end)
-                .then_some(self.hp_end)
-                .ok_or("hpEnd")
-            + (self.sp_start <= 95)
-                .then_some(self.sp_start)
-                .ok_or("spStart")
-            + (1..=100)
-                .contains(&self.sp_end)
-                .then_some(self.sp_end)
-                .ok_or("spEnd")
-            + (1..=3600)
-                .contains(&self.timeout_seconds)
-                .then_some(self.timeout_seconds)
-                .ok_or("timeoutSeconds")
+        recovery_percentage(self.hp_start, 1, 95, "hpStart").into_validated()
+            + recovery_percentage(self.hp_end, 2, 100, "hpEnd")
+            + recovery_percentage(self.sp_start, 0, 95, "spStart")
+            + recovery_percentage(self.sp_end, 1, 100, "spEnd")
+            + RecoveryTimeoutSeconds::try_from(self.timeout_seconds).map_err(|_| "timeoutSeconds")
+    }
+    fn policy(&self) -> Result<RecoveryPolicy, RecoveryError> {
+        let hlist_pat!(hp_start, hp_end, sp_start, sp_end, _timeout) = self
+            .validated_bounds()
+            .into_result()
+            .map_err(|_| RecoveryError::Bounds)?;
+        if hp_start >= hp_end || sp_start >= sp_end {
+            return Err(RecoveryError::Hysteresis);
+        }
+        Ok(RecoveryPolicy { hp_start })
     }
     fn valid(&self) -> bool {
-        self.validated_bounds().into_result().is_ok_and(
-            |hlist_pat!(hp_start, hp_end, sp_start, sp_end, _timeout)| {
-                hp_start < hp_end && sp_start < sp_end
-            },
-        )
+        self.policy().is_ok()
+    }
+    fn starts_above(&self, emergency: u8) -> bool {
+        self.policy().is_ok_and(|policy| {
+            Percentage::try_from(emergency).is_ok_and(|threshold| policy.starts_above(threshold))
+        })
     }
 }
 
@@ -1266,7 +1345,10 @@ pub(crate) fn validate_manual_protection_policy(value: &Value) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
-    use super::{Escape, EscapeResumeGuard, Recovery, Settings, SupplyResumeGuard, SupplySettings};
+    use super::{
+        Escape, EscapeResume, EscapeResumeGuard, Recovery, RunSettings, Settings, SupplyResume,
+        SupplyResumeGuard, SupplySettings,
+    };
     use serde_json::{json, Value};
 
     #[test]
@@ -1344,6 +1426,22 @@ mod tests {
             "route_randomWalk_maxRouteTime": 75,
             "attackRouteMaxPathDistance": 20, "attackMaxRouteTime": 4
         })
+    }
+
+    #[test]
+    fn run_admission_preserves_json_and_rejects_an_authoring_only_form() {
+        let playable: Settings = serde_json::from_value(settings()).unwrap();
+        let admitted = RunSettings::try_from(&playable).unwrap();
+        assert_eq!(
+            serde_json::to_value(&admitted).unwrap(),
+            serde_json::to_value(&playable).unwrap()
+        );
+        let mut draft = settings();
+        draft["map"] = "".into();
+        draft["targets"] = json!([]);
+        let draft: Settings = serde_json::from_value(draft).unwrap();
+        assert!(draft.validate_form().is_ok());
+        assert!(RunSettings::try_from(&draft).is_err());
     }
 
     fn automation() -> Value {
@@ -1775,8 +1873,17 @@ mod tests {
             serde_json::from_str(include_str!("../../src/data/threat-escape-cases.json")).unwrap();
         for case in cases {
             let accepted = if case["kind"] == "guard" {
-                serde_json::from_value::<EscapeResumeGuard>(case["value"].clone())
-                    .is_ok_and(|guard| guard.validate().is_ok())
+                serde_json::from_value::<EscapeResumeGuard>(case["value"].clone()).is_ok_and(
+                    |guard| {
+                        EscapeResume::try_from(&guard).is_ok_and(|admitted| {
+                            assert_eq!(
+                                serde_json::to_value(&admitted).unwrap(),
+                                serde_json::to_value(&guard).unwrap()
+                            );
+                            true
+                        })
+                    },
+                )
             } else {
                 let mut value = settings();
                 value["automation"] = automation();
@@ -2133,8 +2240,17 @@ mod tests {
                 serde_json::from_value::<SupplySettings>(case["value"].clone())
                     .is_ok_and(|v| v.valid())
             } else {
-                serde_json::from_value::<SupplyResumeGuard>(case["value"].clone())
-                    .is_ok_and(|v| v.validate().is_ok())
+                serde_json::from_value::<SupplyResumeGuard>(case["value"].clone()).is_ok_and(
+                    |guard| {
+                        SupplyResume::try_from(&guard).is_ok_and(|admitted| {
+                            assert_eq!(
+                                serde_json::to_value(&admitted).unwrap(),
+                                serde_json::to_value(&guard).unwrap()
+                            );
+                            true
+                        })
+                    },
+                )
             };
             assert_eq!(actual, case["valid"].as_bool().unwrap(), "{}", case["name"]);
         }
@@ -2174,14 +2290,23 @@ mod tests {
 
 #[cfg(test)]
 mod death_recovery_guard_tests {
-    use super::DeathRecoveryGuard;
+    use super::{DeathRecoveryGuard, DeathResume};
     #[test]
     fn matches_strict_death_recovery_guard_corpus() {
         let cases: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("../../src/death-recovery-guards.json")).unwrap();
         for case in cases {
             let result = serde_json::from_str::<DeathRecoveryGuard>(case["json"].as_str().unwrap())
-                .and_then(|v| v.validate().map_err(serde::de::Error::custom));
+                .and_then(|guard| {
+                    DeathResume::try_from(&guard)
+                        .map(|admitted| {
+                            assert_eq!(
+                                serde_json::to_value(&admitted).unwrap(),
+                                serde_json::to_value(&guard).unwrap()
+                            );
+                        })
+                        .map_err(serde::de::Error::custom)
+                });
             assert_eq!(
                 result.is_ok(),
                 case["valid"].as_bool().unwrap(),

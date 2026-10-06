@@ -1,7 +1,7 @@
 //! One-shot update continuation authority. Ordinary startup never grants run intent.
 use crate::update_continuation_logic::{
     self as policy, character, restart_arguments, runtime_identity, startup_stopped,
-    validate_field, DiskCheckpoint, ERROR, LAUNCH_PREFIX, MAX_BYTES,
+    validate_field, AdmittedContinuation, DiskCheckpoint, ERROR, LAUNCH_PREFIX, MAX_BYTES,
 };
 #[cfg(test)]
 use crate::update_continuation_logic::{launch_token, STOPPED_FLAG, TTL_MS};
@@ -51,11 +51,31 @@ struct Claimed {
     account: UpdateAccount,
     runtime: Value,
 }
+// Startup requires consumed-checkpoint proof; a retired retry retains the
+// already-owned reservation. Keep their different admission histories explicit.
+enum AvailableContinuation {
+    Consumed(AdmittedContinuation),
+    RetiredRetry(Continuation),
+}
+impl AvailableContinuation {
+    fn raw(&self) -> &Continuation {
+        match self {
+            Self::Consumed(value) => value.raw(),
+            Self::RetiredRetry(value) => value,
+        }
+    }
+    fn into_wire(self) -> Continuation {
+        match self {
+            Self::Consumed(value) => value.into_wire(),
+            Self::RetiredRetry(value) => value,
+        }
+    }
+}
 #[derive(Default)]
 pub(crate) struct ContinuationState {
     prepared: Option<Prepared>,
     reserved: Option<Reserved>,
-    available: Option<Continuation>,
+    available: Option<AvailableContinuation>,
     claimed: Option<Claimed>,
     restore: Option<Restore>,
     observed_character: Option<(GameIdentity, String)>,
@@ -221,9 +241,9 @@ fn consume(
     args: &[OsString],
     compiled: &str,
     at: u64,
-) -> Result<Option<Continuation>, String> {
+) -> Result<Option<AdmittedContinuation>, String> {
     let bytes = read_and_remove_checkpoint(path.clone())?;
-    let Some(mut continuation) = bytes.and_then(|bytes| {
+    let Some(continuation) = bytes.and_then(|bytes| {
         policy::eligible_checkpoint(&bytes, args, compiled, at, now().unwrap_or(0))
     }) else {
         return Ok(None);
@@ -231,11 +251,11 @@ fn consume(
     let Ok(Some(form)) = current_form::load(path.clone()) else {
         return Ok(None);
     };
-    if !same_form(&form, &continuation.form) {
+    if !same_form(&form, &continuation.raw().form) {
         return Ok(None);
     }
-    continuation.saved_account = login::saved_account_matches(path, &continuation.account);
-    Ok(Some(continuation))
+    let saved_account = login::saved_account_matches(path, &continuation.raw().account);
+    Ok(Some(continuation.with_saved_account(saved_account)))
 }
 pub(crate) fn initialize(app: &tauri::AppHandle) -> Result<(), String> {
     let path = crate::app_data(app).map_err(|_| ERROR)?;
@@ -243,7 +263,8 @@ pub(crate) fn initialize(app: &tauri::AppHandle) -> Result<(), String> {
     // ordinary startup and must never follow an unsafe entry to clean it up.
     let available = consume(path, &app.env().args_os, env!("CARGO_PKG_VERSION"), now()?)
         .ok()
-        .flatten();
+        .flatten()
+        .map(AvailableContinuation::Consumed);
     app.state::<SharedContinuation>()
         .inner()
         .lock()
@@ -358,7 +379,7 @@ pub(crate) fn update_prepared(
         || p.generation != generation
         || Instant::now() >= p.until
         || p.checkpoint.is_some()
-        || runtime_identity(&checkpoint).as_ref() != Some(&identity)
+        || !runtime_identity(&checkpoint).is_some_and(|proof| proof.matches(&identity))
     {
         return Ok(false);
     }
@@ -443,7 +464,7 @@ pub(crate) fn capture(
     if r.prepared.account != account
         || r.prepared.identity != identity
         || r.prepared.generation != generation
-        || runtime_identity(&checkpoint).as_ref() != Some(&identity)
+        || !runtime_identity(&checkpoint).is_some_and(|proof| proof.matches(&identity))
         || character(&checkpoint) != character(r.prepared.checkpoint.as_ref().ok_or(ERROR)?)
     {
         return invalid();
@@ -472,7 +493,7 @@ pub(crate) fn failed(app: &tauri::AppHandle, retired: bool) {
                         p.saved_account = crate::app_data(app)
                             .ok()
                             .is_some_and(|path| login::saved_account_matches(path, &p.account));
-                        p
+                        AvailableContinuation::RetiredRetry(p)
                     });
         }
         state.reserved = None;
@@ -545,12 +566,13 @@ pub(crate) fn update_continuation(
         .map_err(|_| ERROR)?;
     let available = state.available.take();
     if let Some(p) = available.as_ref() {
+        let p = p.raw();
         state.claimed = Some(Claimed {
             account: p.account.clone(),
             runtime: p.runtime.clone(),
         });
     }
-    Ok(available)
+    Ok(available.map(AvailableContinuation::into_wire))
 }
 #[tauri::command]
 pub(crate) fn update_startup_stopped(
@@ -789,7 +811,7 @@ mod tests {
         Prepared {
             request_id: request_id.into(),
             account: disk().continuation.account,
-            identity: runtime_identity(&checkpoint).unwrap(),
+            identity: runtime_identity(&checkpoint).unwrap().into_observation(),
             generation: 2,
             until: Instant::now() + Duration::from_secs(60),
             checkpoint: Some(checkpoint),
@@ -805,7 +827,7 @@ mod tests {
         gate.commit(&old_nonce).unwrap();
         let owner = gate.begin_retirement(&old_nonce, false).unwrap();
         let mut state = ContinuationState {
-            available: Some(disk().continuation),
+            available: Some(AvailableContinuation::RetiredRetry(disk().continuation)),
             ..Default::default()
         };
         state.cancel(true, true);
@@ -850,7 +872,10 @@ mod tests {
         assert!(!startup_stopped(&args));
         write_disk(path.clone(), &record).unwrap();
         args.push(format!("{LAUNCH_PREFIX}{}", record.launch_token.unwrap()).into());
-        let claimed = consume(path, &args, "1.2.3", 1001).unwrap().unwrap();
+        let claimed = consume(path, &args, "1.2.3", 1001)
+            .unwrap()
+            .unwrap()
+            .into_wire();
         assert_eq!(claimed.runtime, checkpoint);
         assert_eq!(claimed.field, field);
     }
@@ -909,7 +934,7 @@ mod tests {
     fn only_explicit_stop_during_a_committed_update_marks_the_restart() {
         for (committed, stop) in [(false, false), (false, true), (true, false), (true, true)] {
             let mut state = ContinuationState {
-                available: Some(disk().continuation),
+                available: Some(AvailableContinuation::RetiredRetry(disk().continuation)),
                 ..Default::default()
             };
             state.cancel(committed, stop);
@@ -1064,7 +1089,7 @@ mod tests {
                 prepared: Prepared {
                     request_id: "0123456789abcdef0123456789abcdef".into(),
                     account: disk().continuation.account,
-                    identity: runtime_identity(&final_runtime).unwrap(),
+                    identity: runtime_identity(&final_runtime).unwrap().into_observation(),
                     generation: 2,
                     until: Instant::now() + Duration::from_secs(60),
                     checkpoint: Some(final_runtime.clone()),
@@ -1079,7 +1104,8 @@ mod tests {
             write_disk(path.clone(), &record).unwrap();
             let claimed = consume(path.clone(), &arguments(), "1.2.3", 1001)
                 .unwrap()
-                .unwrap();
+                .unwrap()
+                .into_wire();
             assert_eq!(claimed.field, field);
             assert_eq!(claimed.runtime, final_runtime);
             assert_eq!(claimed.account, reservation.prepared.account);
@@ -1104,7 +1130,8 @@ mod tests {
         drop(directory);
         let claimed = consume(path.clone(), &arguments(), "1.2.3", 1001)
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .into_wire();
         assert!(!claimed.saved_account); // Caller cannot forge saved credential authority.
         assert_eq!(claimed.account.character_slot, 1);
         assert_eq!(claimed.runtime["partyHeal"]["attempts"], 2);
@@ -1207,7 +1234,7 @@ mod tests {
     #[test]
     fn cancellation_revokes_available_and_claimed_authority() {
         let mut state = ContinuationState {
-            available: Some(disk().continuation),
+            available: Some(AvailableContinuation::RetiredRetry(disk().continuation)),
             claimed: Some(Claimed {
                 account: disk().continuation.account,
                 runtime: runtime(),

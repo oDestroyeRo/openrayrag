@@ -1,4 +1,5 @@
 //! Account schemas and login request policy, without saved-profile or UI effects.
+use crate::domain_values::{AccountName, CharacterSlot, OwnedAccountName, OwnedPassword, Password};
 use frunk::{
     hlist,
     labelled::{IntoLabelledGeneric, IntoUnlabelled},
@@ -33,25 +34,65 @@ enum LoginField {
     Password,
     CharacterSlot,
 }
-type LoginValidation<'a> = Validated<HList!(&'a str, &'a str, u8), LoginField>;
+type LoginValidation<'a> =
+    Validated<HList!(AccountName<'a>, Password<'a>, CharacterSlot), LoginField>;
 
-fn username(value: &str) -> Result<&str, LoginField> {
-    if value.trim().is_empty() || value.chars().count() > 64 || value.chars().any(char::is_control)
-    {
-        return Err(LoginField::Username);
-    }
-    Ok(value)
+#[derive(Debug, frunk::Generic)]
+struct Credentials<'a> {
+    username: AccountName<'a>,
+    password: Password<'a>,
+    character_slot: CharacterSlot,
 }
-fn password(value: &str) -> Result<&str, LoginField> {
-    if value.is_empty() || value.len() > 256 || value.contains('\0') {
-        return Err(LoginField::Password);
-    }
-    Ok(value)
+
+// Frunk can assemble this product only from checked components. Password
+// ownership moves from the raw DTO; this handoff never clones credentials.
+#[derive(Debug, frunk::Generic)]
+pub(crate) struct DirectCredentials {
+    username: OwnedAccountName,
+    password: OwnedPassword,
+    character_slot: CharacterSlot,
 }
-fn character_slot(value: u8) -> Result<u8, LoginField> {
-    (value <= 2)
-        .then_some(value)
-        .ok_or(LoginField::CharacterSlot)
+impl TryFrom<LoginProfile> for DirectCredentials {
+    type Error = String;
+    fn try_from(profile: LoginProfile) -> Result<Self, Self::Error> {
+        (OwnedAccountName::try_from(profile.username)
+            .map_err(|_| LoginField::Username)
+            .into_validated()
+            + OwnedPassword::try_from(profile.password).map_err(|_| LoginField::Password)
+            + character_slot(profile.character_slot))
+        .into_result()
+        .map(frunk::from_generic)
+        .map_err(|_| "Enter a username, password and character slot 1–3.".into())
+    }
+}
+impl DirectCredentials {
+    pub(crate) fn username(&self) -> &str {
+        self.username.as_str()
+    }
+    pub(crate) fn password(&self) -> &str {
+        self.password.as_str()
+    }
+    pub(crate) fn character_slot(&self) -> CharacterSlot {
+        self.character_slot
+    }
+}
+
+// Each field is independently valid; account equality has no unchecked relational invariant.
+#[derive(Debug, PartialEq, Eq, frunk::Generic)]
+struct AccountIdentity<'a> {
+    username: AccountName<'a>,
+    character_slot: CharacterSlot,
+    mode: ConnectionMode,
+}
+
+fn username(value: &str) -> Result<AccountName<'_>, LoginField> {
+    AccountName::try_from(value).map_err(|_| LoginField::Username)
+}
+fn password(value: &str) -> Result<Password<'_>, LoginField> {
+    Password::try_from(value).map_err(|_| LoginField::Password)
+}
+fn character_slot(value: u8) -> Result<CharacterSlot, LoginField> {
+    CharacterSlot::try_from(value).map_err(|_| LoginField::CharacterSlot)
 }
 
 impl LoginProfile {
@@ -65,6 +106,7 @@ impl LoginProfile {
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.validated_fields()
             .into_result()
+            .map(frunk::from_generic::<Credentials<'_>, _>)
             .map(|_| ())
             .map_err(|_| "Enter a username, password and character slot 1–3.".into())
     }
@@ -79,7 +121,7 @@ pub(crate) struct SavedLogin {
     pub(crate) auto_login: bool,
 }
 
-/// Proven account metadata only; continuation storage never receives credentials.
+/// Credential-free transport DTO; checked account identities drive policy comparisons.
 #[derive(
     Clone, Debug, Deserialize, Serialize, PartialEq, Eq, frunk::Generic, frunk::LabelledGeneric,
 )]
@@ -90,9 +132,15 @@ pub(crate) struct UpdateAccount {
     pub mode: ConnectionMode,
 }
 impl UpdateAccount {
+    fn identity(&self) -> Result<AccountIdentity<'_>, Vec<LoginField>> {
+        (username(&self.username).into_validated()
+            + character_slot(self.character_slot)
+            + Ok(self.mode))
+        .into_result()
+        .map(frunk::from_generic)
+    }
     pub fn validate(&self) -> Result<(), String> {
-        (username(&self.username).into_validated() + character_slot(self.character_slot))
-            .into_result()
+        self.identity()
             .map(|_| ())
             .map_err(|_| "Update account is invalid.".into())
     }
@@ -106,6 +154,18 @@ impl UpdateAccount {
             |slot: &u8| *slot,
             |mode: &ConnectionMode| *mode
         ]))
+    }
+}
+
+pub(crate) fn account_matches(profile: &LoginProfile, account: &UpdateAccount) -> bool {
+    let identity: Result<AccountIdentity<'_>, _> = (username(&profile.username).into_validated()
+        + character_slot(profile.character_slot)
+        + Ok(profile.mode))
+    .into_result()
+    .map(frunk::from_generic);
+    match (identity, account.identity()) {
+        (Ok(saved), Ok(expected)) => saved == expected,
+        _ => false,
     }
 }
 
@@ -196,6 +256,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn checked_account_matching_retains_exact_name_mode_and_slot_identity() {
+        let source = profile(" account ");
+        let account = UpdateAccount::from_profile(&source);
+        assert!(account_matches(&source, &account));
+        for change in ["trimmed", "mode", "slot", "invalid"] {
+            let mut other = account.clone();
+            match change {
+                "trimmed" => other.username = "account".into(),
+                "mode" => other.mode = ConnectionMode::BotOnly,
+                "slot" => other.character_slot = 2,
+                _ => other.character_slot = 3,
+            }
+            assert!(!account_matches(&source, &other));
+        }
+    }
+
+    #[test]
+    fn direct_admission_moves_credentials_and_retains_the_slot_without_cloning_password() {
+        let raw = profile(" exact user ");
+        let password_ptr = raw.password.as_ptr();
+        let admitted = DirectCredentials::try_from(raw).unwrap();
+        assert_eq!(admitted.username(), " exact user ");
+        assert_eq!(admitted.password().as_ptr(), password_ptr);
+        assert_eq!(admitted.character_slot().index(), 0);
+        assert!(!format!("{admitted:?}").contains("synthetic-password"));
+        let mut invalid = profile("");
+        invalid.password = "\0".into();
+        invalid.character_slot = 3;
+        assert_eq!(
+            DirectCredentials::try_from(invalid).unwrap_err(),
+            "Enter a username, password and character slot 1–3."
+        );
     }
 
     #[test]

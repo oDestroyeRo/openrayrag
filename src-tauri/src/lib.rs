@@ -10,6 +10,7 @@ mod current_form;
 mod current_form_logic;
 mod direct;
 mod direct_wire;
+mod domain_values;
 mod local_login_logic;
 mod login;
 mod login_logic;
@@ -169,24 +170,30 @@ fn control_bot(
     death_recovery_guard: Option<automation::DeathRecoveryGuard>,
 ) -> Result<(), String> {
     require_view(&window, "main")?;
-    if let Some(guard) = &death_recovery_guard {
+    let admitted_death = if let Some(guard) = &death_recovery_guard {
         if action != "start" {
             return Err("Death recovery state is only accepted by start.".into());
         }
-        guard.validate()?;
-    }
-    if let Some(guard) = &supply_guard {
+        Some(automation::DeathResume::try_from(guard)?)
+    } else {
+        None
+    };
+    let admitted_supply = if let Some(guard) = &supply_guard {
         if action != "start" {
             return Err("Supply resume state is only accepted by start.".into());
         }
-        guard.validate()?;
-    }
-    if let Some(guard) = &escape_guard {
+        Some(automation::SupplyResume::try_from(guard)?)
+    } else {
+        None
+    };
+    let admitted_escape = if let Some(guard) = &escape_guard {
         if action != "start" {
             return Err("Escape resume state is only accepted by start.".into());
         }
-        guard.validate()?;
-    }
+        Some(automation::EscapeResume::try_from(guard)?)
+    } else {
+        None
+    };
     if !matches!(
         action.as_str(),
         "start"
@@ -257,12 +264,13 @@ fn control_bot(
             }
         }
     }
-    if action == "start" {
-        settings
-            .as_ref()
-            .ok_or("Combat settings are required.")?
-            .validate()?;
-    }
+    let admitted_settings = if action == "start" {
+        Some(automation::RunSettings::try_from(
+            settings.as_ref().ok_or("Combat settings are required.")?,
+        )?)
+    } else {
+        None
+    };
     let game = app.get_webview("game").ok_or("Open the game first.")?;
     let script = if matches!(
         action.as_str(),
@@ -288,13 +296,17 @@ fn control_bot(
         )?
     } else {
         let action_json = serde_json::to_string(&action).map_err(|_| "Invalid action.")?;
-        let settings_json = serde_json::to_string(&settings).map_err(|_| "Invalid settings.")?;
+        let settings_json = match admitted_settings {
+            Some(settings) => serde_json::to_string(&settings),
+            None => serde_json::to_string(&settings),
+        }
+        .map_err(|_| "Invalid settings.")?;
         let escape_json =
-            serde_json::to_string(&escape_guard).map_err(|_| "Invalid escape resume state.")?;
+            serde_json::to_string(&admitted_escape).map_err(|_| "Invalid escape resume state.")?;
         let supply_json =
-            serde_json::to_string(&supply_guard).map_err(|_| "Invalid supply resume state.")?;
-        let recovery_json = serde_json::to_string(&death_recovery_guard)
-            .map_err(|_| "Invalid death recovery state.")?;
+            serde_json::to_string(&admitted_supply).map_err(|_| "Invalid supply resume state.")?;
+        let recovery_json =
+            serde_json::to_string(&admitted_death).map_err(|_| "Invalid death recovery state.")?;
         format!(
             "window.__RAYRAG__?.control({action_json},{settings_json},{escape_json},{supply_json},{recovery_json})"
         )

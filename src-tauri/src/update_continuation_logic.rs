@@ -32,6 +32,28 @@ pub(crate) struct Continuation {
     pub runtime: Value,
     pub(crate) saved_account: bool,
 }
+
+/// Payload admitted after the destructive checkpoint read. Raw transport
+/// reconstruction cannot manufacture this capability or mutate its retained data.
+pub(crate) struct AdmittedContinuation(Continuation);
+impl AdmittedContinuation {
+    fn admit(payload: Continuation, at: u64) -> Result<Self, String> {
+        validate_payload(&payload, at)?;
+        Ok(Self(payload))
+    }
+    pub(crate) fn raw(&self) -> &Continuation {
+        &self.0
+    }
+    pub(crate) fn into_wire(self) -> Continuation {
+        self.0
+    }
+    pub(crate) fn with_saved_account(self, saved_account: bool) -> Self {
+        Self(Continuation {
+            saved_account,
+            ..self.0
+        })
+    }
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DiskCheckpoint {
@@ -45,10 +67,7 @@ fn invalid<T>() -> Result<T, String> {
     Err(ERROR.into())
 }
 pub(crate) fn request_id(value: &str) -> bool {
-    value.len() == 32
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    crate::domain_values::UpdateRequestId::try_from(value).is_ok()
 }
 fn exact(value: &Value, keys: &[&str]) -> bool {
     value
@@ -308,20 +327,34 @@ pub(crate) fn validate_field(value: &Value) -> Result<(), String> {
     }
     Ok(())
 }
-pub(crate) fn runtime_identity(runtime: &Value) -> Option<GameIdentity> {
-    let status = &runtime["status"];
-    for key in ["sessionId", "connectionId"] {
-        let id = status[key].as_str()?;
-        if id.is_empty()
-            || id.len() > 64
-            || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        {
-            return None;
+pub(crate) struct RuntimeIdentity<'a> {
+    session: crate::domain_values::SessionId<'a>,
+    connection: crate::domain_values::ConnectionId<'a>,
+}
+impl RuntimeIdentity<'_> {
+    pub(crate) fn matches(&self, observed: &GameIdentity) -> bool {
+        self.session.as_str() == observed.session_id
+            && self.connection.as_str() == observed.connection_id
+    }
+    #[cfg(test)]
+    pub(crate) fn into_observation(self) -> GameIdentity {
+        GameIdentity {
+            session_id: self.session.as_str().to_owned(),
+            connection_id: self.connection.as_str().to_owned(),
         }
     }
-    Some(GameIdentity {
-        session_id: status["sessionId"].as_str()?.to_owned(),
-        connection_id: status["connectionId"].as_str()?.to_owned(),
+}
+
+pub(crate) fn runtime_identity(runtime: &Value) -> Option<RuntimeIdentity<'_>> {
+    let status = &runtime["status"];
+    // Session and connection are distinct fields even with the same lexical rule.
+    // Their sequential admission remains separate from raw bridge observations.
+    let session = crate::domain_values::SessionId::try_from(status["sessionId"].as_str()?).ok()?;
+    let connection =
+        crate::domain_values::ConnectionId::try_from(status["connectionId"].as_str()?).ok()?;
+    Some(RuntimeIdentity {
+        session,
+        connection,
     })
 }
 pub(crate) fn character(runtime: &Value) -> Option<&str> {
@@ -344,16 +377,16 @@ fn validate_payload(payload: &Continuation, at: u64) -> Result<(), String> {
     }
     Ok(())
 }
-pub(crate) fn launch_token(args: &[OsString]) -> Option<String> {
+pub(crate) fn launch_token(args: &[OsString]) -> Option<crate::domain_values::UpdateRequestId<'_>> {
     let matching: Vec<_> = args
         .iter()
         .skip(1)
         .filter_map(|arg| arg.to_str()?.strip_prefix(LAUNCH_PREFIX))
         .collect();
-    if matching.len() != 1 || !request_id(matching[0]) {
+    if matching.len() != 1 {
         return None;
     }
-    Some(matching[0].into())
+    crate::domain_values::UpdateRequestId::try_from(matching[0]).ok()
 }
 pub(crate) fn startup_stopped(args: &[OsString]) -> bool {
     args.iter()
@@ -411,7 +444,7 @@ pub(crate) fn eligible_checkpoint(
     compiled: &str,
     at: u64,
     runtime_at: u64,
-) -> Option<Continuation> {
+) -> Option<AdmittedContinuation> {
     if bytes.len() as u64 > MAX_BYTES {
         return None;
     }
@@ -422,14 +455,17 @@ pub(crate) fn eligible_checkpoint(
     let token = launch_token(args)?;
     if disk.version != 1
         || disk.target_version != compiled
-        || disk.launch_token.as_deref() != Some(&token)
+        || disk
+            .launch_token
+            .as_deref()
+            .and_then(|raw| crate::domain_values::UpdateRequestId::try_from(raw).ok())
+            != Some(token)
         || at < disk.created_at
         || at - disk.created_at > TTL_MS
-        || validate_payload(&disk.continuation, runtime_at).is_err()
     {
         return None;
     }
-    Some(disk.continuation)
+    AdmittedContinuation::admit(disk.continuation, runtime_at).ok()
 }
 
 #[cfg(test)]
@@ -520,6 +556,36 @@ mod tests {
         args.push(STOPPED_FLAG.into());
         assert!(eligible_checkpoint(&bytes, &args, "1.2.3", 1000, 1000).is_none());
         assert!(eligible_checkpoint(&bytes, &["Companion".into()], "1.2.3", 1000, 1000).is_none());
+    }
+
+    #[test]
+    fn admitted_continuation_projects_the_same_wire_document_and_checked_identity_matches_both_channels(
+    ) {
+        let payload = checkpoint().continuation;
+        let expected = serde_json::to_vec(&payload).unwrap();
+        let identity = runtime_identity(&payload.runtime).unwrap();
+        let mut observed = GameIdentity {
+            session_id: payload.runtime["status"]["sessionId"]
+                .as_str()
+                .unwrap()
+                .into(),
+            connection_id: payload.runtime["status"]["connectionId"]
+                .as_str()
+                .unwrap()
+                .into(),
+        };
+        assert!(identity.matches(&observed));
+        observed.connection_id = "different".into();
+        assert!(!identity.matches(&observed));
+        observed.connection_id = payload.runtime["status"]["connectionId"]
+            .as_str()
+            .unwrap()
+            .into();
+        observed.session_id = "different".into();
+        assert!(!identity.matches(&observed));
+        let admitted = AdmittedContinuation::admit(payload, 1000).unwrap();
+        assert_eq!(serde_json::to_vec(admitted.raw()).unwrap(), expected);
+        assert_eq!(serde_json::to_vec(&admitted.into_wire()).unwrap(), expected);
     }
 
     #[test]

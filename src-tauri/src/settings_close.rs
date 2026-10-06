@@ -1,3 +1,4 @@
+use crate::domain_values::CloseToken;
 pub(crate) use crate::settings_close_logic::Request;
 use crate::settings_close_logic::{exit_intent, Completion, Intent, Lifecycle, RequestPlan};
 use std::sync::Mutex;
@@ -86,28 +87,30 @@ pub(crate) use macos::install as install_macos_quit;
 
 pub(crate) type SharedClose = Mutex<Lifecycle>;
 
-fn generate_token() -> String {
-    uuid::Uuid::new_v4().to_string()
+fn generate_token() -> CloseToken {
+    CloseToken::try_from(uuid::Uuid::new_v4().to_string())
+        .expect("UUIDs use canonical token spelling")
 }
 
 fn request(
     state: &mut Lifecycle,
     intent: Intent,
-    generate: impl FnOnce() -> String,
+    generate: impl FnOnce() -> CloseToken,
 ) -> Option<Request> {
-    let (request, intent) = match state.request_plan(intent) {
+    let (token, intent) = match state.request_plan(intent) {
         RequestPlan::Allow => return None,
-        RequestPlan::GenerateToken(intent) => (Request { token: generate() }, intent),
-        RequestPlan::Reuse { request, intent } => (request, intent),
+        RequestPlan::GenerateToken(intent) => (generate(), intent),
+        RequestPlan::Reuse { token, intent } => (token, intent),
     };
-    *state = Lifecycle::pending(request.clone(), intent);
+    let request = Request::from(&token);
+    *state = Lifecycle::pending(token, intent);
     Some(request)
 }
 
 fn request_exit(
     state: &mut Lifecycle,
     code: Option<i32>,
-    generate: impl FnOnce() -> String,
+    generate: impl FnOnce() -> CloseToken,
 ) -> Option<Request> {
     request(
         state,
@@ -222,7 +225,7 @@ mod tests {
         let calls = Cell::new(0);
         let generate = || {
             calls.set(calls.get() + 1);
-            format!("token-{}", calls.get())
+            CloseToken::try_from(format!("00000000-0000-4000-8000-{:012}", calls.get())).unwrap()
         };
         let mut state = Lifecycle::Unregistered;
         assert!(request(&mut state, Intent::Close, generate).is_none());
@@ -266,7 +269,10 @@ mod tests {
             .is_none()
         );
         assert_eq!(state, Lifecycle::Ready);
-        let request = request(&mut state, Intent::Close, || "owned".into()).unwrap();
+        let request = request(&mut state, Intent::Close, || {
+            CloseToken::try_from("00000000-0000-4000-8000-000000000001".to_owned()).unwrap()
+        })
+        .unwrap();
         let before = state.clone();
         assert!(
             request_exit(&mut state, Some(tauri::RESTART_EXIT_CODE), || panic!(
