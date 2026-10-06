@@ -45,7 +45,7 @@ The domain audit covers the production owners in `architecture.json`, including 
 
 | Family | Protected boundary and consumers |
 | --- | --- |
-| Gameplay | Item versus bag identities in inventory and receipts; learned skills; actor lifetime identities; revision channels; admitted form/run settings; explicit configuration time units; available versus unavailable resource evidence. |
+| Gameplay | Item versus bag identities in inventory and receipts; learned skills; actor lifetime identities; admitted disposition rules and supply goals; revision channels; admitted form/run settings; explicit configuration time units; available versus unavailable resource evidence. |
 | Frontend and persistence | Profile identities/names/timestamps, form revisions, login slots, close capabilities, update correlation, registry documents and readonly map/recovery projections. Editable drafts are detached from admitted settings. |
 | Native admission | Checked credential components, form metadata, command/run admission, recovery thresholds, continuation ownership and close lifecycle. Raw serde records retain the existing schema; private aggregates retain admission through their consumer. |
 | Native update and geometry | Stable candidate versions and verified archive ownership; requested view extents are distinct from valid clipped extents, which may be smaller than one pixel. |
@@ -54,7 +54,7 @@ The domain audit covers the production owners in `architecture.json`, including 
 
 Several apparently similar values intentionally have different policies. Actor zero is valid, while item/bag zero and offline protocol sentinels are not admitted IDs. Learned skill IDs have a wider range than byte-sized actions. An absent form map is allowed before Start. A respawn identity may carry an unknown self incarnation of zero. Signed wire timing is not a positive duration. Native credentials and update accounts have stronger validation than the existing browser login form.
 
-Compatibility adapters also retain historical loose inputs. Game-status session observations are not verified continuation identities. Continuation account mode is checked using its existing string coercion but retained as an unknown raw value; it is not falsely declared a canonical mode. The frontend forwards a native updater reservation as an opaque payload and preserves its existing cleanup condition. Narrowing these contracts belongs to a separately specified behavior change.
+Compatibility adapters also retain historical loose inputs. Engagement observation worlds are correlation strings, while manual requests additionally require the existing UUID syntax. Game-status session observations are not verified continuation identities. Continuation account mode is checked using its existing string coercion but retained as an unknown raw value; it is not falsely declared a canonical mode. The frontend forwards a native updater reservation as an opaque payload and preserves its existing cleanup condition. Narrowing these contracts belongs to a separately specified behavior change.
 
 Ordinary primitives remain in binary/ELF/FFI decoding, navigation search and per-cell probes, scratch counters, uninterpreted telemetry, authoring/display values and declarative external configuration. Typed records already distinguish benchmark measurements by field; branding each local sample or loop index adds no useful boundary. Native `Instant`, `Duration`, platform handles and archive-library records retain their existing types and lifetime rules.
 
