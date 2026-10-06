@@ -12,7 +12,7 @@ describe('native full status and heartbeat boundary during route planning',()=>{
     for(const connectionMode of ['botOnly','gameClient'])expect(validStatus({...status,connectionMode})).toBe(true);
     expect(validStatus({...status,connectionMode:'unverified'})).toBe(false);
     expect(status.memo).toBeDefined();expect(status.socket).toBeDefined();expect(status.manualTarget).toBeDefined();
-    const malformed=structuredClone(status);malformed.actorObservations.actors[0]!.hp!.max=0;expect(validStatus(malformed)).toBe(false);
+    const malformed=structuredClone(status);Object.assign(malformed.actorObservations.actors[0]!.hp!,{max:0});expect(validStatus(malformed)).toBe(false);
     expect(validStatus({...status,memo:{...status.memo,blocked:'invalid'}})).toBe(false);expect(validStatus({...status,socket:{...status.socket,pending:'invalid'}})).toBe(false);
   });
   it('accepts real planning telemetry through the full predicate and keeps heartbeat fresh past seven seconds',()=>{
