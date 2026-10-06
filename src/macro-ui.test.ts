@@ -117,7 +117,7 @@ describe('macro editor documents', () => {
     const configured = draft.configured();
     expect(configured).toEqual({ settings, script: macroExample('continuous') });
     expect(configured).toEqual(draft.read());
-    configured.settings.radius = 1; configured.script!.rules.length = 0; settings.radius = 19;
+    Reflect.set(configured.settings, 'radius', 1); configured.script!.rules.length = 0; settings.radius = 19;
     expect(draft.configured().settings.radius).toBe(18); expect(draft.enabledScript?.rules).toHaveLength(2);
     expect(draft.text).toContain('# applied notes\r\n'); expect(draft.unsaved).toBe(true);
     draft.text += '\r\ninvalid manual draft'; const manual = draft.text;
@@ -329,7 +329,7 @@ it('uses the cached applied document for unchanged refreshes and draft keystroke
   // An unchanged sync must not inspect or rewrite user text, and configured
   // getters retain only the already validated source rather than compiling it.
   expect(()=>draft.syncSettings(settings)).not.toThrow();expect(draft.text).toContain('# manual draft');
-  draft.discard();const initial=draft.configured();initial.settings.radius=1;
+  draft.discard();const initial=draft.configured();Reflect.set(initial.settings,'radius',1);
   expect(draft.configured().settings.radius).toBe(12);expect(draft.enabledScript).toBeNull();
   expect(replace).not.toHaveBeenCalled(); expect(parse).not.toHaveBeenCalled();
 });
