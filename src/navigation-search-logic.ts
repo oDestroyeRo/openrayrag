@@ -20,7 +20,10 @@ const wallPenalties = [0, 60, 50, 20, 10, 0] as const;
 
 interface OpenCell { cell: number; cost: number; priority: number }
 
-interface SearchScratch { costs: Float64Array | number[]; parents: Int32Array | number[]; seen: Uint32Array | number[]; closed: Uint32Array | number[]; stamp: number; queue?: Int32Array | number[] }
+interface SearchScratch {
+  costs: Float64Array; parents: Int32Array; seen: Uint8Array; closed: Uint8Array;
+  size: number; stamp: number; queue?: Int32Array;
+}
 
 class RouteHeap {
   private readonly cells: OpenCell[] = [];
@@ -59,41 +62,70 @@ export function findNavigationRoute(
   avoidWalls: boolean, goalMode: 'walk' | 'attack' | 'cast',
 ): Position[] | null {
   let scratch: SearchScratch | null = null;
-  // Bounded local queries avoid allocating full-map buffers. Larger searches
-  // retain dense typed arrays so sparse property lookups cannot dominate them.
-  const dense = maxDistance > 64 || view.count <= 4096;
-  const origin = dense ? 0 : view.index(from);
+  const last = view.position(view.count - 1), gridWidth = last.x + 1, gridHeight = last.y + 1;
+  let compact = maxDistance <= 64 && view.count > 4096;
+  const minX = compact ? Math.max(0, from.x - maxDistance) : 0;
+  const minY = compact ? Math.max(0, from.y - maxDistance) : 0;
+  const width = compact ? Math.min(gridWidth - 1, from.x + maxDistance) - minX + 1 : gridWidth;
+  const height = compact ? Math.min(gridHeight - 1, from.y + maxDistance) - minY + 1 : gridHeight;
+  function createScratch(size: number, stamp = 0): SearchScratch {
+    const buffer = new ArrayBuffer(size * 14);
+    return { costs: new Float64Array(buffer, 0, size), parents: new Int32Array(buffer, size * 8, size),
+      seen: new Uint8Array(buffer, size * 12, size), closed: new Uint8Array(buffer, size * 13, size), size, stamp };
+  }
   function beginSearch(): SearchScratch {
-    scratch ??= { costs: dense ? new Float64Array(view.count) : [], parents: dense ? new Int32Array(view.count) : [],
-      seen: dense ? new Uint32Array(view.count) : [], closed: dense ? new Uint32Array(view.count) : [], stamp: 0 };
+    scratch ??= createScratch(width * height);
     scratch.stamp++;
     return scratch;
   }
-  function reconstructPath(parents: Int32Array | number[], end: number): Position[] {
+  function searchIndex(cell: number, point: Position): number {
+    if (!compact) return cell;
+    const y = point.y - minY, x = point.x - minX;
+    if (x >= 0 && y >= 0 && x < width && y < height) return x + y * width;
+    // A* may prefer a cheaper detour beyond the step cap before falling back
+    // to BFS. Grow its ledger without pruning cells or changing heap ordering.
+    const previous = scratch!, expanded = createScratch(view.count, previous.stamp);
+    for (let index = 0; index < previous.size; index++) {
+      if (!previous.seen[index]) continue;
+      const global = index % width + minX + (Math.floor(index / width) + minY) * gridWidth;
+      expanded.costs[global] = previous.costs[index]!;
+      expanded.parents[global] = previous.parents[index]!;
+      expanded.seen[global] = previous.seen[index]!;
+      expanded.closed[global] = previous.closed[index]!;
+    }
+    Object.assign(previous, expanded);
+    compact = false;
+    return cell;
+  }
+  function reconstructPath(workspace: SearchScratch, end: number): Position[] {
     const cells: Position[] = [];
-    for (let cell = end; cell >= 0; cell = parents[cell - origin]!) cells.push(view.position(cell));
+    for (let cell = end; cell >= 0;) {
+      const point = view.position(cell);
+      cells.push(point); cell = workspace.parents[searchIndex(cell, point)]!;
+    }
     return cells.reverse();
   }
   function shortestSteps(from: Position, goal: (p: Position) => boolean, maxDistance: number): Position[] | null {
     const workspace = beginSearch();
-    const { parents, costs: steps, seen, stamp } = workspace;
-    const queue = workspace.queue ??= dense ? new Int32Array(view.count) : [];
-    const start = view.index(from);
+    const { stamp } = workspace;
+    const queue = workspace.queue ??= new Int32Array(workspace.size);
+    const start = view.index(from), startIndex = searchIndex(start, from);
     let head = 0;
     let tail = 1;
     queue[0] = start;
-    steps[start - origin] = 0; parents[start - origin] = -1; seen[start - origin] = stamp;
+    workspace.costs[startIndex] = 0; workspace.parents[startIndex] = -1; workspace.seen[startIndex] = stamp;
     while (head < tail) {
-      const cell = queue[head++]!;
-      const p = view.position(cell);
-      if (goal(p)) return reconstructPath(parents, cell);
-      if (steps[cell - origin]! >= maxDistance) continue;
+      const cell = queue[head++]!, p = view.position(cell), cellIndex = searchIndex(cell, p);
+      if (goal(p)) return reconstructPath(workspace, cell);
+      if (workspace.costs[cellIndex]! >= maxDistance) continue;
       for (const [dx, dy] of navigationDirections) {
         const next = { x: p.x + dx, y: p.y + dy };
         const index = view.index(next);
-        if (index < 0 || seen[index - origin] === stamp || !view.step(p, next)) continue;
-        steps[index - origin] = steps[cell - origin]! + 1; seen[index - origin] = stamp;
-        parents[index - origin] = cell;
+        if (index < 0) continue;
+        const nextIndex = searchIndex(index, next);
+        if (workspace.seen[nextIndex] === stamp || !view.step(p, next)) continue;
+        workspace.costs[nextIndex] = workspace.costs[cellIndex]! + 1; workspace.seen[nextIndex] = stamp;
+        workspace.parents[nextIndex] = cell;
         queue[tail++] = index;
       }
     }
@@ -112,18 +144,19 @@ export function findNavigationRoute(
     cappedRoute = reachable;
   }
   const heuristic = (p: Position) => minimumRouteCost(p, to, range);
-  const { costs, parents, seen, closed, stamp } = beginSearch();
-  const start = view.index(from);
+  const workspace = beginSearch();
+  const { stamp } = workspace;
+  const start = view.index(from), startIndex = searchIndex(start, from);
   const open = new RouteHeap();
-  costs[start - origin] = 0; parents[start - origin] = -1; seen[start - origin] = stamp;
+  workspace.costs[startIndex] = 0; workspace.parents[startIndex] = -1; workspace.seen[startIndex] = stamp;
   open.push({ cell: start, cost: 0, priority: heuristic(from) });
   let current: OpenCell | undefined;
   while ((current = open.pop())) {
-    if (closed[current.cell - origin] === stamp || current.cost !== costs[current.cell - origin]) continue;
-    closed[current.cell - origin] = stamp;
-    const p = view.position(current.cell);
+    const p = view.position(current.cell), currentIndex = searchIndex(current.cell, p);
+    if (workspace.closed[currentIndex] === stamp || current.cost !== workspace.costs[currentIndex]) continue;
+    workspace.closed[currentIndex] = stamp;
     if (goal(p)) {
-      const route = reconstructPath(parents, current.cell);
+      const route = reconstructPath(workspace, current.cell);
       if (route.length - 1 <= maxDistance) return route;
       // A cheaper wall-aware detour can exceed a step cap. Try a shortest-step
       // route so a narrow but valid corridor is still usable within that cap.
@@ -132,13 +165,13 @@ export function findNavigationRoute(
     for (const [dx, dy] of navigationDirections) {
       const next = { x: p.x + dx, y: p.y + dy };
       if (!view.step(p, next)) continue;
-      const cell = view.index(next);
-      if (closed[cell - origin] === stamp) continue;
+      const cell = view.index(next), cellIndex = searchIndex(cell, next);
+      if (workspace.closed[cellIndex] === stamp) continue;
       const wallCost = avoidWalls ? wallPenalties[view.clearance[cell]!]! : 0;
       const cost = current.cost + (dx && dy ? 14 : 10) + wallCost;
-      if (seen[cell - origin] === stamp && cost >= costs[cell - origin]!) continue;
-      costs[cell - origin] = cost; seen[cell - origin] = stamp;
-      parents[cell - origin] = current.cell;
+      if (workspace.seen[cellIndex] === stamp && cost >= workspace.costs[cellIndex]!) continue;
+      workspace.costs[cellIndex] = cost; workspace.seen[cellIndex] = stamp;
+      workspace.parents[cellIndex] = current.cell;
       open.push({ cell, cost, priority: cost + heuristic(next) });
     }
   }

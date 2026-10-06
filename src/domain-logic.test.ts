@@ -86,3 +86,26 @@ it('projects disposition telemetry without leaking input or catalog state', () =
   expect(status).toEqual(before);
   expect(dispositionContextFromStatus(status)).toEqual(expected);
 });
+
+it('grows compact A* buffers before retaining the exact shortest-step fallback', () => {
+  const width = 400, count = width * width, from = { x: 100, y: 100 }, to = { x: 103, y: 100 };
+  const direct = [from, { x: 101, y: 100 }, { x: 102, y: 100 }, to];
+  const detour = [from, ...Array.from({ length: 4 }, (_, i) => ({ x: 100, y: 101 + i })),
+    ...Array.from({ length: 3 }, (_, i) => ({ x: 101 + i, y: 104 })),
+    ...Array.from({ length: 4 }, (_, i) => ({ x: 103, y: 103 - i }))];
+  const key = (a: { x: number; y: number }, b: { x: number; y: number }) => `${a.x},${a.y}:${b.x},${b.y}`;
+  const edges = new Set([direct, detour].flatMap(route => route.slice(1).flatMap((point, index) =>
+    [key(route[index]!, point), key(point, route[index]!)])));
+  const clearance = new Uint8Array(count).fill(5);
+  for (const point of direct.slice(1, -1)) clearance[point.x + point.y * width] = 1;
+  let beyondCap = false;
+  const view: NavigationSearchView = { count, clearance,
+    index: p => p.x >= 0 && p.y >= 0 && p.x < width && p.y < width ? p.x + p.y * width : -1,
+    position: cell => ({ x: cell % width, y: Math.floor(cell / width) }),
+    step: (a, b) => { const allowed = edges.has(key(a, b)); if (allowed && b.y === 104) beyondCap = true; return allowed; },
+    clearWalkCorridor: () => true, clearApproach: () => true, canAttack: () => false, canCast: () => false };
+  // The cheap eleven-step detour crosses the three-step allocation rectangle.
+  // A* still finds it first, then the existing cap policy falls back to BFS.
+  expect(findNavigationRoute(view, from, to, 0, 3, true, 'walk')).toEqual(direct);
+  expect(beyondCap).toBe(true);
+});
