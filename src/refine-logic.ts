@@ -1,3 +1,4 @@
+import { map, pipe, sortBy } from 'remeda';
 import catalog from './data/socket-catalog.json';
 import { dispositionStockFloors } from './disposition-ui-logic';
 import type { InventoryItem } from './protocol-feature';
@@ -43,7 +44,7 @@ export function refineFloors(request:RefinePreviewRequest):Array<{itemId:number;
   const floors=new Map<number,number>();
   for(const row of [...dispositionStockFloors(request.policy),...request.policy.disposition?.rules.map(row=>({itemId:row.itemId,count:row.keep}))??[]])
     floors.set(row.itemId,Math.max(floors.get(row.itemId)??0,row.count));
-  return [...floors].map(([itemId,count])=>({itemId,count})).sort((a,b)=>a.itemId-b.itemId);
+  return pipe([...floors], map(([itemId,count])=>({itemId,count})), sortBy(row=>row.itemId));
 }
 
 function guardKey(request:RefinePreviewRequest):string { return JSON.stringify([request.targetBagId,refineFloors(request),request.maxSpend,request.minZeny,request.policy.disposition?.maxSpend??null]); }

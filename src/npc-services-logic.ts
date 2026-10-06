@@ -1,3 +1,4 @@
+import { allPass, filter } from 'remeda';
 import { DEFAULT_MAP_POLICY, validateMapPolicy, type MapPolicy } from './map-policy-logic';
 import { type ActionIdentity } from './actor-identity';
 import catalog from './data/npc-services.json';
@@ -203,13 +204,12 @@ export type ServiceResolution =
 
 export function resolveServiceNpc(s: NpcServiceDefinition, map: string, actors: readonly Entity[]): ServiceResolution {
   if (map !== s.map) return { state: 'missing', reason: `Enter ${s.map} before resolving this NPC.` };
-  const matches = actors.filter(
-    (a) =>
-      a.kind === 2 &&
-      !a.dead &&
-      a.name === s.identity.name &&
-      distance(a, s.identity.anchor) <= s.identity.maxDisplacement,
-  );
+  const matches = filter(actors, allPass([
+    (actor: Entity) => actor.kind === 2,
+    actor => !actor.dead,
+    actor => actor.name === s.identity.name,
+    actor => distance(actor, s.identity.anchor) <= s.identity.maxDisplacement,
+  ]));
   if (matches.length > 1)
     return { state: 'ambiguous', reason: 'More than one visible NPC matches the service identity.' };
   return matches[0]

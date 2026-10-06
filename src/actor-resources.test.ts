@@ -159,6 +159,12 @@ it('captured arrival eligibility is detached, positive, fresh and globally unamb
  expect(s.world.partyActors.capturedArrival(captured,s.world.party,s.world.map,s.observations)).toBeNull();
 });
 
+it('rejects a mismatched captured party before traversing the current roster',()=>{
+ const s=setup();s.join([{...member,leader:true}]);const captured={...s.world.partyActors.get(7)!,name:member.name,partyName:'Other Party'};
+ s.world.party!.members.set(8,{...member,memberId:8,get entityId():number{throw new Error('Roster traversal is too early.');}});
+ expect(s.world.partyActors.capturedArrival(captured,s.world.party,s.world.map,s.observations)).toBeNull();
+});
+
 
 it('detached captured arrival requires authoritative living HP and never repairs shared resources',()=>{
  const s=setup();s.join([{...member,leader:true}]);const captured={...s.world.partyActors.get(7)!,name:member.name,partyName:'Party'};

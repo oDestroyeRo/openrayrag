@@ -1,3 +1,4 @@
+import { sort } from 'remeda';
 import catalog from './data/socket-catalog.json';
 import type { InventoryItem } from './protocol-feature';
 import type { SocketSelection } from './socket-protocol';
@@ -73,4 +74,4 @@ export interface Receipt { prepared:Prepared; inventory:Map<number,InventoryItem
   character:string; identity:string; connection:number; map:string; deadline:number; cardSeen:boolean; targetSeen:boolean; canceled:boolean; dirty:boolean;
   fresh?:{key:string;connection:number;inventoryRevision:number;equipmentRevision:number} }
 
-export const binding=(c:SocketContext):string=>JSON.stringify([c.character,c.identity,c.connection,c.map,c.inventoryRevision,c.equipmentRevision,[...c.floors].sort(([a],[b])=>a-b)]);
+export const binding=(c:SocketContext):string=>JSON.stringify([c.character,c.identity,c.connection,c.map,c.inventoryRevision,c.equipmentRevision,sort([...c.floors], ([a],[b])=>a-b)]);

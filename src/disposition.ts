@@ -1,3 +1,5 @@
+import { inventoryItemCount } from './character-state-logic';
+import { sort } from 'remeda';
 import type { InventoryItem } from './protocol-feature';
 import type { WorldAction } from './world-protocol';
 import { saleProceeds, shopQuote, worldActionBlockers, workflowWorldFromSnapshot, workflowWorldSnapshot, type WorkflowContext, type WorkflowWorld } from './workflows-logic';
@@ -82,7 +84,7 @@ export function validateDispositionPolicy(input: unknown): DispositionPolicy {
 
 const names: ContainerName[] = ['inventory', 'storage', 'cart'];
 const safeNumber = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 2_147_483_647;
-const ordered = (items: InventoryItem[]) => [...items].sort((a, b) => a.itemId - b.itemId || a.bagId - b.bagId);
+const ordered = (items: InventoryItem[]) => sort(items, (a, b) => a.itemId - b.itemId || a.bagId - b.bagId);
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
@@ -92,10 +94,10 @@ function fingerprint(policy: DispositionPolicy, context: DispositionContext): st
   const ids = new Set(policy.rules.map(row => row.itemId));
   for (const name of names) for (const item of context.containers[name].items ?? []) ids.add(item.itemId);
   const metadata = Object.fromEntries([...ids].sort((a, b) => a - b).map(id => [id, context.metadata[id] ?? null]));
-  return canonical({ policy: { ...policy, rules: [...policy.rules].sort((a, b) => a.itemId - b.itemId) },
+  return canonical({ policy: { ...policy, rules: sort(policy.rules, (a, b) => a.itemId - b.itemId) },
     containers: Object.fromEntries(names.map(name => [name, { ...context.containers[name], items: context.containers[name].items === null ? null : ordered(context.containers[name].items!) }])),
-    equipment: context.equipment === null ? null : [...context.equipment].sort((a, b) => a - b), ammoId: context.ammoId, metadata,
-    minimumStock: [...context.minimumStock ?? []].sort((a, b) => a.itemId - b.itemId),
+    equipment: context.equipment === null ? null : sort(context.equipment, (a, b) => a - b), ammoId: context.ammoId, metadata,
+    minimumStock: sort(context.minimumStock ?? [], (a, b) => a.itemId - b.itemId),
     workflow: { map: context.workflow.map, playerId: context.workflow.playerId, alive: context.workflow.alive, idle: context.workflow.idle,
       zeny: context.workflow.zeny, world: workflowWorldSnapshot(context.workflow.world), protectedItemIds: context.workflow.protectedItemIds,
       pushCartLevel: context.workflow.pushCartLevel } });
@@ -149,12 +151,12 @@ export function planDisposition(input: unknown, context: DispositionContext): Di
     if (item.slots?.some(id => id !== 0)) return 'Carded item';
     return null;
   };
-  const rules = [...policy.rules].sort((a, b) => a.itemId - b.itemId);
+  const rules = sort(policy.rules, (a, b) => a.itemId - b.itemId);
   for (const name of names) for (const item of ordered(containers[name].items ?? [])) {
     const reason = protection(item, name, rules.find(row => row.itemId === item.itemId));
     if (reason) plan.protections.push({ container: name, itemId: item.itemId, bagId: item.bagId, count: item.count, reason });
   }
-  const count = (itemId: number) => containers.inventory.items!.filter(item => item.itemId === itemId).reduce((sum, item) => sum + item.count, 0);
+  const count = (itemId: number) => inventoryItemCount(itemId)(containers.inventory.items!);
   function capacity(item: InventoryItem, destination: ContainerName, requested: number, buy: boolean): { count: number; reason?: string } {
     const target = containers[destination]; const info = context.metadata[item.itemId];
     if (target.items === null) return { count: 0, reason: `${destination} stock is not observed.` };

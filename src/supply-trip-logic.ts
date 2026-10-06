@@ -1,3 +1,4 @@
+import { inventoryItemCount } from './character-state-logic';
 import type { Position } from './protocol';
 import type { Settings } from './settings';
 import type { DispositionAction, DispositionContext, DispositionPolicy } from './disposition';
@@ -217,6 +218,5 @@ export function validateSupplyResumeGuard(input: unknown): SupplyResumeGuard {
 }
 
 export const count = (context: SupplyContext, id: number) =>
-  context.disposition.containers.inventory.items
-    ?.filter((item) => item.itemId === id)
-    .reduce((sum, item) => sum + item.count, 0) ?? null;
+  context.disposition.containers.inventory.items == null ? null
+    : inventoryItemCount(id)(context.disposition.containers.inventory.items);

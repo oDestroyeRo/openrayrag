@@ -1,3 +1,4 @@
+import { piped } from 'remeda';
 import { CompanionController } from './controller';
 import { encodeControllerAction } from './controller-action-encoding';
 import { socialCommand } from './social-protocol';
@@ -10,8 +11,8 @@ import { databaseTravelCommand, supportsDatabaseTravel } from './database-travel
 /** Both transport modes use this controller and exactly these action encoders. */
 export function wireController(send: (packet: Uint8Array) => void,
   store: ConstructorParameters<typeof CompanionController>[8], now = Date.now): CompanionController {
-  return new CompanionController(action => send(encodeControllerAction(action)), now, undefined, action => send(socialCommand(action)), slot => send(memoCommand(slot)),
-  action => send(socketCommand(action)), packet => send(Uint8Array.from(refineCommand(packet))),
-  wire => send(warpCommand(wire)), store,
-  {supported:supportsDatabaseTravel,send:map=>send(databaseTravelCommand(map))});
+  return new CompanionController(piped(encodeControllerAction, send), now, undefined, piped(socialCommand, send), piped(memoCommand, send),
+  piped(socketCommand, send), piped((packet: Parameters<typeof refineCommand>[0]) => Uint8Array.from(refineCommand(packet)), send),
+  piped(warpCommand, send), store,
+  {supported:supportsDatabaseTravel,send:piped(databaseTravelCommand, send)});
 }

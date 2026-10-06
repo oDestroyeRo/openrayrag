@@ -1,3 +1,4 @@
+import { map } from 'remeda';
 import { SUPPORTED_STATUS_IDS } from './actor-status-catalog';
 import { resourceFresh, compareResource, validResourceObservation, RESOURCE_OPERATORS, type ResourceObservation, type ResourceOperator } from './actor-resources';
 export const ACTOR_OBSERVATION_LIMITS = { actors: 300, publishedActors: 64, publishedStatuses: 128, evaluatedStatuses:512, conditionReports:8, conditionsPerReport:4, conditions: 16, staleMs: 15_000 } as const;
@@ -159,7 +160,7 @@ export const unknownCast = (): CastObservation => ({state:'unknown',observedAt:n
 export interface PublishedConditionReport {rule:string;conditions:PredicateTrace[];truncated?:boolean}
 
 export function publishConditionReports(reports:Array<{rule:string;conditions:PredicateTrace[]}>):PublishedConditionReport[] {
-  const published:PublishedConditionReport[]=reports.slice(0,ACTOR_OBSERVATION_LIMITS.conditionReports).map(report=>({rule:report.rule,
+  const published:PublishedConditionReport[]=map(reports.slice(0,ACTOR_OBSERVATION_LIMITS.conditionReports), report=>({rule:report.rule,
     conditions:structuredClone(report.conditions.slice(0,ACTOR_OBSERVATION_LIMITS.conditionsPerReport)),
     ...(report.conditions.length>ACTOR_OBSERVATION_LIMITS.conditionsPerReport?{truncated:true}:{})}));
   if(reports.length>published.length)published.push({rule:`${reports.length-published.length} additional condition reports omitted.`,conditions:[],truncated:true});

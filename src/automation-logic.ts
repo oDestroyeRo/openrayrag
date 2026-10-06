@@ -1,3 +1,4 @@
+import { map } from 'remeda';
 import type { AutomationScheduler } from './automation';
 import type { ActionIdentity } from './actor-identity';
 import type { matchesSkillExecution } from './skill-execution';
@@ -14,7 +15,7 @@ export function lootRule(a: AutomationSettings, itemId: number): LootRule | unde
 export function acceptsMonster(a: AutomationSettings, e: Entity, player: Entity, selected: number[], aggressive: boolean, observations?:ActorObservationSnapshot): boolean {
   let rule = monsterRule(a,e.classId);
   if(rule?.conditions?.length) {
-    const traces=rule.conditions.map(actorPredicateEvaluator(observations));
+    const traces=map(rule.conditions, actorPredicateEvaluator(observations));
     if(traces.some(trace=>trace.state==='unavailable'))return false;
     if(traces.some(trace=>trace.state==='unmatched')) {
       if(rule.action==='attack')return false;

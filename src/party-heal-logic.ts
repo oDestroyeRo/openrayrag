@@ -1,3 +1,4 @@
+import { sort } from 'remeda';
 import type { ActionIdentity } from './actor-identity';
 import { actorPredicateEvaluator, type ActorObservationSnapshot, type ActorPredicate } from './actor-observations-logic';
 import { resourceFresh } from './actor-resources';
@@ -42,7 +43,7 @@ export function partyHealCandidates(bindings:PartyActorBinding[],actors:Readonly
     candidates.push({binding,hp:row.hp!.value!,maxHp:row.hp!.max!,hpAt:row.hp!.at!});
   }
   // Cross multiplication is exact even at int32 resource bounds.
-  return candidates.sort((a,b)=>{const delta=BigInt(a.hp)*BigInt(b.maxHp)-BigInt(b.hp)*BigInt(a.maxHp);return delta<0n?-1:delta>0n?1:a.binding.memberId-b.binding.memberId;});
+  return sort(candidates, (a,b)=>{const delta=BigInt(a.hp)*BigInt(b.maxHp)-BigInt(b.hp)*BigInt(a.maxHp);return delta<0n?-1:delta>0n?1:a.binding.memberId-b.binding.memberId;});
 }
 
 export function validPartyHealSnapshot(value:unknown):value is PartyHealSnapshot {

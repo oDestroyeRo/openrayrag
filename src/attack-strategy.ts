@@ -1,3 +1,4 @@
+import { map } from 'remeda';
 import type { AttackStrategyRule } from './settings';
 import type { ActorObservationSnapshot } from './actor-observations-logic';
 import { actorPredicateEvaluator } from './actor-observations-logic';
@@ -37,7 +38,7 @@ export class AttackStrategyPolicy {
         if(rule.behavior==='opener')return {state:'wait',reason:`Waiting for opener ${rule.id} cooldown.`};
         continue;
       }
-      const traces=(rule.conditions??[]).map(evaluate);
+      const traces=map(rule.conditions??[], evaluate);
       if(traces.some(trace=>trace.state==='unavailable'))return {state:'wait',reason:`Strategy ${rule.id} actor conditions are unavailable.`};
       if(traces.some(trace=>trace.state==='unmatched'))continue;
       const ready=castReadiness(rule.skillId,rule.level,state,observations);

@@ -1,3 +1,4 @@
+import { filter, pipe, sort } from 'remeda';
 import catalog from './data/weapon-catalog.json';
 import type { CharacterState } from './character-state';
 import type { Entity } from './protocol';
@@ -82,7 +83,8 @@ export function selectAmmo(state:CharacterState,p:Entity,a:AutomationSettings):I
   if(!state.inventoryKnown)throw new Error('Ammo stock is unknown.');
   for(const preference of a.loadout.ammoPreferences)if(!AMMO_CATALOG[preference.itemId]||AMMO_CATALOG[preference.itemId]!.ammoType!==0)throw new Error(`Preferred ammo ${preference.itemId} is not a verified arrow.`);
   const preference=(id:number)=>{const i=a.loadout.ammoPreferences.findIndex(v=>v.itemId===id);return i<0?a.loadout.ammoPreferences.length:i;};
-  const candidates=[...state.inventory.values()].filter(i=>i.type===1&&AMMO_CATALOG[i.itemId]?.ammoType===0&&p.level>=AMMO_CATALOG[i.itemId]!.minLevel&&i.count>a.loadout.minAmmoStock);
-  candidates.sort((x,y)=>preference(x.itemId)-preference(y.itemId)||(x.bagId===state.ammoId?-1:0)-(y.bagId===state.ammoId?-1:0)||x.itemId-y.itemId||x.bagId-y.bagId);
+  const candidates=pipe([...state.inventory.values()],
+    filter(i=>i.type===1&&AMMO_CATALOG[i.itemId]?.ammoType===0&&p.level>=AMMO_CATALOG[i.itemId]!.minLevel&&i.count>a.loadout.minAmmoStock),
+    sort((x,y)=>preference(x.itemId)-preference(y.itemId)||(x.bagId===state.ammoId?-1:0)-(y.bagId===state.ammoId?-1:0)||x.itemId-y.itemId||x.bagId-y.bagId));
   return candidates[0]??null;
 }

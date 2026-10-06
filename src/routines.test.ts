@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { dryRunRoutine, ROUTINE_LIMITS, RoutineRuntime, validateRoutineSelectorCheckpoint, validateRoutineSpec,
   type RoutineCondition, type RoutineObservation, type RoutineOptions, type RoutineRule, type RoutineSpec } from './routines';
 
-import { routineConditionEvaluator, traceRules } from './routines-logic';
+import { routineActorPredicates, routineConditionEvaluator, traceRules } from './routines-logic';
 
 type TestAction = { type: 'heal'; itemId: number } | { type: 'stop' };
 const isAction = (value: unknown): value is TestAction => {
@@ -518,5 +518,25 @@ describe('bound routine evaluation', () => {
     trace.rules[0]!.conditions[0]!.condition.value = 0;
     expect(traceRules(input)).toEqual(traceRules(before));
     expect(input).toEqual(before);
+  });
+});
+
+describe('routine actor projection', () => {
+  it('preserves rule and predicate order, references, and sparse-slot semantics', () => {
+    const first: RoutineCondition = { field: 'actorStatus', actor: { scope: 'self' }, statusId: 1, operator: 'eq', value: false };
+    const second: RoutineCondition = { field: 'actorCasting', actor: { scope: 'target' }, operator: 'eq', value: true };
+    const conditions: RoutineCondition[] = new Array(4);
+    conditions[1] = hp; conditions[3] = first;
+    const rules: { conditions: RoutineCondition[] }[] = new Array(3);
+    rules[1] = { conditions }; rules[2] = { conditions: [second, first] };
+    const before = structuredClone(rules);
+    const selected = routineActorPredicates(rules);
+    expect(selected).toEqual([first, second, first]);
+    expect(selected[0]).toBe(first);
+    expect(selected[1]).toBe(second);
+    selected.pop();
+    expect(rules).toEqual(before);
+    expect(Object.hasOwn(rules, 0)).toBe(false);
+    expect(Object.hasOwn(conditions, 0)).toBe(false);
   });
 });

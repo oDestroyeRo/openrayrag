@@ -1,3 +1,4 @@
+import { filter, flatMap, map } from 'remeda';
 import { actorPredicateEvaluator, validActorPredicate, type ActorPredicate, type ActorObservationSnapshot } from './actor-observations-logic';
 export type NumericOperator = 'lt' | 'lte' | 'eq' | 'gte' | 'gt';
 
@@ -6,6 +7,13 @@ export type RoutineCondition =
   | { field: 'hpPercent' | 'spPercent' | 'weightPercent' | 'level' | 'jobLevel' | 'zeny' | 'elapsedSeconds'; operator: NumericOperator; value: number }
   | { field: 'map'; operator: 'eq' | 'ne'; value: string }
   | { field: 'inventory'; itemId: number; operator: NumericOperator; value: number };
+
+/** Retain rule order and the original predicate references for the current observation pass. */
+export function routineActorPredicates(rules: readonly { conditions: RoutineCondition[] }[]): ActorPredicate[] {
+  return flatMap(rules, rule => filter(rule.conditions, (condition): condition is ActorPredicate =>
+    condition.field === 'actorStatus' || condition.field === 'actorCasting'
+    || condition.field === 'actorHpPercent' || condition.field === 'actorSpPercent'));
+}
 
 export interface RoutineRule<Action> {
   name: string; priority: number; cooldownSeconds: number; maxRuns: number;
@@ -251,8 +259,8 @@ export interface RoutineTraceInput<Action> extends RoutineConditionContext {
 
 export function traceRules<Action>({ spec, observation, progress, now = 0, allowExtendedElapsed = false }: RoutineTraceInput<Action>): RoutineTrace<Action> {
   const evaluate = routineConditionEvaluator({ observation, allowExtendedElapsed });
-  const rules = spec.rules.map((rule, index): RuleTrace<Action> => {
-    const conditions = rule.conditions.map(evaluate);
+  const rules = map(spec.rules, (rule, index): RuleTrace<Action> => {
+    const conditions = map(rule.conditions, evaluate);
     let state: RuleTrace<Action>['state'] = conditions.some(condition => condition.state === 'unmatched') ? 'unmatched'
       : conditions.some(condition => condition.state === 'unavailable') ? 'unavailable' : 'matched';
     let reason = state === 'matched' ? 'All conditions matched.'

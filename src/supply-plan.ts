@@ -1,3 +1,5 @@
+import { inventoryItemCount } from './character-state-logic';
+import { sort } from 'remeda';
 import { insideLockArea, mapAllowed, mapPolicy, policySummary } from './map-policy-logic';
 import { planDisposition, type DispositionPolicy, type DispositionRule } from './disposition';
 import { serviceByContractId } from './npc-services-logic';
@@ -20,9 +22,7 @@ export function nextSupplyAction(
   const c = context.disposition,
     world = c.workflow.world;
   const carried = (id: number) =>
-    c.containers.inventory.items
-      ?.filter((item) => item.itemId === id)
-      .reduce((sum, item) => sum + item.count, 0) ?? 0;
+    inventoryItemCount(id)(c.containers.inventory.items ?? []);
   const floor = (rule: DispositionRule) =>
     Math.max(
       rule.maximum,
@@ -31,7 +31,7 @@ export function nextSupplyAction(
         ?.filter((row) => row.itemId === rule.itemId)
         .map((row) => row.count) ?? []),
     );
-  const rules = [...policy.rules].sort((a, b) => a.itemId - b.itemId);
+  const rules = sort(policy.rules, (a, b) => a.itemId - b.itemId);
   // Dispose before receiving new stock, so capacity is based on confirmed data.
   const target =
     rules.find(
@@ -179,9 +179,7 @@ export function previewSupplyTrip(
   )
     return "Waiting for observed stock, weight and capacity.";
   const stock = (id: number) =>
-    inventory
-      .items!.filter((item) => item.itemId === id)
-      .reduce((sum, item) => sum + item.count, 0);
+    inventoryItemCount(id)(inventory.items!);
   const goals = supply.stockEnabled
     ? policy.rules
         .filter(

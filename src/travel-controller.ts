@@ -1,3 +1,4 @@
+import { map } from 'remeda';
 import { DEFAULT_MAP_POLICY, insideLockArea, mapAllowed, policyIdentity, type MapPolicy } from './map-policy-logic';
 import type { Entity, GameEvent, Position, Walk } from './protocol';
 import type { Action } from './engine';
@@ -543,6 +544,6 @@ export class TravelController {
   }
   snapshot(): TravelSnapshot {
     return { policy:structuredClone(this.policy),purpose:this.purpose,state: this.state, destination: this.destination, reason: this.reason,
-      remainingMaps: this.steps.map(step => step.portal.toMap).slice(0,64), route: this.route.slice(0,512), leg: this.leg?.cells ?? [] };
+      remainingMaps: map(this.steps, step => step.portal.toMap).slice(0,64), route: this.route.slice(0,512), leg: this.leg?.cells ?? [] };
   }
 }

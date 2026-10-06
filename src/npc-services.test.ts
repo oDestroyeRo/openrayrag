@@ -484,3 +484,13 @@ describe('shop-open and resource-effect contracts', () => {
     }
   });
 });
+
+describe('composed NPC identity checks', () => {
+  it('short-circuits later evidence for ineligible kinds and dead actors', () => {
+    const ineligible = { ...player };
+    Object.defineProperty(ineligible, 'dead', { get: () => { throw new Error('Ineligible actor evidence was read.'); } });
+    const dead = { ...npc, dead: true };
+    Object.defineProperty(dead, 'name', { get: () => { throw new Error('Dead actor identity was read.'); } });
+    expect(resolveServiceNpc(storage, storage.map, [ineligible, dead]).state).toBe('missing');
+  });
+});

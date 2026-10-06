@@ -1,7 +1,7 @@
 import type { EngagementIdentity } from './attack-strategy-logic';
 import type { PartyActorBinding } from './party-actors-logic';
 
-import { PARTY_ENGAGEMENT_LIMITS, sameMonster, samePartyBinding, type Blocker, type PartyEngagementSnapshot, type Claims } from './party-engagement-logic';
+import { PARTY_ENGAGEMENT_LIMITS, sameMonster, samePartyBinding, type Blocker, type PartyEngagementSnapshot, type Claims, partyEngagementSnapshot, partyEngagementReason } from './party-engagement-logic';
 
 export { PARTY_ENGAGEMENT_LIMITS, samePartyBinding, type PartyEngagementSnapshot } from './party-engagement-logic';
 
@@ -48,11 +48,9 @@ export class PartyEngagements {
     return !!claims && sameMonster(claims.monster, monster) && !claims.blocker && claims.sources.size > 0;
   }
   snapshot(enabled: boolean): PartyEngagementSnapshot {
-    const values = [...this.claims.values()], reasons = [...new Set(values.flatMap(row => row.blocker ? [this.reason(row.monster.id)] : []))];
-    return { enabled, accepted: values.filter(row => !row.blocker && row.sources.size > 0).length,
-      blocked: values.filter(row => !!row.blocker).length, reasons };
+    return partyEngagementSnapshot({ enabled, claims: [...this.claims.values()] });
   }
   reason(id: number): string {
-    return `Party engagement unavailable: ${this.claims.get(id)?.blocker ?? 'no verified current party attack source'}.`;
+    return partyEngagementReason(this.claims.get(id)?.blocker);
   }
 }
