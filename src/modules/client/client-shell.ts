@@ -158,10 +158,10 @@ export function mountClientShell(root: HTMLElement): ClientShell {
                 <label><input id="auto-reconnect" type="checkbox" disabled /> Reconnect after connection loss · this session</label>
                 <button id="forget-login" type="button" class="text-button" hidden>Forget local saved login</button>
               </div>
-              <p class="hint">With game client shares one login between the Game and Bot views. Bot only uses the companion map and controls. Disconnect before changing connection modes.</p>
+              <p class="hint">With game client shares one login between the Game and Bot views. Bot only uses the companion map and controls. Stop automation and wait for pending actions, then Disconnect to choose a different connection mode.</p>
               <p class="hint">Saved credentials use a local file with user-only access. The app does not encrypt them.</p>
               <p id="reconnect-help" class="hint">A running bot reconnects with this session login and resumes when your character is ready.</p>
-              <div class="signin-actions"><p id="login-help" class="hint">Select an existing slot. Sign-in enters the field with combat stopped.</p><button id="signin" type="submit" class="primary">Sign in & enter</button></div>
+              <div class="signin-actions"><p id="login-help" class="hint">Select an existing slot. Sign-in enters the field with combat stopped.</p><button id="account-disconnect" type="button" class="secondary" title="Closes the shared connection after automation and pending actions stop; cannot undo server actions" disabled>Disconnect</button><button id="signin" type="submit" class="primary">Sign in & enter</button></div>
             </form>
           </details>
           <section id="client-profiles" class="panel settings feature-panel" data-section="profiles" aria-labelledby="client-profiles-title"><div class="panel-title"><h3 id="client-profiles-title">Profiles</h3></div></section>

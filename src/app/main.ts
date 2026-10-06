@@ -314,7 +314,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
       map:latest?.map??'',player:latest?.player??null,settings:checked});
   stopButton.disabled = dispatches.stopping || !gameOpen && !fieldRun.requested && !loginBusy && !updateContinuation.pending;
   openButton.disabled = false;
-  element<HTMLButtonElement>('disconnect').disabled = !disconnectReady();
+  for (const id of ['disconnect', 'account-disconnect']) element<HTMLButtonElement>(id).disabled = !disconnectReady();
   const controls=panelControls({native,ready:!!ready,accountReady,connectedCharacter:!!(latest?.connected&&latest.player),
     busy,stopping:dispatches.stopping,loginBusy,gameOpen,rememberLogin:element<HTMLInputElement>('remember-login').checked,
     sessionLoginAvailable,runActive:runActive(),featuresSettled:features.settledForMaintenance()});
@@ -394,7 +394,7 @@ async function perform(action: () => Promise<unknown>): Promise<void> {
   try { await action(); } catch (error) { message(typeof error === 'string' ? error : 'Unable to contact the game.', true); }
   finally { busy = false; updateButtons(); }
 }
-element('disconnect').addEventListener('click', () => {
+for (const id of ['disconnect', 'account-disconnect']) element(id).addEventListener('click', () => {
   if (!disconnectReady()) return;
   void perform(async () => { await invoke('close_game'); });
 });

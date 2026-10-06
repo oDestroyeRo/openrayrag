@@ -664,18 +664,18 @@ it('Connect account opens the retained account form without creating or showing 
  expect(f.calls('open_game')).toEqual([]);expect(f.calls('login_game')).toEqual([]);expect(f.calls('control_bot')).toEqual([]);
 });
 
-it('requires settled, fresh stopped state for explicit Disconnect and clears telemetry for a new login',async()=>{
+it.each(['disconnect','account-disconnect'])('requires settled, fresh stopped state for %s and clears telemetry for a new login',async disconnectId=>{
  const f=await fixture(),publish=ipc.listen.mock.calls.find(call=>call[0]==='game-status')![1];
  const base=new BotEngine(()=>{}).snapshot();
  const status={...base,sessionId:'synthetic-session',login:{phase:'idle',message:''},reconnectAvailable:false,connected:true,compatible:true,
   player:{id:0,classId:4,kind:0,name:'Synthetic',level:30,hp:100,maxHp:100,x:1,y:1,dead:false,statuses:[]},
   character:{...base.character,stats:{sp:75,maxSp:200}},mapInfo:{code:'',name:'',source:'observed',monsters:[]}};
- publish({payload:{...status,runRequested:true}});expect(f.get('connection-mode').disabled).toBe(true);expect(f.get('disconnect').disabled).toBe(true);await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([]);
- publish({payload:{...status,refine:{blocked:true,reason:'Pending receipt'}}});expect(f.get('disconnect').disabled).toBe(true);await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([]);
- publish({payload:status});ipc.featureSettled=false;await vi.advanceTimersByTimeAsync(1000);expect(f.get('disconnect').disabled).toBe(true);
- ipc.featureSettled=true;publish({payload:status});expect(f.get('disconnect').disabled).toBe(false);
+ publish({payload:{...status,runRequested:true}});expect(f.get('connection-mode').disabled).toBe(true);expect(f.get(disconnectId).disabled).toBe(true);await f.get(disconnectId).emit('click');expect(f.calls('close_game')).toEqual([]);
+ publish({payload:{...status,refine:{blocked:true,reason:'Pending receipt'}}});expect(f.get(disconnectId).disabled).toBe(true);await f.get(disconnectId).emit('click');expect(f.calls('close_game')).toEqual([]);
+ publish({payload:status});ipc.featureSettled=false;await vi.advanceTimersByTimeAsync(1000);expect(f.get(disconnectId).disabled).toBe(true);
+ ipc.featureSettled=true;publish({payload:status});expect(f.get(disconnectId).disabled).toBe(false);
  let finish!:()=>void;ipc.invoke.mockImplementation((command:string)=>command==='close_game'?new Promise<void>(resolve=>{finish=resolve;}):Promise.resolve(undefined));
- await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([['close_game']]);expect(f.get('disconnect').disabled).toBe(true);expect(f.get('console-walk').disabled).toBe(true);finish();
+ await f.get(disconnectId).emit('click');expect(f.calls('close_game')).toEqual([['close_game']]);for(const id of ['disconnect','account-disconnect'])expect(f.get(id).disabled).toBe(true);expect(f.get('console-walk').disabled).toBe(true);finish();
  const closed=ipc.listen.mock.calls.find(call=>call[0]==='game-closed')![1];closed({payload:undefined});
  expect(ipc.clearMacro).toHaveBeenCalledOnce();
  for(let i=0;i<20;i++)await Promise.resolve();
