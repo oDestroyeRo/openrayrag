@@ -122,6 +122,7 @@ body:has(.client-shell) { margin: 0; background: var(--client-bg); }
 .client-shell .you { background: var(--client-accent); }
 .client-shell .mob { background: #fdba74; }
 .client-shell .drop { background: #c4b5fd; }
+.client-shell .legend-dot.npc { background: #67e8f9; border-radius: 0; transform: rotate(45deg); }
 .client-shell .navigation-info { margin-top: 12px; }
 .client-shell .map-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .client-shell .map-legend span { display: inline-block; width: 9px; height: 9px; border: 1px solid var(--client-muted); margin-left: 4px; }
@@ -189,7 +190,8 @@ body:has(.client-shell) { margin: 0; background: var(--client-bg); }
 .client-shell .console-inspector-tabs button { min-height: 44px; padding: 0 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--client-secondary); }
 .client-shell .console-inspector-tabs button.selected { color: var(--client-text); border-bottom-color: var(--client-accent); }
 .console-inspector-tabs #nearby { color: var(--client-muted); padding-left: 5px; font-size: 12px; }
-.client-shell .console-inspector .monster-list { margin: 0; max-height: 220px; overflow: auto; }
+.client-shell .console-inspector :is(.monster-list, .npc-list) { margin: 0; max-height: 220px; overflow: auto; font-size: 12px; color: var(--client-secondary); line-height: 1.6; }
+.client-shell .console-nearby-heading { margin: 12px 0 4px; color: var(--client-text); font-size: 12px; font-weight: 600; }
 .console-actor-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--client-border); }
 .console-actor-row > span { min-width: 0; white-space: pre-line; overflow-wrap: anywhere; }
 .client-shell .console-actor-row > button { min-height: 44px; padding: 9px 12px; flex-shrink: 0; }

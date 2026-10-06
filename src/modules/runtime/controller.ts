@@ -15,6 +15,7 @@ import {sameActionIdentity,type ActionIdentity} from '../world/actor-identity';
 import { ManualSocket, type SocketContext, type SocketSnapshot } from '../socket/socket';
 import { socketStockFloors, validateSocketEnvelope, type SocketAction } from '../socket/socket-protocol';
 import { validateManualTargetRequest } from '../combat/manual-target';
+import { validateManualNpcTalkRequest } from '../services/manual-npc-talk-logic';
 import { insideLockArea, lockEntry, mapAllowed, mapPolicy } from '../navigation/map-policy';
 import type { ActorPredicate } from '../world/actor-observations';
 import { routineActorPredicates } from '../automation/routines-logic';
@@ -843,6 +844,20 @@ export class CompanionController {
       if(!this.movementSettled())throw new Error('Wait for authoritative movement to settle before a manual command.');
       const blocker=this.manualWorldBlocker();if(blocker)throw new Error(blocker);
       this.engine.startManual(request);this.started=this.now();this.lastTick=this.now();return;
+    }
+    if(mode==='command'&&input&&typeof input==='object'&&'type' in input&&input.type==='manualNpcTalk') {
+      const request=validateManualNpcTalkRequest(input);this.requireIdle();
+      if(!this.movementSettled())throw new Error('Wait for authoritative movement to settle before talking to an NPC.');
+      const blocker=this.manualWorldBlocker();if(blocker)throw new Error(blocker);
+      const binding=this.engine.actorActionIdentity(request.target.id),npc=this.engine.actors.get(request.target.id);
+      if(request.map!==this.engine.map||!binding||binding.world!==request.owner.world
+        ||binding.selfId!==request.owner.id||binding.selfIncarnation!==request.owner.incarnation
+        ||binding.targetIncarnation!==request.target.incarnation)
+        throw new Error('Character, map or NPC lifetime changed. Select the NPC again.');
+      if(!npc||(npc.kind!==2&&npc.kind!==4)||npc.dead)throw new Error('Selected NPC is absent, replaced or dead.');
+      if(this.engine.player!.dead||this.engine.player!.hp<=0)throw new Error('A current living character is required to talk to an NPC.');
+      this.dispatch({type:'npcTalk',id:request.target.id},null);
+      this.started=this.now();this.lastTick=this.now();return;
     }
     if (mode === 'social') {
       this.requireIdle();

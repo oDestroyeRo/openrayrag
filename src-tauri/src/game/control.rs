@@ -1158,6 +1158,19 @@ fn manual_identity(value: &Value) -> Result<&str, String> {
     Ok(world)
 }
 
+fn validate_manual_npc_talk(value: &Value) -> Validation {
+    let request = object(value, &["type", "map", "owner", "target"])?;
+    if string(request, "type")? != "manualNpcTalk" {
+        return Err(invalid());
+    }
+    let map = string(request, "map")?;
+    map_code(map)?;
+    if manual_identity(field(request, "owner")?)? != manual_identity(field(request, "target")?)? {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 fn validate_manual_target(value: &Value) -> Validation {
     let request = object(
         value,
@@ -1259,6 +1272,9 @@ pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
         return Err("Automation request exceeds its limit.".into());
     }
     match action {
+        "command" if request.get("type").and_then(Value::as_str) == Some("manualNpcTalk") => {
+            validate_manual_npc_talk(request)
+        }
         "command" if request.get("type").and_then(Value::as_str) == Some("manualTarget") => {
             validate_manual_target(request)
         }
@@ -2438,6 +2454,72 @@ mod automation_request_tests {
             &json!({"service":service,"executionPolicy":null})
         )
         .is_err());
+    }
+    #[test]
+    fn manual_npc_talk_is_strict_and_command_only() {
+        let world = "12345678-1234-1234-1234-123456789abc";
+        let request = json!({"type":"manualNpcTalk","map":"unmapped_field",
+            "owner":{"world":world,"id":1,"incarnation":1},
+            "target":{"world":world,"id":20,"incarnation":2}});
+        assert!(validate_request("command", &request).is_ok());
+        assert!(request_script("command", &request)
+            .unwrap()
+            .contains("manualNpcTalk"));
+        assert!(validate_action(&request).is_err());
+        for mode in ["workflow", "routine", "service", "social", "memo"] {
+            assert!(validate_request(mode, &request).is_err());
+        }
+        let mut actor_zero = request.clone();
+        actor_zero["owner"]["id"] = json!(0);
+        actor_zero["target"]["id"] = json!(0);
+        assert!(validate_request("command", &actor_zero).is_ok());
+        let mut boundary = request.clone();
+        boundary["target"]["id"] = json!(i32::MAX);
+        boundary["target"]["incarnation"] = json!(i32::MAX);
+        assert!(validate_request("command", &boundary).is_ok());
+        for (path, value) in [
+            ("/type", json!("npcTalk")),
+            ("/map", json!("")),
+            ("/map", json!("bad/map")),
+            ("/map", json!("a".repeat(65))),
+            ("/owner/world", json!("invalid")),
+            ("/owner/id", json!(-1)),
+            ("/owner/incarnation", json!(0)),
+            (
+                "/target/world",
+                json!("00000000-0000-0000-0000-000000000000"),
+            ),
+            ("/target/id", json!(-1)),
+            ("/target/id", json!(1.5)),
+            ("/target/id", json!(i32::MAX as i64 + 1)),
+            ("/target/incarnation", json!(0)),
+            ("/target/incarnation", json!(i32::MAX as i64 + 1)),
+        ] {
+            let mut invalid = request.clone();
+            *invalid.pointer_mut(path).unwrap() = value;
+            assert!(validate_request("command", &invalid).is_err(), "{path}");
+        }
+        for key in ["type", "map", "owner", "target"] {
+            let mut invalid = request.clone();
+            invalid.as_object_mut().unwrap().remove(key);
+            assert!(
+                validate_request("command", &invalid).is_err(),
+                "missing {key}"
+            );
+        }
+        for path in ["", "/owner", "/target"] {
+            let mut invalid = request.clone();
+            invalid
+                .pointer_mut(path)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert("extra".into(), json!(true));
+            assert!(
+                validate_request("command", &invalid).is_err(),
+                "extra at {path}"
+            );
+        }
     }
     #[test]
     fn manual_targets_are_strict_and_command_only() {

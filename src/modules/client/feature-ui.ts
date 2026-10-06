@@ -518,7 +518,7 @@ export class FeatureUi {
     });
   }
   private workflows(): void {
-    const npc = this.detail('NPC dialogue'); const npcGrid = document.createElement('div'); npcGrid.className = 'form-grid'; npc.append(npcGrid);
+    const npc = this.detail('NPC dialogue'); npc.id = 'npc-dialogue-panel'; const npcGrid = document.createElement('div'); npcGrid.className = 'form-grid'; npc.append(npcGrid);
     const npcId = this.input(npcGrid,'npc-id','Visible NPC ID','number','',0); const option = this.input(npcGrid,'npc-option','Option index','number','0',0,31);
     const npcChoiceLabel=document.createElement('label');npcChoiceLabel.className='form-field';npcChoiceLabel.textContent='NPCs in view';const npcChoice=document.createElement('select');npcChoice.id='visible-npcs';const emptyNpc=document.createElement('option');emptyNpc.value='';emptyNpc.textContent='Choose a visible NPC';npcChoice.append(emptyNpc);npcChoiceLabel.append(npcChoice);npcGrid.append(npcChoiceLabel);npcChoice.addEventListener('change',()=>{if(npcChoice.value)npcId.value=npcChoice.value;});
     const npcButtons = document.createElement('div'); npcButtons.className = 'button-row'; npc.append(npcButtons);
