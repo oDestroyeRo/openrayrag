@@ -30,8 +30,10 @@ Keep effect ordering visible. A persistence failure must not commit a new in-mem
 Prefer a named input record for decisions with several related arguments, especially booleans. For repeated evaluation against the same context, bind that context once and return a unary function that can be passed directly to `map`, `filter` or `every`:
 
 ```ts
+import { map } from 'remeda';
+
 const evaluate = actorPredicateEvaluator(snapshot);
-const results = conditions.map(evaluate);
+const results = map(conditions, evaluate);
 ```
 
 The observation belongs to one synchronous decision pass. Treat it as read-only and bind a new evaluator when the snapshot changes; do not retain an evaluator across ticks as a cache. Returned traces and actions remain detached from their inputs. Static predicates, such as feature flags, can be composed once at module initialization. Release discovery similarly binds the expected source revision before filtering workflow runs.
