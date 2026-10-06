@@ -10,11 +10,15 @@ import sys
 import tempfile
 import unittest
 
-repo, published = map(Path, sys.argv[1:])
-root = Path(__file__).resolve().parent.parent
+repo = published = None
+root = Path(__file__).parent.parent
 
 
 class WeaponCatalogTest(unittest.TestCase):
+    def setUp(self):
+        if repo is None or published is None:
+            self.skipTest('External pinned source inputs were not supplied')
+
     def run_generator(self, input_path, output_path):
         return subprocess.run([
             sys.executable, str(root / 'scripts/build-weapon-catalog.py'),
@@ -52,4 +56,13 @@ class WeaponCatalogTest(unittest.TestCase):
                 self.assertEqual(output.read_bytes(), b'existing catalog\n')
 
 
-unittest.main(argv=[sys.argv[0]])
+def main(argv=None):
+    global repo, published
+    argv = sys.argv[1:] if argv is None else argv
+    if argv:
+        repo, published = map(Path, argv)
+    unittest.main(argv=[sys.argv[0]])
+
+
+if __name__ == '__main__':
+    main()

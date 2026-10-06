@@ -11,7 +11,6 @@ import unittest
 from unittest import mock
 import zipfile
 
-sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('release_native', pathlib.Path(__file__).with_name('release-native.py'))
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)

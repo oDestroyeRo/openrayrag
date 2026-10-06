@@ -7,11 +7,15 @@ import sys
 import tempfile
 import unittest
 
-root = Path(__file__).resolve().parent.parent
-repo = Path(sys.argv[1])
+root = Path(__file__).parent.parent
+repo = None
 
 
 class MemoMapCatalogTest(unittest.TestCase):
+    def setUp(self):
+        if repo is None:
+            self.skipTest('External pinned source inputs were not supplied')
+
     def test_exact_pinned_generation(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'memo.json'
@@ -28,4 +32,12 @@ class MemoMapCatalogTest(unittest.TestCase):
             self.assertFalse(items['pay_dun00'])
 
 
-unittest.main(argv=[sys.argv[0]])
+def main(argv=None):
+    global repo
+    argv = sys.argv[1:] if argv is None else argv
+    repo = Path(argv[0]) if argv else None
+    unittest.main(argv=[sys.argv[0]])
+
+
+if __name__ == '__main__':
+    main()

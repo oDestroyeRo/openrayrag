@@ -7,11 +7,15 @@ import sys
 import tempfile
 import unittest
 
-root = Path(__file__).resolve().parent.parent
-repo = Path(sys.argv[1])
+root = Path(__file__).parent.parent
+repo = None
 
 
 class EmoteCatalogTest(unittest.TestCase):
+    def setUp(self):
+        if repo is None:
+            self.skipTest('External pinned source inputs were not supplied')
+
     def test_exact_reproduction_and_bounds(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'emotes.json'
@@ -27,4 +31,12 @@ class EmoteCatalogTest(unittest.TestCase):
             self.assertFalse(ids & {13, 34, 35, 59, 60, 61, 62, 63, 200, 205})
 
 
-unittest.main(argv=[sys.argv[0]])
+def main(argv=None):
+    global repo
+    argv = sys.argv[1:] if argv is None else argv
+    repo = Path(argv[0]) if argv else None
+    unittest.main(argv=[sys.argv[0]])
+
+
+if __name__ == '__main__':
+    main()

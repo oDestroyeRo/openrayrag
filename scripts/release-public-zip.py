@@ -4,33 +4,15 @@ No extraction, application launch, credentials or network access is performed.
 """
 import hashlib
 import json
-from pathlib import Path, PurePosixPath
-import re
-import stat
+from pathlib import Path
 import sys
 import zipfile
 
-
-def checked(condition, message):
-    if not condition:
-        raise ValueError(message)
+from release_policy import checked, public_asset_index, validate_public_zip_entries
 
 
 def verify_archive(archive_path, assets, expected_digest):
-    checked(re.fullmatch(r'sha256:[a-f0-9]{64}', expected_digest), 'Invalid ZIP digest.')
-    checked(isinstance(assets, list) and 0 < len(assets) <= 100, 'Invalid public asset list.')
-    expected = {}
-    for item in assets:
-        checked(isinstance(item, dict) and set(item) == {'name', 'size', 'sha256'}, 'Invalid asset fields.')
-        name = item['name']
-        checked(isinstance(name, str) and re.fullmatch(r'[A-Za-z0-9_.-]+', name)
-                and name not in {'.', '..'} and PurePosixPath(name).name == name
-                and name not in expected, 'Invalid or duplicate public asset name.')
-        checked(type(item['size']) is int and 0 < item['size'] <= 256 * 1024 * 1024
-                and re.fullmatch(r'[a-f0-9]{64}', item['sha256']), 'Invalid public asset size/hash.')
-        expected[name] = item
-    total = sum(item['size'] for item in assets)
-    checked(total <= 512 * 1024 * 1024, 'Public asset total exceeds its bound.')
+    expected, total = public_asset_index(assets, expected_digest)
     # Retain one opened descriptor for hashing and ZIP reads, avoiding a path swap.
     with Path(archive_path).open('rb') as raw:
         raw.seek(0, 2)
@@ -42,14 +24,8 @@ def verify_archive(archive_path, assets, expected_digest):
         raw.seek(0)
         with zipfile.ZipFile(raw) as archive:
             entries = archive.infolist()
-            names = [entry.filename for entry in entries]
-            checked(len(names) == len(set(names)) == len(expected) and set(names) == set(expected),
-                    'ZIP has duplicate, missing or unexpected paths.')
+            validate_public_zip_entries(entries, expected)
             for entry in entries:
-                checked(not entry.is_dir() and not stat.S_ISLNK(entry.external_attr >> 16)
-                        and not entry.flag_bits & 1
-                        and entry.compress_type in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED},
-                        'ZIP directories, links, encryption or unsupported compression are forbidden.')
                 item = expected[entry.filename]
                 checked(entry.file_size == item['size'], 'ZIP entry size differs from public asset.')
                 digest = hashlib.sha256()
@@ -65,11 +41,16 @@ def verify_archive(archive_path, assets, expected_digest):
             'proof': 'Original Actions ZIP digest and every entry hash/size equal anonymous public assets'}
 
 
-if __name__ == '__main__':
-    if len(sys.argv) != 4:
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if len(argv) != 3:
         raise SystemExit('Usage: release-public-zip.py <artifact.zip> <public-assets.json> <sha256:digest>')
     try:
-        result = verify_archive(sys.argv[1], json.loads(Path(sys.argv[2]).read_text()), sys.argv[3])
+        result = verify_archive(argv[0], json.loads(Path(argv[1]).read_text()), argv[2])
         print(json.dumps(result, indent=2))
     except (ValueError, OSError, zipfile.BadZipFile) as error:
         raise SystemExit(str(error)) from None
+
+
+if __name__ == '__main__':
+    main()

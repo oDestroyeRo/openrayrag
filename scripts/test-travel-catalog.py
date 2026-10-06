@@ -13,13 +13,17 @@ import sys
 import tempfile
 import unittest
 
-SOURCE_GIT = str(Path(sys.argv.pop(1)).resolve())
-SCRIPTS = Path(__file__).resolve().parent
+SOURCE_GIT = None
+SCRIPTS = Path(__file__).parent
 REPORT = SCRIPTS / 'navigation-portal-sources.json'
 CATALOG = SCRIPTS.parent / 'src/data/travel-portals.json'
 
 
 class TravelCatalogTest(unittest.TestCase):
+    def setUp(self):
+        if SOURCE_GIT is None:
+            self.skipTest('External pinned source checkout was not supplied')
+
     def generate(self, report, output):
         return subprocess.run([
             sys.executable, str(SCRIPTS / 'build-travel-catalog.py'), str(report), SOURCE_GIT, str(output),
@@ -73,5 +77,13 @@ class TravelCatalogTest(unittest.TestCase):
             self.assertEqual(output.read_bytes(), original)
 
 
+def main(argv=None):
+    global SOURCE_GIT
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and not argv[0].startswith('-'):
+        SOURCE_GIT = str(Path(argv.pop(0)).resolve())
+    unittest.main(argv=[sys.argv[0], *argv])
+
+
 if __name__ == '__main__':
-    unittest.main()
+    main()
