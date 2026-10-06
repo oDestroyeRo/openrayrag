@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign, createHash } from "node:crypto";
-import { mkdtemp, writeFile, readFile, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, readdir, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -754,14 +754,14 @@ test("GitHub adapter peels annotated tags instead of trusting target_commitish",
     global.fetch = original;
   }
 });
-test("workflow uses versioned actions, separates signing from PR checks and queues every publisher", async () => {
+test("workflow pins third-party actions, separates signing from PR checks and queues every publisher", async () => {
   const source = await readFile(
     new URL("../../.github/workflows/release.yml", import.meta.url),
     "utf8",
   );
   assert.equal(
-    [...source.matchAll(/uses: [^\n]+@([^\s]+)/g)].every((m) =>
-      /^v\d+\.\d+\.\d+$/.test(m[1]),
+    [...source.matchAll(/uses: ([^\s]+)@([^\s]+)/g)].every((m) =>
+      (/^(actions|github)\//.test(m[1]) ? /^v\d+\.\d+\.\d+$/ : /^[a-f0-9]{40}$/).test(m[2]),
     ),
     true,
   );
@@ -911,14 +911,16 @@ test("artifact restore checks the actual ZIP digest before extracting", async ()
     global.fetch = original;
   }
 });
-test("artifact restore extracts the immutable original legacy or multiplatform ZIP", async () => {
-  for (const schemaVersion of [1, 2]) {
+test("artifact restore extracts the immutable original legacy, multiplatform or semantic ZIP", async () => {
+  for (const schemaVersion of [1, 2, 3]) {
+    const context = schemaVersion === 3 ? await semanticFixture(new PlannedApi()) : null,
+      ident = context?.id ?? id(2),
+      files = context?.files ?? bundle(2, "original", schemaVersion);
     const root = await mkdtemp(join(tmpdir(), "rayrag-restore-test-"));
     try {
       const source = join(root, "source"),
         destination = join(root, "restored"),
-        zip = join(root, "artifact.zip"),
-        files = bundle(2, "original", schemaVersion);
+        zip = join(root, "artifact.zip");
       await mkdir(source);
       for (const [name, bytes] of files)
         await writeFile(join(source, name), bytes);
@@ -940,10 +942,10 @@ test("artifact restore extracts the immutable original legacy or multiplatform Z
               digest: original.digest,
               workflow_run: {
                 id: Number(original.runId),
-                head_sha: id(2).sourceSha,
+                head_sha: ident.sourceSha,
               },
             };
-      await api.restoreArtifact(original, id(2), destination);
+      await api.restoreArtifact(original, ident, destination);
       const restored = new Map(
         await Promise.all(
           [...files.keys()].map(async (name) => [
@@ -954,12 +956,29 @@ test("artifact restore extracts the immutable original legacy or multiplatform Z
       );
       assert.deepEqual(restored, files);
       assert.equal(
-        validateBundle(restored, id(2), publicKey).schemaVersion,
+        validateBundle(restored, ident, publicKey).schemaVersion,
         schemaVersion,
       );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  }
+});
+
+test("artifact restore rejects a digest-matched malformed ZIP without writing downloaded bytes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rayrag-invalid-restore-test-"));
+  try {
+    const bytes = Buffer.from("not a ZIP archive"),
+      original = { ...artifact(2), digest: `sha256:${sha256(bytes)}` },
+      api = new GitHubReleaseApi("synthetic-token");
+    api.request = async (_method, path) => path.endsWith("/zip") ? bytes : {
+      id: Number(original.id), expired: false, digest: original.digest,
+      workflow_run: { id: Number(original.runId), head_sha: id(2).sourceSha },
+    };
+    await assert.rejects(api.restoreArtifact(original, id(2), root), /Command failed/);
+    assert.deepEqual(await readdir(root), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

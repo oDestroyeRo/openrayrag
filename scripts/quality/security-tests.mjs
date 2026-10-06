@@ -10,6 +10,7 @@ const desktop = await readYaml('../../.github/workflows/release.yml');
 const release = await readYaml('../../.github/workflows/release-publish.yml');
 const security = await readYaml('../../.github/workflows/security.yml');
 const dependabot = await readYaml('../../.github/dependabot.yml');
+const autoMerge = await readYaml('../../.github/workflows/dependabot-auto-merge.yml');
 
 function succeeds(script, variables) {
   try {
@@ -140,13 +141,16 @@ test('required gates reject failed, cancelled, skipped or missing applicable sec
   }
 });
 
-test('versioned actions and scan permissions preserve the release trust boundary', () => {
-  for (const workflow of [desktop, release, security]) {
+test('immutable third-party actions and scan permissions preserve the release trust boundary', () => {
+  for (const workflow of [desktop, release, security, autoMerge]) {
     assert.deepEqual(workflow.permissions, { contents: 'read' });
     for (const job of Object.values(workflow.jobs)) {
       assert.ok(job.uses || job['timeout-minutes'] > 0);
       for (const step of job.steps ?? []) {
-        if (step.uses) assert.match(step.uses, /@v\d+\.\d+\.\d+$/);
+        if (step.uses) {
+          assert.match(step.uses, /^(actions|github)\//.test(step.uses)
+            ? /@v\d+\.\d+\.\d+$/ : /@[a-f0-9]{40}$/);
+        }
         if (step.uses?.startsWith('actions/checkout@')) {
           assert.equal(step.with.ref, '${{ github.sha }}');
           assert.equal(step.with['persist-credentials'], false);
