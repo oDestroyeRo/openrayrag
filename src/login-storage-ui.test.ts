@@ -607,7 +607,7 @@ it('renders the fresh held owner before toolbar status and binds observed sessio
  const status={...base,sessionId:'synthetic-session',login:{phase:'idle',message:''},reconnectAvailable:false,connected:true,compatible:true,
   player:{id:0,classId:4,kind:0,name:'Synthetic',level:30,hp:100,maxHp:100,x:1,y:1,dead:false,statuses:[]},
   character:{...base.character,stats:{sp:75,maxSp:200}},deaths:2,reason:'Stopped by you.',
-  mapInfo:{code:'',name:'',source:'observed',monsters:[]},refine:{blocked:true,reason:'Waiting for the exact refine transaction.'}};
+  mapInfo:{code:'',name:'',source:'observed',monsters:[]},refine:{state:'pending',blocked:true,reason:'Waiting for the exact refine transaction.',candidates:[],dialogueToken:null,preview:null}};
  const saves=f.calls('save_current_form').length;
  publish({payload:status});
  expect(f.get('status').textContent).toBe('WAITING');expect(f.get('notice').textContent).toBe(status.refine.reason);
@@ -615,7 +615,7 @@ it('renders the fresh held owner before toolbar status and binds observed sessio
  expect(f.get('sp-text').textContent).toBe('75 / 200');expect(f.get('sp-bar').style.width).toBe('37.5%');expect(f.get('death-count').textContent).toBe('2');
  await f.get('client-tab-settings').emit('click');expect(f.get('notice').textContent).toBe(status.refine.reason);
  expect(f.calls('save_current_form')).toHaveLength(saves);expect(f.calls('control_bot')).toEqual([]);
- publish({payload:{...status,character:{...base.character,stats:null},refine:{blocked:false}}});
+ publish({payload:{...status,character:{...base.character,stats:null},refine:{...status.refine,state:'idle',blocked:false}}});
  expect(f.get('status').textContent).toBe('READY');expect(f.get('sp-text').textContent).toBe('— / —');expect(f.get('sp-bar').style.width).toBe('0%');
 });
 

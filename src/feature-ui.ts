@@ -1,30 +1,29 @@
+import { browserTextStorage } from './storage-effects';
+import { actorInput, chooseFollowMode, checkedAction, isAction, featureServiceBlocked, featureActive, featureObservation } from './feature-ui-logic';
+import { validWarpSnapshot } from './warp-ui-logic';
+import { macroActive } from './macro-ui-logic';
+export { actorInput, chooseFollowMode, validFeatureStatus } from './feature-ui-logic';
 import { dashboardTaskLabel } from './client-dashboard';
 import type { ClientShell } from './client-shell';
-import { validPartyFollowSnapshot } from './party-follow';
-import { validPartyHealSnapshot } from './party-heal';
-import { validateDeathRecoveryGuard } from './death-recovery';
-import { RefineUi, validRefineSnapshot } from './refine-ui';
+import { RefineUi } from './refine-ui';
 import { DEFAULT_MAP_POLICY, insideLockArea, mapPolicy, policySummary, validateMapPolicy } from './map-policy';
 import { ManualTargetUi } from './manual-target-ui';
 import { routeBetweenMapsAsync } from './travel';
-import {actorId} from './actor-identity';
-import { SocketUi, validSocketSnapshot } from './socket-ui';
+import { SocketUi } from './socket-ui';
 import { ActorPredicateEditor, actorSnapshotAt } from './actor-predicate-ui';
-import { SocialUi, validSocialSnapshot } from './social-ui';
-import { MemoUi, validMemoSnapshot } from './memo-ui';
-import { WarpUi, validWarpSnapshot } from './warp-ui';
-import { validActorSnapshot, type ActorObservationSnapshot } from './actor-observations';
+import { SocialUi } from './social-ui';
+import { MemoUi } from './memo-ui';
+import { WarpUi } from './warp-ui';
+import { type ActorObservationSnapshot } from './actor-observations';
 import { DEFAULT_AUTOMATION, DEFAULT_RETREAT, DEFAULT_PARTY_HEAL, validateAutomation, type AutomationSettings, type Settings } from './settings';
 import { MAX_PROFILES, ProfileStore } from './profiles';
 import { ITEM_CATALOG, SKILL_CATALOG, itemName, skillName } from './game-catalog';
-import { validateExpandedAction } from './protocol-feature';
-import { validateWorldAction } from './world-protocol';
 import { validateWorkflowSpec } from './workflows';
 import { NpcServiceStore } from './npc-service-store';
 import { BUILTIN_SERVICES, previewServiceAsync, validateServiceRequest } from './npc-services';
 import type { Entity } from './protocol';
 import { dryRunRoutine, validateRoutineSpec, type RoutineObservation } from './routines';
-import { MacroUi, macroActive, validMacroSnapshot } from './macro-ui';
+import { MacroUi } from './macro-ui';
 import type { BotScriptDocument } from './bot-script';
 import { DEFAULT_SUPPLY } from './supply-trip';
 import { previewSupplyTrip } from './supply-plan';
@@ -53,22 +52,6 @@ type Row = Record<string, unknown>;
 const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const text = (v: unknown): string => typeof v === 'string' ? v : '';
 const number = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
-/** Blank is absence, never the allocator's valid actor zero. */
-export function actorInput(value:string,optional=false):number|undefined {
-  if(!value.trim()){if(optional)return undefined;throw new Error('Choose an observed actor ID.');}
-  return actorId(Number(value));
-}
-function checkedAction(input: unknown): Record<string, unknown> {
-  if (['sit','useItem','skill','equip','respawn','allocateSkill','allocateStats'].includes(text(object(input).type))) {
-    return validateExpandedAction(input) as unknown as Record<string,unknown>;
-  }
-  return validateWorldAction(input) as unknown as Record<string,unknown>;
-}
-function isAction(input: unknown): input is Record<string,unknown> { try { checkedAction(input); return true; } catch { return false; } }
-/** Mode selection explicitly clears incompatible policy in the form. */
-export function chooseFollowMode(follow:AutomationSettings['follow'],mode:'name'|'partyLeader'):AutomationSettings['follow'] {
-  return {...follow,mode,...(mode==='partyLeader'?{name:''}:{rendezvous:false})};
-}
 const fields: Record<Section, Field[]> = {
   combat: [
     { path:'combat.mode', label:'Attack monsters', options:[['selected','Only selected monsters'],['retaliate','Only monsters attacking me'],['both','Selected monsters + monsters attacking me'],['off','Combat off']] },
@@ -200,44 +183,6 @@ const idColumn = (key: string, label: string, max = 2147483647): Column => ({key
 const priority: Column = {key:'priority',label:'Priority',min:-100,max:100};
 const countColumn: Column = {key:'count',label:'Quantity',min:1,max:9999};
 
-// Bounded telemetry is treated as data. A new packet field cannot inject HTML or
-// make a native status event grow an unbounded tree in the controller.
-export function validFeatureStatus(value: Record<string, unknown>): boolean {
-  if(value.macro!==undefined&&!validMacroSnapshot(value.macro))return false;
-  if(value.partyHeal!==undefined&&!validPartyHealSnapshot(value.partyHeal))return false;
-  if(value.deathRecoveryGuard!==undefined){try{validateDeathRecoveryGuard(value.deathRecoveryGuard);}catch{return false;}}
-  let remaining = 100_000;
-  function bounded(v: unknown, depth: number): boolean {
-    if (--remaining < 0 || depth > 10) return false;
-    if (v === null || typeof v === 'boolean') return true;
-    if (typeof v === 'number') return Number.isFinite(v);
-    if (typeof v === 'string') return v.length <= 8192;
-    if (Array.isArray(v)) return v.length <= 2048 && v.every(entry => bounded(entry,depth+1));
-    if (v && typeof v === 'object') return Object.keys(v).length <= 256 && Object.values(v).every(entry => bounded(entry,depth+1));
-    return false;
-  }
-  if (!['character','world','workflow','routine','macro','service','task','actionResult','travel','partyFollow','escape','supply','supplyGuard','deathRecoveryGuard','elapsedSeconds','deaths','lootStats','actors','loadout','attackStrategies','manualTarget','partyHeal','retreat'].every(key => value[key] === undefined || bounded(value[key],0))) return false;
-  if(object(value.travel).policy!==undefined){try{validateMapPolicy(object(value.travel).policy);}catch{return false;}}
-  if(value.partyEngagement!==undefined) {
-    const p=object(value.partyEngagement);
-    if(Object.keys(p).length!==4||Object.keys(p).some(key=>!['enabled','accepted','blocked','reasons'].includes(key))||typeof p.enabled!=='boolean'||!Number.isInteger(p.accepted)||!Number.isInteger(p.blocked)||Number(p.accepted)<0||Number(p.blocked)<0||Number(p.accepted)+Number(p.blocked)>150||!Array.isArray(p.reasons)||p.reasons.length>4||!p.reasons.every(reason=>typeof reason==='string'&&reason.length<=160))return false;
-  }
-  if(value.partyFollow!==undefined&&!validPartyFollowSnapshot(value.partyFollow))return false;
-  if(value.actorObservations!==undefined&&!validActorSnapshot(value.actorObservations))return false;
-  if(value.social!==undefined&&!validSocialSnapshot(value.social))return false;
-  if(value.warp!==undefined&&!validWarpSnapshot(value.warp))return false;
-  if(value.memo!==undefined&&!validMemoSnapshot(value.memo))return false;
-  if(value.socket!==undefined&&!validSocketSnapshot(value.socket))return false;
-  if(value.refine!==undefined&&!validRefineSnapshot(value.refine))return false;
-  if(value.ruleConditions!==undefined&&!bounded(value.ruleConditions,0))return false;
-  const barter = object(value.world).barter;
-  return barter === undefined || Array.isArray(barter) && barter.every(entry => {
-    const row = object(entry);
-    return Number.isInteger(object(row.item).itemId) && Array.isArray(row.required)
-      && row.required.every(required => Number.isInteger(object(required).itemId) && Number.isInteger(object(required).count));
-  });
-}
-
 export class FeatureUi {
   private readonly settingInputs = new Map<string, HTMLInputElement | HTMLSelectElement>();
   private readonly manualTargets:ManualTargetUi;
@@ -310,7 +255,7 @@ export class FeatureUi {
   private readonly warp:WarpUi;
   constructor(private readonly host: HTMLElement, private readonly hooks: Hooks, private readonly mounts: FeatureUiMounts) {
     let storage: Pick<Storage,'getItem'|'setItem'>;
-    try { storage = localStorage; } catch { storage = {getItem:()=>null,setItem:()=>{throw new Error('Profile storage is unavailable.');}}; }
+    try { storage = browserTextStorage(); } catch { storage = {getItem:()=>null,setItem:()=>{throw new Error('Profile storage is unavailable.');}}; }
     this.profiles = new ProfileStore(storage); this.services = new NpcServiceStore(storage);
     for (const [section, panel] of Object.entries(mounts.sections) as Array<[Section, HTMLElement]>) this.panels.set(section, panel);
     this.hpPotions = new RecoveryItemUi(() => this.hooks.changed(), () => {
@@ -717,23 +662,17 @@ export class FeatureUi {
     this.memo.lock(manual);this.warp.lock(warp);this.socket.lock(manual);this.manualTargets.lock(manual);
   }
   settledForMaintenance(allowMacro = false): boolean { return (allowMacro || !macroActive(this.status.macro)) && this.refine.settledForMaintenance(); }
-  serviceBlocked(): boolean { return macroActive(this.status.macro) || object(this.status.warp).blocked===true || object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.supply).uncertain===true || object(this.status.social).pending===true || object(this.status.escape).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending'; }
+  serviceBlocked(): boolean { return featureServiceBlocked(this.status); }
   clearSocial(): void { delete this.status.social; this.social.clear(); delete this.status.socket; this.socket.clear();delete this.status.refine;this.refine.clear(); }
   clearMemo(): void { delete this.status.memo; this.memo.clear();delete this.status.warp;this.warp.clear(); }
   clearMacro(): void { delete this.status.macro; this.macroUi.render(undefined, {}); }
-  active(): boolean { return macroActive(this.status.macro) || object(this.status.warp).blocked===true || object(this.status.refine).blocked===true || object(this.status.retreat).settling===true || ['pending','uncertain'].includes(text(object(this.status.partyHeal).state)) || object(this.status.partyFollow).ownsTravel===true || object(this.status.manualTarget).active===true || object(this.status.manualTarget).settling===true || ['planning','walking','transition'].includes(text(object(this.status.travel).state)) || object(this.status.socket).pending===true || object(this.status.memo).blocked===true || object(this.status.social).pending===true || object(this.status.service).active===true || object(this.status.workflow).running===true || ['running','waiting'].includes(text(object(this.status.routine).state)) || object(this.status.actionResult).status==='pending' || object(this.status.task).pending===true; }
+  active(): boolean { return featureActive(this.status); }
   warpActivationReady():boolean{return validWarpSnapshot(this.status.warp)&&this.status.warp.activation!==null;}
   hasUnsavedMacro(): boolean { return this.macroUi.unsaved; }
   setupDraftDirty(): boolean { return this.macroUi.dirty; }
   setupDocument(): BotScriptDocument { return this.macroUi.configured(); }
   syncSetup(settings: Settings): void { this.macroUi.syncSettings(settings); }
-  private observation(): RoutineObservation {
-    const stats=object(object(this.status.character).stats);const player=object(this.status.player);const hp=number(stats.hp)??number(player.hp);const maxHp=number(stats.maxHp)??number(player.maxHp);const sp=number(stats.sp);const maxSp=number(stats.maxSp);const zeny=number(stats.zeny);const result:RoutineObservation={actors:actorSnapshotAt(this.status.actorObservations),map:text(this.status.map),elapsedSeconds:number(this.status.elapsedSeconds)??0};
-    if(hp!==null&&maxHp!==null&&maxHp>0)result.hpPercent=hp/maxHp*100;if(sp!==null&&maxSp!==null&&maxSp>0)result.spPercent=sp/maxSp*100;if(zeny!==null)result.zeny=zeny;
-    const level=number(stats.level)??number(player.level),jobLevel=number(stats.jobLevel),weight=number(stats.weight),maxWeight=number(stats.maxWeight);
-    if(level!==null)result.level=level;if(jobLevel!==null)result.jobLevel=jobLevel;if(weight!==null&&maxWeight!==null&&maxWeight>0)result.weightPercent=weight/maxWeight*100;
-    const character=object(this.status.character);if(character.inventoryKnown===true&&Array.isArray(character.inventory)){const counts:Record<number,number>={};for(const entry of character.inventory){const row=object(entry);const id=number(row.itemId);const count=number(row.count);if(id!==null&&count!==null)counts[id]=(counts[id]??0)+count;}result.inventory=counts;}return result;
-  }
+  private observation(): RoutineObservation { return featureObservation(this.status, Date.now()); }
   render(value: unknown): void {
     this.status=object(value);this.macroUi.render(this.status.macro,this.observation());if(this.routePreview&&(this.routePreview.identity!==this.previewIdentity()||this.routePreview.evidence!==this.routePreview.current?.()))this.cancelRoutePreview();const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);
     this.hpPotions.update(character);

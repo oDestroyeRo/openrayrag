@@ -1,9 +1,9 @@
 import type { Snapshot } from './engine';
 import type { EscapeSnapshot } from './escape';
-import type { LoginStatus } from './login';
-import { validMapInfo, type MapInfo } from './map-data';
+import type { LoginStatus } from './login-logic';
+import { validMapInfo, type MapInfo } from './map-data-logic';
 import { validNavigationStatus } from './navigation-status';
-import { validFeatureStatus } from './feature-ui';
+import { validFeatureStatus } from './feature-ui-logic';
 
 export type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; connectionMode?: 'botOnly' | 'gameClient'; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean; escape?: EscapeSnapshot; macro?:import('./macros').MacroSnapshot; supplyGuard?:import('./supply-trip').SupplyResumeGuard; deathRecoveryGuard?:import('./death-recovery').DeathRecoveryGuard };
 

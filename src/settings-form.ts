@@ -1,4 +1,4 @@
-import { formDocument, type FormDocument } from './current-form';
+import { formDocument, type FormDocument } from './current-form-logic';
 import type { FeatureUi } from './feature-ui';
 import { settingsWithFieldMap } from './field-controls';
 import type { MapInfo } from './map-data';

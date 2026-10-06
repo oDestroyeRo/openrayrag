@@ -1,109 +1,11 @@
-import { GAME_URL, type Entity } from './protocol';
-
-export interface MapMonster {
-  classId: number; name: string; level: number; maxHp: number;
-  spawnCount: number | null; visibleCount: number;
-}
-export interface MapInfo {
-  code: string; name: string; source: 'loading' | 'database' | 'observed'; monsters: MapMonster[];
-}
-export type MapCatalog = Map<string, { name: string; monsters: MapMonster[] }>;
-export const MAP_DATA_URL = `${GAME_URL}StreamingAssets/ClientConfigGenerated/`;
-const mapCode = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(value);
-const text = (value: unknown, limit = 128): value is string => typeof value === 'string' && value.length > 0 && value.length <= limit && !/[\x00-\x1f]/.test(value);
-const integer = (value: unknown, min: number, max: number): value is number => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
-function record(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid map database');
-  return value as Record<string, unknown>;
-}
-function items(value: unknown): unknown[] {
-  const list = record(value).Items;
-  if (!Array.isArray(list) || list.length > 4096) throw new Error('Invalid map database');
-  return list;
-}
-
-export function parseMapCatalog(mapData: unknown, monsterData: unknown): MapCatalog {
-  const catalog: MapCatalog = new Map();
-  for (const value of items(mapData)) {
-    const row = record(value);
-    if (!mapCode(row.Code) || !text(row.Name) || catalog.has(row.Code)) throw new Error('Invalid map metadata');
-    catalog.set(row.Code, { name: row.Name, monsters: [] });
-  }
-  const ids = new Set<number>();
-  for (const value of items(monsterData)) {
-    const row = record(value);
-    if (!integer(row.Id, 1, 2_147_483_647) || ids.has(row.Id) || !text(row.Name, 64)
-      || !integer(row.Level, 0, 9999) || !integer(row.HP, 0, 2_000_000_000)
-      || !Array.isArray(row.Spawns) || row.Spawns.length > 4096) throw new Error('Invalid monster metadata');
-    ids.add(row.Id);
-    for (const value of row.Spawns) {
-      const spawn = record(value);
-      if (!mapCode(spawn.Map) || !integer(spawn.Count, 0, 1_000_000)) throw new Error('Invalid spawn metadata');
-      if (!spawn.Count) continue;
-      // Some published spawns refer to maps absent from the map-name export.
-      if (!catalog.has(spawn.Map)) catalog.set(spawn.Map, { name: spawn.Map, monsters: [] });
-      const monsters = catalog.get(spawn.Map)!.monsters;
-      const existing = monsters.find(monster => monster.classId === row.Id);
-      if (existing) existing.spawnCount! += spawn.Count;
-      else monsters.push({ classId: row.Id, name: row.Name, level: row.Level, maxHp: row.HP, spawnCount: spawn.Count, visibleCount: 0 });
-      if (monsters.length > 128) throw new Error('Map roster exceeds its limit');
-    }
-  }
-  return catalog;
-}
+import { parseMapCatalog, parseMapDataText, type MapCatalog } from './map-data-logic';
+import { withMapDataRequests } from './map-data-effects';
+export { currentMapInfo, parseMapCatalog, validMapInfo, type MapMonster, type MapInfo, type MapCatalog } from './map-data-logic';
+export { MAP_DATA_URL } from './map-data-effects';
 
 export async function loadMapCatalog(fetcher: typeof fetch = fetch): Promise<MapCatalog> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12_000);
-  try {
-    const read = async (file: string) => {
-      const response = await fetcher(`${MAP_DATA_URL}${file}`, { signal: controller.signal, credentials: 'omit' });
-      if (!response.ok) throw new Error('Map database unavailable');
-      const data = await response.text();
-      if (data.length > 2_000_000) throw new Error('Map database exceeds its limit');
-      return JSON.parse(data) as unknown;
-    };
-    const [maps, monsters] = await Promise.all([read('maps.json'), read('monsterdatabase.json')]);
+  return withMapDataRequests(async read => {
+    const [maps, monsters] = await Promise.all(['maps.json', 'monsterdatabase.json'].map(async file => parseMapDataText(await read(file))));
     return parseMapCatalog(maps, monsters);
-  } finally { clearTimeout(timer); controller.abort(); }
-}
-
-export function currentMapInfo(code: string, entities: Iterable<Entity>, catalog: MapCatalog | null, loading: boolean): MapInfo {
-  const map = catalog?.get(code);
-  const monsters = new Map(map?.monsters.map(monster => [monster.classId, { ...monster }]));
-  const observed = new Set<number>();
-  // Aggregate before the radar's 150-entity cap; these counts are visible live
-  // entities, while spawnCount is the database's configured map population.
-  for (const entity of entities) {
-    if (entity.kind !== 1 || entity.dead || entity.hp <= 0) continue;
-    let monster = monsters.get(entity.classId);
-    if (!monster) {
-      monster = { classId: entity.classId, name: entity.name, level: entity.level, maxHp: entity.maxHp, spawnCount: null, visibleCount: 0 };
-      monsters.set(entity.classId, monster);
-    }
-    if (!observed.has(entity.classId)) {
-      monster.name = entity.name; monster.level = entity.level; monster.maxHp = entity.maxHp;
-      observed.add(entity.classId);
-    } else {
-      monster.level = Math.max(monster.level, entity.level); monster.maxHp = Math.max(monster.maxHp, entity.maxHp);
-    }
-    monster.visibleCount++;
-  }
-  return { code, name: map?.name ?? code, source: loading ? 'loading' : map ? 'database' : 'observed', monsters: [...monsters.values()].slice(0,128) };
-}
-
-export function validMapInfo(value: unknown, code: string): value is MapInfo {
-  if (!value || typeof value !== 'object') return false;
-  const info = value as Partial<MapInfo>;
-  if (info.code !== code || typeof info.name !== 'string' || info.name.length > 128
-    || !['loading','database','observed'].includes(info.source ?? '') || !Array.isArray(info.monsters) || info.monsters.length > 128) return false;
-  const ids = new Set<number>();
-  return info.monsters.every(value => {
-    if (!value || typeof value !== 'object') return false;
-    const m = value as Partial<MapMonster>;
-    if (!integer(m.classId, 1, 2_147_483_647) || ids.has(m.classId) || !text(m.name,64)
-      || !integer(m.level,0,9999) || !integer(m.maxHp,0,2_000_000_000)
-      || !(m.spawnCount === null || integer(m.spawnCount,0,1_000_000_000)) || !integer(m.visibleCount,0,100_000)) return false;
-    ids.add(m.classId); return true;
-  });
+  }, fetcher);
 }

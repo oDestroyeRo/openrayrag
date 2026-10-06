@@ -1,5 +1,5 @@
 import { clientStatus } from './client-status';
-import type { MapInfo } from './map-data';
+import type { MapInfo } from './map-data-logic';
 import type { Settings } from './settings';
 
 /** An idle task label can survive a run/state transition; it is not an action. */
