@@ -497,33 +497,27 @@ export class GitHubReleaseApi {
       bytes && artifactDigest(`sha256:${sha256(bytes)}`) === artifact.digest,
       "Workflow artifact ZIP checksum differs.",
     );
-    const temporary = await mkdtemp(join(tmpdir(), "rayrag-release-artifact-"));
-    try {
-      const zip = join(temporary, "bundle.zip");
-      await writeFile(zip, bytes);
-      await mkdir(folder, { recursive: true });
-      requireValue(
-        (await readdir(folder)).length === 0,
-        "Artifact destination must be empty.",
-      );
-      execFileSync(
-        "python3",
-        [
-          join(repositoryRoot, "scripts/release/release-native.py"),
-          "extract-zip",
-          zip,
-          folder,
-          JSON.stringify([
-            expectedNames(id.version, 1),
-            expectedNames(id.version, 2),
-            expectedNames(id.version, 3),
-          ]),
-        ],
-        { stdio: "inherit" },
-      );
-    } finally {
-      await rm(temporary, { recursive: true, force: true });
-    }
+    await mkdir(folder, { recursive: true });
+    requireValue(
+      (await readdir(folder)).length === 0,
+      "Artifact destination must be empty.",
+    );
+    // Keep downloaded container bytes in memory until the extractor admits
+    // every entry; only validated release assets may reach the filesystem.
+    execFileSync(
+      "python3",
+      [
+        join(repositoryRoot, "scripts/release/release-native.py"),
+        "extract-zip-stdin",
+        folder,
+        JSON.stringify([
+          expectedNames(id.version, 1),
+          expectedNames(id.version, 2),
+          expectedNames(id.version, 3),
+        ]),
+      ],
+      { input: bytes, stdio: ["pipe", "inherit", "inherit"] },
+    );
   }
 }
 /** @param {Response} response @param {number} [limit] @returns {Promise<Buffer>} */

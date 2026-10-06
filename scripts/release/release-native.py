@@ -1,6 +1,7 @@
 """Validate release containers without launching the app; reject unsafe archive entries."""
 import json
 import hashlib
+import io
 import os
 import pathlib
 import plistlib
@@ -115,9 +116,24 @@ def extract_zip(archive, destination, names):
     with zipfile.ZipFile(archive) as source:
         members = source.infolist()
         validate_workflow_zip(members, names, ASSET_LIMIT, BUNDLE_LIMIT)
+        # Check every payload and CRC before opening any output file. Retain
+        # the same archive descriptor, and bound each decompressed read.
         for member in members:
-            with source.open(member) as reader, (destination / member.filename).open('xb') as writer:
-                shutil.copyfileobj(reader, writer)
+            copy_zip_member(source, member)
+        for member in members:
+            with (destination / member.filename).open('xb') as writer:
+                copy_zip_member(source, member, writer)
+
+
+def copy_zip_member(source, member, writer=None):
+    size = 0
+    with source.open(member) as reader:
+        while chunk := reader.read(1024 * 1024):
+            size += len(chunk)
+            checked(size <= member.file_size, 'Workflow artifact payload exceeds bounds.')
+            if writer is not None:
+                writer.write(chunk)
+    checked(size == member.file_size, 'Workflow artifact payload size differs.')
 
 
 def main(argv=None):
@@ -126,6 +142,10 @@ def main(argv=None):
         verify(pathlib.Path(argv[1]), argv[2])
     elif argv[0] == 'extract-zip':
         extract_zip(pathlib.Path(argv[1]), pathlib.Path(argv[2]), json.loads(argv[3]))
+    elif argv[0] == 'extract-zip-stdin':
+        raw = sys.stdin.buffer.read(BUNDLE_LIMIT + 1024 * 1024 + 1)
+        checked(0 < len(raw) <= BUNDLE_LIMIT + 1024 * 1024, 'Workflow artifact ZIP exceeds bounds.')
+        extract_zip(io.BytesIO(raw), pathlib.Path(argv[1]), json.loads(argv[2]))
     else:
         raise ValueError('Unknown release verification command.')
 

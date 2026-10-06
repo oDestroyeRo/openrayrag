@@ -201,7 +201,7 @@ test('privileged completion provisions locked runtime dependencies and executes 
   assert.equal(job.steps.length, 4);
   assert.match(job.steps[0].uses, /^actions\/checkout@v\d+\.\d+\.\d+$/);
   assert.deepEqual(job.steps[0].with, { ref: '${{ github.sha }}', 'persist-credentials': false });
-  assert.equal(job.steps[1].uses, 'oven-sh/setup-bun@v2.2.0');
+  assert.match(job.steps[1].uses, /^oven-sh\/setup-bun@[a-f0-9]{40}$/);
   assert.equal(job.steps[1].with['bun-version-file'], '.bun-version');
   assert.equal(job.steps[2].run, 'bun install --production --frozen-lockfile --ignore-scripts');
   assert.equal(job.steps[2].env, undefined);
