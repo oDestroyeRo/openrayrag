@@ -110,7 +110,8 @@ export function mountClientShell(root: HTMLElement): ClientShell {
           </section>
           <section id="client-bot-recovery" class="panel settings feature-panel" data-section="recovery" role="tabpanel" aria-labelledby="client-bot-tab-recovery" hidden>
             <div class="panel-title"><h3 id="client-bot-recovery-title" tabindex="-1">Recovery</h3></div>
-            <div class="field-row"><label for="min-hp">Wait below HP</label><output id="hp-value">45%</output></div><input id="min-hp" type="range" min="20" max="95" value="45" />
+            <div class="field-row"><label for="min-hp">Emergency HP stop</label><output id="hp-value">45%</output></div><input id="min-hp" type="range" min="20" max="95" value="45" />
+            <p class="hint">When Sit to recover HP and SP is enabled, keep Emergency HP stop below Rest below HP %, and Rest below HP % below Resume above HP %. Rest below HP % can be at most 95%.</p>
           </section>
           <section id="client-bot-travel" class="panel settings feature-panel" data-section="travel" role="tabpanel" aria-labelledby="client-bot-tab-travel" hidden>
             <div class="panel-title"><h3 id="client-bot-travel-title" tabindex="-1">Travel</h3></div>
