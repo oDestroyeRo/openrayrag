@@ -4,6 +4,7 @@ import { manualTargetPolicy } from '../combat/manual-target';
 import { DEFAULT_MAP_POLICY } from '../navigation/map-policy';
 import { describe, expect, it, vi } from 'vitest';
 import { CompanionController, type ControllerAction } from './controller';
+import { wireController } from './controller-wire';
 import { BotEngine, type Action } from '../automation/engine';
 import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT, DEFAULT_SETTINGS, validateSettings } from '../settings/settings';
 import { BUILTIN_SERVICES } from '../services/npc-services';
@@ -40,6 +41,78 @@ function ownPacket(e:Entity,entry:number):BitWriter {
   return new BitWriter().u8(OP.spawn).u8(entry).i32(body.length).take(body);
 }
 function policy() { return structuredClone(DEFAULT_AUTOMATION); }
+
+describe('manual NPC map click admission', () => {
+  const npc: Entity = { ...player, id: 20, classId: 50, kind: 2, name: 'Kafra Staff', hp: 0, maxHp: 0, x: 199, y: 199 };
+  function fixture(id = npc.id, kind = npc.kind) {
+    const f = setup(); f.receive({ type: 'spawn', entity: { ...npc, id, kind } });
+    const binding = f.controller.engine.actorActionIdentity(id)!;
+    const request = { type: 'manualNpcTalk', map: f.controller.engine.map,
+      owner: { world: String(binding.world), id: Number(binding.selfId), incarnation: Number(binding.selfIncarnation) },
+      target: { world: String(binding.world), id, incarnation: Number(binding.targetIncarnation) } };
+    return { ...f, request };
+  }
+
+  it.each([2, 4])('talks once to observed NPC kind %i with zero HP and no approach', kind => {
+    const f = fixture(20, kind); f.controller.perform('command', f.request); f.step();
+    expect(f.sent).toEqual([{ type: 'npcTalk', id: 20 }]); expect(f.controller.active).toBe(true);
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(19).bool(true));
+    expect(f.controller.active).toBe(true);
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(20).bool(true));
+    expect(f.controller.active).toBe(false); expect(f.controller.world.npc.id).toBe(20);
+  });
+
+  it('admits a current NPC actor zero', () => {
+    const f = fixture(0); f.controller.perform('command', f.request);
+    expect(f.sent).toEqual([{ type: 'npcTalk', id: 0 }]);
+  });
+
+  it.each(['map', 'world', 'ownerWorld', 'targetLifetime', 'ownerLifetime', 'ownerId', 'selfReplacement', 'npcReplacement', 'removed', 'dead', 'monster', 'player'])('rejects %s before sending', variant => {
+    const f = fixture(), r = f.request;
+    if (variant === 'map') r.map = 'prontera';
+    if (variant === 'world') r.owner.world = r.target.world = '00000000-0000-0000-0000-000000000000';
+    if (variant === 'ownerWorld') r.owner.world = '00000000-0000-0000-0000-000000000000';
+    if (variant === 'targetLifetime') r.target.incarnation++;
+    if (variant === 'ownerLifetime') r.owner.incarnation++;
+    if (variant === 'ownerId') r.owner.id = 9;
+    if (variant === 'selfReplacement') f.receive({ type: 'spawn', entity: { ...player } });
+    if (variant === 'npcReplacement') f.receive({ type: 'spawn', entity: { ...npc } });
+    if (variant === 'removed') f.receive({ type: 'remove', id: 20, dead: false });
+    if (variant === 'dead') f.controller.engine.actors.get(20)!.dead = true;
+    if (variant === 'monster') f.controller.engine.actors.get(20)!.kind = 1;
+    if (variant === 'player') f.controller.engine.actors.get(20)!.kind = 0;
+    expect(() => f.controller.perform('command', r)).toThrow(); expect(f.sent).toEqual([]);
+  });
+
+  it.each(['stale', 'disconnected', 'automation', 'interaction', 'vending', 'cast', 'deadSelf'])('retains the %s fence', variant => {
+    const f = fixture();
+    if (variant === 'stale') f.advance(16_000);
+    if (variant === 'disconnected') f.controller.disconnect();
+    if (variant === 'automation') f.controller.start(settings);
+    if (variant === 'interaction') f.controller.world.apply({ type: 'npcFocus', id: 20, focus: true });
+    if (variant === 'vending') f.controller.world.apply({ type: 'vendingStarted', name: 'Shop', rows: [] });
+    if (variant === 'cast') f.receive({ type: 'castStart', id: 1, skillId: 2, level: 1, position: player, remainingSeconds: 10, flags: 0 });
+    if (variant === 'deadSelf') f.controller.engine.player!.dead = true;
+    const before = f.sent.length;
+    expect(() => f.controller.perform('command', f.request)).toThrow(); expect(f.sent).toHaveLength(before);
+  });
+
+  it('emits the existing opcode on a map without collision data and keeps raw NPC talk compatible', () => {
+    const packets: Uint8Array[] = [], controller = wireController(packet => packets.push(packet), undefined, () => 100_000);
+    controller.connect(true);
+    controller.receive(new BitWriter().u8(OP.enter).i32(1).string('unmapped_field').finish());
+    controller.receive(ownPacket(player, 1).finish()); controller.receive(ownPacket(npc, 0).finish());
+    const binding = controller.engine.actorActionIdentity(20)!;
+    controller.perform('command', { type: 'manualNpcTalk', map: 'unmapped_field',
+      owner: { world: binding.world, id: 1, incarnation: binding.selfIncarnation },
+      target: { world: binding.world, id: 20, incarnation: binding.targetIncarnation } });
+    expect(packets).toEqual([Uint8Array.of(76, 20, 0, 0, 0)]);
+    controller.receive(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(20).bool(true).finish());
+    controller.receive(new BitWriter().u8(WORLD_OP.npc).u8(3).finish());
+    controller.perform('command', { type: 'npcTalk', id: 20 });
+    expect(packets).toEqual([Uint8Array.of(76, 20, 0, 0, 0), Uint8Array.of(76, 20, 0, 0, 0)]);
+  });
+});
 
 describe('deployed party initialization packets', () => {
   function roster(duplicate = false, count = 33, trailer = false) {

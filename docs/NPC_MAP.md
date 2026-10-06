@@ -1,0 +1,11 @@
+# NPCs on the live map
+
+In **Bot → Live map**, observed NPCs appear as cyan diamonds. Hover a marker to see its name, NPC type and coordinates. Click the marker or its **Talk** button under **Nearby → NPCs** to request a conversation. The request opens **Tools → NPC dialogue**, where the existing **Continue** and **Choose option** controls use the server's dialogue and menu observations.
+
+Known service labels come from the pinned service catalogue. Exact current-map, name and anchor matches identify **Storage**, **Shop**, or **Teleport** services. Multiple contracts for one NPC combine their labels. Unknown or ambiguous matches remain **NPC**; a name or sprite alone does not establish a service. These labels describe catalogue contracts, not proof that every deployed script has been exercised.
+
+Manual Talk requires a fresh living character, stopped automation and settled movement/actions. NPC HP zero and actor ID zero are valid. Both existing NPC actor kinds, 2 and 4, remain supported. An NPC without a published lifetime can be displayed but cannot be selected for Talk. The nearby list works on observed maps without collision data; map markers require the map raster. Empty map clicks retain the existing bounded Walk behavior.
+
+Map and nearby clicks send a command-only `manualNpcTalk` envelope containing the current map and the owner's and target's world, ID and incarnation. Native admission validates the envelope. The shared controller verifies both current actor lifetimes and the NPC kind before dispatching the existing opcode 76 `npcTalk`. A removed actor, reused ID, changed map/world, dead NPC or stale observation cannot redirect a displayed selection. This does not introduce automatic walking, dialogue advancement, retries or field-run intent. The existing NPC focus receipt owns confirmation and uncertainty in both connection modes.
+
+Local verification covers marker geometry, Talk versus Walk dispatch, actor zero, zero HP, stale and detached selections, locks, dialogue navigation, service matching, redraws, command validation, opcode bytes and receipt correlation. See `bot-console.test.ts`, `manual-npc-talk-logic.test.ts`, `controller.test.ts`, and the native `manual_npc_talk_is_strict_and_command_only` test. Offline UI and synthetic protocol checks do not establish a live deployed NPC conversation.

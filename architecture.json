@@ -204,6 +204,7 @@
   "src/modules/services/disposition-ui-logic.ts": "logic",
   "src/modules/services/disposition-ui.ts": "logic",
   "src/modules/services/disposition.ts": "logic",
+  "src/modules/services/manual-npc-talk-logic.ts": "logic",
   "src/modules/services/npc-service-store-logic.ts": "logic",
   "src/modules/services/npc-service-store.ts": "orchestration",
   "src/modules/services/npc-services-logic.ts": "logic",

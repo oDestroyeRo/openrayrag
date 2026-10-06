@@ -2,6 +2,7 @@ import { accountHasDraft, panelUpdateWaitReason, panelDisconnectReady, panelCont
 import { CurrentForm } from '../modules/settings/current-form';
 import { SettingsClose } from '../modules/settings/settings-close';
 import { BotConsole } from '../modules/client/bot-console';
+import { consoleNpcs } from '../modules/client/bot-console-logic';
 import { ActivityLog } from '../modules/client/activity-log';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -238,6 +239,12 @@ const botConsole = new BotConsole(shell.main, {
   account: () => { shell.showPage('settings'); element<HTMLDetailsElement>('signin-panel').open = true; element<HTMLInputElement>('username').focus(); },
   lootSettings: () => { shell.showPage('bot'); shell.showBotSection('inventory'); },
   manualTools: () => shell.showPage('manual'),
+  npcDialogue: id => {
+    shell.showPage('manual');
+    element<HTMLInputElement>('npc-id').value = String(id);
+    element<HTMLDetailsElement>('npc-dialogue-panel').open = true;
+    element('npc-dialogue').scrollIntoView({ block: 'nearest' });
+  },
 });
 function disconnectReady():boolean {
   return panelDisconnectReady({native,gameOpen,accountReady,updateBusy,busy,stopping:dispatches.stopping,loginBusy,
@@ -479,7 +486,7 @@ function render(s: ValidatedGameStatus): void {
   element('sp-text').textContent = sp.text; element('sp-bar').style.width = sp.width;
   element('death-count').textContent = clientDeaths(fieldRun.requested ? fieldRun.metrics.deaths : s.deaths);
   for (const key of ['attacks','kills','looted'] as const) element(key).textContent = String(fieldRun.requested ? fieldRun.metrics[key] : s[key]);
-  element('nearby').textContent = String(s.monsters.length);
+  element('nearby').textContent = String(s.monsters.length + consoleNpcs(s).length);
   element('map-label').textContent = s.map || 'WAITING';
   element('target-label').textContent = s.target || 'No active target';
   message(fieldRun.settingsApplyWaitReason(s.sessionId)||reason,

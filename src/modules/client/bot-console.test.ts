@@ -6,9 +6,10 @@ import { actorKey, manualTargetView } from '../combat/manual-target-view';
 import { GridNavigator, searchGrid } from '../navigation/navigation';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from '../settings/settings';
 import type { Entity } from '../protocol/protocol';
+import { consoleNpcs, consoleNpcAt } from './bot-console-logic';
 
 class Node {
-  children: Node[] = []; parent: Node | null = null; id = ''; className = ''; type = ''; disabled = false; hidden = false;
+  children: Node[] = []; parent: Node | null = null; id = ''; className = ''; type = ''; title = ''; disabled = false; hidden = false;
   private text = ''; private selected = ''; private canvasWidth = 400; private canvasHeight = 400;
   get width() { return this.canvasWidth; } set width(value: number) { this.canvasWidth = value; }
   get height() { return this.canvasHeight; } set height(value: number) { this.canvasHeight = value; }
@@ -46,13 +47,13 @@ function fixture() {
   const engine = new BotEngine(() => {}); engine.connect(true);
   engine.receive([{ type: 'enter', id: 0, map: 'prt_fild08' }, { type: 'spawn', entity: { ...player } }, { type: 'spawn', entity: { ...monster } }, { type: 'inventory', items: [{ itemId: 501, bagId: 501, count: 3, type: 1 }, { itemId: 610, bagId: 610, count: 2, type: 1 }], equipment: Array(10).fill(0), ammoId: -1 }]);
   const host = new Node('main');
-  const ids = ['radar', 'console-walk-x', 'console-walk-y', 'console-item', 'console-use-item', 'console-walk-form', 'console-walk', 'console-action', 'console-item-info', 'console-item-result', 'console-latest-action', 'console-target-result', 'console-lock', 'console-loot-settings', 'console-item-tools', 'open', 'console-levels', 'console-weight', 'console-zeny', 'console-experience', 'console-base-experience', 'console-job-experience', 'console-stock-count', 'monster-list', 'console-drops', 'navigation-info'];
+  const ids = ['radar', 'console-walk-x', 'console-walk-y', 'console-item', 'console-use-item', 'console-walk-form', 'console-walk', 'console-action', 'console-item-info', 'console-item-result', 'console-latest-action', 'console-target-result', 'console-lock', 'console-loot-settings', 'console-item-tools', 'open', 'console-levels', 'console-weight', 'console-zeny', 'console-experience', 'console-base-experience', 'console-job-experience', 'console-stock-count', 'monster-list', 'console-npcs', 'console-drops', 'navigation-info'];
   for (const id of ids) { const node = new Node(id === 'radar' ? 'canvas' : id === 'console-item' ? 'select' : id === 'console-walk-x' || id === 'console-walk-y' ? 'input' : 'div'); node.id = id; host.append(node); }
-  const command = vi.fn(async (_request: Record<string, unknown>) => {}), notify = vi.fn(), account = vi.fn(), lootSettings = vi.fn(), manualTools = vi.fn();
+  const command = vi.fn(async (_request: Record<string, unknown>) => {}), notify = vi.fn(), account = vi.fn(), lootSettings = vi.fn(), manualTools = vi.fn(), npcDialogue = vi.fn();
   const settings = { ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [], automation: structuredClone(DEFAULT_AUTOMATION) };
-  const view = new BotConsole(host as unknown as HTMLElement, { settings: () => settings, command, notify, account, lootSettings, manualTools });
+  const view = new BotConsole(host as unknown as HTMLElement, { settings: () => settings, command, notify, account, lootSettings, manualTools, npcDialogue });
   const render = () => view.render(engine.snapshot()); render(); view.lock(false, 'Ready');
-  return { engine, host, view, command, notify, settings, render, account, lootSettings, manualTools, get: (id: string) => host.querySelector(`#${id}`)! };
+  return { engine, host, view, command, notify, settings, render, account, lootSettings, manualTools, npcDialogue, get: (id: string) => host.querySelector(`#${id}`)! };
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -103,6 +104,98 @@ describe('bot console map coordinates', () => {
     f.settings.automation.combat.levelDifference = -100; await attack().emit('click'); expect(f.command).not.toHaveBeenCalled();
     f.settings.automation.combat.levelDifference = 1; await attack().emit('click'); expect(f.command).toHaveBeenCalledOnce(); expect(f.command.mock.calls[0]![0]).toMatchObject({ type: 'manualTarget', command: { type: 'attack', target: { id: 2 } } });
     expect(f.settings.targets).toEqual([]);
+  });
+});
+
+describe('bot console NPC map interactions', () => {
+  const npc: Entity = { ...player, id: 10, kind: 2, classId: 50, name: 'Map Guide', hp: 0, maxHp: 0, x: origin.x + 8, y: origin.y + 6 };
+  const button = (f: ReturnType<typeof fixture>) => f.get('console-npcs').all().find(node => node.tag === 'button')!;
+  const spawn = (f: ReturnType<typeof fixture>, entity = npc) => { f.engine.receive([{ type: 'spawn', entity: { ...entity } }]); f.render(); };
+
+  it('talks once from the painted marker, reveals dialogue and preserves settings and coordinate drafts', async () => {
+    const f = fixture(), before = structuredClone(f.settings); spawn(f);
+    f.get('console-walk-x').value = '123'; f.get('console-walk-y').value = '234';
+    const canvas = f.get('radar'), x = 50 + (npc.x + .5) / grid.width * 800, y = 100 + (grid.height - .5 - npc.y) / grid.height * 800;
+    await canvas.emit('mousemove', x, y); expect(canvas.title).toContain('Map Guide · NPC');
+    await canvas.emit('click', x, y);
+    expect(f.command).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'manualNpcTalk', map: 'prt_fild08', owner: expect.objectContaining({ id: 0 }), target: expect.objectContaining({ id: 10 }) }));
+    expect(f.npcDialogue).toHaveBeenCalledExactlyOnceWith(10); expect(f.settings).toEqual(before);
+    expect(f.get('console-walk-x').value).toBe('123'); expect(f.get('console-walk-y').value).toBe('234');
+  });
+
+  it.each([2, 4])('allows a zero-ID, zero-HP kind %i NPC through the Talk button', async kind => {
+    const f = fixture();
+    f.engine.receive([{ type: 'enter', id: 1, map: 'prt_fild08' }, { type: 'spawn', entity: { ...player, id: 1 } }]);
+    spawn(f, { ...npc, id: 0, kind });
+    expect(button(f).hidden).toBe(false); await button(f).emit('click');
+    expect(f.command).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'manualNpcTalk', target: expect.objectContaining({ id: 0 }) }));
+    expect(f.npcDialogue).toHaveBeenCalledWith(0);
+  });
+
+  it('matches CSS-scaled marker centers and edges, selects the closest NPC and breaks ties by ID', () => {
+    const f = fixture(); spawn(f);
+    const status = f.engine.snapshot(), rect = { left: 17, top: 43, width: 800, height: 200 };
+    const x = rect.left + (npc.x + .5) / grid.width * rect.width, y = rect.top + (grid.height - .5 - npc.y) / grid.height * rect.height;
+    const hit = (clientX = x, clientY = y, bounds = rect) => consoleNpcAt({ status, clientX, clientY, rect: bounds, width: grid.width, height: grid.height });
+    expect(hit()?.id).toBe(10); expect(hit(x + 7.9)?.id).toBe(10); expect(hit(x + 8.1)).toBeNull();
+    expect(hit(rect.left - 1, y)).toBeNull(); expect(hit(x, rect.top + rect.height)).toBeNull();
+    expect(hit(x, y, { ...rect, width: 0 })).toBeNull(); expect(hit(NaN)).toBeNull();
+    status.actors.push({ ...npc, id: 11, x: npc.x + 1 });
+    expect(hit(x + 1.6)?.id).toBe(11); expect(hit(x + 1)?.id).toBe(10);
+  });
+
+  it.each(['replacement', 'removed', 'world', 'disconnect', 'stale', 'noTarget', 'noOwner', 'dead'])('rejects an old Talk button after %s', async variant => {
+    const f = fixture(); spawn(f); const old = button(f);
+    if (variant === 'replacement') spawn(f);
+    else if (variant === 'removed') { f.engine.receive([{ type: 'remove', id: npc.id, dead: false }]); f.render(); }
+    else if (variant === 'disconnect') f.view.render(null);
+    else {
+      const status = f.engine.snapshot();
+      if (variant === 'world') status.actorObservations.world = '00000000-0000-0000-0000-000000000001';
+      if (variant === 'stale') { status.actorObservations.at = Date.now() - 16000; status.actorObservations.lastFrameAt = Date.now() - 16000; }
+      if (variant === 'noTarget' || variant === 'noOwner') status.actorObservations.actors = status.actorObservations.actors.filter(actor => actor.id !== (variant === 'noTarget' ? npc.id : 0));
+      if (variant === 'dead') status.actors.find(actor => actor.id === npc.id)!.dead = true;
+      f.view.render(status);
+    }
+    await old.emit('click'); expect(f.command).not.toHaveBeenCalled(); expect(f.npcDialogue).not.toHaveBeenCalled(); expect(f.notify).toHaveBeenCalled();
+  });
+
+  it('keeps unobserved lifetimes read-only and retains list talk on a map without collision', async () => {
+    const f = fixture(); spawn(f); const status = f.engine.snapshot();
+    status.actorObservations.actors = status.actorObservations.actors.filter(actor => actor.id !== npc.id);
+    f.view.render(status); expect(button(f).hidden).toBe(true); expect(f.get('console-npcs').all().some(node => node.textContent.includes('Map Guide'))).toBe(true);
+    f.view.render({ ...f.engine.snapshot(), map: 'unmapped_field', navigation: null });
+    await button(f).emit('click'); expect(f.command).toHaveBeenCalledWith(expect.objectContaining({ type: 'manualNpcTalk', map: 'unmapped_field' }));
+  });
+
+  it('respects lock, pending and dispatch failure without revealing dialogue', async () => {
+    const f = fixture(); spawn(f); f.view.lock(true, 'Stop automation.');
+    expect(button(f).disabled).toBe(true); await button(f).emit('click'); expect(f.command).not.toHaveBeenCalled();
+    f.view.lock(false, 'Ready'); let resolve!: () => void;
+    f.command.mockImplementationOnce(() => new Promise<void>(done => { resolve = done; }));
+    await button(f).emit('click'); expect(button(f).disabled).toBe(true); await button(f).emit('click'); expect(f.command).toHaveBeenCalledOnce();
+    resolve(); for (let i = 0; i < 12; i++) await Promise.resolve();
+    f.npcDialogue.mockClear(); f.command.mockRejectedValueOnce(new Error('NPC request unavailable.'));
+    await button(f).emit('click'); expect(f.npcDialogue).not.toHaveBeenCalled(); expect(f.notify).toHaveBeenLastCalledWith('NPC request unavailable.', true);
+  });
+
+  it('labels exact known NPC services while keeping unknown, misplaced and ambiguous NPCs generic', () => {
+    const f = fixture(), status = f.engine.snapshot(), kafra = { ...npc, name: 'Kafra Staff', x: 151, y: 29 };
+    const labels = (map: string, actors: Entity[]) => consoleNpcs({ ...status, map, actors }).map(actor => actor.kindLabel);
+    expect(labels('prontera', [kafra])).toEqual(['NPC · Storage / Teleport']);
+    expect(labels('prt_fild05', [{ ...npc, name: 'Tool Dealer', x: 290, y: 221 }])).toEqual(['NPC · Shop']);
+    for (const actors of [[npc], [{ ...kafra, x: 152 }], [{ ...kafra, kind: 4 }], [kafra, { ...kafra, id: 11 }]])
+      expect(labels('prontera', actors).every(label => label === 'NPC')).toBe(true);
+    expect(labels('prt_fild08', [kafra])).toEqual(['NPC']); expect(labels('prontera', [{ ...kafra, dead: true }])).toEqual([]);
+  });
+
+  it('redraws NPC additions, movement and removal while retaining unchanged Talk buttons and map pixels', () => {
+    const f = fixture(), context = f.get('radar').context; context.drawImage.mockClear(); spawn(f);
+    expect(context.drawImage).toHaveBeenCalledOnce(); const talk = button(f); context.drawImage.mockClear();
+    f.render(); expect(button(f)).toBe(talk); expect(context.drawImage).not.toHaveBeenCalled();
+    spawn(f, { ...npc, x: npc.x + .25 }); expect(context.drawImage).toHaveBeenCalledOnce(); context.drawImage.mockClear();
+    f.engine.receive([{ type: 'remove', id: npc.id, dead: false }]); f.render();
+    expect(context.drawImage).toHaveBeenCalledOnce(); expect(f.get('console-npcs').all()).not.toContain(talk);
   });
 });
 

@@ -1,4 +1,4 @@
-import { mapCoordinate, consoleCharacterText, consoleInventory, consoleMonsters, consoleSelectedItem, consoleInventorySignature, consoleDropTexts, consoleRadarSignature } from './bot-console-logic';
+import { mapCoordinate, consoleCharacterText, consoleInventory, consoleMonsters, consoleNpcs, consoleNpcAt, consoleNpcTalk, NPC_MAP_RADIUS, consoleSelectedItem, consoleInventorySignature, consoleDropTexts, consoleRadarSignature } from './bot-console-logic';
 export { mapCoordinate } from './bot-console-logic';
 import type { Snapshot } from '../automation/engine';
 import { ITEM_CATALOG, itemName } from '../catalog/game-catalog';
@@ -16,6 +16,7 @@ interface Hooks {
   account(): void;
   lootSettings(): void;
   manualTools(): void;
+  npcDialogue(id: number): void;
 }
 /** Projection only. Manual commands enter the existing receipt-owning controller. */
 export class BotConsole {
@@ -30,6 +31,7 @@ export class BotConsole {
   private inventorySignature = '';
   private inventoryWorld: string | null = null;
   private readonly monsters = new Map<string, { root: HTMLElement; text: HTMLElement; button: HTMLButtonElement }>();
+  private readonly npcs = new Map<string, { root: HTMLElement; text: HTMLElement; button: HTMLButtonElement }>();
   private itemRequest: { world: string | null } | null = null;
   private readonly canvas: HTMLCanvasElement;
   private readonly x: HTMLInputElement;
@@ -43,12 +45,21 @@ export class BotConsole {
     });
     this.items = this.get('console-item'); this.use = this.get('console-use-item');
     this.canvas.addEventListener('click', event => {
-      const point = mapCoordinate(event.clientX, event.clientY, this.canvas.getBoundingClientRect(), this.canvas.width, this.canvas.height);
+      const rect = this.canvas.getBoundingClientRect();
+      const point = mapCoordinate(event.clientX, event.clientY, rect, this.canvas.width, this.canvas.height);
+      const npc = this.raster && this.rasterMap === this.status?.map ? consoleNpcAt({ status: this.status,
+        clientX: event.clientX, clientY: event.clientY, rect, width: this.canvas.width, height: this.canvas.height }) : null;
+      if (npc) { this.operation(() => this.talk(npc.key)); return; }
       if (point) this.operation(async () => {
         if (!this.status || this.rasterMap !== this.status.map || !this.raster) throw new Error('Current map collision is unavailable.');
         this.x.value = String(point.x); this.y.value = String(point.y);
         await this.target({ type: 'walk', destination: point });
       });
+    });
+    this.canvas.addEventListener('mousemove', event => {
+      const npc = this.raster && this.rasterMap === this.status?.map ? consoleNpcAt({ status: this.status,
+        clientX: event.clientX, clientY: event.clientY, rect: this.canvas.getBoundingClientRect(), width: this.canvas.width, height: this.canvas.height }) : null;
+      this.canvas.title = npc ? `${npc.name} · ${npc.kindLabel} · ${npc.x}, ${npc.y} · Click to talk` : 'Click walkable ground to walk; click an NPC to talk.';
     });
     this.get('console-walk-form').addEventListener('submit', event => {
       event.preventDefault(); this.operation(() => {
@@ -77,6 +88,13 @@ export class BotConsole {
     return node;
   }
   private world(): string | null { return this.status?.actorObservations?.world ?? null; }
+  private async talk(key: string): Promise<void> {
+    const request = consoleNpcTalk(this.status, key, Date.now());
+    this.get('console-action').textContent = 'Talk requested · waiting for NPC dialogue from the server.';
+    this.get('console-action').hidden = false;
+    await this.hooks.command(request);
+    this.hooks.npcDialogue(request.target.id);
+  }
   private async target(command: { type: 'walk'; destination: Position } | { type: 'attack'; key: string }): Promise<void> {
     if (!this.status) throw new Error('Connect a verified character first.');
     const { request, context } = manualTargetView(this.status as unknown as Record<string, unknown>, this.hooks.settings(), command);
@@ -102,6 +120,7 @@ export class BotConsole {
     this.x.disabled = disabled; this.y.disabled = disabled; this.items.disabled = this.status?.character.inventoryKnown !== true;
     this.get<HTMLButtonElement>('console-walk').disabled = disabled || !searchGrid(this.status?.map ?? '');
     for (const row of this.monsters.values()) row.button.disabled = disabled;
+    for (const row of this.npcs.values()) row.button.disabled = disabled;
     this.itemControls();
   }
   private selectedItem(): { itemId: number; count: number } | null {
@@ -153,6 +172,22 @@ export class BotConsole {
     let empty = list.querySelector<HTMLElement>('.console-empty');
     if (!empty) { list.textContent = ''; for (const row of this.monsters.values()) list.append(row.root); empty = document.createElement('p'); empty.className = 'console-empty'; list.append(empty); }
     empty.hidden = live.size > 0; empty.textContent = 'No living monsters observed.';
+    const npcList = this.get('console-npcs'), liveNpcs = new Set<string>();
+    for (const npc of consoleNpcs(status)) {
+      const key = npc.key;
+      liveNpcs.add(key); let row = this.npcs.get(key);
+      if (!row) {
+        const root = document.createElement('div'), text = document.createElement('span'), button = document.createElement('button');
+        root.className = 'console-actor-row'; button.type = 'button'; button.className = 'secondary compact'; button.textContent = 'Talk';
+        button.addEventListener('click', () => this.operation(() => this.talk(key)));
+        root.append(text, button); npcList.append(root); row = { root, text, button }; this.npcs.set(key, row);
+      }
+      row.text.textContent = npc.text; row.button.hidden = !npc.talkable; row.button.setAttribute('aria-label', npc.label);
+    }
+    for (const [key, row] of this.npcs) if (!liveNpcs.has(key)) { row.root.remove(); this.npcs.delete(key); }
+    let npcEmpty = npcList.querySelector<HTMLElement>('.console-empty');
+    if (!npcEmpty) { npcList.textContent = ''; for (const row of this.npcs.values()) npcList.append(row.root); npcEmpty = document.createElement('p'); npcEmpty.className = 'console-empty'; npcList.append(npcEmpty); }
+    npcEmpty.hidden = liveNpcs.size > 0; npcEmpty.textContent = 'No NPCs observed.';
     const dropTexts = consoleDropTexts(status);
     if (this.dropTexts?.length !== dropTexts.length || dropTexts.some((text, index) => text !== this.dropTexts![index])) {
       const drops = this.get('console-drops'); drops.replaceChildren();
@@ -212,6 +247,11 @@ export class BotConsole {
     };
     for (const monster of status?.monsters ?? []) dot(monster, '#fdba74', 2.5);
     for (const drop of status?.drops ?? []) dot(drop, '#c4b5fd', 2);
+    for (const npc of consoleNpcs(status)) {
+      const x = npc.x + .5, y = canvas.height - .5 - npc.y, r = NPC_MAP_RADIUS;
+      ctx.fillStyle = '#67e8f9'; ctx.strokeStyle = '#091122'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.lineTo(x, y - r); ctx.fill(); ctx.stroke();
+    }
     if (n?.goal) dot(n.goal, '#7dd3fc', 3.5); if (status?.player) dot(status.player, '#86efac', 4);
     this.mapSignature = signature;
   }
