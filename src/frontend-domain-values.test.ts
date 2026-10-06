@@ -15,6 +15,7 @@ import { BUILTIN_SERVICES } from './npc-services-logic';
 import { checkedSavedService, savedServiceId, serviceContractId, type ServiceContractId } from './npc-service-store-logic';
 import { NpcServiceStore } from './npc-service-store';
 import { carriedRecoveryItem, recoveryInventory } from './recovery-item-ui-logic';
+import { actorInput } from './feature-ui-logic';
 
 const settings = () => ({ ...structuredClone(DEFAULT_SETTINGS), map: 'prt_fild08', targets: [4000] });
 const token = '00000000-0000-0000-0000-000000000001';
@@ -156,6 +157,8 @@ describe('frontend admitted domains', () => {
       const stock = recoveryInventory({ inventoryKnown: true, inventory: [] });
       // @ts-expect-error recovery projections select item IDs, not inventory slot IDs
       carriedRecoveryItem(stock)(bagId(501));
+      // @ts-expect-error a validated UI actor cannot select a recovery item
+      carriedRecoveryItem(stock)(actorInput('501')!);
       void [request, close, session, profile, name, savedAt, revision, item, timestamp, contract, serviceProfile];
     }
   });

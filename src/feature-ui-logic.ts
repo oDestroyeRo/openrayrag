@@ -1,5 +1,6 @@
 import { anyPass, filter, find, groupBy, map, mapValues, pipe, sumBy, take } from 'remeda';
 import { actorId } from './actor-identity';
+import type { ActorId } from './domain-values';
 import type { AutomationSettingsInput } from './settings';
 import { validateExpandedAction } from './protocol-feature';
 import { validateWorldAction } from './world-protocol';
@@ -79,7 +80,7 @@ export function featureSkillsText(skills: readonly unknown[]): string {
   })).join(', ');
 }
 /** Blank is absence, never the allocator's valid actor zero. */
-export function actorInput(value:string,optional=false):number|undefined {
+export function actorInput(value:string,optional=false):ActorId|undefined {
   if(!value.trim()){if(optional)return undefined;throw new Error('Choose an observed actor ID.');}
   return actorId(Number(value));
 }
