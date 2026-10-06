@@ -7,8 +7,8 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  REPOSITORY, anonymousBytes, githubMetadata, privateWriter, privateEnvironment,
-  createReportDirectory, downloadActionsZip, runReadOnly, bunInstallCommand,
+  REPOSITORY, MAX_METADATA, anonymousBytes, githubMetadata, privateWriter, privateEnvironment,
+  createReportDirectory, downloadActionsZip, runReadOnly, runReadOnlyAsync, bunInstallCommand,
 } from "./release-public-io.mjs";
 import { parseOptions, releaseSnapshot, verifyPublishedRelease, publicationEvidence } from "./release-public.mjs";
 import { sourceWorkflowMatches, sameSourceWorkflow, validateArtifactProduction, hasSuccessfulPublisher } from "./release-public-policy.mjs";
@@ -26,6 +26,27 @@ test("read-only process execution keeps metacharacters literal even when a calle
     ["-e", "process.stdout.write(process.argv.at(-1))", "--", literal],
     { shell: true });
   assert.equal(output.toString("utf8"), literal);
+});
+
+test("asynchronous metadata runner preserves bounds, literal arguments and private failures", async () => {
+  const literal = "spaces & | ; $(printf should-not-run)";
+  assert.equal((await runReadOnlyAsync(process.execPath,
+    ["-e", "process.stdout.write(process.argv.at(-1))", "--", literal],
+    { shell: true })).toString("utf8"), literal);
+  const calls = [];
+  const execute = (command, args, options, callback) => {
+    calls.push({ command, args, options });
+    queueMicrotask(() => callback(null, Buffer.from("metadata")));
+  };
+  assert.equal((await runReadOnlyAsync("gh", ["api"], {}, execute)).toString(), "metadata");
+  assert.equal(calls[0].options.timeout, 60_000);
+  assert.equal(calls[0].options.maxBuffer, MAX_METADATA);
+  assert.equal(calls[0].options.shell, false);
+  assert.equal(calls[0].options.encoding, "buffer");
+  const failure = Object.assign(new Error("private launch detail"), { code: 3, stderr: "private child output" });
+  await assert.rejects(runReadOnlyAsync("gh", ["api"], {}, (command, args, options, callback) => {
+    callback(failure, Buffer.alloc(0));
+  }), { message: "gh verification command failed (exit 3)." });
 });
 
 test("source dependency installation and historical lock migration use Bun without a command shell", () => {
@@ -189,6 +210,7 @@ test("anonymous download validates every redirect and sends no credentials", asy
   });
   assert.equal(bytes.toString(), "proof");
   assert.equal(requests.length, 2);
+  assert.equal(requests[0][1].signal, requests[1][1].signal);
   for (const [, init] of requests) {
     assert.equal(init.credentials, "omit");
     assert.equal(init.redirect, "manual");
@@ -215,17 +237,177 @@ test("public downloads bound declared/streamed bytes and redirects", async () =>
   assert.equal(calls, 6);
 });
 
+test("public download failures cancel bodies and preserve their primary diagnostic", async () => {
+  for (const [init, expected] of [
+    [{ status: 503 }, /HTTP 503/],
+    [{ headers: { "content-length": "invalid" } }, /declared bound/],
+    [{ headers: { "content-length": "9" } }, /declared bound/],
+    [{ status: 302 }, /Missing public download redirect/],
+  ]) {
+    let canceled = 0;
+    const body = new ReadableStream({ cancel() { canceled++; throw new Error("secondary cancellation failure"); } });
+    await assert.rejects(anonymousBytes("https://github.com/a", 4,
+      async () => new Response(body, init)), expected);
+    assert.equal(canceled, 1);
+    assert.equal(body.locked, false);
+  }
+  let canceled = 0;
+  const overflow = new ReadableStream({
+    start(controller) { controller.enqueue(Buffer.from("oversized")); },
+    cancel() { canceled++; throw new Error("secondary cancellation failure"); },
+  });
+  await assert.rejects(anonymousBytes("https://github.com/a", 4,
+    async () => new Response(overflow)), /byte bound/);
+  assert.equal(canceled, 1);
+  assert.equal(overflow.locked, false);
+  const streamFailure = new Error("primary stream failure");
+  const broken = new ReadableStream({ pull(controller) { controller.error(streamFailure); } });
+  await assert.rejects(anonymousBytes("https://github.com/a", 4,
+    async () => new Response(broken)), error => error === streamFailure);
+  assert.equal(broken.locked, false);
+});
+
+test("public reader cleanup attempts cancellation and lock release for arbitrary thrown values", async () => {
+  const calls = [];
+  const body = { getReader: () => ({
+    read: async () => { throw undefined; },
+    cancel: async () => { calls.push("cancel"); throw new Error("secondary cancellation failure"); },
+    releaseLock: () => { calls.push("release"); throw new Error("secondary release failure"); },
+  }) };
+  let rejected = false;
+  try {
+    await anonymousBytes("https://github.com/a", 4,
+      async () => ({ status: 200, ok: true, headers: new Headers(), body }));
+  } catch (error) { rejected = true; assert.equal(error, undefined); }
+  assert.equal(rejected, true);
+  assert.deepEqual(calls, ["cancel", "release"]);
+});
+
+test("public downloads share one operation deadline and dispose it on every outcome", async () => {
+  for (const outcome of ["success", "timeout", "fetch-failure", "origin-failure"]) {
+    const token = {}, scheduled = [], cleared = [], signals = [];
+    const timers = {
+      setTimeout(callback, delay) { scheduled.push({ callback, delay }); return token; },
+      clearTimeout(timer) { cleared.push(timer); },
+    };
+    const download = anonymousBytes(outcome === "origin-failure" ? "https://attacker.example/a" : "https://github.com/a", 8,
+      async (url, init) => {
+        signals.push(init.signal);
+        if (outcome === "fetch-failure") throw new Error("fetch failed");
+        if (signals.length === 1) return new Response(null, { status: 302, headers: { location: "/b" } });
+        if (outcome === "timeout") { scheduled[0].callback(); throw init.signal.reason; }
+        return new Response("proof");
+      }, timers);
+    if (outcome === "success") assert.equal((await download).toString(), "proof");
+    else await assert.rejects(download, outcome === "timeout" ? { name: "TimeoutError" } : /fetch failed|origin/);
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0].delay, 180_000);
+    assert.deepEqual(cleared, [token]);
+    if (signals.length === 2) assert.equal(signals[0], signals[1]);
+  }
+});
+
+test("deadline cancels stalled delivered bodies and releases locks without awaiting failed cleanup", async () => {
+  for (const outcome of ["stalled-read", "stalled-redirect", "http-failure"]) {
+    let expire, observed, canceled = 0, fetches = 0, cleared = 0;
+    const owned = new Promise(resolve => { observed = resolve; });
+    const body = new ReadableStream({
+      pull: () => new Promise(() => {}),
+      cancel() {
+        canceled++;
+        if (outcome === "stalled-redirect") observed();
+        return new Promise(() => {});
+      },
+    });
+    if (outcome === "stalled-read") {
+      const getReader = body.getReader.bind(body);
+      body.getReader = () => { const reader = getReader(); observed(); return reader; };
+    }
+    const pending = anonymousBytes("https://github.com/a", 8, async () => {
+      fetches++;
+      return new Response(body, outcome === "stalled-redirect"
+        ? { status: 302, headers: { location: "/b" } }
+        : outcome === "http-failure" ? { status: 503 } : {});
+    }, {
+      setTimeout(callback, delay) { expire = callback; assert.equal(delay, 180_000); return 1; },
+      clearTimeout() { cleared++; },
+    });
+    if (outcome === "http-failure") await assert.rejects(pending, /HTTP 503/);
+    else {
+      await owned;
+      if (outcome === "stalled-read") assert.equal(body.locked, true);
+      expire();
+      await assert.rejects(pending, { name: "TimeoutError" });
+    }
+    assert.equal(body.locked, false);
+    assert.equal(canceled, 1);
+    assert.equal(fetches, 1);
+    assert.equal(cleared, 1);
+  }
+});
+
+test("deadline disposes bodies returned late by a transport that ignores cancellation", async () => {
+  let expire, deliver, canceled = 0;
+  const body = new ReadableStream({ cancel() { canceled++; return new Promise(() => {}); } });
+  const pending = anonymousBytes("https://github.com/a", 8,
+    () => new Promise(resolve => { deliver = resolve; }), {
+      setTimeout(callback) { expire = callback; return 1; }, clearTimeout() {},
+    });
+  expire();
+  await assert.rejects(pending, { name: "TimeoutError" });
+  deliver(new Response(body));
+  await Promise.resolve();
+  assert.equal(canceled, 1);
+  assert.equal(body.locked, false);
+});
+
 test("metadata uses exact read-only gh routes, a cache, and explicit fresh reads", async () => {
   const requests = [];
-  const api = githubMetadata(REPOSITORY, (command, args) => {
-    requests.push([command, args]); return Buffer.from(JSON.stringify({ count: requests.length }));
+  const api = githubMetadata(REPOSITORY, (command, args, options) => {
+    requests.push([command, args, options]); return Buffer.from(JSON.stringify({ count: requests.length }));
   });
   const route = "/git/matching-refs/tags/rayrag-release-plan/";
   assert.equal((await api(route)).count, 1);
   assert.equal((await api(route)).count, 1);
   assert.equal((await api(route, { fresh: true })).count, 2);
-  assert.deepEqual(requests[0], ["gh", ["api", "--hostname", "github.com", "--method", "GET", `repos/${REPOSITORY}${route}`]]);
+  assert.deepEqual(requests[0], ["gh", ["api", "--hostname", "github.com", "--method", "GET", `repos/${REPOSITORY}${route}`],
+    { timeout: 60_000, maxBuffer: MAX_METADATA, shell: false }]);
   await assert.rejects(api("/../../another-repo"), /path/);
+});
+
+test("independent metadata reads make progress together and fresh reads own the cache", async () => {
+  const pending = [];
+  const api = githubMetadata(REPOSITORY, (command, args) => new Promise((resolve, reject) => {
+    pending.push({ args, resolve, reject });
+  }));
+  const routes = ["/actions/runs/123/attempts/2", "/actions/runs/123/attempts/2/jobs?per_page=100", "/actions/artifacts/345"];
+  const grouped = Promise.all(routes.map(route => api(route)));
+  assert.equal(pending.length, 3);
+  assert.deepEqual(pending.map(call => call.args.at(-1)), routes.map(route => `repos/${REPOSITORY}${route}`));
+  const cached = api(routes[0]);
+  assert.equal(pending.length, 3);
+  const fresh = api(routes[0], { fresh: true });
+  assert.equal(pending.length, 4);
+  pending[3].resolve(Buffer.from('{"value":"fresh"}'));
+  assert.deepEqual(await fresh, { value: "fresh" });
+  pending.slice(0, 3).forEach((call, index) => call.resolve(Buffer.from(JSON.stringify({ value: index }))));
+  assert.deepEqual(await grouped, [{ value: 0 }, { value: 1 }, { value: 2 }]);
+  assert.deepEqual(await cached, { value: 0 });
+  assert.deepEqual(await api(routes[0]), { value: "fresh" });
+});
+
+test("failed and invalid metadata reads leave no rejected cached value", async () => {
+  for (const invalid of [() => { throw new Error("transient read failure"); }, () => Buffer.from("invalid JSON"),
+    () => Buffer.alloc(MAX_METADATA + 1)]) {
+    let calls = 0;
+    const api = githubMetadata(REPOSITORY, async () => {
+      calls++;
+      return calls === 1 ? invalid() : Buffer.from('{"recovered":true}');
+    });
+    await assert.rejects(api("/releases/latest"));
+    assert.deepEqual(await api("/releases/latest"), { recovered: true });
+    assert.equal(calls, 2);
+  }
 });
 
 test("private reports are exclusive and sanitized child environments remove credentials", async () => {
@@ -287,6 +469,38 @@ test("Actions ZIP streaming is bounded and the command is explicitly GET", async
     await assert.rejects(downloadActionsZip(REPOSITORY, "123", join(folder, "overflow.zip"), 3, childFactory), /bound/);
     await assert.rejects(downloadActionsZip(REPOSITORY, "123", join(folder, "artifact.zip"), 7, childFactory), { code: "EEXIST" });
   } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
+test("Actions ZIP cleanup cannot mask primary failures and attempts every owned release", async () => {
+  for (const primary of [new Error("primary launch failure"), undefined]) {
+    let closed = 0, rejected = false;
+    const open = async (destination, flags, mode) => {
+      assert.equal(flags, "wx"); assert.equal(mode, 0o600);
+      return { close: async () => { closed++; throw new Error("secondary close failure"); } };
+    };
+    try {
+      await downloadActionsZip(REPOSITORY, "123", "private.zip", 7, () => { throw primary; }, open);
+    } catch (error) { rejected = true; assert.equal(error, primary); }
+    assert.equal(rejected, true);
+    assert.equal(closed, 1);
+  }
+  for (const outcome of ["overflow", "write", "success"]) {
+    const released = [];
+    const primary = new Error("primary write failure"), closeFailure = new Error("close failure");
+    const child = new EventEmitter();
+    child.stdout = Readable.from([Buffer.from("archive")]);
+    child.exitCode = null;
+    child.kill = () => { released.push("kill"); throw new Error("secondary kill failure"); };
+    if (outcome === "success") child.stdout.on("end", () => setImmediate(() => { child.exitCode = 0; child.emit("close", 0); }));
+    const open = async () => ({
+      writeFile: async () => { if (outcome === "write") throw primary; },
+      close: async () => { released.push("close"); throw closeFailure; },
+    });
+    await assert.rejects(downloadActionsZip(REPOSITORY, "123", "private.zip", outcome === "overflow" ? 3 : 7,
+      () => child, open), error => outcome === "overflow" ? /byte bound/.test(error.message)
+      : error === (outcome === "write" ? primary : closeFailure));
+    assert.deepEqual(released, outcome === "success" ? ["close"] : ["kill", "close"]);
+  }
 });
 
 function fixture() {
