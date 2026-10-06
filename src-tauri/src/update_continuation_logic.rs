@@ -360,14 +360,19 @@ pub(crate) fn startup_stopped(args: &[OsString]) -> bool {
         .skip(1)
         .any(|arg| arg.to_str() == Some(STOPPED_FLAG))
 }
-pub(crate) fn restart_arguments(args: &mut Vec<OsString>, stopped: bool) {
-    args.retain(|arg| {
-        !arg.to_str()
-            .is_some_and(|s| s.starts_with(LAUNCH_PREFIX) || s == STOPPED_FLAG)
-    });
+pub(crate) fn restart_arguments(args: &[OsString], stopped: bool) -> Vec<OsString> {
+    let mut args: Vec<_> = args
+        .iter()
+        .filter(|arg| {
+            !arg.to_str()
+                .is_some_and(|s| s.starts_with(LAUNCH_PREFIX) || s == STOPPED_FLAG)
+        })
+        .cloned()
+        .collect();
     if stopped {
         args.push(STOPPED_FLAG.into());
     }
+    args
 }
 pub(crate) fn envelope(
     account: &UpdateAccount,
@@ -430,6 +435,26 @@ pub(crate) fn eligible_checkpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_arguments_leave_inputs_unchanged_and_repeat_exactly() {
+        let input = vec![
+            OsString::from("Companion"),
+            format!("{LAUNCH_PREFIX}0123456789abcdef0123456789abcdef").into(),
+            STOPPED_FLAG.into(),
+            "--unrelated-option".into(),
+        ];
+        let original = input.clone();
+        for stopped in [false, true] {
+            let mut expected: Vec<OsString> = vec!["Companion".into(), "--unrelated-option".into()];
+            if stopped {
+                expected.push(STOPPED_FLAG.into());
+            }
+            assert_eq!(restart_arguments(&input, stopped), expected);
+            assert_eq!(restart_arguments(&input, stopped), expected);
+            assert_eq!(input, original);
+        }
+    }
 
     fn runtime() -> Value {
         json!({"version":1,"frozenAt":1000,"status":{

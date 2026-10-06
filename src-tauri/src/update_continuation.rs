@@ -500,7 +500,7 @@ pub(crate) async fn restart(app: &tauri::AppHandle, target: &str) -> Result<(), 
                 .inner()
                 .lock()
                 .map_err(|_| ERROR)?;
-            restart_arguments(&mut env.args_os, state.stop_restart);
+            env.args_os = restart_arguments(&env.args_os, state.stop_restart);
             if let Some(r) = state.reserved.as_ref().filter(|_| !state.stop_restart) {
                 let token = uuid::Uuid::new_v4().simple().to_string();
                 write_disk(
@@ -846,7 +846,7 @@ mod tests {
         record.continuation = envelope(state.reserved.as_ref().unwrap()).unwrap();
         let mut args = arguments();
         args.push(STOPPED_FLAG.into()); // Inherited arguments do not poison the new update.
-        restart_arguments(&mut args, state.stop_restart);
+        args = restart_arguments(&args, state.stop_restart);
         assert!(!startup_stopped(&args));
         write_disk(path.clone(), &record).unwrap();
         args.push(format!("{LAUNCH_PREFIX}{}", record.launch_token.unwrap()).into());
@@ -917,7 +917,7 @@ mod tests {
             assert!(state.available.is_none());
             assert!(state.claimed.is_none());
             let mut args = arguments();
-            restart_arguments(&mut args, state.stop_restart);
+            args = restart_arguments(&args, state.stop_restart);
             assert_eq!(startup_stopped(&args), committed && stop);
             assert!(launch_token(&args).is_none());
             state.cancel(committed, false); // Later failure cleanup cannot undo explicit Stop.
@@ -929,7 +929,7 @@ mod tests {
         let mut args = arguments();
         args.push(STOPPED_FLAG.into());
         args.push("--unrelated-option".into());
-        restart_arguments(&mut args, false);
+        args = restart_arguments(&args, false);
         assert_eq!(
             args,
             vec![
@@ -939,17 +939,17 @@ mod tests {
         );
         assert!(!startup_stopped(&args));
         assert!(launch_token(&args).is_none());
-        restart_arguments(&mut args, true);
+        args = restart_arguments(&args, true);
         assert!(startup_stopped(&args));
         assert!(launch_token(&args).is_none());
-        restart_arguments(&mut args, true);
+        args = restart_arguments(&args, true);
         assert_eq!(
             args.iter()
                 .filter(|arg| arg.to_str() == Some(STOPPED_FLAG))
                 .count(),
             1
         );
-        restart_arguments(&mut args, false);
+        args = restart_arguments(&args, false);
         assert!(!startup_stopped(&args));
     }
     #[test]
