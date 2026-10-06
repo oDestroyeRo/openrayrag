@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cp, lstat, readFile, realpath, mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import { parse } from 'yaml';
 import { spawnSync } from 'node:child_process';
 import { platforms, packageConfig, packageSmokes, assertArchitecture, installerFiles } from './ci-platform.mjs';
@@ -122,11 +122,25 @@ test('quality warms the trusted release dependency cache for each platform witho
   assert.ok(artifact.with.path.includes('reports/*'));
 });
 
+test('Bun download cache paths are normalized siblings outside each platform checkout',()=>{
+  for(const {paths,workspace} of [
+    {paths:posix,workspace:'/home/runner/work/openrayrag/openrayrag'},
+    {paths:posix,workspace:'/Users/runner/work/openrayrag/openrayrag'},
+    {paths:win32,workspace:'D:\\a\\openrayrag\\openrayrag'},
+  ]){
+    const cachePath=workflow.env.BUN_INSTALL_CACHE_DIR.replace('${{ github.workspace }}',workspace);
+    assert.equal(paths.isAbsolute(cachePath),true);
+    assert.equal(paths.normalize(cachePath),cachePath);
+    assert.equal(paths.dirname(cachePath),paths.dirname(workspace));
+    assert.notEqual(cachePath,workspace);
+  }
+});
+
 test('Bun download caches are shared across installation jobs while complete trusted quality lanes alone write them',()=>{
   const quality=workflow.jobs.quality;
   const restoreOf=job=>job.steps.find(step=>step.id==='bun-cache');
   const restore=restoreOf(quality);
-  assert.equal(workflow.env.BUN_INSTALL_CACHE_DIR,'${{ github.workspace }}/../rayrag-bun-cache');
+  assert.equal(workflow.env.BUN_INSTALL_CACHE_DIR,'${{ github.workspace }}-bun-cache');
   assert.equal(release.env.BUN_INSTALL_CACHE_DIR,workflow.env.BUN_INSTALL_CACHE_DIR);
   assert.equal(restore.with.path,'${{ env.BUN_INSTALL_CACHE_DIR }}');
   assert.equal(restore.uses,'actions/cache/restore@v6.1.0');
