@@ -61,6 +61,7 @@
   "scripts/responsive-fixture-policy.mjs": "logic",
   "scripts/semantic-release-plan.mjs": "orchestration",
   "scripts/semantic-release-policy.mjs": "logic",
+  "scripts/tooling-domain-values.mjs": "logic",
   "src-tauri/build.rs": "orchestration",
   "src-tauri/src/automation.rs": "logic",
   "src-tauri/src/catalog_logic.rs": "logic",
