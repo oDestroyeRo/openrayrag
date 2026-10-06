@@ -1,5 +1,5 @@
 // Pure transforms for source content. Reading and writing remain in release.mjs.
-import { stableVersion } from "./semantic-release-plan.mjs";
+import { stableVersion } from "./semantic-release-policy.mjs";
 import { requireValue, IDENTIFIER, ENDPOINT } from "./release-policy.mjs";
 
 export const VERSION_PATHS = Object.freeze([

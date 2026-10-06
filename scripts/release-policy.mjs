@@ -5,7 +5,7 @@ import {
   compareVersions,
   validatePlan,
   planSha256,
-} from "./semantic-release-plan.mjs";
+} from "./semantic-release-policy.mjs";
 import migration from "../release-migration.json" with { type: "json" };
 export const REPOSITORY = "oDestroyeRo/openrayrag";
 export const TARGET = "aarch64-apple-darwin";

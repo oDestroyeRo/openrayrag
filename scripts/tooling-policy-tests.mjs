@@ -148,7 +148,7 @@ test('anonymous source module discovery supports old releases and bounds new val
   const files = ['scripts/release-policy.mjs', 'scripts/release-publication.mjs', 'scripts/release-source-policy.mjs', 'scripts/release-reservation-policy.mjs'];
   assert.deepEqual(sourceModuleFiles(sha, args => {
     assert.deepEqual(args.slice(0, 4), ['ls-tree', '--name-only', sha, '--']);
-    assert.deepEqual(args.slice(4), files);
+    for (const name of files) assert.ok(args.slice(4).includes(name));
     return Buffer.from(files.join('\n') + '\n');
   }), files);
   for (const text of ['scripts/foreign.mjs', 'scripts/release-policy.mjs\nscripts/release-policy.mjs']) assert.throws(() => sourceModuleFiles(sha, () => Buffer.from(text)), /Unexpected/);

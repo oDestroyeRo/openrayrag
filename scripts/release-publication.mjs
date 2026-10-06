@@ -1,6 +1,6 @@
 // Publication orchestration. API, dates, reservations and native verification
 // are injected; release-policy owns all deterministic bundle/source contracts.
-import { compareVersions, planSha256 } from "./semantic-release-plan.mjs";
+import { compareVersions, planSha256 } from "./semantic-release-policy.mjs";
 import {
   requireValue, identity, countOf, expectedNames, validateBundle, validateArtifact,
   releaseBody, releaseMetadata, parseJson, sourceCount, isNewer,

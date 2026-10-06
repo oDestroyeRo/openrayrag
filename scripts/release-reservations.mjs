@@ -1,5 +1,5 @@
 // Durable, create-only release orchestration. GitHub effects use the injected API.
-import { serializePlan, validatePlan } from "./semantic-release-plan.mjs";
+import { serializePlan, validatePlan } from "./semantic-release-policy.mjs";
 import {
   MAX_RESERVATIONS, planRefName, serializeReservation,
   validateContext, validateLedger, validateRef, parseReservation,

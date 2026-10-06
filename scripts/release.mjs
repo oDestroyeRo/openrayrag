@@ -31,7 +31,7 @@ import {
   validatePlatformBuild,
   publishRelease,
 } from "./release-core.mjs";
-import { stableVersion, serializePlan } from "./semantic-release-plan.mjs";
+import { stableVersion, serializePlan } from "./semantic-release-policy.mjs";
 import { planProduction, loadProductionPlan } from "./release-planning.mjs";
 import { PLAN_REF_PREFIX, MAX_RESERVATIONS } from "./release-reservations.mjs";
 import { VERSION_PATHS, versionContents, validateUpdaterConfig, tagResponseBytes, annotatedTag } from "./release-source-policy.mjs";

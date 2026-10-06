@@ -8,7 +8,7 @@ import {
   compareVersions,
   bumpVersion,
   MAX_PLAN_BYTES,
-} from "./semantic-release-plan.mjs";
+} from "./semantic-release-policy.mjs";
 
 export const PLAN_REF_PREFIX = "refs/tags/rayrag-release-plan/";
 export const MAX_RESERVATIONS = 10_000;
