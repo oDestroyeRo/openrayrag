@@ -287,7 +287,13 @@ function checkSettings(value: SettingsInput, form: boolean): ReadonlyData<Domain
   const automation = value.automation ? validateAutomation(value.automation) : undefined;
   if (!form && !value.targets.length && automation && ['selected','both'].includes(automation.combat.mode) && !automation.combat.rules.some(r=>r.action==='attack')) throw new Error('Choose selected monsters or disable selected combat.');
   if (automation?.mapPolicy?.lockArea && (automation.mapPolicy.lockArea.map !== value.map || (automation.travel.destinationMap && automation.travel.destinationMap !== value.map))) throw new Error('The field lock map, rectangle map and field destination must match.');
-  if (automation?.recovery.enabled && automation.recovery.hpStart <= value.minHpPercent) throw new Error('Recovery HP start must be above the emergency HP stop limit.');
+  if (automation?.recovery.enabled && automation.recovery.hpStart <= value.minHpPercent) {
+    const hpStart = automation.recovery.hpStart;
+    const remedy = value.minHpPercent === 95
+      ? 'Rest below HP % cannot exceed 95%; lower Emergency HP stop below 95% and set Rest below HP % above it, keeping Resume above HP % higher'
+      : `Raise Rest below HP % to ${value.minHpPercent + 1}–95% and keep Resume above HP % higher${hpStart > 20 ? `, lower Emergency HP stop below ${hpStart}%` : ''}`;
+    throw new Error(`Rest below HP % (${hpStart}%) must be above Emergency HP stop (${value.minHpPercent}%). ${remedy}, or turn off Sit to recover HP and SP.`);
+  }
   const { automation: _automation, ...base } = value;
   return { ...base, map: value.map === '' ? '' : mapCode(value.map), targets: value.targets.map(value => speciesId(value)),
     minHpPercent: percentage(value.minHpPercent), route_randomWalk_maxRouteTime: seconds(value.route_randomWalk_maxRouteTime),
