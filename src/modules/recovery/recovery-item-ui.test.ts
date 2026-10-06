@@ -111,7 +111,7 @@ function featureUi(settingsUnavailable = false) {
     for (const key of ['allow', 'deny', 'area', 'map', 'minX', 'minY', 'maxX', 'maxY']) { const input = new Element('input'); input.id = `map-policy-${key}`; host.append(input); }
   });
   const ui = new FeatureUi(host as unknown as HTMLElement, hooks, { sections, manualTools, sessionDetails } as unknown as ConstructorParameters<typeof FeatureUi>[2]);
-  for (const id of ['party-engagement-state', 'party-heal-state', 'attack-strategy-state', 'actor-condition-state', 'supply-preview', 'map-policy-preview', 'session-details', 'visible-npcs', 'character-data', 'npc-dialogue', 'shop-state', 'storage-state', 'party-state', 'barter-state', 'workflow-state', 'service-state', 'routine-state']) {
+  for (const id of ['party-engagement-state', 'party-heal-state', 'attack-strategy-state', 'actor-condition-state', 'supply-preview', 'map-policy-preview', 'session-details', 'visible-npcs', 'visible-player-shops', 'character-data', 'npc-dialogue', 'shop-state', 'vending-state', 'storage-state', 'party-state', 'barter-state', 'workflow-state', 'service-state', 'routine-state']) {
     const output = new Element('div'); output.id = id; host.append(output);
   }
   return { ui, host, sections, hooks };

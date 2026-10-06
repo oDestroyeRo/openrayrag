@@ -171,3 +171,48 @@ describe('walking protocol', () => {
       .toEqual([{type:'hit',id:1,damage:5,position:{x:10,y:20},stops:true}]);
   });
 });
+
+
+describe('NPC unmanaged display metadata', () => {
+  function core(kind = 2) {
+    const packet = poring.slice(), view = new DataView(packet.buffer);
+    const at = 6 + 1 + 12 + 8 + 6;
+    packet[at] = kind; packet[at + 2] = 0;
+    return packet.slice(0, 6 + view.getInt32(2, true));
+  }
+  function tail(display = 3, effect = 255, interactable = 1, padding = 231, owner = 0) {
+    return new BitWriter().i32(8).u8(display).u8(effect).u8(interactable).u8(padding).i32(owner).finish();
+  }
+  const joined = (body: Uint8Array, suffix: Uint8Array) => new Uint8Array([...body, ...suffix]);
+
+  it('reads deployed raw offsets, arbitrary padding/effect bytes and owner zero/sentinels', () => {
+    for (const kind of [2, 3]) for (const displayType of [0, 1, 2, 3]) for (const ownerId of [-1, 0, 0x7fffffff]) {
+      expect(decode(joined(core(kind), tail(displayType, 255, 1, 231, ownerId)))[0]).toMatchObject({
+        type: 'spawn', entity: { kind, npcSpawn: { displayType, effectType: 255, interactable: true, ownerId } },
+      });
+    }
+    expect(decode(joined(core(), tail(0, 0, 0)))[0]).toMatchObject({ entity: { npcSpawn: { interactable: false } } });
+  });
+
+  it('leaves entity-only, unsupported tails and player-like NPC appearance unclassified', () => {
+    for (const suffix of [new Uint8Array(), Uint8Array.of(1, 2, 3), new BitWriter().i32(9).take(new Uint8Array(9)).finish(),
+      new BitWriter().i32(-1).finish(), new BitWriter().i32(0x7fffffff).finish()]) {
+      const event = decode(joined(core(), suffix))[0];
+      expect(event?.type).toBe('spawn'); if (event?.type === 'spawn') expect(event.entity.npcSpawn).toBeUndefined();
+    }
+    expect(decode(joined(core(4), tail(3)))[0]).toMatchObject({ entity: { kind: 4 } });
+    const playerLike = decode(joined(core(4), tail(3)))[0];
+    if (playerLike?.type === 'spawn') expect(playerLike.entity.npcSpawn).toBeUndefined();
+  });
+
+  it('rejects malformed or truncated known eight-byte records and preserves masked suffixes', () => {
+    const valid = tail();
+    for (let length = 4; length < valid.length; length++) expect(() => decode(joined(core(), valid.slice(0, length)))).toThrow();
+    for (const invalid of [tail(4), tail(255), tail(3, 0, 2), tail(3, 0, 255), tail(3, 0, 1, 0, -2), tail(3, 0, 1, 0, -2147483648)])
+      expect(() => decode(joined(core(), invalid))).toThrow('NPC appearance');
+    const masked = joined(core(), tail(2));
+    expect(decode(joined(masked, Uint8Array.of(254, 18, 91, 127)))).toEqual(decode(masked));
+    const padded = new Uint8Array(masked.length + 5); padded.set(masked, 2);
+    expect(decode(padded.subarray(2, 2 + masked.length))).toEqual(decode(masked));
+  });
+});

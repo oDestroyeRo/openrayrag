@@ -1,4 +1,5 @@
 import { sameActionIdentity } from '../world/actor-identity';
+import { isTalkNpc } from '../world/actor-interaction-logic';
 import { confirmWorkflowReceipt } from './workflows-logic';
 import { DEFAULT_MAP_POLICY, mapAllowed, policySummary, type MapPolicyInput as MapPolicy } from '../navigation/map-policy-logic';
 import { routeBetweenMaps, routeBetweenMapsAsync } from '../navigation/travel';
@@ -135,7 +136,7 @@ export class NpcServiceRuntime {
     return (
       !!a &&
       !a.dead &&
-      a.kind === 2 &&
+      a.kind === s.identity.kind && isTalkNpc(a) &&
       a.name === b.actor.name &&
       a.classId === b.actor.classId &&
       distance(a, b.actor) === 0

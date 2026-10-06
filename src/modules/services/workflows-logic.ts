@@ -49,7 +49,7 @@ export function workflowWorldSnapshot(world: WorkflowWorld): WorldSnapshot {
 export interface WorkflowContext {
   map: string; playerId: number | null; alive: boolean; idle: boolean;
   inventory: InventoryItem[]; equipped: number[]; zeny: number;
-  world: WorkflowWorld; visibleNpcIds: number[]; visiblePlayerIds?: number[];
+  world: WorkflowWorld; visibleNpcIds: number[]; visibleVendorIds?: number[]; visiblePlayerIds?: number[];
   actorIdentity?:(id:number)=>ActionIdentity|null;
   protectedItemIds?: number[]; basicSkillLevel?: number; pushCartLevel?: number; vendingLevel?: number;
   itemCatalog?: Readonly<Record<string, { sellPrice: number; itemClass: number }>>;
@@ -216,7 +216,7 @@ export function worldActionBlockers(input: WorldAction, context: WorkflowContext
   if (context.playerId===null||!context.alive) reasons.push('A ready living character is required.');
   if (!context.idle) reasons.push('Wait for movement and the previous action to finish.');
   if (!context.map || context.map !== state.map) reasons.push('World state is not ready for this map.');
-  const npcContext = () => { if (state.npc.id === null) reasons.push('No confirmed NPC interaction.'); else if(state.npc.id===0&&!context.visibleNpcIds.includes(0))reasons.push('NPC actor zero is no longer observed.'); };
+  const npcContext = () => { if (state.npc.id === null) reasons.push('No confirmed NPC interaction.'); else if(state.npc.id===0&&!context.visibleNpcIds.includes(0)&&!context.visibleVendorIds?.includes(0))reasons.push('NPC actor zero is no longer observed.'); };
   const checkBag = (items: InventoryItem[], bagId: number, count: number, protect: boolean) => {
     const item = items.find(item => item.bagId === bagId);
     if (!item || item.count < count) reasons.push('Item count is unavailable.');
@@ -277,7 +277,7 @@ export function worldActionBlockers(input: WorldAction, context: WorkflowContext
       if (action.rows.length > (context.vendingLevel ?? 0) + 2) reasons.push('Too many rows for the learned Vending level.');
       for (const row of action.rows) checkBag([...state.cart.values()], row.id, row.count, false); break;
     case 'vendingStop': if (!state.vending) reasons.push('No confirmed active vending shop.'); break;
-    case 'vendingView': if (!context.visibleNpcIds.includes(action.id)) reasons.push('Select a visible vendor.'); break;
+    case 'vendingView': if (!context.visibleVendorIds?.includes(action.id)) reasons.push('Select a visible vendor.'); break;
     case 'vendingPurchase': {
       if (!state.viewedVending) reasons.push('Open a confirmed vending store first.');
       let cost = 0;
