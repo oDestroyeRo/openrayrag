@@ -22,8 +22,10 @@ export const IDENTIFIER = "com.rayrag.companion";
 // Match the installed client's download and signature limits before publishing.
 export const MAX_UPDATER_METADATA = 64_000;
 export const MAX_UPDATER_ARCHIVE = 128 * 1024 * 1024;
-export const NODE_VERSION = "26.10.0",
+export const BUN_VERSION = "1.4.2",
   RUST_VERSION = "1.98.1";
+// Retained for verification/recovery of immutable releases made before Bun.
+const LEGACY_NODE_VERSION = "26.10.0";
 export const ENDPOINT = `https://github.com/${REPOSITORY}/releases/latest/download/latest.json`;
 export const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 /**
@@ -468,7 +470,7 @@ export function createBundle(id, payload, build, publicKey) {
       runId: build.runId,
       runAttempt: build.runAttempt,
       artifactName: build.artifactName,
-      toolchain: { node: NODE_VERSION, rust: RUST_VERSION },
+      toolchain: { bun: BUN_VERSION, rust: RUST_VERSION },
       ...(schemaVersion >= 2
         ? {
             platforms: [
@@ -603,9 +605,11 @@ export function validateBundle(files, id, publicKey) {
       p.artifactName === `release-${id.sourceSha}-${p.runId}-${p.runAttempt}`,
     "Invalid build provenance.",
   );
-  exactKeys(p.toolchain, ["node", "rust"], "toolchain");
+  const runtime = Object.hasOwn(p.toolchain ?? {}, "bun") ? "bun" : "node";
+  exactKeys(p.toolchain, [runtime, "rust"], "toolchain");
   requireValue(
-    p.toolchain.node === NODE_VERSION && p.toolchain.rust === RUST_VERSION,
+    p.toolchain[runtime] === (runtime === "bun" ? BUN_VERSION : LEGACY_NODE_VERSION) &&
+      p.toolchain.rust === RUST_VERSION,
     "Unexpected release toolchain.",
   );
   const expected = expectedNames(id.version, p.schemaVersion)

@@ -1,4 +1,4 @@
-// Offline renderer benchmark: node scripts/benchmark-client-rendering.mjs
+// Offline renderer benchmark: bun scripts/benchmark-client-rendering.mjs
 //   [--ref HEAD] [--output /tmp/baseline.json] [--compare /tmp/baseline.json]
 //   [--samples 5] [--iterations 100] [--chrome /path/to/chrome]
 // --ref bundles src/ from that commit; omitted bundles the working tree. The
@@ -35,7 +35,7 @@ const commit = execFileSync('git', ['rev-parse', '--verify', `${options.get('--r
 const chromePath = options.get('--chrome') ?? process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const temporary = await mkdtemp(join(tmpdir(), 'rayrag-client-rendering-'));
 const sourceHashes = new Map();
-const harnessFiles = ['scripts/benchmark-client-rendering.mjs', 'scripts/client-rendering-fixture.ts', 'scripts/client-rendering-native.ts', 'package-lock.json'];
+const harnessFiles = ['scripts/benchmark-client-rendering.mjs', 'scripts/client-rendering-fixture.ts', 'scripts/client-rendering-native.ts', 'bun.lock'];
 const harnessHash = createHash('sha256');
 for (const file of harnessFiles) harnessHash.update(file).update(await readFile(join(root, file)));
 const harness = { files: harnessFiles, hash: harnessHash.digest('hex') };
@@ -112,7 +112,7 @@ try {
   }
   if (!ready) throw new Error('Benchmark fixture did not initialize.');
   const browser = await cdp.send('Browser.getVersion');
-  const report = { schemaVersion: 2, harness, createdAt: new Date().toISOString(), source: { commit, mode: options.has('--ref') ? 'commit' : 'working-tree', loadedSourceHash: createHash('sha256').update(JSON.stringify([...sourceHashes].sort())).digest('hex'), dirty: execFileSync('git', ['status', '--short', '--', 'src'], { cwd: root, encoding: 'utf8' }).trim() }, machine: { platform: platform(), release: release(), cpu: cpus()[0]?.model, cores: cpus().length, totalMemoryBytes: totalmem(), node: process.version, browser: browser.product, viewport: [1280, 900], timezone: 'UTC' }, methodology: { samples, iterations, warmupSamples: 2, synchronousBurst: true, timers: 'Real main 1000ms callbacks run in explicit timer scenario; automatic periodic callbacks suspended.', instrumentation: 'Work counters collected in a separate instrumented pass; timed samples restore original methods and disconnect MutationObserver.', heap: 'JSHeapUsedSize before/after replay only with GC before and after; live heap is not peak allocation or native canvas memory.', cpu: 'CDP TaskDuration brackets replay only; setup and outcome pixel hashing run outside CPU/heap metrics. Renderer CPU seconds, not whole-app CPU percent.', timingGate: false }, workload: await cdp.evaluate('window.clientRenderingBenchmark.workload'), scenarios: [], probes: null };
+  const report = { schemaVersion: 2, harness, createdAt: new Date().toISOString(), source: { commit, mode: options.has('--ref') ? 'commit' : 'working-tree', loadedSourceHash: createHash('sha256').update(JSON.stringify([...sourceHashes].sort())).digest('hex'), dirty: execFileSync('git', ['status', '--short', '--', 'src'], { cwd: root, encoding: 'utf8' }).trim() }, machine: { platform: platform(), release: release(), cpu: cpus()[0]?.model, cores: cpus().length, totalMemoryBytes: totalmem(), bun: process.versions.bun, browser: browser.product, viewport: [1280, 900], timezone: 'UTC' }, methodology: { samples, iterations, warmupSamples: 2, synchronousBurst: true, timers: 'Real main 1000ms callbacks run in explicit timer scenario; automatic periodic callbacks suspended.', instrumentation: 'Work counters collected in a separate instrumented pass; timed samples restore original methods and disconnect MutationObserver.', heap: 'JSHeapUsedSize before/after replay only with GC before and after; live heap is not peak allocation or native canvas memory.', cpu: 'CDP TaskDuration brackets replay only; setup and outcome pixel hashing run outside CPU/heap metrics. Renderer CPU seconds, not whole-app CPU percent.', timingGate: false }, workload: await cdp.evaluate('window.clientRenderingBenchmark.workload'), scenarios: [], probes: null };
   for (const kind of ['steady', 'vitals', 'movement', 'logs', 'timer', 'reconnect']) {
     const count = kind === 'reconnect' ? Math.min(iterations, 10) : iterations;
     await cdp.evaluate(`window.clientRenderingBenchmark.prepare(${JSON.stringify(kind)}, ${count})`);

@@ -60,9 +60,9 @@ test("trusted policy uses only pinned pure plugins with a compatible current wri
       "utf8",
     ),
   );
-  const lock = JSON.parse(
+  const lock = Bun.JSONC.parse(
     await readFile(
-      new URL("../tools/release/package-lock.json", import.meta.url),
+      new URL("../tools/release/bun.lock", import.meta.url),
       "utf8",
     ),
   );
@@ -73,7 +73,7 @@ test("trusted policy uses only pinned pure plugins with a compatible current wri
         : pkg.devDependencies[name],
       version,
     );
-    assert.equal(lock.packages[`node_modules/${name}`].version, version);
+    assert.equal(lock.packages[name][0].slice(name.length + 1), version);
   }
   assert.deepEqual(
     config.plugins.map(([name]) => name),
@@ -82,18 +82,18 @@ test("trusted policy uses only pinned pure plugins with a compatible current wri
       "@semantic-release/release-notes-generator",
     ],
   );
-  assert.equal(lock.packages["node_modules/semantic-release"], undefined);
-  assert.equal(lock.packages["node_modules/@semantic-release/npm"], undefined);
+  assert.equal(lock.packages["semantic-release"], undefined);
+  assert.equal(lock.packages["@semantic-release/npm"], undefined);
   assert.equal(
-    lock.packages["node_modules/@semantic-release/github"],
+    lock.packages["@semantic-release/github"],
     undefined,
   );
-  const rootLock = JSON.parse(
-    await readFile(new URL("../package-lock.json", import.meta.url), "utf8"),
+  const rootLock = Bun.JSONC.parse(
+    await readFile(new URL("../bun.lock", import.meta.url), "utf8"),
   );
   assert.ok(
     !Object.keys(rootLock.packages).some((path) =>
-      /\/node_modules\/(?:braces|micromatch)$/.test(`/${path}`),
+      /\/(?:braces|micromatch)$/.test(`/${path}`),
     ),
   );
   assert.equal(

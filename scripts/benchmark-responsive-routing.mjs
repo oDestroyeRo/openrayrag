@@ -1,4 +1,4 @@
-// node scripts/benchmark-responsive-routing.mjs
+// bun scripts/benchmark-responsive-routing.mjs
 // Offline ESM/native-module and Safari-targeted injected-IIFE artifacts under
 // the same host scheduler. This does not claim native WebKit or live-game proof.
 import { strictEqual } from 'node:assert';
@@ -47,5 +47,5 @@ try{
     for(const mode of ['legacy','weighted'])for(const destination of ['prontera','payon','geffen'])for(const warm of [false,true])rows.push(await measure(api,mode,destination,warm));
     results.push({runtime,rows,cancellation:await cancellation(api)});
   }
-  console.log(JSON.stringify({host:process.version,sliceBudgetMs:8,results},null,2));
+  console.log(JSON.stringify({host:`Bun ${process.versions.bun}`,sliceBudgetMs:8,results},null,2));
 }finally{await rm(folder,{recursive:true,force:true});}

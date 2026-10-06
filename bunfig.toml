@@ -1,0 +1,3 @@
+[run]
+# Run package binaries with Bun, including tools whose shebang names Node.
+bun = true

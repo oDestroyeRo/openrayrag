@@ -77,7 +77,7 @@ Direct player trading, guild/friend/clan, pets and other companions, quest logs/
 
 ## Verification before release
 
-Run `npm run check`, formatting verification and `npm run app:build`; inspect the integrated diff and app signature. Protocol additions require fixed fixtures and malformed-bound tests. Resource actions require state readback, cancellation/late-response tests and no duplicate request after uncertainty. Persistent running requires tests for map changes, temporary loss, continued decisions during manual input, exhausted limits and Stop cancelling every retry. Native tests must report exactly which action families were exercised; unvisited maps and untested transactions remain explicit gaps.
+Run `bun run check`, formatting verification and `bun run app:build`; inspect the integrated diff and app signature. Protocol additions require fixed fixtures and malformed-bound tests. Resource actions require state readback, cancellation/late-response tests and no duplicate request after uncertainty. Persistent running requires tests for map changes, temporary loss, continued decisions during manual input, exhausted limits and Stop cancelling every retry. Native tests must report exactly which action families were exercised; unvisited maps and untested transactions remain explicit gaps.
 
 Bounded command-only Walk and explicit visible-monster normal Attack now use the same physical navigation, field policy, range/LOS and observed arrow reserve as field combat. They retain cancellation receipts and never create field/reconnect intent, acquire replacements, loot, or execute strategies. See [manual target behavior and proof limits](MANUAL_TARGETS.md).
 

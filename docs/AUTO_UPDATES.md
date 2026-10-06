@@ -42,7 +42,7 @@ A successful install restarts through Tauri's cached canonical executable path, 
 
 ## Bootstrap and proof surfaces
 
-Older installed clients contain no updater and need one bootstrap installation of an updater-enabled app/DMG. Local developer app builds can disable only artifact signing with `npm run app:build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'`; committed release configuration keeps artifact generation and signed-version enforcement enabled. Production signing keys belong only to root-managed release secrets.
+Older installed clients contain no updater and need one bootstrap installation of an updater-enabled app/DMG. Local developer app builds can disable only artifact signing with `bun run app:build --config '{"bundle":{"createUpdaterArtifacts":false}}'`; committed release configuration keeps artifact generation and signed-version enforcement enabled. Production signing keys belong only to root-managed release secrets.
 
 Synthetic tests cover bounded/interrupted downloads, authenticated signature/version rejection, strict form persistence/migration and revisions, navigation/lease mutations, current/obsolete socket dispatch gates, retained movement/action owners, atomic replacement/rollback and interprocess locks. Source and local checks do not prove hosted release publication, an installed runtime update or successful restart. Those require separate CI/release and native runtime evidence; no test should induce a game death or restart a requested run.
 

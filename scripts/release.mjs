@@ -19,7 +19,7 @@ import {
   LINUX_TARGET,
   IDENTIFIER,
   ENDPOINT,
-  NODE_VERSION,
+  BUN_VERSION,
   RUST_VERSION,
   MAX_RELEASE_ASSET,
   MAX_RELEASE_BUNDLE,
@@ -47,7 +47,6 @@ export async function stampVersions(root, version) {
   stableVersion(version);
   const paths = [
     "package.json",
-    "package-lock.json",
     "src-tauri/Cargo.toml",
     "src-tauri/Cargo.lock",
     "src-tauri/tauri.conf.json",
@@ -56,17 +55,14 @@ export async function stampVersions(root, version) {
       paths.map((p) => readFile(join(root, p), "utf8")),
     ),
     pkg = JSON.parse(values[0]),
-    lock = JSON.parse(values[1]),
-    config = JSON.parse(values[4]);
+    config = JSON.parse(values[3]);
   const old = pkg.version;
   requireValue(
     pkg.name === "rayrag-companion" &&
-      lock.version === old &&
-      lock.packages?.[""]?.version === old &&
       config.version === old,
     "Source versions are inconsistent.",
   );
-  const cargo = values[2].replaceAll("\r\n", "\n").split("\n");
+  const cargo = values[1].replaceAll("\r\n", "\n").split("\n");
   let section = "",
     changed = 0;
   for (let i = 0; i < cargo.length; i++) {
@@ -82,7 +78,7 @@ export async function stampVersions(root, version) {
   }
   requireValue(changed === 1, "Expected one Cargo package version.");
   let packages = 0;
-  const cargoLock = values[3]
+  const cargoLock = values[2]
     .replaceAll("\r\n", "\n")
     .split("[[package]]")
     .map((block) => {
@@ -101,14 +97,10 @@ export async function stampVersions(root, version) {
     })
     .join("[[package]]");
   requireValue(packages === 1, "Expected one root package in Cargo.lock.");
-  pkg.version =
-    lock.version =
-    lock.packages[""].version =
-    config.version =
-      version;
+  // Bun's dependency lock has no root package version; keep it byte-identical.
+  pkg.version = config.version = version;
   const updates = [
     JSON.stringify(pkg, null, 2) + "\n",
-    JSON.stringify(lock, null, 2) + "\n",
     cargo.join("\n"),
     cargoLock,
     JSON.stringify(config, null, 2) + "\n",
@@ -736,7 +728,7 @@ async function main() {
       "Release must be built as the stamped ARM64 macOS app.",
     );
     requireValue(
-      process.version === `v${NODE_VERSION}` &&
+      process.versions.bun === BUN_VERSION &&
         exec("rustc", ["--version"]).startsWith(`rustc ${RUST_VERSION} `),
       "Release toolchain differs from the pinned versions.",
     );

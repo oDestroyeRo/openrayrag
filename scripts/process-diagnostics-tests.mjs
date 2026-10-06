@@ -145,7 +145,7 @@ test('actual smoke entry point rejects signing credentials before any version st
   skip: !((process.platform === 'darwin' && process.arch === 'arm64')
     || (['win32', 'linux'].includes(process.platform) && process.arch === 'x64')),
 }, async () => {
-  const sourceFiles = ['package.json', 'package-lock.json', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock', 'src-tauri/tauri.conf.json'];
+  const sourceFiles = ['package.json', 'bun.lock', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock', 'src-tauri/tauri.conf.json'];
   const paths = sourceFiles.map(path => new URL(`../${path}`, import.meta.url));
   const before = await Promise.all(paths.map(path => readFile(path)));
   const platform = { darwin: 'macos', win32: 'windows', linux: 'linux' }[process.platform];

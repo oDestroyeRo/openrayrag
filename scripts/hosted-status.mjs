@@ -86,7 +86,7 @@ export function parseOptions(args) {
       options.expectedSha = sha;
     } else if (flag === '--failed-log' && !options.jobId) options.jobId = id(args[++index]);
     else if (flag === '--pr' && !options.pullRequest) options.pullRequest = id(args[++index]);
-    else throw new Error('Usage: npm run ci:status -- <run-id> [--sha <source-sha>] [--pr <number>] [--watch | --failed-log <job-id>]');
+    else throw new Error('Usage: bun run ci:status <run-id> [--sha <source-sha>] [--pr <number>] [--watch | --failed-log <job-id>]');
   }
   requireValue(!(options.watch && options.jobId), 'Download one failed log from a snapshot, or watch status changes.');
   return options;
@@ -110,7 +110,7 @@ export async function watchRun(options, { read = readApi, readPullRequest = pull
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const options = parseOptions(process.argv.slice(2));
-  if (options.help) console.log('npm run ci:status -- <run-id> [--sha <source-sha>] [--pr <number>] [--watch | --failed-log <job-id>]\nRead-only metadata. Watch polls every 45 seconds and prints changes. --pr includes merge eligibility and external checks such as the CodeQL policy summary. Failed logs are saved privately, including when other jobs still run.');
+  if (options.help) console.log('bun run ci:status <run-id> [--sha <source-sha>] [--pr <number>] [--watch | --failed-log <job-id>]\nRead-only metadata. Watch polls every 45 seconds and prints changes. --pr includes merge eligibility and external checks such as the CodeQL policy summary. Failed logs are saved privately, including when other jobs still run.');
   else {
     const state = await watchRun(options);
     if (state.status === 'completed' && (state.conclusion !== 'success' || (state.pullRequest && state.pullRequest.mergeState !== 'CLEAN'))) process.exitCode = 1;

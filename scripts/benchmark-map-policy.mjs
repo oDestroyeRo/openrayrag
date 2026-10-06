@@ -1,4 +1,4 @@
-// node scripts/benchmark-map-policy.mjs [baseline-ref] [--incremental]
+// bun scripts/benchmark-map-policy.mjs [baseline-ref] [--incremental]
 // Exact default-policy TravelStep oracle; timings are local planning, not network latency.
 import { deepStrictEqual } from 'node:assert';
 import { build } from 'esbuild';

@@ -44,9 +44,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: .bun-version
       - name: Merge the verified dependency update and start main release
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
-        run: node scripts/dependabot-auto-merge.mjs
+        run: bun scripts/dependabot-auto-merge.mjs

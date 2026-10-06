@@ -441,7 +441,7 @@ function render(s: GameStatus): void {
   activityLog.render(s.log);
   botConsole.render(s); updateButtons(); resumeFieldRun(s);
 }
-if (!native) message('Browser preview · Launch the desktop app with npm run app:dev to connect.');
+if (!native) message('Browser preview · Launch the desktop app with bun run app:dev to connect.');
 if (native) {
   void (async () => {
   try {

@@ -6,7 +6,7 @@ const workflowPath = '.github/workflows/release.yml';
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 function mergeTitle(pr) {
-  const ecosystem = /^dependabot\/(npm_and_yarn|cargo|github_actions)\//.exec(pr.head?.ref ?? '')?.[1];
+  const ecosystem = /^dependabot\/(bun|cargo|github_actions)\//.exec(pr.head?.ref ?? '')?.[1];
   const title = pr.title;
   if (!ecosystem || typeof title !== 'string' || title.length > 256 ||
       /[\u0000-\u001f\u007f]/.test(title) || title !== title.trim()) return undefined;
@@ -15,7 +15,7 @@ function mergeTitle(pr) {
   const [, type, scope] = conventional;
   if (ecosystem === 'github_actions') return type === 'ci' && scope === 'deps' ? title : undefined;
   if (type !== 'chore') return undefined;
-  if (pr.head.ref.startsWith('dependabot/npm_and_yarn/tools/release/') && scope !== 'deps-dev') return undefined;
+  if (pr.head.ref.startsWith('dependabot/bun/tools/release/') && scope !== 'deps-dev') return undefined;
   return title;
 }
 

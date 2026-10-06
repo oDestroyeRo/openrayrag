@@ -72,14 +72,14 @@ Native transport bounds are distinct from codec bounds: 512 KiB socket messages/
 3. Route the encoder through `controller-wire.ts`. Give the controller one action owner and an authoritative result receipt. A socket write, visual effect or resource debit alone may not establish completion. Define late-response, Stop, map-change, disconnect and reconnect behavior before enabling retries.
 4. Add native request validation in `control.rs`; new panel action families may also require `lib.rs::control_bot` and both runtime APIs. Review `official-input.ts` when official input can supersede a route or spend resources. Keep raw packets out of user/imported action schemas.
 5. Add fixed synthetic wire fixtures and malformed/truncated/trailing-byte cases, including nonzero unused bits, actor zero, absent state and relevant int32 limits. Cover result correlation, stale generations, rejected writes and unresolved outcomes through both connection modes. Test sensitive auth only with synthetic accounts/local servers.
-6. Run focused tests, then the repository's shared `npm run check` for an implementation change. `npm run bridge` regenerates the injected bridge through [build-bridge.mjs](../../scripts/build-bridge.mjs); edit TypeScript owners, not generated JavaScript. Native/package and hosted checks are separate proof surfaces.
+6. Run focused tests, then the repository's shared `bun run check` for an implementation change. `bun run bridge` regenerates the injected bridge through [build-bridge.mjs](../../scripts/build-bridge.mjs); edit TypeScript owners, not generated JavaScript. Native/package and hosted checks are separate proof surfaces.
 7. Update this catalogue, the affected layout, [feature inventory](../FEATURES.md) and feature evidence together. Record the source/build and precisely which live actions were tested. An upstream handler, codec fixture, passing CI and deployed success are different evidence.
 
 For a codec change, start with the relevant files below and add the affected controller/transport tests:
 
 ```sh
-npm test -- src/binary.test.ts src/protocol.test.ts src/protocol-feature.test.ts src/world-protocol.test.ts
-npm test -- src/login.test.ts src/direct-runtime.test.ts src/bridge-input.test.ts
+bun run test src/binary.test.ts src/protocol.test.ts src/protocol-feature.test.ts src/world-protocol.test.ts
+bun run test src/login.test.ts src/direct-runtime.test.ts src/bridge-input.test.ts
 ```
 
 Specialized fixtures live beside their adapters, including `actor-resource-protocol`, `party-engagement-protocol`, `social-protocol`, `memo-protocol`, `refine-protocol` and `warp-protocol` tests. Native `direct_wire.rs` and `direct.rs` tests exercise synthetic authentication and a local WebSocket server; no real account is required.

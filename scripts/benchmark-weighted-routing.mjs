@@ -1,4 +1,4 @@
-// node scripts/benchmark-weighted-routing.mjs <frozen-before-esm-bundle> [--incremental]
+// bun scripts/benchmark-weighted-routing.mjs <frozen-before-esm-bundle> [--incremental]
 // The bundle must export TravelPlanner and DEFAULT_MAP_POLICY. Scores, not tie
 // paths, are compared: the conservative frontier can change equal-cost order.
 import { deepStrictEqual } from 'node:assert';

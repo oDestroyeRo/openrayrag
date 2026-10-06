@@ -1,6 +1,6 @@
 version: 2
 updates:
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: /
     schedule:
       interval: cron
@@ -11,11 +11,11 @@ updates:
       prefix: chore
       include: scope
     groups:
-      npm-minor-patch:
+      bun-minor-patch:
         applies-to: version-updates
         patterns: ["*"]
         update-types: [minor, patch]
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: /tools/release
     schedule:
       interval: cron

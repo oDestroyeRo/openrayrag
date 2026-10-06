@@ -13,12 +13,13 @@ export async function verificationPlan(platform = process.platform, directory = 
   if (!scripts.length) throw new Error('No script tests found.');
   const cargo = ['--locked', '--manifest-path', 'src-tauri/Cargo.toml'];
   const steps = [
-    { tool: 'npm', args: ['ci', '--prefix', 'tools/release', '--ignore-scripts', '--no-audit', '--no-fund'], report: 'release-tools.log' },
-    { tool: 'npm', args: ['run', 'typecheck:release'], report: 'release-types.log' },
+    { tool: 'bun', args: ['install', '--cwd', 'tools/release', '--frozen-lockfile', '--ignore-scripts'], report: 'release-tools.log' },
+    { tool: 'bun', args: ['run', 'typecheck:release'], report: 'release-types.log' },
     { tool: 'python', args: ['vendor/glib/verify.py', ...(platform === 'linux' ? ['--test'] : [])], report: 'glib.log' },
-    { tool: 'node', args: ['--test', ...scripts], report: 'scripts.log' },
-    { tool: 'npm', args: ['run', 'build'], report: 'frontend-build.log' },
-    { tool: 'npm', args: ['test', '--', '--reporter=default', '--reporter=junit', '--outputFile=reports/frontend.xml'], report: 'frontend.log' },
+    // Process/packaging regressions can exceed Bun's five-second default on CI.
+    { tool: 'bun', args: ['test', '--timeout', '120000', ...scripts.map(name => `./${name}`)], report: 'scripts.log' },
+    { tool: 'bun', args: ['run', 'build'], report: 'frontend-build.log' },
+    { tool: 'bun', args: ['run', 'test', '--reporter=default', '--reporter=junit', '--outputFile=reports/frontend.xml'], report: 'frontend.log' },
     { tool: 'cargo', args: ['test', ...cargo], report: 'native.log' },
     { tool: 'cargo', args: ['test', ...cargo, '--features', 'ci-smoke'], report: 'native-ci.log' },
     { tool: 'cargo', args: ['clippy', ...cargo, '--all-targets', '--', '-D', 'warnings'], report: 'clippy.log' },
@@ -32,12 +33,9 @@ export async function verificationPlan(platform = process.platform, directory = 
 }
 
 export function invocation(step, env = process.env, platform = process.platform) {
-  if (step.tool === 'npm') {
-    if (!env.npm_execpath) throw new Error('Run verification through npm run check.');
-    // Run the npm JavaScript entry point; npm.cmd cannot spawn without a shell.
-    return { file: process.execPath, args: [env.npm_execpath, ...step.args] };
-  }
-  return { file: step.tool === 'node' ? process.execPath : step.tool === 'python' ? (platform === 'win32' ? 'python' : 'python3') : step.tool, args: step.args };
+  // Reuse the running Bun executable directly, including bun.exe on Windows.
+  // No package-manager shim or shell is needed.
+  return { file: step.tool === 'bun' ? process.execPath : step.tool === 'python' ? (platform === 'win32' ? 'python' : 'python3') : step.tool, args: step.args };
 }
 
 export async function executePlan(steps, run = runLoggedProcess, directory = root, env = process.env) {
@@ -52,8 +50,8 @@ export async function executePlan(steps, run = runLoggedProcess, directory = roo
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  if (args.length > 1 || (args.length && !['--plan', '--help'].includes(args[0]))) throw new Error('Usage: npm run check [-- --plan]');
-  if (args[0] === '--help') console.log('npm run check: complete source checks with retained reports. --plan lists checks without running them. Native installer smoke and hosted security remain CI proof.');
+  if (args.length > 1 || (args.length && !['--plan', '--help'].includes(args[0]))) throw new Error('Usage: bun run check [--plan]');
+  if (args[0] === '--help') console.log('bun run check: complete source checks with retained reports. --plan lists checks without running them. Native installer smoke and hosted security remain CI proof.');
   else {
     const plan = await verificationPlan();
     if (args[0] === '--plan') console.log(JSON.stringify(plan, null, 2));
