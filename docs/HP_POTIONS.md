@@ -16,12 +16,12 @@ Advanced HP/SP item rules remain available in Inventory and take priority. An it
 
 ## Catalog and settings contract
 
-The shared catalog contains 69 HP and 25 SP items, with 18 items in both lists. Effects come from [Rebuild's pinned item scripts](https://github.com/Doddler/RagnarokRebuildTcp/blob/4099e2c000c3c550516760b9c1241595aac9aceb/RoRebuildServer/GameConfig/ServerData/Script/Items/ItemEffects.txt), resolved through `ItemsUsable.csv` and matched to the pinned client by ID, name, item class and untargeted use mode. Unimplemented food, status-only items, speed items and teleport items are excluded. Classification does not assert live server healing amounts. The generator and source hashes are in `scripts/build-recovery-item-catalog.py` and `src/data/recovery-item-catalog.json`.
+The shared catalog contains 69 HP and 25 SP items, with 18 items in both lists. Effects come from [Rebuild's pinned item scripts](https://github.com/Doddler/RagnarokRebuildTcp/blob/4099e2c000c3c550516760b9c1241595aac9aceb/RoRebuildServer/GameConfig/ServerData/Script/Items/ItemEffects.txt), resolved through `ItemsUsable.csv` and matched to the pinned client by ID, name, item class and untargeted use mode. Unimplemented food, status-only items, speed items and teleport items are excluded. Classification does not assert live server healing amounts. The generator and source hashes are in `scripts/catalogs/build-recovery-item-catalog.py` and `src/data/recovery-item-catalog.json`.
 
 Reproduce the catalog from a Rebuild source checkout containing the pin:
 
 ```sh
-python3 scripts/build-recovery-item-catalog.py /path/to/RagnarokRebuildTcp src/data/game-catalog.json src/data/recovery-item-catalog.json
+python3 scripts/catalogs/build-recovery-item-catalog.py /path/to/RagnarokRebuildTcp src/data/game-catalog.json src/data/recovery-item-catalog.json
 ```
 
 The optional `automation.hpPotions` and `automation.spPotions` objects each have exactly five required fields. Existing `hpPotions` selections keep their schema and order; the accepted HP catalog now includes food and herbs. For example:

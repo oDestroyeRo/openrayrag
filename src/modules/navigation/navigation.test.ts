@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { distance, minimumRouteCost, GridNavigator, MAX_MAP_DIMENSION, NAVIGATION_MAPS, routeSegment, searchGrid, type WalkGrid } from './navigation';
 import { type Position } from '../protocol/protocol';
 import catalog from '../../data/navigation-maps.json';
-import sources from '../../../scripts/navigation-sources.json';
+import sources from '../../../scripts/catalogs/navigation-sources.json';
 
 function openGrid(width: number, height: number, blocked: (p: Position) => boolean = () => false): WalkGrid {
   return { width, height, walkable: p => Number.isInteger(p.x) && Number.isInteger(p.y)

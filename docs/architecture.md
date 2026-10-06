@@ -12,6 +12,37 @@ Pure functions do not mutate their inputs, retained instances or caller-visible 
 
 The separation follows existing domain owners rather than three giant application folders. `*-logic.ts`, `*-policy.ts`, `*_logic.rs`, and the tooling policy modules contain extracted decisions. Effect adapters describe their operation, such as map reads, storage or scheduling. Existing public modules and command/script entrypoints compose those owners and retain compatibility exports. Runtime consumers of a pure function import its logic owner directly; a compatibility facade can also expose stateful orchestration.
 
+## Module layout
+
+Folders collect a domain's implementation and its tests. Responsibility remains visible in the named logic, effect and orchestration files within that folder.
+
+```text
+src/
+  app/                    application entrypoints
+  modules/<feature>/      feature owners, adapters, presentation and colocated tests
+  shared/                 domain values, binary primitives, condition folds and storage
+  data/                   shared generated catalogs and cross-language fixtures
+src-tauri/src/
+  lib.rs, main.rs          Tauri composition and executable entrypoint
+  game/                   request admission and embedded catalog queries
+  session/                login, credential storage, transport and maintenance
+  settings/               settings admission, current form and close handshake
+  update/                 updater, installation and continuation ownership
+  shell/                  native view geometry and smoke adapter
+  shared/                 validated scalar domain values
+scripts/
+  release/                planning, reservations, publication and public verification
+  quality/                source checks, architecture, CI, smoke and hosted status
+  benchmarks/             benchmark commands, policies and fixtures
+  catalogs/               catalog generators, navigation acquisition and inputs
+  shared/                 tooling domain values and process outcomes
+tools/release/            isolated, locked release dependencies
+```
+
+Frontend features include runtime, session, settings, client presentation, world observations, protocol, automation, combat, navigation, party, recovery, services, Memo, Warp, socket, refine, social, update and catalog queries. Feature UI and protocol adapters stay beside their feature owner. The application entrypoints connect those modules. Shared code must have actual consumers across features; a convenient dumping ground is not a reason to put code there.
+
+Import the specific owner directly. Folder relocation does not create a barrel export, a new dependency layer or independently deployable packages. Existing cross-feature dependencies remain explicit, and every production file retains its architecture role. Native group modules use ordinary Rust module declarations and preserve the privacy of their leaves. See [the layout decision](adr/0001-feature-module-layout.md) for placement and compatibility rules.
+
 Examples:
 
 ```text
@@ -111,6 +142,6 @@ Use higher-level encodings when multiple real interpreters or repeated traversal
 
 `architecture.json` records a role for every first-party JavaScript, TypeScript, Python and Rust production source under `src`, `src-tauri/src`, `scripts` and `tools`, plus root configuration and the native build entrypoint. Tests, generated output, static data and vendored upstream code have separate ownership and are excluded from the role inventory. Code beside static data remains covered. New production source must be classified; removed source must be removed from the inventory.
 
-`bun scripts/architecture.mjs` checks the inventory, JavaScript/TypeScript runtime dependencies and ambient effects, Python logic imports/effects, and Rust logic effect references. `bun run check` runs its regression suite with the other script checks. Erased TypeScript imports do not create runtime dependencies. Deterministic hashing and parsing are logic; source acquisition and printing are effects.
+`bun scripts/quality/architecture.mjs` checks the inventory, JavaScript/TypeScript runtime dependencies and ambient effects, Python logic imports/effects, and Rust logic effect references. `bun run check` runs its regression suite with the other script checks. Erased TypeScript imports do not create runtime dependencies. Deterministic hashing and parsing are logic; source acquisition and printing are effects.
 
 This guard establishes dependency and ambient-effect constraints, not mathematical purity. It cannot prove that an injected callback is read-only or that a value is never mutated through an alias. Review those contracts and test unchanged inputs, repeated outputs, ordering, cancellation and failure paths. Native module dependencies and transaction ownership also require source review. Existing integration tests remain the proof for composed behavior; local checks do not establish hosted packaging or live game behavior.

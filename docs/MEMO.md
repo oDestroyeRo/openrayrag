@@ -24,8 +24,8 @@ Rebuild pin: **`4099e2c000c3c550516760b9c1241595aac9aceb`**.
 Regenerate and prove the catalog without gameplay:
 
 ```sh
-python3 scripts/build-memo-map-catalog.py /path/to/RagnarokRebuildTcp src/data/memo-map-catalog.json
-python3 scripts/test-memo-map-catalog.py /path/to/RagnarokRebuildTcp
+python3 scripts/catalogs/build-memo-map-catalog.py /path/to/RagnarokRebuildTcp src/data/memo-map-catalog.json
+python3 scripts/catalogs/test-memo-map-catalog.py /path/to/RagnarokRebuildTcp
 ```
 
 Source-shaped synthetic tests cover complete wire and malformed bounds, strict TypeScript/Rust request parity, learned/granted prerequisites, exact permission, stale/identical preview, ordered readback, movement and shared ownership, cancellation/late traffic, bounded uncertainty and button-only UI. No live memo slot was overwritten and no deployed memo send/readback proof is claimed. Integrated offline native layout and control inspection belongs to release validation.

@@ -730,7 +730,11 @@ mod tests {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "login::local_store::platform::tests::operation_lock_child",
+                    // libtest omits the crate component from exact test names.
+                    concat!(module_path!(), "::operation_lock_child")
+                        .split_once("::")
+                        .unwrap()
+                        .1,
                     "--nocapture",
                 ])
                 .env("RAYRAG_STORAGE_LOCK_TEST_PATH", &path)

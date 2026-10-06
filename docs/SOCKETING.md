@@ -17,7 +17,7 @@ Local evidence uses public metadata and synthetic source-shaped packets only. No
 Regenerate deterministically:
 
 ```sh
-python3 scripts/build-socket-catalog.py SOURCE_REPO ITEMS_JSON src/data/socket-catalog.json
+python3 scripts/catalogs/build-socket-catalog.py SOURCE_REPO ITEMS_JSON src/data/socket-catalog.json
 ```
 
 `SOURCE_REPO` must contain the fixed pin; its checkout HEAD is ignored. `ITEMS_JSON` is the public generated item catalog. Unknown source entries remain unavailable; identity mismatches fail generation.

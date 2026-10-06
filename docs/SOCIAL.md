@@ -21,8 +21,8 @@ Guild, friends, clan, private whispers, automatic replies and other social syste
 Rebuild source: `4099e2c000c3c550516760b9c1241595aac9aceb`. The generated catalog stores its source path, SHA-256 and pin. Regenerate and check it without gameplay:
 
 ```sh
-python3 scripts/build-emote-catalog.py /path/to/RagnarokRebuildTcp src/data/emote-catalog.json
-python3 scripts/test-emote-catalog.py /path/to/RagnarokRebuildTcp
+python3 scripts/catalogs/build-emote-catalog.py /path/to/RagnarokRebuildTcp src/data/emote-catalog.json
+python3 scripts/catalogs/test-emote-catalog.py /path/to/RagnarokRebuildTcp
 ```
 
 - [PacketSay](https://github.com/Doddler/RagnarokRebuildTcp/blob/4099e2c000c3c550516760b9c1241595aac9aceb/RoRebuildServer/RoRebuildServer/Networking/PacketHandlers/Character/PacketSay.cs): channels, 140-unit check, learned Shout prerequisite and allowance.

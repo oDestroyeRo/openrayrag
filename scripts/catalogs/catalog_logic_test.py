@@ -272,6 +272,37 @@ Item("Yggdrasil_Seed") { HealHpPercent(50); HealSpPercent(50); }
         self.assertEqual(catalog_logic.source_record(b'input', 'pin', 'source')['sha256'], hashlib.sha256(b'input').hexdigest())
 
 
+class CatalogEffects(unittest.TestCase):
+    def test_cast_main_reads_project_catalog_and_selects_default_or_explicit_output(self):
+        cast = load_script('build-cast-policy')
+        published = {'7': {'name': 'Synthetic card'}}
+        blobs = {'synthetic-source': b'synthetic'}
+        result = {'items': published, 'combos': []}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            data = root / 'src/data'
+            data.mkdir(parents=True)
+            (data / 'game-catalog.json').write_text(json.dumps({'items': published}))
+            source = root / 'public-source'
+            for explicit in (False, True):
+                destination = root / 'explicit.json' if explicit else data / 'cast-policy.json'
+                argv = [str(source), str(destination)] if explicit else [str(source)]
+                with self.subTest(explicit=explicit), \
+                        mock.patch.object(cast, '__file__', str(root / 'scripts/catalogs/build-cast-policy.py')), \
+                        mock.patch.object(cast, 'load_pinned_blobs', return_value=blobs) as acquire, \
+                        mock.patch.object(cast.subprocess, 'check_output', return_value=b'synthetic audit\n') as audit, \
+                        mock.patch.object(cast, 'build_catalog', return_value=result) as build, \
+                        mock.patch.object(cast, 'write_catalog') as write, \
+                        mock.patch('builtins.print'):
+                    cast.main(argv)
+                    acquire.assert_called_once_with(source, cast.PIN, cast.SOURCE_PATHS)
+                    audit.assert_called_once_with(['git', '-C', str(source), 'grep', '-n',
+                                                  'SpConsumption', cast.PIN, '--', cast.BASE + 'Script'])
+                    build.assert_called_once_with(blobs, published, ['synthetic audit'])
+                    write.assert_called_once_with(destination, catalog_logic.catalog_json(result, ensure_ascii=False))
+                    self.assertFalse(destination.exists())
+
+
 class NavigationEffects(unittest.TestCase):
     def test_unity_adapter_delegates_and_restores_the_library_on_success_and_error(self):
         extract = load_script('extract-navigation')

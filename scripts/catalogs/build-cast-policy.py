@@ -87,7 +87,7 @@ def build_catalog(blobs, published, audit):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     repo = Path(argv[0])
     out = Path(argv[1]) if len(argv) > 1 else root / 'src/data/cast-policy.json'
     published = json.loads((root / 'src/data/game-catalog.json').read_text())['items']
