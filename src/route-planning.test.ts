@@ -60,6 +60,42 @@ describe('incremental exact routing', () => {
 
 describe('planning scheduling and retention', () => {
   function* forever(): PlanningWork<number> { while (true) yield; }
+  it('distinguishes a completed undefined value from rejection and closes once', async () => {
+    const runtime = new ManualPlanningScheduler();
+    const work = (function* (): PlanningWork<undefined> { return undefined; })();
+    let closes = 0;
+    const close = work.return.bind(work);
+    work.return = value => { closes++; return close(value); };
+    const result = runPlanning(work, { scheduler: runtime });
+    runtime.drain();
+    await expect(result).resolves.toBeUndefined();
+    expect(closes).toBe(1);
+    expect(runtime.callbacks.size).toBe(0);
+  });
+  it.each([undefined, null, false, 0, 'search failure'])('retains the original thrown value %s over iterator cleanup failure', async cause => {
+    const runtime = new ManualPlanningScheduler();
+    const work = (function* (): PlanningWork<never> { throw cause; })();
+    let closes = 0;
+    work.return = () => { closes++; throw new Error('cleanup failure'); };
+    const settled = runPlanning(work, { scheduler: runtime }).then(
+      value => ({ type: 'completed', value }), error => ({ type: 'failed', error }));
+    runtime.drain();
+    expect(await settled).toEqual({ type: 'failed', error: cause });
+    expect(closes).toBe(1);
+    expect(runtime.callbacks.size).toBe(0);
+  });
+  it('rejects an undefined iterator-close failure and releases its job slot', async () => {
+    const runtime = new ManualPlanningScheduler();
+    const work = (function* (): PlanningWork<number> { return 7; })();
+    work.return = () => { throw undefined; };
+    const settled = runPlanning(work, { scheduler: runtime }).then(
+      value => ({ type: 'completed', value }), error => ({ type: 'failed', error }));
+    runtime.drain();
+    expect(await settled).toEqual({ type: 'failed', error: undefined });
+    const jobs = Array.from({ length: MAX_PLANNING_JOBS }, () => runPlanning((function* () { return 9; })(), { scheduler: runtime }));
+    runtime.drain();
+    expect(await Promise.all(jobs)).toEqual(Array(MAX_PLANNING_JOBS).fill(9));
+  });
   it('bounds concurrent jobs without queuing and frees slots on abort', async () => {
     const runtime = new ManualPlanningScheduler(), abort = new AbortController();
     const jobs = Array.from({length:MAX_PLANNING_JOBS},()=>runPlanning(forever(),{scheduler:runtime,signal:abort.signal}));
