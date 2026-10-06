@@ -11,7 +11,7 @@ from pathlib import Path
 import sys
 
 from catalog_effects import load_pinned_blobs, write_catalog
-from catalog_logic import catalog_json, source_record
+from catalog_logic import RefineRule, catalog_json, source_record
 
 PIN = '4099e2c000c3c550516760b9c1241595aac9aceb'
 SOURCE_PATHS = (
@@ -106,9 +106,8 @@ def build_catalog(blobs, raw):
                 rank = int(row['Rank']) if item_class == 2 else 0
                 if item_class == 2 and rank not in [1, 2, 3, 4]:
                     raise ValueError(f"{item['Id']}: invalid refine rank")
-                ore, cost = {0: (985,2000),1: (1010,200),2: (1011,1000),3: (984,5000),4: (984,10000)}[rank]
-                items[str(item['Id'])]['refine'] = {'rank': rank, 'oreItemId': ore, 'zenyCost': cost,
-                    'thresholds': [values[rank-1 if rank else 4] for values in thresholds[:10]]}
+                rule = RefineRule.from_sequential_rows(rank, thresholds)
+                items[str(item['Id'])]['refine'] = rule.to_json()
     return {'sourcePin': PIN, 'sources': sources, 'items': items, 'unknown': unknown}
 
 

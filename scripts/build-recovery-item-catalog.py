@@ -11,7 +11,7 @@ import re
 import sys
 
 from catalog_effects import load_pinned_blobs, write_catalog
-from catalog_logic import catalog_json, source_record
+from catalog_logic import RecoveryResources, catalog_json, source_record
 
 PIN = '4099e2c000c3c550516760b9c1241595aac9aceb'
 SOURCE_PATHS = (
@@ -36,7 +36,7 @@ def build_catalog(blobs, client):
         hp_min, hp_max, sp_min, sp_max = map(int, values)
         if code in healing or not 0 <= hp_min <= hp_max or not 0 <= sp_min <= sp_max:
             raise ValueError('Invalid or duplicate recovery declaration')
-        healing[code] = (hp_min > 0, sp_min > 0)
+        healing[code] = RecoveryResources(hp=hp_min > 0, sp=sp_min > 0)
 
     # These three reviewed direct-use bodies recover both resources. Never infer
     # effects from an item name, icon, category or an unimplemented food definition.
@@ -51,21 +51,21 @@ def build_catalog(blobs, client):
             continue
         if code not in direct or any(effect not in body for effect in direct[code]) or 'OnValidate' in body or 'OnUseTargeted' in body:
             raise ValueError(f'Unreviewed direct healing body: {code}')
-        healing[code] = (True, True)
+        healing[code] = RecoveryResources(hp=True, sp=True)
         seen.add(code)
     if seen != set(direct):
         raise ValueError('Missing reviewed direct healing body')
 
     hp_ids, sp_ids = [], []
-    for code, (hp, sp) in healing.items():
+    for code, resources in healing.items():
         row = rows[code]
         item_id = int(row['Id'])
         item = client['items'].get(str(item_id))
         if not item or item['name'] != row['Name'] or item['itemClass'] != 1 or item['useType'] != 1 or row['UseMode'] != 'Use':
             continue
-        if hp:
+        if resources.hp:
             hp_ids.append(item_id)
-        if sp:
+        if resources.sp:
             sp_ids.append(item_id)
     order = lambda item_id: (client['items'][str(item_id)]['price'], item_id)
     result = {'sourcePin': PIN, 'clientItemsSha256': client['sources']['items']['sha256'],

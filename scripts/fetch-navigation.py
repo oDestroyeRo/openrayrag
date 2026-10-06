@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 
-from navigation_logic import reviewed_bundle_matches, scene_url
+from navigation_logic import SceneMapCode, reviewed_bundle_matches, scene_url
 
 
 def matches(path, source):
@@ -23,9 +23,9 @@ def matches(path, source):
 
 
 def fetch(source, destination):
-    code = source['map']
     expected = scene_url(source)
-    output = destination / f'rayrag-{code}-scene.bundle'
+    code = SceneMapCode(source['map'])
+    output = destination / code.bundle_filename
     if matches(output, source):
         return False
     with tempfile.NamedTemporaryFile(dir=destination, delete=False) as handle:
@@ -36,7 +36,7 @@ def fetch(source, destination):
             '--retry', '1', '--max-time', '120', '--output', str(temporary), expected,
         ], check=True)
         if not matches(temporary, source):
-            raise ValueError(f'{code}: downloaded asset differs from the reviewed source')
+            raise ValueError(f'{code.value}: downloaded asset differs from the reviewed source')
         temporary.replace(output)
     finally:
         temporary.unlink(missing_ok=True)

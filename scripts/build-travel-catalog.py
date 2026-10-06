@@ -22,6 +22,7 @@ import sys
 
 from catalog_effects import load_pinned_blobs, write_catalog
 from catalog_logic import catalog_json
+from navigation_logic import GridDimensions, MapPosition, PortalArea
 
 PIN = '4099e2c000c3c550516760b9c1241595aac9aceb'
 
@@ -75,9 +76,9 @@ def parse_source(text):
     return text.splitlines(), depths, gated
 
 
-def walkable(grid, bits, x, y):
-    index = x + y * grid['width']
-    return (0 <= x < grid['width'] and 0 <= y < grid['height']
+def walkable(dimensions, bits, x, y):
+    index = x + y * dimensions.width
+    return (0 <= x < dimensions.width and 0 <= y < dimensions.height
             and bool(bits[index >> 3] & (1 << (index & 7))))
 
 
@@ -86,6 +87,7 @@ def build_catalog(report_raw, grids, source_blobs):
     validate_report(report)
     bits = {name: base64.b64decode(g['walkableBitsBase64'], validate=True) for name, g in grids.items()}
     source_cache = {}
+    dimension_cache = {}
     excluded = {}
 
     def skip(reason):
@@ -97,8 +99,18 @@ def build_catalog(report_raw, grids, source_blobs):
             source_cache[path] = parse_source(source_blobs[path].decode('utf-8-sig'))
         return source_cache[path]
 
+    def dimensions(name):
+        if name not in dimension_cache:
+            dimension_cache[name] = GridDimensions.from_export(grids[name], name)
+        return dimension_cache[name]
+
     def can_walk(name, x, y):
-        return walkable(grids[name], bits[name], x, y)
+        # Preserve out-of-bounds skips before admitting a map's dimensions.
+        if name not in dimension_cache:
+            grid = grids[name]
+            if not (0 <= x < grid['width'] and 0 <= y < grid['height']):
+                return False
+        return walkable(dimensions(name), bits[name], x, y)
 
     edges = {}
     for from_map, areas in sorted(report['perMapEvidence'].items()):
@@ -157,14 +169,17 @@ def build_catalog(report_raw, grids, source_blobs):
                 if not can_walk(to_map, ax, ay):
                     skip('blockedArrival')
                     continue
-                if not any(can_walk(from_map, px, py) for py in range(y - h, y + h + 1)
-                           for px in range(x - w, x + w + 1)):
+                trigger = PortalArea.from_export(rectangle, dimensions(from_map), from_map)
+                if not any(can_walk(from_map, px, py) for px, py in trigger.cells()):
                     skip('blockedTrigger')
                     continue
-                key = (from_map, x, y, w, h, to_map, ax, ay)
+                arrival = MapPosition(dimensions(to_map), ax, ay)
+                key = (from_map, trigger.center.x, trigger.center.y, trigger.half_width, trigger.half_height,
+                       to_map, arrival.x, arrival.y)
                 edges.setdefault(key, {
-                    'id': f'{from_map}:{x},{y},{w},{h}:{to_map}:{ax},{ay}', 'fromMap': from_map, 'toMap': to_map,
-                    'area': rectangle, 'arrival': {'x': ax, 'y': ay},
+                    'id': f'{from_map}:{trigger.center.x},{trigger.center.y},{trigger.half_width},{trigger.half_height}:{to_map}:{arrival.x},{arrival.y}',
+                    'fromMap': from_map, 'toMap': to_map,
+                    'area': trigger.to_json(), 'arrival': arrival.to_json(),
                     'source': {'kind': match[1], 'commit': PIN, 'path': s['path'], 'line': line},
                 })
 

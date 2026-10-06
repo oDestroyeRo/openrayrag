@@ -1,7 +1,110 @@
 """Deterministic scene policy and collision-grid transformations."""
 import base64
 from collections import Counter
+from dataclasses import dataclass
 import re
+
+
+@dataclass(frozen=True, slots=True)
+class SceneMapCode:
+    """A lowercase public scene key that confines both its URL and cache name."""
+    value: str
+
+    def __post_init__(self):
+        if not isinstance(self.value, str) or not re.fullmatch(r'[a-z0-9_-]{1,64}', self.value):
+            raise ValueError('Invalid map code')
+
+    @property
+    def source_url(self):
+        return ('https://websea01.rayrag.com/StreamingAssets/aa/WebGL/'
+                f'scenes_scenes_assets_scenes_maps_{self.value}.unity.bundle')
+
+    @property
+    def bundle_filename(self):
+        return f'rayrag-{self.value}-scene.bundle'
+
+
+@dataclass(frozen=True, slots=True)
+class GridDimensions:
+    """Reviewed collision dimensions, bounded by the catalog's cell policy."""
+    width: int
+    height: int
+
+    def __post_init__(self):
+        if not all(type(value) is int and 1 <= value <= 512 for value in (self.width, self.height)):
+            raise ValueError('Invalid grid dimensions')
+
+    @classmethod
+    def from_export(cls, grid, map_code):
+        width, height = grid['width'], grid['height']
+        if not all(type(value) is int and 1 <= value <= 512 for value in (width, height)):
+            raise ValueError(f'{map_code}: unsupported dimensions')
+        return cls(width, height)
+
+    @property
+    def cell_count(self):
+        return self.width * self.height
+
+    @property
+    def bitset_bytes(self):
+        return (self.cell_count + 7) // 8
+
+    def contains(self, x, y):
+        return 0 <= x < self.width and 0 <= y < self.height
+
+
+@dataclass(frozen=True, slots=True)
+class MapPosition:
+    """An integer cell whose owning dimensions establish its index and bounds."""
+    dimensions: GridDimensions
+    x: int
+    y: int
+
+    def __post_init__(self):
+        if (not isinstance(self.dimensions, GridDimensions)
+                or type(self.x) is not int or type(self.y) is not int
+                or not self.dimensions.contains(self.x, self.y)):
+            raise ValueError('Invalid map position')
+
+    @property
+    def index(self):
+        return self.x + self.y * self.dimensions.width
+
+    def to_json(self):
+        return {'x': self.x, 'y': self.y}
+
+
+@dataclass(frozen=True, slots=True)
+class PortalArea:
+    """A reviewed trigger center and its bounded, inclusive half extents."""
+    center: MapPosition
+    half_width: int
+    half_height: int
+
+    def __post_init__(self):
+        if (not isinstance(self.center, MapPosition)
+                or type(self.half_width) is not int or type(self.half_height) is not int
+                or not 0 <= self.half_width <= self.center.dimensions.width
+                or not 0 <= self.half_height <= self.center.dimensions.height):
+            raise ValueError('Invalid portal extent')
+
+    @classmethod
+    def from_export(cls, portal, dimensions, map_code):
+        if any(type(portal[key]) is not int for key in ('x', 'y', 'halfWidth', 'halfHeight')):
+            raise ValueError('Invalid portal values')
+        if not dimensions.contains(portal['x'], portal['y']):
+            raise ValueError(f'{map_code}: portal center outside map')
+        if not (0 <= portal['halfWidth'] <= dimensions.width
+                and 0 <= portal['halfHeight'] <= dimensions.height):
+            raise ValueError(f'{map_code}: invalid portal extent')
+        return cls(MapPosition(dimensions, portal['x'], portal['y']), portal['halfWidth'], portal['halfHeight'])
+
+    def to_json(self):
+        return {**self.center.to_json(), 'halfWidth': self.half_width, 'halfHeight': self.half_height}
+
+    def cells(self):
+        return ((x, y) for y in range(self.center.y - self.half_height, self.center.y + self.half_height + 1)
+                for x in range(self.center.x - self.half_width, self.center.x + self.half_width + 1))
 
 
 def validate_inventory(sources, portals):
@@ -15,8 +118,7 @@ def scene_url(source):
     code = source['map']
     if not re.fullmatch(r'[a-z0-9_-]{1,64}', code):
         raise ValueError('Invalid map code')
-    expected = ('https://websea01.rayrag.com/StreamingAssets/aa/WebGL/'
-                f'scenes_scenes_assets_scenes_maps_{code}.unity.bundle')
+    expected = SceneMapCode(code).source_url
     if source['sourceUrl'] != expected:
         raise ValueError('Unexpected scene URL')
     return expected
@@ -70,30 +172,26 @@ def grid_summary(tree, grid, output_path):
 
 def validate_grid(source, grid, portals):
     map_code = source['map']
-    width, height = grid['width'], grid['height']
-    if not all(type(v) is int and 1 <= v <= 512 for v in (width, height)):
-        raise ValueError(f'{map_code}: unsupported dimensions')
-    if (width, height) != (source['width'], source['height']):
+    dimensions = GridDimensions.from_export(grid, map_code)
+    if (dimensions.width, dimensions.height) != (source['width'], source['height']):
         raise ValueError(f'{map_code}: dimensions differ from the reviewed source')
     bits = base64.b64decode(grid['walkableBitsBase64'], validate=True)
     sight = base64.b64decode(grid['snipableOnlyBitsBase64'], validate=True)
-    if len(bits) != (width * height + 7) // 8 or len(sight) != len(bits):
+    if len(bits) != dimensions.bitset_bytes or len(sight) != len(bits):
         raise ValueError('Invalid bitset size')
     if any(walk & snipable for walk, snipable in zip(bits, sight)):
         raise ValueError('Snipable-only cells overlap walking cells')
-    if width * height % 8 and (bits[-1] | sight[-1]) >> (width * height % 8):
+    if dimensions.cell_count % 8 and (bits[-1] | sight[-1]) >> (dimensions.cell_count % 8):
         raise ValueError('Nonzero trailing bits')
     walkable = sum(byte.bit_count() for byte in bits)
-    blocked = width * height - walkable
+    blocked = dimensions.cell_count - walkable
     if not walkable or (walkable, blocked) != (source['walkableCount'], source['blockedCount']):
         raise ValueError(f'{map_code}: cell counts differ from the reviewed source')
+    reviewed_portals = []
     for portal in portals:
-        if any(type(portal[k]) is not int for k in ('x', 'y', 'halfWidth', 'halfHeight')):
-            raise ValueError('Invalid portal values')
-        if not (0 <= portal['x'] < width and 0 <= portal['y'] < height):
-            raise ValueError(f'{map_code}: portal center outside map')
-        if not (0 <= portal['halfWidth'] <= width and 0 <= portal['halfHeight'] <= height):
-            raise ValueError(f'{map_code}: invalid portal extent')
+        area = PortalArea.from_export(portal, dimensions, map_code)
+        # Preserve extension fields and insertion order at the wire boundary.
+        reviewed_portals.append({**portal, **area.to_json()})
     return {
-        **grid, 'walkableCount': walkable, 'blockedCount': blocked, 'portals': portals,
+        **grid, 'walkableCount': walkable, 'blockedCount': blocked, 'portals': reviewed_portals,
     }
