@@ -1,17 +1,19 @@
 //! One-shot update continuation authority. Ordinary startup never grants run intent.
-use crate::update_continuation_logic::{
+use crate::update::update_continuation_logic::{
     self as policy, character, restart_arguments, runtime_identity, startup_stopped,
     validate_field, AdmittedContinuation, DiskCheckpoint, ERROR, LAUNCH_PREFIX, MAX_BYTES,
 };
 #[cfg(test)]
-use crate::update_continuation_logic::{launch_token, STOPPED_FLAG, TTL_MS};
-pub(crate) use crate::update_continuation_logic::{request_id, Continuation, ContinuationBase};
+use crate::update::update_continuation_logic::{launch_token, STOPPED_FLAG, TTL_MS};
+pub(crate) use crate::update::update_continuation_logic::{
+    request_id, Continuation, ContinuationBase,
+};
 use crate::{
-    automation::{DeathRecoveryGuard, EscapeResumeGuard, Settings, SupplyResumeGuard},
-    current_form::{self, FormDocument},
-    current_form_logic::same_form,
-    login::{self, local_store as file, UpdateAccount},
-    maintenance::{GameIdentity, Gate, SharedGate},
+    session::login::{self, local_store as file, UpdateAccount},
+    session::maintenance::{GameIdentity, Gate, SharedGate},
+    settings::automation::{DeathRecoveryGuard, EscapeResumeGuard, Settings, SupplyResumeGuard},
+    settings::current_form::{self, FormDocument},
+    settings::current_form_logic::same_form,
 };
 use serde_json::{json, Value};
 use std::{
@@ -318,7 +320,7 @@ pub(crate) fn update_prepare(
     if !self::request_id(&request_id) {
         return invalid();
     }
-    let gate = crate::maintenance::admit(&app)?;
+    let gate = crate::session::maintenance::admit(&app)?;
     let (account, identity, generation) = owner(&app, &gate)?;
     let mut state = app
         .state::<SharedContinuation>()
@@ -556,7 +558,7 @@ pub(crate) fn update_continuation(
     window: Webview,
 ) -> Result<Option<Continuation>, String> {
     crate::require_view(&window, "main")?;
-    if crate::ci_smoke::active() {
+    if crate::shell::ci_smoke::active() {
         return Ok(None);
     }
     let mut state = app
@@ -580,7 +582,7 @@ pub(crate) fn update_startup_stopped(
     window: Webview,
 ) -> Result<bool, String> {
     crate::require_view(&window, "main")?;
-    if crate::ci_smoke::active() {
+    if crate::shell::ci_smoke::active() {
         return Ok(false);
     }
     // This launch-only opt-out grants no run authority and changes no saved preference.
@@ -694,7 +696,7 @@ pub(crate) fn update_restore(
     if let Some(g) = &death_recovery_guard {
         g.validate()?;
     }
-    let gate = crate::maintenance::admit(&app)?;
+    let gate = crate::session::maintenance::admit(&app)?;
     let (account, identity, generation) = owner(&app, &gate)?;
     let mut state = app
         .state::<SharedContinuation>()
@@ -903,7 +905,7 @@ mod tests {
     #[test]
     fn smoke_capability_has_harmless_startup_queries_without_update_or_gameplay_authority() {
         let capability: Value =
-            serde_json::from_str(include_str!("../capabilities/ci-smoke.json")).unwrap();
+            serde_json::from_str(include_str!("../../capabilities/ci-smoke.json")).unwrap();
         assert!(capability.get("windows").is_none());
         assert_eq!(capability["webviews"], json!(["main"]));
         let permissions = capability["permissions"].as_array().unwrap();

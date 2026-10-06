@@ -1,5 +1,5 @@
 //! Saved-login document parsing and encoding, without filesystem access.
-use crate::login_logic::LoginProfile;
+use crate::session::login_logic::LoginProfile;
 
 pub(crate) const MAX_BYTES: u64 = 4096;
 
@@ -24,7 +24,7 @@ pub(crate) fn encode(profile: &LoginProfile) -> Result<Vec<u8>, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::login_logic::ConnectionMode;
+    use crate::session::login_logic::ConnectionMode;
     use serde_json::{json, Value};
 
     fn profile() -> Value {

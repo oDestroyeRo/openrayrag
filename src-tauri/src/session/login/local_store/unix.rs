@@ -333,7 +333,7 @@ mod tests {
     }
     fn profile() -> LoginProfile {
         LoginProfile {
-            mode: crate::login::ConnectionMode::GameClient,
+            mode: crate::session::login::ConnectionMode::GameClient,
             username: "synthetic-account".into(),
             password: "synthetic-only-password".into(),
             character_slot: 2,

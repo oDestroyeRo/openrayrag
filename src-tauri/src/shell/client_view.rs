@@ -1,11 +1,11 @@
 //! A persistent game webview shares the companion window, never its authority.
-use crate::domain_values::{ClippedViewExtent, RequestedViewExtent, ViewOrigin};
+use crate::shared::domain_values::{ClippedViewExtent, RequestedViewExtent, ViewOrigin};
 use frunk::{hlist_pat, prelude::IntoValidated};
 use serde::Deserialize;
 use tauri::{webview::WebviewBuilder, Manager, Webview};
 
 pub(crate) fn create_main(app: &tauri::AppHandle) -> tauri::Result<()> {
-    crate::ci_smoke::milestone("main-window-building");
+    crate::shell::ci_smoke::milestone("main-window-building");
     let config = app
         .config()
         .app
@@ -14,13 +14,13 @@ pub(crate) fn create_main(app: &tauri::AppHandle) -> tauri::Result<()> {
         .find(|window| window.label == "main")
         .expect("The main window configuration must exist");
     let window = tauri::window::WindowBuilder::from_config(app, config)?.build()?;
-    crate::ci_smoke::milestone("main-webview-building");
+    crate::shell::ci_smoke::milestone("main-webview-building");
     window.add_child(
         WebviewBuilder::from_config(config).auto_resize(),
         tauri::LogicalPosition::new(0, 0),
         window.inner_size()?,
     )?;
-    crate::ci_smoke::milestone("main-webview-built");
+    crate::shell::ci_smoke::milestone("main-webview-built");
     Ok(())
 }
 
@@ -121,11 +121,13 @@ pub(crate) fn set_game_view(
             .and_then(|()| window.set_focus())
             .map_err(|_| "Could not switch to Bot.".into());
     };
-    if crate::direct::runtime_mode(&game)? != crate::login::ConnectionMode::GameClient {
+    if crate::session::direct::runtime_mode(&game)?
+        != crate::session::login::ConnectionMode::GameClient
+    {
         return Err("Game is unavailable in Bot only mode.".into());
     }
     // Presentation cannot expose official input during update installation.
-    let _permit = crate::maintenance::admit(&app)?;
+    let _permit = crate::session::maintenance::admit(&app)?;
     let parent = window.window();
     let size = parent
         .inner_size()
@@ -161,12 +163,12 @@ mod tests {
     #[test]
     fn sharing_a_parent_window_does_not_share_controller_authority() {
         let controller: serde_json::Value =
-            serde_json::from_str(include_str!("../capabilities/controller.json")).unwrap();
+            serde_json::from_str(include_str!("../../capabilities/controller.json")).unwrap();
         assert!(controller.get("windows").is_none());
         assert_eq!(controller["webviews"], serde_json::json!(["main"]));
         for capability in [
-            include_str!("../capabilities/game-telemetry.json"),
-            include_str!("../capabilities/bot-runtime.json"),
+            include_str!("../../capabilities/game-telemetry.json"),
+            include_str!("../../capabilities/bot-runtime.json"),
         ] {
             let capability: serde_json::Value = serde_json::from_str(capability).unwrap();
             assert!(capability.get("windows").is_none());
@@ -180,7 +182,7 @@ mod tests {
             }
         }
         let official: serde_json::Value =
-            serde_json::from_str(include_str!("../capabilities/game-telemetry.json")).unwrap();
+            serde_json::from_str(include_str!("../../capabilities/game-telemetry.json")).unwrap();
         assert_eq!(official["local"], false);
         assert_eq!(
             official["remote"]["urls"],

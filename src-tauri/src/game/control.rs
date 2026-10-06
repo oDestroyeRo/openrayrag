@@ -1,4 +1,4 @@
-use crate::domain_values::{ActorId, BagId, ItemCount, ItemId};
+use crate::shared::domain_values::{ActorId, BagId, ItemCount, ItemId};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -476,7 +476,7 @@ fn validate_service(value: &Value) -> Validation {
     bound_workflow.insert("npcId".into(), Value::from(1));
     validate_workflow(&Value::Object(bound_workflow))?;
     integer(workflow, "timeoutMs", 1000, 60_000)?;
-    let catalog: Value = serde_json::from_str(include_str!("../../src/data/npc-services.json"))
+    let catalog: Value = serde_json::from_str(include_str!("../../../src/data/npc-services.json"))
         .map_err(|_| invalid())?;
     let known = catalog["contracts"]
         .as_array()
@@ -741,7 +741,7 @@ fn validate_macro_step(value: &Value, max_spend: i64) -> Validation {
             }
             let service_id = string(step, "serviceId")?;
             let catalog: Value =
-                serde_json::from_str(include_str!("../../src/data/npc-services.json"))
+                serde_json::from_str(include_str!("../../../src/data/npc-services.json"))
                     .map_err(|_| invalid())?;
             let service = catalog["contracts"]
                 .as_array()
@@ -803,7 +803,7 @@ fn validate_macro(value: &Value) -> Validation {
         return Err("Macro settings exceed their limit.".into());
     }
     validate_macro_script(field(request, "script")?)?;
-    let settings: crate::automation::Settings =
+    let settings: crate::settings::automation::Settings =
         serde_json::from_value(settings_value.clone()).map_err(|_| invalid())?;
     settings.validate()
 }
@@ -935,7 +935,7 @@ fn validate_warp(value: &Value, preview_only: bool) -> Validation {
     if request.len() != keys.len() {
         return Err(invalid());
     }
-    crate::automation::validate_manual_protection_policy(field(request, "policy")?)?;
+    crate::settings::automation::validate_manual_protection_policy(field(request, "policy")?)?;
     if kind == "warpGround" {
         integer(request, "slot", 0, 3)?;
         let target = object(field(request, "target")?, &["x", "y"])?;
@@ -1015,7 +1015,7 @@ fn validate_social(value: &Value) -> Validation {
             static IDS: OnceLock<HashSet<i64>> = OnceLock::new();
             let ids = IDS.get_or_init(|| {
                 let catalog: Value =
-                    serde_json::from_str(include_str!("../../src/data/emote-catalog.json"))
+                    serde_json::from_str(include_str!("../../../src/data/emote-catalog.json"))
                         .expect("Emote catalog must be valid");
                 catalog["items"]
                     .as_array()
@@ -1057,7 +1057,7 @@ fn validate_refine(value: &Value, preview: bool) -> Validation {
     integer(request, "catalystBagId", 0, 0)?;
     integer(request, "maxSpend", 0, 2_000_000_000)?;
     integer(request, "minZeny", 0, 2_147_483_647)?;
-    crate::automation::validate_manual_protection_policy(field(request, "policy")?)?;
+    crate::settings::automation::validate_manual_protection_policy(field(request, "policy")?)?;
     if !preview {
         let token = string(request, "previewToken")?;
         if token.len() != 32
@@ -1081,7 +1081,7 @@ fn validate_socket(request: &Value, commit: bool) -> Validation {
     if v.len() != keys.len() {
         return Err(invalid());
     }
-    crate::automation::validate_manual_protection_policy(field(v, "policy")?)?;
+    crate::settings::automation::validate_manual_protection_policy(field(v, "policy")?)?;
     let target = integer(v, "targetBagId", 1, MAX_ID)?;
     let card = integer(v, "cardBagId", 1, MAX_ID)?;
     if target == card {
@@ -1136,7 +1136,7 @@ fn validate_manual_target(value: &Value) -> Validation {
     }
     let map = string(request, "map")?;
     map_code(map)?;
-    let (width, height) = crate::map_dimensions(map).ok_or_else(invalid)?;
+    let (width, height) = crate::game::catalog_logic::map_dimensions(map).ok_or_else(invalid)?;
     let world = manual_identity(field(request, "owner")?)?;
     integer(request, "timeoutSeconds", 1, 120)?;
     let policy = object(
@@ -1182,7 +1182,7 @@ fn validate_manual_target(value: &Value) -> Validation {
         }
     }
     if let Some(policy) = policy.get("mapPolicy") {
-        crate::automation::validate_map_policy(policy)?;
+        crate::settings::automation::validate_map_policy(policy)?;
         if let Some(area) = policy.get("lockArea").filter(|v| !v.is_null()) {
             if area.get("map").and_then(Value::as_str) != Some(map) {
                 return Err(invalid());
@@ -1233,7 +1233,10 @@ pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
                 .is_some_and(|o| o.contains_key("service"))
             {
                 let wrapper = object(request, &["service", "executionPolicy"])?;
-                crate::automation::validate_map_policy(field(wrapper, "executionPolicy")?)?;
+                crate::settings::automation::validate_map_policy(field(
+                    wrapper,
+                    "executionPolicy",
+                )?)?;
                 validate_service(field(wrapper, "service")?)
             } else {
                 validate_service(request)
@@ -1448,7 +1451,8 @@ mod macro_request_tests {
     #[test]
     fn shared_macro_script_corpus_matches_typescript() {
         let cases: Value =
-            serde_json::from_str(include_str!("../../src/data/macro-script-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/macro-script-cases.json"))
+                .unwrap();
         for case in cases.as_array().unwrap() {
             assert_eq!(
                 validate_macro_script(&case["script"]).is_ok(),
@@ -1856,7 +1860,8 @@ mod tests {
     #[test]
     fn warp_shared_schema_and_generic_bypass() {
         let cases: Value =
-            serde_json::from_str(include_str!("../../src/data/warp-request-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/warp-request-cases.json"))
+                .unwrap();
         for case in cases.as_array().unwrap() {
             assert_eq!(
                 validate_request(case["mode"].as_str().unwrap(), &case["request"]).is_ok(),
@@ -1877,7 +1882,8 @@ mod tests {
     #[test]
     fn manual_memo_shared_corpus_and_automation_exclusion() {
         let cases: Value =
-            serde_json::from_str(include_str!("../../src/data/memo-request-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/memo-request-cases.json"))
+                .unwrap();
         for case in cases.as_array().unwrap() {
             assert_eq!(
                 validate_request("memo", &case["request"]).is_ok(),
@@ -1895,7 +1901,8 @@ mod tests {
     #[test]
     fn manual_social_shared_corpus_and_routine_exclusion() {
         let cases: serde_json::Value =
-            serde_json::from_str(include_str!("../../src/data/social-request-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/social-request-cases.json"))
+                .unwrap();
         for case in cases.as_array().unwrap() {
             assert_eq!(
                 validate_request("social", &case["request"]).is_ok(),
@@ -1918,7 +1925,7 @@ mod tests {
     #[test]
     fn service_contract_shared_corpus() {
         let cases: serde_json::Value = serde_json::from_str(include_str!(
-            "../../src/data/npc-service-request-cases.json"
+            "../../../src/data/npc-service-request-cases.json"
         ))
         .unwrap();
         for case in cases.as_array().unwrap() {
@@ -2050,9 +2057,10 @@ mod automation_request_tests {
 
     #[test]
     fn actor_zero_field_contract_matches_typescript() {
-        let cases: Value =
-            serde_json::from_str(include_str!("../../src/data/actor-zero-request-cases.json"))
-                .unwrap();
+        let cases: Value = serde_json::from_str(include_str!(
+            "../../../src/data/actor-zero-request-cases.json"
+        ))
+        .unwrap();
         for action in cases["valid"].as_array().unwrap() {
             assert!(validate_action(action).is_ok(), "rejected {action}");
         }
@@ -2317,7 +2325,7 @@ mod automation_request_tests {
     #[test]
     fn resource_predicates_share_the_typescript_schema() {
         let cases: Value = serde_json::from_str(include_str!(
-            "../../src/data/actor-resource-condition-cases.json"
+            "../../../src/data/actor-resource-condition-cases.json"
         ))
         .unwrap();
         for case in cases.as_array().unwrap() {
@@ -2365,7 +2373,7 @@ mod automation_request_tests {
     #[test]
     fn service_execution_policy_is_separate_and_strict() {
         let cases: serde_json::Value = serde_json::from_str(include_str!(
-            "../../src/data/npc-service-request-cases.json"
+            "../../../src/data/npc-service-request-cases.json"
         ))
         .unwrap();
         let service = &cases
@@ -2375,7 +2383,7 @@ mod automation_request_tests {
             .find(|c| c["valid"] == true)
             .unwrap()["request"];
         let policy_cases: serde_json::Value =
-            serde_json::from_str(include_str!("../../src/data/map-policy-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/map-policy-cases.json")).unwrap();
         for case in policy_cases.as_array().unwrap() {
             let request = json!({"service":service,"executionPolicy":case["policy"]});
             assert_eq!(
@@ -2395,7 +2403,8 @@ mod automation_request_tests {
     #[test]
     fn manual_targets_are_strict_and_command_only() {
         let cases: Vec<serde_json::Value> =
-            serde_json::from_str(include_str!("../../src/data/manual-target-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/manual-target-cases.json"))
+                .unwrap();
         for case in cases {
             let request = &case["request"];
             assert_eq!(
@@ -2416,7 +2425,8 @@ mod automation_request_tests {
     #[test]
     fn manual_target_envelope_retains_the_native_size_limit() {
         let cases: Vec<serde_json::Value> =
-            serde_json::from_str(include_str!("../../src/data/manual-target-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/manual-target-cases.json"))
+                .unwrap();
         let mut request = cases[0]["request"].clone();
         request["policy"]["monsterRules"]=serde_json::Value::Array((0..64).map(|i|json!({"classId":4000+i,"action":"attack","priority":0,"conditions":(0..16).map(|_|json!({"field":"actorStatus","actor":{"scope":"actor","world":"12345678-1234-1234-1234-123456789abc","id":2,"incarnation":2},"statusId":1,"operator":"eq","value":true})).collect::<Vec<_>>()})).collect());
         assert!(serde_json::to_vec(&request).unwrap().len() > 65536);
@@ -2431,7 +2441,8 @@ mod socket_tests {
     #[test]
     fn shares_strict_manual_socket_request_corpus() {
         let cases: Vec<Value> =
-            serde_json::from_str(include_str!("../../src/data/socket-request-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/socket-request-cases.json"))
+                .unwrap();
         for case in cases {
             let mode = case["mode"].as_str().unwrap();
             let request = &case["request"];
@@ -2462,7 +2473,8 @@ mod refine_tests {
     #[test]
     fn shares_strict_refine_corpus_and_excludes_automatic_documents() {
         let cases: Vec<Value> =
-            serde_json::from_str(include_str!("../../src/data/refine-request-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/refine-request-cases.json"))
+                .unwrap();
         for case in cases {
             let mode = case["mode"].as_str().unwrap();
             let request = &case["request"];
@@ -2487,10 +2499,14 @@ mod refine_tests {
     #[test]
     fn rejects_oversized_otherwise_valid_refine_protection_policy() {
         let cases: Vec<Value> =
-            serde_json::from_str(include_str!("../../src/data/refine-request-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/refine-request-cases.json"))
+                .unwrap();
         let mut request = cases[0]["request"].clone();
         request["policy"]["combat"]["rules"] = json!((0..64).map(|i| json!({"classId":4000+i,"action":"attack","priority":0,"conditions":(0..16).map(|_|json!({"field":"actorStatus","actor":{"scope":"self"},"statusId":6,"operator":"eq","value":false})).collect::<Vec<_>>()})).collect::<Vec<_>>());
-        assert!(crate::automation::validate_manual_protection_policy(&request["policy"]).is_ok());
+        assert!(
+            crate::settings::automation::validate_manual_protection_policy(&request["policy"])
+                .is_ok()
+        );
         assert!(serde_json::to_vec(&request).unwrap().len() > 65_536);
         assert!(validate_request("refinePreview", &request).is_err());
     }

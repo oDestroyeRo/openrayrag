@@ -106,7 +106,7 @@ pub(crate) fn parse_feed(bytes: &[u8], current: &str) -> Result<Option<Candidate
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::update_install_logic as update_install;
+    use crate::update::update_install_logic as update_install;
     fn feed(version: &str) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "version": version,

@@ -1,4 +1,4 @@
-//! Compile the real owner from an adjacent module, proving construction cannot bypass admission.
+//! Compile the real owners in their nested module graph, proving construction cannot bypass admission.
 use std::{
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -77,12 +77,13 @@ fn linked_dependencies(executable: &Path, deps: &Path) -> Vec<(&'static str, Pat
 
 fn compile(source: &str, dir: &Path, deps: &Path, linked: &[(&str, PathBuf)]) -> Output {
     let fixture = dir.join("probe.rs");
-    let owner = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/domain_values.rs");
-    let updater = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/updater_logic.rs");
-    let installer = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/update_install_logic.rs");
+    let owner = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shared/domain_values.rs");
+    let updater = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/update/updater_logic.rs");
+    let installer =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/update/update_install_logic.rs");
     std::fs::write(
         &fixture,
-        format!("#![allow(dead_code)]\n#[path = {owner:?}] mod domain_values;\n#[path = {updater:?}] mod updater_logic;\n#[path = {installer:?}] mod update_install_logic;\n{source}\n"),
+        format!("#![allow(dead_code)]\nmod shared {{ #[path = {owner:?}] pub(crate) mod domain_values; }}\nmod update {{ #[path = {updater:?}] pub(crate) mod updater_logic; #[path = {installer:?}] pub(crate) mod update_install_logic; }}\n{source}\n"),
     )
     .unwrap();
     let mut command = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
@@ -109,29 +110,29 @@ fn domain_values_reject_private_unchecked_serde_and_generic_construction() {
     let executable = std::env::current_exe().unwrap();
     let deps = executable.parent().unwrap();
     let linked = linked_dependencies(&executable, deps);
-    let control = compile("fn main() { let slot = domain_values::CharacterSlot::try_from(2_u8).unwrap(); assert_eq!(slot.index(), 2); let _: frunk::HList![u8] = frunk::hlist![0_u8]; fn serde_available<T: serde::Serialize>() {} serde_available::<u8>(); }", dir.path(), deps, &linked);
+    let control = compile("fn main() { let slot = shared::domain_values::CharacterSlot::try_from(2_u8).unwrap(); assert_eq!(slot.index(), 2); let _: frunk::HList![u8] = frunk::hlist![0_u8]; fn serde_available<T: serde::Serialize>() {} serde_available::<u8>(); let version = update::updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); assert_eq!(version.as_str(), \"1.2.3\"); let _: fn(Vec<u8>, update::updater_logic::CandidateAsset, &str) -> Result<update::update_install_logic::VerifiedArchive, String> = update::update_install_logic::VerifiedArchive::new; }", dir.path(), deps, &linked);
     assert!(
         control.status.success(),
         "positive control failed: {}",
         String::from_utf8_lossy(&control.stderr)
     );
     for (source, expected) in [
-        ("fn main() { let _ = domain_values::CharacterSlot(3); }", "E0603"),
-        ("fn main() { let slot = domain_values::CharacterSlot::try_from(0_u8).unwrap(); let _ = slot.0; }", "E0616"),
-        ("fn main() { let mut slot = domain_values::CharacterSlot::try_from(0_u8).unwrap(); slot.0 = 3; }", "E0616"),
-        ("fn main() { let _: domain_values::FormRevision = domain_values::CharacterSlot::try_from(0_u8).unwrap(); }", "E0308"),
-        ("fn main() { let _: domain_values::CharacterSlot = 3_u8.into(); }", "E0277"),
-        ("fn main() { let _: domain_values::CharacterSlot = frunk::from_generic(frunk::hlist![3_u8]); }", "E0277"),
-        ("fn main() { fn decode<T: serde::de::DeserializeOwned>() {} decode::<domain_values::CharacterSlot>(); }", "E0277"),
-        ("fn main() { let _: domain_values::ItemId = domain_values::BagId::try_from(1_i64).unwrap(); }", "E0308"),
-        ("fn main() { let _: domain_values::SessionId<'_> = domain_values::ConnectionId::try_from(\"identity\").unwrap(); }", "E0308"),
-        ("fn main() { let _: domain_values::RecoveryTimeoutSeconds = domain_values::Percentage::try_from(1_u8).unwrap(); }", "E0308"),
-        ("fn main() { fn encode<T: serde::Serialize>() {} encode::<domain_values::OwnedPassword>(); }", "E0277"),
-        ("fn main() { let _ = updater_logic::StableUpdateVersion { text: \"invalid\".into(), parsed: semver::Version::new(0, 0, 0) }; }", "E0451"),
-        ("fn main() { let version = updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); let _ = updater_logic::CandidateAsset { version, platform: updater_logic::Platform { url: \"wrong\".into(), signature: \"wrong\".into() } }; }", "E0451"),
-        ("fn main() { let version = updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); let _ = update_install_logic::VerifiedArchive { bytes: std::sync::Arc::new(vec![0]), version }; }", "E0451"),
-        ("fn main() { fn decode<T: serde::de::DeserializeOwned>() {} decode::<update_install_logic::VerifiedArchive>(); }", "E0277"),
-        ("fn main() { let version = updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); let _: update_install_logic::VerifiedArchive = frunk::from_generic(frunk::hlist![std::sync::Arc::new(vec![0_u8]), version]); }", "E0277"),
+        ("fn main() { let _ = shared::domain_values::CharacterSlot(3); }", "E0603"),
+        ("fn main() { let slot = shared::domain_values::CharacterSlot::try_from(0_u8).unwrap(); let _ = slot.0; }", "E0616"),
+        ("fn main() { let mut slot = shared::domain_values::CharacterSlot::try_from(0_u8).unwrap(); slot.0 = 3; }", "E0616"),
+        ("fn main() { let _: shared::domain_values::FormRevision = shared::domain_values::CharacterSlot::try_from(0_u8).unwrap(); }", "E0308"),
+        ("fn main() { let _: shared::domain_values::CharacterSlot = 3_u8.into(); }", "E0277"),
+        ("fn main() { let _: shared::domain_values::CharacterSlot = frunk::from_generic(frunk::hlist![3_u8]); }", "E0277"),
+        ("fn main() { fn decode<T: serde::de::DeserializeOwned>() {} decode::<shared::domain_values::CharacterSlot>(); }", "E0277"),
+        ("fn main() { let _: shared::domain_values::ItemId = shared::domain_values::BagId::try_from(1_i64).unwrap(); }", "E0308"),
+        ("fn main() { let _: shared::domain_values::SessionId<'_> = shared::domain_values::ConnectionId::try_from(\"identity\").unwrap(); }", "E0308"),
+        ("fn main() { let _: shared::domain_values::RecoveryTimeoutSeconds = shared::domain_values::Percentage::try_from(1_u8).unwrap(); }", "E0308"),
+        ("fn main() { fn encode<T: serde::Serialize>() {} encode::<shared::domain_values::OwnedPassword>(); }", "E0277"),
+        ("fn main() { let _ = update::updater_logic::StableUpdateVersion { text: \"invalid\".into(), parsed: semver::Version::new(0, 0, 0) }; }", "E0451"),
+        ("fn main() { let version = update::updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); let _ = update::updater_logic::CandidateAsset { version, platform: update::updater_logic::Platform { url: \"wrong\".into(), signature: \"wrong\".into() } }; }", "E0451"),
+        ("fn main() { let version = update::updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); let _ = update::update_install_logic::VerifiedArchive { bytes: std::sync::Arc::new(vec![0]), version }; }", "E0451"),
+        ("fn main() { fn decode<T: serde::de::DeserializeOwned>() {} decode::<update::update_install_logic::VerifiedArchive>(); }", "E0277"),
+        ("fn main() { let version = update::updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); let _: update::update_install_logic::VerifiedArchive = frunk::from_generic(frunk::hlist![std::sync::Arc::new(vec![0_u8]), version]); }", "E0277"),
     ] {
         let result = compile(source, dir.path(), deps, &linked);
         let errors = String::from_utf8_lossy(&result.stderr);

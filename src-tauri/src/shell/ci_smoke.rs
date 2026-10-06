@@ -199,7 +199,7 @@ mod enabled {
     }
 
     fn offline(app: &tauri::AppHandle) -> Result<(), String> {
-        let gate = app.state::<crate::maintenance::SharedGate>();
+        let gate = app.state::<crate::session::maintenance::SharedGate>();
         let gate = gate
             .lock()
             .map_err(|_| "CI maintenance state unavailable")?;
@@ -215,7 +215,7 @@ mod enabled {
             return Err("CI settings directory changed during the run".into());
         }
         let document =
-            crate::current_form::load(data)?.ok_or("Packaged settings were not saved")?;
+            crate::settings::current_form::load(data)?.ok_or("Packaged settings were not saved")?;
         serde_json::to_value(document).map_err(|_| "CI settings could not be read".into())
     }
 
@@ -299,7 +299,7 @@ mod enabled {
         offline(&app)?;
         match event.as_str() {
             "ready" => {
-                let gate = app.state::<crate::maintenance::SharedGate>();
+                let gate = app.state::<crate::session::maintenance::SharedGate>();
                 let gate = gate
                     .lock()
                     .map_err(|_| "CI maintenance state unavailable")?;

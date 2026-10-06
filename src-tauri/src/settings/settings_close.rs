@@ -1,6 +1,8 @@
-use crate::domain_values::CloseToken;
-pub(crate) use crate::settings_close_logic::Request;
-use crate::settings_close_logic::{exit_intent, Completion, Intent, Lifecycle, RequestPlan};
+pub(crate) use crate::settings::settings_close_logic::Request;
+use crate::settings::settings_close_logic::{
+    exit_intent, Completion, Intent, Lifecycle, RequestPlan,
+};
+use crate::shared::domain_values::CloseToken;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, Webview};
 
@@ -187,7 +189,7 @@ pub(crate) async fn settings_close_complete(
     let intent = {
         // Only the existing validated, private settings writer can prove this
         // revision. Its update/install admission fence still applies to shutdown.
-        let gate = crate::maintenance::admit(&app)?;
+        let gate = crate::session::maintenance::admit(&app)?;
         let shared = app.state::<SharedClose>();
         let mut state = shared.lock().map_err(|_| ERROR)?;
         let (next, intent) = state
@@ -200,7 +202,7 @@ pub(crate) async fn settings_close_complete(
         *state = next;
         intent
     };
-    crate::ci_smoke::milestone("close-save-confirmed");
+    crate::shell::ci_smoke::milestone("close-save-confirmed");
     match intent {
         Intent::Close => {
             if window.window().destroy().is_err() {

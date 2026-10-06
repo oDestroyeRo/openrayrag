@@ -1,5 +1,7 @@
 //! Account schemas and login request policy, without saved-profile or UI effects.
-use crate::domain_values::{AccountName, CharacterSlot, OwnedAccountName, OwnedPassword, Password};
+use crate::shared::domain_values::{
+    AccountName, CharacterSlot, OwnedAccountName, OwnedPassword, Password,
+};
 use frunk::{
     hlist,
     labelled::{IntoLabelledGeneric, IntoUnlabelled},

@@ -1,7 +1,7 @@
 //! Shared, durable Warp uncertainty across the two webview origins.
 use crate::{
-    login::{local_store as file, ConnectionMode},
-    maintenance::GameIdentity,
+    session::login::{local_store as file, ConnectionMode},
+    session::maintenance::GameIdentity,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -140,8 +140,8 @@ pub(crate) fn warp_guard_initialize(
     legacy_held: bool,
 ) -> Result<Option<String>, String> {
     crate::require_game_runtime(&window)?;
-    let gate = crate::maintenance::admit(&app)?;
-    let mode = crate::direct::runtime_mode(&window)?;
+    let gate = crate::session::maintenance::admit(&app)?;
+    let mode = crate::session::direct::runtime_mode(&window)?;
     let shared = app.state::<SharedGuard>();
     let mut state = shared.0.lock().map_err(|_| ERROR)?;
     state.take_initialization(mode)?;
@@ -172,8 +172,8 @@ pub(crate) fn warp_guard_initialize(
 #[tauri::command]
 pub(crate) fn warp_guard_mark(app: tauri::AppHandle, window: Webview) -> Result<String, String> {
     crate::require_game_runtime(&window)?;
-    let _gate = crate::maintenance::admit(&app)?;
-    let mode = crate::direct::runtime_mode(&window)?;
+    let _gate = crate::session::maintenance::admit(&app)?;
+    let mode = crate::session::direct::runtime_mode(&window)?;
     mark_admitted(&app, mode)
 }
 pub(crate) fn bind_owner(app: &tauri::AppHandle, generation: u64, identity: &Option<GameIdentity>) {
@@ -195,11 +195,11 @@ pub(crate) fn warp_guard_clear(
     permit: String,
 ) -> Result<(), String> {
     crate::require_game_runtime(&window)?;
-    let gate = crate::maintenance::admit(&app)?;
+    let gate = crate::session::maintenance::admit(&app)?;
     if gate.identity.as_ref() != Some(&identity) {
         return Err("Warp initialization identity is stale.".into());
     }
-    let mode = crate::direct::runtime_mode(&window)?;
+    let mode = crate::session::direct::runtime_mode(&window)?;
     let shared = app.state::<SharedGuard>();
     let mut state = shared.0.lock().map_err(|_| ERROR)?;
     let proof = state

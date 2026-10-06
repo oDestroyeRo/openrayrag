@@ -1,9 +1,9 @@
 //! Update checkpoint schema and eligibility, with explicit time and no effects.
 use crate::{
-    automation::{DeathRecoveryGuard, EscapeResumeGuard, Settings, SupplyResumeGuard},
-    current_form_logic::FormDocument,
-    login_logic::UpdateAccount,
-    maintenance_logic::GameIdentity,
+    session::login_logic::UpdateAccount,
+    session::maintenance_logic::GameIdentity,
+    settings::automation::{DeathRecoveryGuard, EscapeResumeGuard, Settings, SupplyResumeGuard},
+    settings::current_form_logic::FormDocument,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -67,7 +67,7 @@ fn invalid<T>() -> Result<T, String> {
     Err(ERROR.into())
 }
 pub(crate) fn request_id(value: &str) -> bool {
-    crate::domain_values::UpdateRequestId::try_from(value).is_ok()
+    crate::shared::domain_values::UpdateRequestId::try_from(value).is_ok()
 }
 fn exact(value: &Value, keys: &[&str]) -> bool {
     value
@@ -215,7 +215,7 @@ pub(crate) fn validate_runtime(value: &Value, at: u64) -> Result<(), String> {
             return invalid();
         }
         let script = value["macro"].get("script").ok_or(ERROR)?;
-        crate::control::request_script(
+        crate::game::control::request_script(
             "macro",
             &json!({"script":script,"settings":value["settings"]}),
         )
@@ -328,8 +328,8 @@ pub(crate) fn validate_field(value: &Value) -> Result<(), String> {
     Ok(())
 }
 pub(crate) struct RuntimeIdentity<'a> {
-    session: crate::domain_values::SessionId<'a>,
-    connection: crate::domain_values::ConnectionId<'a>,
+    session: crate::shared::domain_values::SessionId<'a>,
+    connection: crate::shared::domain_values::ConnectionId<'a>,
 }
 impl RuntimeIdentity<'_> {
     pub(crate) fn matches(&self, observed: &GameIdentity) -> bool {
@@ -349,9 +349,11 @@ pub(crate) fn runtime_identity(runtime: &Value) -> Option<RuntimeIdentity<'_>> {
     let status = &runtime["status"];
     // Session and connection are distinct fields even with the same lexical rule.
     // Their sequential admission remains separate from raw bridge observations.
-    let session = crate::domain_values::SessionId::try_from(status["sessionId"].as_str()?).ok()?;
+    let session =
+        crate::shared::domain_values::SessionId::try_from(status["sessionId"].as_str()?).ok()?;
     let connection =
-        crate::domain_values::ConnectionId::try_from(status["connectionId"].as_str()?).ok()?;
+        crate::shared::domain_values::ConnectionId::try_from(status["connectionId"].as_str()?)
+            .ok()?;
     Some(RuntimeIdentity {
         session,
         connection,
@@ -377,7 +379,9 @@ fn validate_payload(payload: &Continuation, at: u64) -> Result<(), String> {
     }
     Ok(())
 }
-pub(crate) fn launch_token(args: &[OsString]) -> Option<crate::domain_values::UpdateRequestId<'_>> {
+pub(crate) fn launch_token(
+    args: &[OsString],
+) -> Option<crate::shared::domain_values::UpdateRequestId<'_>> {
     let matching: Vec<_> = args
         .iter()
         .skip(1)
@@ -386,7 +390,7 @@ pub(crate) fn launch_token(args: &[OsString]) -> Option<crate::domain_values::Up
     if matching.len() != 1 {
         return None;
     }
-    crate::domain_values::UpdateRequestId::try_from(matching[0]).ok()
+    crate::shared::domain_values::UpdateRequestId::try_from(matching[0]).ok()
 }
 pub(crate) fn startup_stopped(args: &[OsString]) -> bool {
     args.iter()
@@ -458,7 +462,7 @@ pub(crate) fn eligible_checkpoint(
         || disk
             .launch_token
             .as_deref()
-            .and_then(|raw| crate::domain_values::UpdateRequestId::try_from(raw).ok())
+            .and_then(|raw| crate::shared::domain_values::UpdateRequestId::try_from(raw).ok())
             != Some(token)
         || at < disk.created_at
         || at - disk.created_at > TTL_MS

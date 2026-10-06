@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 fn navigation_maps() -> &'static serde_json::Map<String, serde_json::Value> {
     static MAPS: OnceLock<serde_json::Map<String, serde_json::Value>> = OnceLock::new();
     MAPS.get_or_init(|| {
-        serde_json::from_str(include_str!("../../src/data/navigation-maps.json"))
+        serde_json::from_str(include_str!("../../../src/data/navigation-maps.json"))
             .expect("Bundled navigation catalog must be valid")
     })
 }

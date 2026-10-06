@@ -1,4 +1,4 @@
-pub(crate) use crate::login_logic::{
+pub(crate) use crate::session::login_logic::{
     ConnectionMode, LoginProfile, LoginRequest, SavedLogin, UpdateAccount,
 };
 use serde::Serialize;
@@ -6,7 +6,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{Manager, Webview};
 
-#[path = "local_login_store.rs"]
 pub(crate) mod local_store;
 pub(crate) const VERIFIED_BUILD: &str = "Build_2569-09-01-01-55";
 
@@ -43,7 +42,7 @@ pub(crate) struct PendingLoginResult {
 impl LoginState {
     pub(crate) fn update_account(
         &self,
-        identity: &crate::maintenance::GameIdentity,
+        identity: &crate::session::maintenance::GameIdentity,
     ) -> Option<UpdateAccount> {
         // Cancellation owns pending login requests. An exact, already-proven
         // live account remains bound through Stop and a later explicit Start.
@@ -230,12 +229,12 @@ pub(crate) fn saved_account_matches(app_data: std::path::PathBuf, account: &Upda
         .load()
         .ok()
         .flatten()
-        .is_some_and(|profile| crate::login_logic::account_matches(&profile, account))
+        .is_some_and(|profile| crate::session::login_logic::account_matches(&profile, account))
 }
 
 #[tauri::command]
 pub(crate) async fn saved_login(window: Webview) -> Result<Option<SavedLogin>, String> {
-    super::require_view(&window, "main")?;
+    crate::require_view(&window, "main")?;
     Ok(login_store(window.app_handle())?
         .load()?
         .map(SavedLogin::from))
@@ -243,7 +242,7 @@ pub(crate) async fn saved_login(window: Webview) -> Result<Option<SavedLogin>, S
 
 #[tauri::command]
 pub(crate) async fn forget_login(window: Webview) -> Result<(), String> {
-    super::require_view(&window, "main")?;
+    crate::require_view(&window, "main")?;
     login_store(window.app_handle())?.forget()
 }
 
@@ -251,13 +250,13 @@ fn resolve_profile(
     request: LoginRequest,
     load: impl FnOnce() -> Result<Option<LoginProfile>, String>,
 ) -> Result<LoginProfile, String> {
-    crate::login_logic::validate_request(&request)?;
+    crate::session::login_logic::validate_request(&request)?;
     let saved = if request.credentials.is_none() {
         load()?
     } else {
         None
     };
-    crate::login_logic::resolve_profile(request, saved)
+    crate::session::login_logic::resolve_profile(request, saved)
 }
 
 #[tauri::command]
@@ -268,17 +267,17 @@ pub(crate) fn login_game(
     window: Webview,
     request: LoginRequest,
 ) -> Result<(), String> {
-    super::require_view(&window, "main")?;
-    let mut _permit = crate::maintenance::admit(&app)?;
+    crate::require_view(&window, "main")?;
+    let mut _permit = crate::session::maintenance::admit(&app)?;
     let remember = request.remember;
     let profile = resolve_profile(request, || login_store(&app)?.load())?;
     if let Some(game) = app.get_webview("game") {
-        if super::direct::runtime_mode(&game)? != profile.mode {
+        if crate::session::direct::runtime_mode(&game)? != profile.mode {
             return Err("Disconnect before changing the connection mode.".into());
         }
     }
     let mode = profile.mode;
-    super::mode_guard::check_app(&app, mode)?;
+    crate::session::mode_guard::check_app(&app, mode)?;
     let state = app.state::<SharedLogin>();
     {
         let mut state = state.lock().map_err(|_| "Login state is unavailable.")?;
@@ -313,18 +312,18 @@ pub(crate) fn login_game(
 fn reopen_game(
     app: &tauri::AppHandle,
     mode: ConnectionMode,
-    gate: &mut crate::maintenance::Gate,
+    gate: &mut crate::session::maintenance::Gate,
 ) -> Result<(), String> {
-    super::mode_guard::check_app(app, mode)?;
+    crate::session::mode_guard::check_app(app, mode)?;
     if app.get_webview("game").is_some() {
-        super::mode_guard::prepare(app, mode)?;
+        crate::session::mode_guard::prepare(app, mode)?;
     }
-    super::direct::cancel_admitted(app, gate);
+    crate::session::direct::cancel_admitted(app, gate);
     let result = if let Some(game) = app.get_webview("game") {
-        game.navigate(super::direct::url_for(mode))
+        game.navigate(crate::session::direct::url_for(mode))
             .map_err(|_| "Could not reopen the game.".to_string())
     } else {
-        super::open_game_window(app, mode)
+        crate::open_game_window(app, mode)
     };
     if result.is_err() {
         if let Ok(mut state) = app.state::<SharedLogin>().lock() {
@@ -337,8 +336,8 @@ fn reopen_game(
 
 #[tauri::command]
 pub(crate) fn reconnect_game(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
-    super::require_view(&window, "main")?;
-    let mut _permit = crate::maintenance::admit(&app)?;
+    crate::require_view(&window, "main")?;
+    let mut _permit = crate::session::maintenance::admit(&app)?;
     // Reuse this exact window. A concurrent close must never create a new one.
     let game = app
         .get_webview("game")
@@ -361,13 +360,13 @@ pub(crate) fn reconnect_game(app: tauri::AppHandle, window: Webview) -> Result<(
     }
     _permit.ever_game = true;
     _permit.authorize_navigation();
-    if super::direct::runtime_mode(&game)? != mode {
+    if crate::session::direct::runtime_mode(&game)? != mode {
         return Err("Disconnect before changing the connection mode.".into());
     }
-    super::mode_guard::prepare(&app, mode)?;
-    super::direct::cancel_admitted(&app, &mut _permit);
+    crate::session::mode_guard::prepare(&app, mode)?;
+    crate::session::direct::cancel_admitted(&app, &mut _permit);
     let result = game
-        .navigate(super::direct::url_for(mode))
+        .navigate(crate::session::direct::url_for(mode))
         .map_err(|_| "Could not reopen the game.".to_string());
     if result.is_err() {
         _permit.cancel_navigation();
@@ -384,7 +383,7 @@ pub(crate) fn reconnect_game(app: tauri::AppHandle, window: Webview) -> Result<(
 
 #[tauri::command]
 pub(crate) fn cancel_pending_login(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
-    super::require_view(&window, "game")?;
+    crate::require_view(&window, "game")?;
     let state = app.state::<SharedLogin>();
     let mut state = state.lock().map_err(|_| "Login state is unavailable.")?;
     state.cancel();
@@ -398,13 +397,13 @@ pub(crate) fn take_pending_login(
     build: String,
     session_id: String,
 ) -> Result<PendingLoginResult, String> {
-    super::require_view(&window, "game")?;
-    let mut _permit = crate::maintenance::admit(&app)?;
+    crate::require_view(&window, "game")?;
+    let mut _permit = crate::session::maintenance::admit(&app)?;
     if window
         .url()
         .map_err(|_| "Game URL is unavailable.")?
         .as_str()
-        != super::GAME_URL
+        != crate::GAME_URL
         || build != VERIFIED_BUILD
         || session_id.is_empty()
         || session_id.len() > 64
@@ -470,7 +469,7 @@ mod tests {
     #[test]
     fn update_account_requires_the_exact_proven_live_login_owner() {
         let mut state = LoginState::default();
-        let identity = crate::maintenance::GameIdentity {
+        let identity = crate::session::maintenance::GameIdentity {
             session_id: "page-a".into(),
             connection_id: "socket-a".into(),
         };
@@ -483,7 +482,7 @@ mod tests {
         assert_eq!(account.username, "test-account");
         assert_eq!(account.character_slot, 0);
         assert_eq!(account.mode, ConnectionMode::GameClient);
-        let other = crate::maintenance::GameIdentity {
+        let other = crate::session::maintenance::GameIdentity {
             session_id: "page-b".into(),
             ..identity.clone()
         };
@@ -505,7 +504,7 @@ mod tests {
             let mut profile = profile();
             profile.mode = mode;
             let mut state = LoginState::default();
-            let identity = crate::maintenance::GameIdentity {
+            let identity = crate::session::maintenance::GameIdentity {
                 session_id: "page-a".into(),
                 connection_id: "socket-a".into(),
             };
@@ -528,7 +527,7 @@ mod tests {
     #[test]
     fn update_account_does_not_promote_a_cancelled_pending_login_into_proven_ownership() {
         let mut state = LoginState::default();
-        let identity = crate::maintenance::GameIdentity {
+        let identity = crate::session::maintenance::GameIdentity {
             session_id: "page-a".into(),
             connection_id: "socket-a".into(),
         };

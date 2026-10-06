@@ -1,30 +1,12 @@
-use automation::Settings;
-use catalog_logic::{map_dimensions, supported_map};
+use settings::automation::Settings;
 use tauri::{webview::WebviewBuilder, Emitter, Manager, Webview, WebviewUrl};
-mod automation;
-mod catalog_logic;
-mod ci_smoke;
-mod client_view;
-mod control;
-mod current_form;
-mod current_form_logic;
-mod direct;
-mod direct_wire;
-mod domain_values;
-mod local_login_logic;
-mod login;
-mod login_logic;
-mod maintenance;
-mod maintenance_logic;
-mod mode_guard;
-mod settings_close;
-mod settings_close_logic;
-mod update_continuation;
-mod update_continuation_logic;
-mod update_install;
-mod update_install_logic;
-mod updater;
-mod updater_logic;
+
+mod game;
+mod session;
+mod settings;
+mod shared;
+mod shell;
+mod update;
 
 const GAME_URL: &str = "https://websea01.rayrag.com/";
 const BRIDGE: &str = include_str!("../generated/game-bridge.js");
@@ -32,7 +14,7 @@ const BRIDGE: &str = include_str!("../generated/game-bridge.js");
 const MAX_STATUS_BYTES: usize = 500_000;
 
 fn app_data(app: &tauri::AppHandle) -> Result<std::path::PathBuf, tauri::Error> {
-    if let Some(directory) = ci_smoke::data_dir() {
+    if let Some(directory) = shell::ci_smoke::data_dir() {
         return Ok(directory);
     }
     app.path().app_data_dir()
@@ -50,14 +32,14 @@ fn require_view(window: &Webview, label: &str) -> Result<(), String> {
 // synchronously dispatch there, while other UI commands need the same gate.
 fn open_game(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
     require_view(&window, "main")?;
-    let mut permit = maintenance::admit(&app)?;
+    let mut permit = session::maintenance::admit(&app)?;
     permit.ever_game = true;
     permit.game_generation += 1;
     permit.identity = None;
     if app.get_webview("game").is_none() {
         permit.authorize_navigation();
     }
-    let result = open_game_window(&app, login::ConnectionMode::GameClient);
+    let result = open_game_window(&app, session::login::ConnectionMode::GameClient);
     if result.is_err() {
         permit.cancel_navigation();
     }
@@ -67,45 +49,54 @@ fn open_game(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
 #[tauri::command]
 fn close_game(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
     require_view(&window, "main")?;
-    let mut _permit = maintenance::admit(&app)?;
-    direct::cancel_admitted(&app, &mut _permit);
+    let mut _permit = session::maintenance::admit(&app)?;
+    session::direct::cancel_admitted(&app, &mut _permit);
     close_game_runtime(&app, &mut _permit)
 }
 
 /// Child webview closure has no native WindowEvent::Destroyed. Keep explicit
 /// disconnect and updater retirement on the same completion boundary.
 /// Call on the UI thread: native Close executes synchronously there.
-fn close_game_runtime(app: &tauri::AppHandle, gate: &mut maintenance::Gate) -> Result<(), String> {
+fn close_game_runtime(
+    app: &tauri::AppHandle,
+    gate: &mut session::maintenance::Gate,
+) -> Result<(), String> {
     let Some(game) = app.get_webview("game") else {
         return Ok(());
     };
     game.close()
         .map_err(|_| "Could not disconnect the game.".to_string())?;
-    app.state::<direct::SharedDirect>().game_destroyed(gate);
-    if let Ok(mut state) = app.state::<login::SharedLogin>().lock() {
+    app.state::<session::direct::SharedDirect>()
+        .game_destroyed(gate);
+    if let Ok(mut state) = app.state::<session::login::SharedLogin>().lock() {
         state.close();
     }
     let _ = app.emit_to("main", "game-closed", ());
     Ok(())
 }
 
-fn open_game_window(app: &tauri::AppHandle, mode: login::ConnectionMode) -> Result<(), String> {
-    mode_guard::check_app(app, mode)?;
+fn open_game_window(
+    app: &tauri::AppHandle,
+    mode: session::login::ConnectionMode,
+) -> Result<(), String> {
+    session::mode_guard::check_app(app, mode)?;
     if let Some(game) = app.get_webview("game") {
-        if direct::runtime_mode(&game)? != mode {
+        if session::direct::runtime_mode(&game)? != mode {
             return Err("Disconnect before changing the connection mode.".into());
         }
         return Ok(());
     }
-    mode_guard::prepare(app, mode)?;
+    session::mode_guard::prepare(app, mode)?;
     let url = match mode {
-        login::ConnectionMode::BotOnly => WebviewUrl::App("bot-runtime.html".into()),
-        login::ConnectionMode::GameClient => WebviewUrl::External(GAME_URL.parse().unwrap()),
+        session::login::ConnectionMode::BotOnly => WebviewUrl::App("bot-runtime.html".into()),
+        session::login::ConnectionMode::GameClient => {
+            WebviewUrl::External(GAME_URL.parse().unwrap())
+        }
     };
     let builder = WebviewBuilder::new("game", url)
         .incognito(true)
         .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
-        .initialization_script(if mode == login::ConnectionMode::GameClient {
+        .initialization_script(if mode == session::login::ConnectionMode::GameClient {
             BRIDGE
         } else {
             ""
@@ -113,10 +104,10 @@ fn open_game_window(app: &tauri::AppHandle, mode: login::ConnectionMode) -> Resu
         .on_navigation({
             let app = app.clone();
             move |url| {
-                if *url != direct::url_for(mode) {
+                if *url != session::direct::url_for(mode) {
                     return false;
                 }
-                let shared = app.state::<maintenance::SharedGate>();
+                let shared = app.state::<session::maintenance::SharedGate>();
                 let allowed = if let Ok(mut gate) = shared.try_lock() {
                     if let Some(l) = gate.lease.as_mut() {
                         l.invalidated = true;
@@ -165,16 +156,16 @@ fn control_bot(
     action: String,
     settings: Option<Settings>,
     request: Option<serde_json::Value>,
-    escape_guard: Option<automation::EscapeResumeGuard>,
-    supply_guard: Option<automation::SupplyResumeGuard>,
-    death_recovery_guard: Option<automation::DeathRecoveryGuard>,
+    escape_guard: Option<settings::automation::EscapeResumeGuard>,
+    supply_guard: Option<settings::automation::SupplyResumeGuard>,
+    death_recovery_guard: Option<settings::automation::DeathRecoveryGuard>,
 ) -> Result<(), String> {
     require_view(&window, "main")?;
     let admitted_death = if let Some(guard) = &death_recovery_guard {
         if action != "start" {
             return Err("Death recovery state is only accepted by start.".into());
         }
-        Some(automation::DeathResume::try_from(guard)?)
+        Some(settings::automation::DeathResume::try_from(guard)?)
     } else {
         None
     };
@@ -182,7 +173,7 @@ fn control_bot(
         if action != "start" {
             return Err("Supply resume state is only accepted by start.".into());
         }
-        Some(automation::SupplyResume::try_from(guard)?)
+        Some(settings::automation::SupplyResume::try_from(guard)?)
     } else {
         None
     };
@@ -190,7 +181,7 @@ fn control_bot(
         if action != "start" {
             return Err("Escape resume state is only accepted by start.".into());
         }
-        Some(automation::EscapeResume::try_from(guard)?)
+        Some(settings::automation::EscapeResume::try_from(guard)?)
     } else {
         None
     };
@@ -241,22 +232,22 @@ fn control_bot(
     {
         return Err("Use start to apply automation settings.".into());
     }
-    if action == "stop" && update_continuation::stop_while_settling(&app)? {
+    if action == "stop" && update::update_continuation::stop_while_settling(&app)? {
         return Ok(());
     }
-    let mut _permit = maintenance::admit(&app)?;
+    let mut _permit = session::maintenance::admit(&app)?;
     if action == "stop" {
         let mut in_world = false;
-        if let Ok(mut state) = app.state::<login::SharedLogin>().lock() {
+        if let Ok(mut state) = app.state::<session::login::SharedLogin>().lock() {
             in_world = state.in_world;
             state.cancel();
         }
         if !in_world {
             if let Some(game) = app.get_webview("game") {
-                if direct::runtime_mode(&game)? == login::ConnectionMode::BotOnly
-                    && !app.state::<direct::SharedDirect>().entered_world()
+                if session::direct::runtime_mode(&game)? == session::login::ConnectionMode::BotOnly
+                    && !app.state::<session::direct::SharedDirect>().entered_world()
                 {
-                    direct::cancel_admitted(&app, &mut _permit);
+                    session::direct::cancel_admitted(&app, &mut _permit);
                     close_game_runtime(&app, &mut _permit)
                         .map_err(|_| "Could not cancel the connection.")?;
                     return Ok(());
@@ -265,7 +256,7 @@ fn control_bot(
         }
     }
     let admitted_settings = if action == "start" {
-        Some(automation::RunSettings::try_from(
+        Some(settings::automation::RunSettings::try_from(
             settings.as_ref().ok_or("Combat settings are required.")?,
         )?)
     } else {
@@ -290,7 +281,7 @@ fn control_bot(
             | "warpPreview"
             | "warpCancel"
     ) {
-        control::request_script(
+        game::control::request_script(
             &action,
             request.as_ref().ok_or("Automation request is required.")?,
         )?
@@ -312,7 +303,7 @@ fn control_bot(
         )
     };
     if action == "warp" {
-        mode_guard::mark_admitted(&app, direct::runtime_mode(&game)?)?;
+        session::mode_guard::mark_admitted(&app, session::direct::runtime_mode(&game)?)?;
     }
     game.eval(script)
         .map_err(|_| "Could not reach the game controller.".into())
@@ -330,14 +321,17 @@ fn bridge_status(
     if encoded.len() > MAX_STATUS_BYTES || !status.is_object() {
         return Err("Status exceeds its limit.".into());
     }
-    if let Ok(mut gate) = app.state::<maintenance::SharedGate>().lock() {
-        if direct::runtime_mode(&window)? == login::ConnectionMode::BotOnly
-            && !app.state::<direct::SharedDirect>().status_matches(&status)
+    if let Ok(mut gate) = app.state::<session::maintenance::SharedGate>().lock() {
+        if session::direct::runtime_mode(&window)? == session::login::ConnectionMode::BotOnly
+            && !app
+                .state::<session::direct::SharedDirect>()
+                .status_matches(&status)
         {
             return Err("Stale bot runtime status.".into());
         }
-        if direct::runtime_mode(&window)? == login::ConnectionMode::BotOnly {
-            app.state::<direct::SharedDirect>().observe_world(&status);
+        if session::direct::runtime_mode(&window)? == session::login::ConnectionMode::BotOnly {
+            app.state::<session::direct::SharedDirect>()
+                .observe_world(&status);
         }
         let identity = if status.get("connected").and_then(|v| v.as_bool()) == Some(true)
             && status.get("compatible").and_then(|v| v.as_bool()) == Some(true)
@@ -347,7 +341,7 @@ fn bridge_status(
                 .get("sessionId")
                 .and_then(|v| v.as_str())
                 .zip(status.get("connectionId").and_then(|v| v.as_str()))
-                .map(|(session, connection)| maintenance::GameIdentity {
+                .map(|(session, connection)| session::maintenance::GameIdentity {
                     session_id: session.to_owned(),
                     connection_id: connection.to_owned(),
                 })
@@ -360,11 +354,11 @@ fn bridge_status(
             }
             gate.game_generation += 1;
         }
-        mode_guard::bind_owner(&app, gate.game_generation, &identity);
+        session::mode_guard::bind_owner(&app, gate.game_generation, &identity);
         gate.identity = identity;
         gate.observed = Some(std::time::Instant::now());
     }
-    if let Ok(mut state) = app.state::<login::SharedLogin>().lock() {
+    if let Ok(mut state) = app.state::<session::login::SharedLogin>().lock() {
         state.observe(
             status
                 .get("sessionId")
@@ -398,8 +392,8 @@ fn bridge_status(
     } else {
         status["reconnectAvailable"] = false.into();
     }
-    update_continuation::observe(&app, &status);
-    if let Ok(mut update) = app.state::<updater::SharedUpdate>().lock() {
+    update::update_continuation::observe(&app, &status);
+    if let Ok(mut update) = app.state::<update::updater::SharedUpdate>().lock() {
         update.wait_for_official(
             status.get("maintenanceWaiting").and_then(|v| v.as_bool()) == Some(true),
         );
@@ -410,7 +404,7 @@ fn bridge_status(
 
 fn require_game_runtime(window: &Webview) -> Result<(), String> {
     require_view(window, "game")?;
-    direct::runtime_mode(window)?;
+    session::direct::runtime_mode(window)?;
     Ok(())
 }
 
@@ -418,89 +412,92 @@ pub fn run() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(maintenance::SharedGate::default())
-        .manage(mode_guard::SharedGuard::default())
-        .manage(updater::SharedUpdate::default())
-        .manage(update_continuation::SharedContinuation::default())
-        .manage(login::SharedLogin::default())
-        .manage(direct::SharedDirect::default())
-        .manage(settings_close::SharedClose::default())
+        .manage(session::maintenance::SharedGate::default())
+        .manage(session::mode_guard::SharedGuard::default())
+        .manage(update::updater::SharedUpdate::default())
+        .manage(update::update_continuation::SharedContinuation::default())
+        .manage(session::login::SharedLogin::default())
+        .manage(session::direct::SharedDirect::default())
+        .manage(settings::settings_close::SharedClose::default())
         .setup(|app| {
-            ci_smoke::install(app.handle())?;
-            update_continuation::initialize(app.handle())?;
+            shell::ci_smoke::install(app.handle())?;
+            update::update_continuation::initialize(app.handle())?;
             #[cfg(target_os = "macos")]
-            settings_close::install_macos_quit(app.handle())?;
-            client_view::create_main(app.handle())?;
+            settings::settings_close::install_macos_quit(app.handle())?;
+            shell::client_view::create_main(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             #[cfg(feature = "ci-smoke")]
-            ci_smoke::ci_smoke_report,
-            settings_close::settings_close_ready,
-            settings_close::settings_close_cancel,
-            settings_close::settings_close_complete,
-            updater::update_status,
-            updater::current_form,
-            updater::save_current_form,
-            updater::update_initialized,
-            updater::update_reserve,
-            updater::update_ack,
-            updater::update_release,
-            updater::update_install,
-            updater::update_lease_alive,
-            updater::update_invalidate,
-            updater::update_final_ack,
-            update_continuation::update_prepare,
-            update_continuation::update_prepared,
-            update_continuation::update_cancel,
-            update_continuation::update_continuation,
-            update_continuation::update_startup_stopped,
-            update_continuation::update_restore,
-            update_continuation::update_restored,
-            updater::update_open_release,
+            shell::ci_smoke::ci_smoke_report,
+            settings::settings_close::settings_close_ready,
+            settings::settings_close::settings_close_cancel,
+            settings::settings_close::settings_close_complete,
+            update::updater::update_status,
+            update::updater::current_form,
+            update::updater::save_current_form,
+            update::updater::update_initialized,
+            update::updater::update_reserve,
+            update::updater::update_ack,
+            update::updater::update_release,
+            update::updater::update_install,
+            update::updater::update_lease_alive,
+            update::updater::update_invalidate,
+            update::updater::update_final_ack,
+            update::update_continuation::update_prepare,
+            update::update_continuation::update_prepared,
+            update::update_continuation::update_cancel,
+            update::update_continuation::update_continuation,
+            update::update_continuation::update_startup_stopped,
+            update::update_continuation::update_restore,
+            update::update_continuation::update_restored,
+            update::updater::update_open_release,
             open_game,
             close_game,
-            client_view::set_game_view,
+            shell::client_view::set_game_view,
             control_bot,
             bridge_status,
-            direct::direct_connect,
-            direct::direct_poll,
-            direct::direct_observed,
-            mode_guard::warp_guard_mark,
-            mode_guard::warp_guard_initialize,
-            mode_guard::warp_guard_clear,
-            direct::direct_send,
-            login::login_game,
-            login::reconnect_game,
-            login::saved_login,
-            login::forget_login,
-            login::cancel_pending_login,
-            login::take_pending_login
+            session::direct::direct_connect,
+            session::direct::direct_poll,
+            session::direct::direct_observed,
+            session::mode_guard::warp_guard_mark,
+            session::mode_guard::warp_guard_initialize,
+            session::mode_guard::warp_guard_clear,
+            session::direct::direct_send,
+            session::login::login_game,
+            session::login::reconnect_game,
+            session::login::saved_login,
+            session::login::forget_login,
+            session::login::cancel_pending_login,
+            session::login::take_pending_login
         ])
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                ci_smoke::page_loaded(webview.app_handle(), webview.label());
+                shell::ci_smoke::page_loaded(webview.app_handle(), webview.label());
             }
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
-                    ci_smoke::milestone("close-requested");
-                    settings_close::close_requested(window.app_handle(), api);
+                    shell::ci_smoke::milestone("close-requested");
+                    settings::settings_close::close_requested(window.app_handle(), api);
                 }
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                ci_smoke::destroyed(window.app_handle(), window.label());
+                shell::ci_smoke::destroyed(window.app_handle(), window.label());
                 if window.label() == "main" {
-                    direct::cancel(window.app_handle());
+                    session::direct::cancel(window.app_handle());
                     if let Ok(mut gate) = window
                         .app_handle()
-                        .state::<maintenance::SharedGate>()
+                        .state::<session::maintenance::SharedGate>()
                         .lock()
                     {
                         let _ = close_game_runtime(window.app_handle(), &mut gate);
                     }
-                    if let Ok(mut state) = window.app_handle().state::<login::SharedLogin>().lock()
+                    if let Ok(mut state) = window
+                        .app_handle()
+                        .state::<session::login::SharedLogin>()
+                        .lock()
                     {
                         state.close();
                     }
@@ -511,7 +508,7 @@ pub fn run() {
         .expect("Could not launch Rayrag Companion")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
-                settings_close::exit_requested(app, code, &api);
+                settings::settings_close::exit_requested(app, code, &api);
             }
         });
 }

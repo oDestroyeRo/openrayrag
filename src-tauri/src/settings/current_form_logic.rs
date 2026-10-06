@@ -1,6 +1,6 @@
 //! Settings document schema and persistence policy, without storage effects.
-use crate::automation::Settings;
-use crate::domain_values::{FormRevision, FormVersion, ProfileId};
+use crate::settings::automation::Settings;
+use crate::shared::domain_values::{FormRevision, FormVersion, ProfileId};
 use frunk::{prelude::IntoValidated, HList, Validated};
 use serde::{Deserialize, Serialize};
 

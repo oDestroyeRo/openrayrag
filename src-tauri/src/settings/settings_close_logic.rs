@@ -1,5 +1,5 @@
 //! Deterministic close-save lifecycle. Tokens and native shutdown enter from orchestration.
-use crate::domain_values::CloseToken;
+use crate::shared::domain_values::CloseToken;
 use serde::Serialize;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

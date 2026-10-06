@@ -1,4 +1,4 @@
-use crate::domain_values::{Percentage, RecoveryTimeoutSeconds};
+use crate::shared::domain_values::{Percentage, RecoveryTimeoutSeconds};
 use frunk::{hlist_pat, prelude::IntoValidated, HList, Validated};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -82,7 +82,8 @@ impl Settings {
     fn validate_for(&self, form: bool) -> Result<(), String> {
         if !(1..=20).contains(&self.radius)
             || !(20..=95).contains(&self.min_hp_percent)
-            || !(form && self.map.is_empty() || crate::supported_map(&self.map))
+            || !(form && self.map.is_empty()
+                || crate::game::catalog_logic::supported_map(&self.map))
             || !map_code(&self.map, form)
             || !matches!(self.route_random_walk, 0 | 2)
             || !(1..=20).contains(&self.route_step)
@@ -270,7 +271,8 @@ impl MapPolicy {
         let list = |v: &Vec<String>| {
             v.len() <= 256
                 && unique_by(v, |m| m.clone())
-                && v.iter().all(|m| crate::supported_map(m))
+                && v.iter()
+                    .all(|m| crate::game::catalog_logic::supported_map(m))
         };
         matches!(self.mode.as_str(), "legacy" | "weighted")
             && list(&self.allow)
@@ -278,12 +280,12 @@ impl MapPolicy {
             && self.penalties.len() <= 256
             && unique_by(&self.penalties, |p| p.map.clone())
             && self.penalties.iter().all(|p| {
-                crate::supported_map(&p.map)
+                crate::game::catalog_logic::supported_map(&p.map)
                     && p.cost.is_finite()
                     && (0.0..=1_000_000.0).contains(&p.cost)
             })
             && self.lock_area.as_ref().map_or(true, |a| {
-                crate::map_dimensions(&a.map).is_some_and(|(w, h)| {
+                crate::game::catalog_logic::map_dimensions(&a.map).is_some_and(|(w, h)| {
                     a.min_x <= a.max_x
                         && a.min_y <= a.max_y
                         && u64::from(a.max_x) < w
@@ -921,7 +923,7 @@ fn recovery_item_ids(resource: Resource) -> &'static [u32] {
     }
     static CATALOG: std::sync::OnceLock<Catalog> = std::sync::OnceLock::new();
     let catalog = CATALOG.get_or_init(|| {
-        serde_json::from_str(include_str!("../../src/data/recovery-item-catalog.json"))
+        serde_json::from_str(include_str!("../../../src/data/recovery-item-catalog.json"))
             .expect("The bundled recovery item catalog must be valid.")
     });
     match resource {
@@ -1180,7 +1182,7 @@ fn conditions_valid(conditions: &Option<Vec<Value>>, allow_candidate: bool) -> b
     conditions.as_ref().map_or(true, |values| {
         values.len() <= 16
             && values.iter().all(|value| {
-                crate::control::validate_actor_predicate_for(value, allow_candidate).is_ok()
+                crate::game::control::validate_actor_predicate_for(value, allow_candidate).is_ok()
             })
     })
 }
@@ -1390,7 +1392,7 @@ mod tests {
     #[test]
     fn shares_strict_optional_party_engagement_settings() {
         let cases: Vec<Value> = serde_json::from_str(include_str!(
-            "../../src/data/party-engagement-settings-cases.json"
+            "../../../src/data/party-engagement-settings-cases.json"
         ))
         .unwrap();
         for case in cases {
@@ -1467,7 +1469,7 @@ mod tests {
     #[test]
     fn optional_retreat_shared_contract() {
         let cases: Vec<Value> =
-            serde_json::from_str(include_str!("../../src/data/retreat-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/retreat-cases.json")).unwrap();
         for case in cases {
             let mut value = settings();
             value["automation"] = automation();
@@ -1492,7 +1494,7 @@ mod tests {
     #[test]
     fn party_follow_policy_matches_typescript_and_preserves_legacy() {
         let cases: Value = serde_json::from_str(include_str!(
-            "../../src/data/party-follow-settings-cases.json"
+            "../../../src/data/party-follow-settings-cases.json"
         ))
         .unwrap();
         for case in cases.as_array().unwrap() {
@@ -1540,7 +1542,7 @@ mod tests {
     #[test]
     fn party_heal_shared_schema_round_trip_and_bounds() {
         let cases: Vec<Value> =
-            serde_json::from_str(include_str!("../../src/data/party-heal-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/party-heal-cases.json")).unwrap();
         for case in cases {
             let mut value = settings();
             value["automation"] = automation();
@@ -1563,7 +1565,8 @@ mod tests {
     #[test]
     fn recovery_item_shared_schema_matches_settings_and_current_form() {
         let cases: Vec<Value> =
-            serde_json::from_str(include_str!("../../src/data/recovery-item-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/recovery-item-cases.json"))
+                .unwrap();
         for case in cases {
             let mut value = settings();
             value["automation"] = automation();
@@ -1580,8 +1583,9 @@ mod tests {
             let document_value = json!({
                 "version": 1, "revision": 1, "selectedProfileId": null, "settings": value
             });
-            let document =
-                serde_json::from_value::<crate::current_form::FormDocument>(document_value.clone());
+            let document = serde_json::from_value::<crate::settings::current_form::FormDocument>(
+                document_value.clone(),
+            );
             assert_eq!(
                 document
                     .as_ref()
@@ -1593,8 +1597,8 @@ mod tests {
             if expected {
                 let directory = tempfile::tempdir().unwrap();
                 let path = directory.path().canonicalize().unwrap();
-                crate::current_form::save(path.clone(), &document.unwrap()).unwrap();
-                let restored = crate::current_form::load(path).unwrap().unwrap();
+                crate::settings::current_form::save(path.clone(), &document.unwrap()).unwrap();
+                let restored = crate::settings::current_form::load(path).unwrap().unwrap();
                 assert_eq!(serde_json::to_value(restored).unwrap(), document_value);
             }
         }
@@ -1603,7 +1607,7 @@ mod tests {
     #[test]
     fn hp_potion_shared_schema_matches_settings_and_current_form() {
         let cases: Vec<Value> =
-            serde_json::from_str(include_str!("../../src/data/hp-potion-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/hp-potion-cases.json")).unwrap();
         for case in cases {
             let mut value = settings();
             value["automation"] = automation();
@@ -1622,8 +1626,9 @@ mod tests {
             let document_value = json!({
                 "version": 1, "revision": 1, "selectedProfileId": "potion-profile", "settings": value
             });
-            let document =
-                serde_json::from_value::<crate::current_form::FormDocument>(document_value.clone());
+            let document = serde_json::from_value::<crate::settings::current_form::FormDocument>(
+                document_value.clone(),
+            );
             assert_eq!(
                 document
                     .as_ref()
@@ -1695,12 +1700,12 @@ mod tests {
             let document_value = json!({
                 "version": 1, "revision": 1, "selectedProfileId": null, "settings": value
             });
-            let document: crate::current_form::FormDocument =
+            let document: crate::settings::current_form::FormDocument =
                 serde_json::from_value(document_value.clone()).unwrap();
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().canonicalize().unwrap();
-            crate::current_form::save(path.clone(), &document).unwrap();
-            let restored = crate::current_form::load(path).unwrap().unwrap();
+            crate::settings::current_form::save(path.clone(), &document).unwrap();
+            let restored = crate::settings::current_form::load(path).unwrap().unwrap();
             assert_eq!(serde_json::to_value(restored).unwrap(), document_value);
         }
     }
@@ -1870,7 +1875,8 @@ mod tests {
     #[test]
     fn threat_escape_shared_policy_and_guard_boundaries() {
         let cases: Vec<Value> =
-            serde_json::from_str(include_str!("../../src/data/threat-escape-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/threat-escape-cases.json"))
+                .unwrap();
         for case in cases {
             let accepted = if case["kind"] == "guard" {
                 serde_json::from_value::<EscapeResumeGuard>(case["value"].clone()).is_ok_and(
@@ -1895,9 +1901,11 @@ mod tests {
                 let playable = valid(value.clone());
                 value["map"] = json!("");
                 value["targets"] = json!([]);
-                let form = serde_json::from_value::<crate::current_form::FormDocument>(json!({
-                    "version": 1, "revision": 1, "selectedProfileId": "threat-profile", "settings": value
-                }));
+                let form = serde_json::from_value::<crate::settings::current_form::FormDocument>(
+                    json!({
+                        "version": 1, "revision": 1, "selectedProfileId": "threat-profile", "settings": value
+                    }),
+                );
                 let form_accepted = form
                     .as_ref()
                     .is_ok_and(|document| document.validate().is_ok());
@@ -1906,7 +1914,7 @@ mod tests {
                     let document = form.unwrap();
                     assert!(document.settings.validate().is_err());
                     let encoded = serde_json::to_value(&document).unwrap();
-                    let decoded: crate::current_form::FormDocument =
+                    let decoded: crate::settings::current_form::FormDocument =
                         serde_json::from_value(encoded.clone()).unwrap();
                     assert!(decoded.validate().is_ok());
                     assert_eq!(serde_json::to_value(decoded).unwrap(), encoded);
@@ -2233,7 +2241,7 @@ mod tests {
     #[test]
     fn supply_settings_and_reload_guards_match_shared_ts_boundaries() {
         let cases: Value =
-            serde_json::from_str(include_str!("../../src/data/supply-boundary-cases.json"))
+            serde_json::from_str(include_str!("../../../src/data/supply-boundary-cases.json"))
                 .unwrap();
         for case in cases.as_array().unwrap() {
             let actual = if case["kind"] == "settings" {
@@ -2269,7 +2277,7 @@ mod tests {
     #[test]
     fn map_policy_shared_boundary_cases() {
         let cases: Vec<Value> =
-            serde_json::from_str(include_str!("../../src/data/map-policy-cases.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/map-policy-cases.json")).unwrap();
         for case in cases {
             assert_eq!(
                 super::validate_map_policy(&case["policy"]).is_ok(),
@@ -2294,7 +2302,8 @@ mod death_recovery_guard_tests {
     #[test]
     fn matches_strict_death_recovery_guard_corpus() {
         let cases: Vec<serde_json::Value> =
-            serde_json::from_str(include_str!("../../src/death-recovery-guards.json")).unwrap();
+            serde_json::from_str(include_str!("../../../src/data/death-recovery-guards.json"))
+                .unwrap();
         for case in cases {
             let result = serde_json::from_str::<DeathRecoveryGuard>(case["json"].as_str().unwrap())
                 .and_then(|guard| {

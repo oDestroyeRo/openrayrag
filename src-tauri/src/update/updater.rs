@@ -1,10 +1,10 @@
-use crate::update_install_logic::VerifiedArchive as Candidate;
-use crate::updater_logic::{parse_feed, CandidateAsset, MAX_METADATA};
+use crate::update::update_install_logic::VerifiedArchive as Candidate;
+use crate::update::updater_logic::{parse_feed, CandidateAsset, MAX_METADATA};
 use crate::{
-    current_form::{self, FormDocument},
-    current_form_logic::same_form,
-    maintenance::{GameIdentity, SharedGate},
-    update_install,
+    session::maintenance::{GameIdentity, SharedGate},
+    settings::current_form::{self, FormDocument},
+    settings::current_form_logic::same_form,
+    update::update_install,
 };
 use serde::Serialize;
 use std::{
@@ -149,7 +149,7 @@ async fn find_update(
     parse_feed(&metadata, current)
 }
 fn key() -> String {
-    serde_json::from_str::<serde_json::Value>(include_str!("../tauri.conf.json"))
+    serde_json::from_str::<serde_json::Value>(include_str!("../../tauri.conf.json"))
         .ok()
         .and_then(|v| {
             v["plugins"]["updater"]["pubkey"]
@@ -225,7 +225,7 @@ async fn check(app: tauri::AppHandle) {
     }
 }
 pub(crate) fn schedule(app: &tauri::AppHandle) {
-    if crate::ci_smoke::active() {
+    if crate::shell::ci_smoke::active() {
         return;
     }
     if !AUTOMATIC_SUPPORTED {
@@ -317,7 +317,7 @@ pub(crate) fn save_current_form(
     document: FormDocument,
 ) -> Result<u64, String> {
     crate::require_view(&window, "main")?;
-    let mut gate = crate::maintenance::admit(&app)?;
+    let mut gate = crate::session::maintenance::admit(&app)?;
     current_form::save(
         crate::app_data(&app).map_err(|_| "Settings storage unavailable.")?,
         &document,
@@ -328,7 +328,7 @@ pub(crate) fn save_current_form(
 #[tauri::command]
 pub(crate) fn update_initialized(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
     crate::require_view(&window, "main")?;
-    let mut gate = crate::maintenance::admit(&app)?;
+    let mut gate = crate::session::maintenance::admit(&app)?;
     gate.initialized = true;
     Ok(())
 }
@@ -337,7 +337,7 @@ pub(crate) fn update_reserve(
     app: tauri::AppHandle,
     window: Webview,
     document: FormDocument,
-    continuation: Option<crate::update_continuation::ContinuationBase>,
+    continuation: Option<crate::update::update_continuation::ContinuationBase>,
 ) -> Result<String, String> {
     crate::require_view(&window, "main")?;
     if !AUTOMATIC_SUPPORTED {
@@ -355,7 +355,7 @@ pub(crate) fn update_reserve(
         return Err("No verified update is ready.".into());
     }
     if app
-        .state::<crate::login::SharedLogin>()
+        .state::<crate::session::login::SharedLogin>()
         .lock()
         .map_err(|_| "Login state unavailable.")?
         .maintenance_busy()
@@ -372,7 +372,8 @@ pub(crate) fn update_reserve(
     let nonce = uuid::Uuid::new_v4().simple().to_string();
     gate.reserve(nonce.clone(), document.revision, game.is_some())?;
     if let Some(base) = continuation {
-        if let Err(error) = crate::update_continuation::reserve(&app, &gate, &nonce, document, base)
+        if let Err(error) =
+            crate::update::update_continuation::reserve(&app, &gate, &nonce, document, base)
         {
             gate.lease = None;
             return Err(error);
@@ -404,9 +405,10 @@ pub(crate) fn update_ack(
     }
     let shared = app.state::<SharedGate>();
     let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
-    if crate::direct::runtime_mode(&window)? == crate::login::ConnectionMode::BotOnly
+    if crate::session::direct::runtime_mode(&window)?
+        == crate::session::login::ConnectionMode::BotOnly
         && !app
-            .state::<crate::direct::SharedDirect>()
+            .state::<crate::session::direct::SharedDirect>()
             .settled_for(&identity)
     {
         return Ok(false);
@@ -463,7 +465,7 @@ pub(crate) async fn update_install(
             return Err("Update settlement changed.".into());
         }
         if app
-            .state::<crate::login::SharedLogin>()
+            .state::<crate::session::login::SharedLogin>()
             .lock()
             .map_err(|_| "Login state unavailable.")?
             .maintenance_busy()
@@ -505,18 +507,18 @@ pub(crate) async fn update_install(
             let mode = app
                 .get_webview("game")
                 .as_ref()
-                .map(crate::direct::runtime_mode)
+                .map(crate::session::direct::runtime_mode)
                 .transpose()?;
             let shared = app.state::<SharedGate>();
             let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
-            app.state::<crate::direct::SharedDirect>()
+            app.state::<crate::session::direct::SharedDirect>()
                 .retire_for_update(&mut gate, &nonce, mode)?
         };
         retirement_owner = Some(retirement.owner());
         let owner = retirement
             .join(
                 app.state::<SharedGate>().inner(),
-                app.state::<crate::direct::SharedDirect>().inner(),
+                app.state::<crate::session::direct::SharedDirect>().inner(),
             )
             .await?;
         if app.get_webview("game").is_some() {
@@ -530,7 +532,7 @@ pub(crate) async fn update_install(
                     let shared = close_app.state::<SharedGate>();
                     let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
                     close_app
-                        .state::<crate::direct::SharedDirect>()
+                        .state::<crate::session::direct::SharedDirect>()
                         .request_game_close(&mut gate, &close_owner)?;
                     crate::close_game_runtime(&close_app, &mut gate)
                         .map_err(|_| "Could not close the settled game.".to_string())
@@ -569,7 +571,7 @@ pub(crate) async fn update_install(
                 let gate = shared.lock().map_err(|_| "Update state unavailable.")?;
                 if install_app.get_webview("game").is_some()
                     || !install_app
-                        .state::<crate::direct::SharedDirect>()
+                        .state::<crate::session::direct::SharedDirect>()
                         .replacement_ready(&gate, &owner)
                 {
                     return Err("Game settlement changed before replacement.".into());
@@ -582,11 +584,11 @@ pub(crate) async fn update_install(
     }
     .await;
     let result = match result {
-        Ok(()) => crate::update_continuation::restart(&app, &target_version).await,
+        Ok(()) => crate::update::update_continuation::restart(&app, &target_version).await,
         Err(error) => Err(error),
     };
     if let Err(e) = result {
-        crate::update_continuation::failed(
+        crate::update::update_continuation::failed(
             &app,
             app.get_webview("game").is_none() && retirement_owner.is_some(),
         );
@@ -598,7 +600,7 @@ pub(crate) async fn update_install(
             } else if gate.lease.as_ref().is_some_and(|l| l.nonce == nonce) {
                 gate.lease = None;
             }
-            crate::update_continuation::finish_failure(&app, &gate);
+            crate::update::update_continuation::finish_failure(&app, &gate);
         }
         if let Ok(mut u) = app.state::<SharedUpdate>().lock() {
             u.status.phase = "error".into();
@@ -890,9 +892,10 @@ pub(crate) fn update_final_ack(
     crate::require_game_runtime(&window)?;
     let shared = app.state::<SharedGate>();
     let mut gate = shared.lock().map_err(|_| "Update state unavailable.")?;
-    if crate::direct::runtime_mode(&window)? == crate::login::ConnectionMode::BotOnly
+    if crate::session::direct::runtime_mode(&window)?
+        == crate::session::login::ConnectionMode::BotOnly
         && !app
-            .state::<crate::direct::SharedDirect>()
+            .state::<crate::session::direct::SharedDirect>()
             .settled_for(&identity)
     {
         return Ok(false);
@@ -910,7 +913,7 @@ pub(crate) fn update_final_ack(
         .version()
         .to_owned();
     if let Err(error) =
-        crate::update_continuation::capture(&app, &gate, &nonce, checkpoint, &target)
+        crate::update::update_continuation::capture(&app, &gate, &nonce, checkpoint, &target)
     {
         gate.invalidate(&nonce);
         return Err(error);

@@ -1,7 +1,9 @@
 //! Version-8 native authentication. Neither handshake nor optional token leaves native memory.
-use crate::domain_values::CharacterSlot;
+use crate::shared::domain_values::CharacterSlot;
 const VERSION: i16 = 8;
-pub(crate) fn authentication(credentials: &crate::login_logic::DirectCredentials) -> Vec<u8> {
+pub(crate) fn authentication(
+    credentials: &crate::session::login_logic::DirectCredentials,
+) -> Vec<u8> {
     fn string(out: &mut Vec<u8>, value: &str) {
         let mut len = value.len();
         while len >= 128 {
@@ -118,11 +120,11 @@ pub(crate) fn enter(name: &str) -> Vec<u8> {
 mod tests {
     use super::*;
     fn authentication(username: &str, password: &str) -> Vec<u8> {
-        let profile = crate::login_logic::LoginProfile {
+        let profile = crate::session::login_logic::LoginProfile {
             username: username.into(),
             password: password.into(),
             character_slot: 0,
-            mode: crate::login_logic::ConnectionMode::BotOnly,
+            mode: crate::session::login_logic::ConnectionMode::BotOnly,
             auto_login: false,
         };
         super::authentication(&profile.try_into().unwrap())

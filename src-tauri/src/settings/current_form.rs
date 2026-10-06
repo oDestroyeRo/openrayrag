@@ -1,8 +1,10 @@
 //! Settings-only persistence. Credentials and running intent are not part of this schema.
-pub(crate) use crate::current_form_logic::FormDocument;
+pub(crate) use crate::settings::current_form_logic::FormDocument;
 use crate::{
-    current_form_logic::{encode, matches_encoded, parse, validate_revision, ERROR, MAX_BYTES},
-    login::local_store as file,
+    session::login::local_store as file,
+    settings::current_form_logic::{
+        encode, matches_encoded, parse, validate_revision, ERROR, MAX_BYTES,
+    },
 };
 use std::{
     fs::File,

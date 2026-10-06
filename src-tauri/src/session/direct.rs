@@ -1,9 +1,9 @@
 //! Fixed TLS transport for the bundled controller. Authentication remains native.
 use crate::{
-    direct_wire,
-    login::{ConnectionMode, SharedLogin},
-    login_logic::DirectCredentials,
-    maintenance::{GameIdentity, GameRetirement, Gate, SharedGate},
+    session::direct_wire,
+    session::login::{ConnectionMode, SharedLogin},
+    session::login_logic::DirectCredentials,
+    session::maintenance::{GameIdentity, GameRetirement, Gate, SharedGate},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
@@ -413,7 +413,7 @@ fn incoming_capacity(app: &tauri::AppHandle, epoch: u64) -> Result<bool, String>
     Ok(current.incoming_capacity())
 }
 fn admit_handshake(app: &tauri::AppHandle, epoch: u64) -> Result<(), String> {
-    let _permit = crate::maintenance::admit(app)?;
+    let _permit = crate::session::maintenance::admit(app)?;
     let shared = app.state::<SharedDirect>();
     let mut state = shared.0.lock().map_err(|_| "Transport unavailable.")?;
     let c = state
@@ -425,7 +425,7 @@ fn admit_handshake(app: &tauri::AppHandle, epoch: u64) -> Result<(), String> {
     Ok(())
 }
 fn admit_ping(app: &tauri::AppHandle, epoch: u64) -> bool {
-    let Ok(_permit) = crate::maintenance::admit(app) else {
+    let Ok(_permit) = crate::session::maintenance::admit(app) else {
         return false;
     };
     let shared = app.state::<SharedDirect>();
@@ -478,7 +478,10 @@ fn verified_build(bytes: &[u8]) -> bool {
         return false;
     };
     // Inert text only: exactly one pinned declaration, no execution or Unity downloads.
-    let declaration = format!("var buildUrl = \"{}\";", crate::login::VERIFIED_BUILD);
+    let declaration = format!(
+        "var buildUrl = \"{}\";",
+        crate::session::login::VERIFIED_BUILD
+    );
     text.matches("var buildUrl").count() == 1 && text.contains(&declaration)
 }
 pub(crate) async fn server_version() -> Result<(), String> {
@@ -660,7 +663,7 @@ pub(crate) async fn direct_connect(
         return Err("Invalid connection identity.".into());
     }
     let (epoch, retired, login_generation, page_generation) = {
-        let gate = crate::maintenance::admit(&app)?;
+        let gate = crate::session::maintenance::admit(&app)?;
         let shared = app.state::<SharedDirect>();
         let mut state = shared.0.lock().map_err(|_| "Transport unavailable.")?;
         let (epoch, retired) = state.reserve()?;
@@ -682,7 +685,7 @@ pub(crate) async fn direct_connect(
     // Reservation and both generations must survive cancellation/navigation/another login.
     let answer = (|| {
         local_window(&window)?;
-        let gate = crate::maintenance::admit(&app)?;
+        let gate = crate::session::maintenance::admit(&app)?;
         if gate.game_generation != page_generation {
             return Err("Connection page replaced.".into());
         }
@@ -804,7 +807,7 @@ pub(crate) async fn direct_send(
         return Err("Invalid controller gameplay packet.".into());
     }
     let (result, epoch) = {
-        let _permit = crate::maintenance::admit(&app)?;
+        let _permit = crate::session::maintenance::admit(&app)?;
         let shared = app.state::<SharedDirect>();
         let mut state = shared.0.lock().map_err(|_| "Transport unavailable.")?;
         let current = state
@@ -813,7 +816,7 @@ pub(crate) async fn direct_send(
             .filter(|c| c.connected && SharedDirect::matches(c, &session_id, &connection_id))
             .ok_or("Connection replaced or closed.")?;
         if is_warp(&bytes) {
-            crate::mode_guard::mark_admitted(&app, ConnectionMode::BotOnly)?;
+            crate::session::mode_guard::mark_admitted(&app, ConnectionMode::BotOnly)?;
         }
         let (answer, result) = oneshot::channel();
         current.pending += 1;
@@ -846,7 +849,7 @@ mod tests {
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     };
-    fn profile() -> crate::login::LoginProfile {
+    fn profile() -> crate::session::login::LoginProfile {
         serde_json::from_value(serde_json::json!({"username":"synthetic-user","password":"synthetic-only","characterSlot":0,"mode":"botOnly"})).unwrap()
     }
     fn approval() -> Vec<u8> {
@@ -1170,7 +1173,10 @@ mod tests {
         ] {
             assert!(mode_for_url(&url.parse().unwrap()).is_err());
         }
-        let declaration = format!("var buildUrl = \"{}\";", crate::login::VERIFIED_BUILD);
+        let declaration = format!(
+            "var buildUrl = \"{}\";",
+            crate::session::login::VERIFIED_BUILD
+        );
         assert!(verified_build(declaration.as_bytes()));
         assert!(!verified_build(b"var buildUrl = \"other\";"));
         assert!(!verified_build(

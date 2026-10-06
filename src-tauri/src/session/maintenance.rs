@@ -1,4 +1,4 @@
-pub(crate) use crate::maintenance_logic::GameIdentity;
+pub(crate) use crate::session::maintenance_logic::GameIdentity;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},

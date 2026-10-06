@@ -1,6 +1,6 @@
 //! Native-only, unencrypted local persistence. Never expose bytes or OS errors to IPC.
 use super::LoginProfile;
-use crate::local_login_logic::{self as document, MAX_BYTES};
+use crate::session::local_login_logic::{self as document, MAX_BYTES};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -108,11 +108,9 @@ fn invalid() -> io::Error {
 }
 
 #[cfg(unix)]
-#[path = "local_login_store/unix.rs"]
-mod platform;
+mod unix;
 #[cfg(windows)]
-#[path = "local_login_store/windows.rs"]
-mod platform;
+mod windows;
 #[cfg(target_os = "macos")]
 pub(crate) use platform::access_list;
 #[cfg(all(test, target_os = "macos"))]
@@ -121,6 +119,10 @@ pub(crate) use platform::{
     create_private_file, private_file, remove_private_file, rename_at, sync_directory,
     verify_private, FileLock,
 };
+#[cfg(unix)]
+use unix as platform;
+#[cfg(windows)]
+use windows as platform;
 
 #[cfg(test)]
 mod portable_tests {
@@ -128,7 +130,7 @@ mod portable_tests {
     use std::fs;
     fn profile() -> LoginProfile {
         LoginProfile {
-            mode: crate::login::ConnectionMode::GameClient,
+            mode: crate::session::login::ConnectionMode::GameClient,
             username: "synthetic-account".into(),
             password: "synthetic-password".into(),
             character_slot: 1,

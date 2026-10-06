@@ -1,8 +1,8 @@
 //! Bounded signed archive validation and a same-volume replacement with rollback.
 //! This does not invoke the plugin's privileged macOS installer.
-pub(crate) use crate::update_install_logic::MAX_ARCHIVE;
+pub(crate) use crate::update::update_install_logic::MAX_ARCHIVE;
 #[cfg(target_os = "macos")]
-use crate::update_install_logic::{self as policy, safe_path};
+use crate::update::update_install_logic::{self as policy, safe_path};
 #[cfg(target_os = "macos")]
 use std::{
     fs,
@@ -212,7 +212,7 @@ fn replace(
     .map_err(ReplacementFailure::into_error)
 }
 #[cfg(target_os = "macos")]
-fn lock_cache(cache: &Path) -> io::Result<crate::login::local_store::FileLock> {
+fn lock_cache(cache: &Path) -> io::Result<crate::session::login::local_store::FileLock> {
     use std::os::unix::fs::OpenOptionsExt;
     let lock = fs::OpenOptions::new()
         .read(true)
@@ -222,12 +222,12 @@ fn lock_cache(cache: &Path) -> io::Result<crate::login::local_store::FileLock> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(cache.join("transaction.lock"))?;
-    crate::login::local_store::verify_private(&lock, false)?;
+    crate::session::login::local_store::verify_private(&lock, false)?;
     // Keep acquired operation ownership through the entire install transaction.
-    crate::login::local_store::FileLock::acquire(lock)
+    crate::session::login::local_store::FileLock::acquire(lock)
 }
 pub(crate) fn install(
-    archive: &crate::update_install_logic::VerifiedArchive,
+    archive: &crate::update::update_install_logic::VerifiedArchive,
 ) -> Result<(), String> {
     let (bytes, version) = (archive.bytes(), archive.version());
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
@@ -271,9 +271,9 @@ fn install_at(bytes: &[u8], version: &str, current: &Path) -> io::Result<()> {
         .open(&cache)?;
     if created {
         cache_fd.set_permissions(fs::Permissions::from_mode(0o700))?;
-        crate::login::local_store::access_list::clear(&cache_fd)?;
+        crate::session::login::local_store::access_list::clear(&cache_fd)?;
     }
-    crate::login::local_store::verify_private(&cache_fd, true)?;
+    crate::session::login::local_store::verify_private(&cache_fd, true)?;
     fs::File::open(parent)?.sync_all()?;
     let _transaction_lock = lock_cache(&cache)?;
     // Another instance may have replaced the on-disk app since this
@@ -288,7 +288,7 @@ fn install_at(bytes: &[u8], version: &str, current: &Path) -> io::Result<()> {
         .prefix(".rayrag-update-")
         .tempdir_in(&cache)?;
     let dir = fs::File::open(staging.path())?;
-    crate::login::local_store::access_list::clear(&dir).map_err(|_| invalid())?;
+    crate::session::login::local_store::access_list::clear(&dir).map_err(|_| invalid())?;
     extract(bytes, staging.path())?;
     let staged = staging.path().join("Rayrag Companion.app");
     if !bundle_matches(&staged, version) || !launchable(&staged) {
@@ -332,7 +332,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::*;
     #[cfg(target_os = "macos")]
-    use crate::update_install_logic::verify;
+    use crate::update::update_install_logic::verify;
     mod replacement_program_tests {
         use super::super::{replacement_program, ReplacementEffects, ReplacementFailure};
 
@@ -543,8 +543,11 @@ mod tests {
         }
 
         fn assert_recovery(cache: &Path, previous: &VerifiedFixture) {
-            crate::login::local_store::verify_private(&fs::File::open(cache).unwrap(), true)
-                .unwrap();
+            crate::session::login::local_store::verify_private(
+                &fs::File::open(cache).unwrap(),
+                true,
+            )
+            .unwrap();
             let mut names: Vec<_> = fs::read_dir(cache)
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name().into_string().unwrap())
@@ -580,12 +583,15 @@ mod tests {
                 let root = root.canonicalize().unwrap();
                 directory != root && directory.starts_with(root)
             }));
-            crate::login::local_store::verify_private(&fs::File::open(&directory).unwrap(), true)
-                .expect("the fixture manifest directory must be owned, private, and ACL-free");
+            crate::session::login::local_store::verify_private(
+                &fs::File::open(&directory).unwrap(),
+                true,
+            )
+            .expect("the fixture manifest directory must be owned, private, and ACL-free");
             let manifest: Manifest =
                 serde_json::from_slice(&fixture_bytes(&manifest_path, &directory, 64_000)).unwrap();
             let config: serde_json::Value =
-                serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+                serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
             assert_eq!(manifest.public_key, config["plugins"]["updater"]["pubkey"]);
             assert_eq!(manifest.entries.len(), 3);
             let versions: Vec<_> = manifest
@@ -704,7 +710,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn cache_lock_release_is_owned_by_the_acquiring_process() {
-        use crate::login::local_store::InheritedLock;
+        use crate::session::login::local_store::InheritedLock;
         use std::os::fd::AsRawFd;
         let t = tempfile::tempdir().unwrap();
         let mut first = lock_cache(t.path()).unwrap();

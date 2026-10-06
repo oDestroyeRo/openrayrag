@@ -17,12 +17,12 @@ pub(crate) const MAX_ARCHIVE: usize = 128 * 1024 * 1024;
 #[derive(Clone)]
 pub(crate) struct VerifiedArchive {
     bytes: std::sync::Arc<Vec<u8>>,
-    version: crate::updater_logic::StableUpdateVersion,
+    version: crate::update::updater_logic::StableUpdateVersion,
 }
 impl VerifiedArchive {
     pub(crate) fn new(
         bytes: Vec<u8>,
-        asset: crate::updater_logic::CandidateAsset,
+        asset: crate::update::updater_logic::CandidateAsset,
         key: &str,
     ) -> Result<Self, String> {
         verify(&bytes, asset.signature(), key, asset.version().as_str())?;
@@ -200,9 +200,12 @@ mod tests {
             let metadata = serde_json::json!({"version":version,"platforms":{"darwin-aarch64":{
                 "url":format!("https://github.com/oDestroyeRo/openrayrag/releases/download/v{version}/Rayrag_Companion_{version}_aarch64.app.tar.gz"),
                 "signature":fixture["signature"]}}});
-            crate::updater_logic::parse_feed(&serde_json::to_vec(&metadata).unwrap(), "0.1.0")
-                .unwrap()
-                .unwrap()
+            crate::update::updater_logic::parse_feed(
+                &serde_json::to_vec(&metadata).unwrap(),
+                "0.1.0",
+            )
+            .unwrap()
+            .unwrap()
         };
         let key = fixture["publicKey"].as_str().unwrap();
         let archive = VerifiedArchive::new(bytes.clone(), asset("0.2.27"), key).unwrap();
