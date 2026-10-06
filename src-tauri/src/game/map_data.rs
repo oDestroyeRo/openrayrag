@@ -80,6 +80,45 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    fn request_headers(reader: &mut impl Read) -> std::io::Result<Vec<u8>> {
+        let mut request = Vec::new();
+        let mut chunk = [0; 512];
+        loop {
+            let available = chunk.len().min(4096 - request.len());
+            if available == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Request headers exceed their limit.",
+                ));
+            }
+            let count = reader.read(&mut chunk[..available])?;
+            if count == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Incomplete request headers.",
+                ));
+            }
+            request.extend_from_slice(&chunk[..count]);
+            if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                request.truncate(end + 4);
+                return Ok(request);
+            }
+        }
+    }
+    #[test]
+    fn request_reader_captures_fragmented_headers_and_rejects_incomplete_or_oversized_headers() {
+        struct Fragmented<'a>(&'a [u8]);
+        impl Read for Fragmented<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let size = buffer.len().min(7);
+                self.0.read(&mut buffer[..size])
+            }
+        }
+        let headers = b"GET /asset HTTP/1.1\r\nHost: localhost\r\nAuthorization: test\r\nCookie: test\r\n\r\n";
+        assert_eq!(request_headers(&mut Fragmented(headers)).unwrap(), headers);
+        assert!(request_headers(&mut &headers[..headers.len() - 1]).is_err());
+        assert!(request_headers(&mut &vec![b'a'; 4097][..]).is_err());
+    }
     #[test]
     fn catalogue_capability_is_exclusive_to_the_local_bot_runtime() {
         let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
@@ -113,9 +152,7 @@ mod tests {
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
-            let mut request = vec![0; 4096];
-            let count = stream.read(&mut request).unwrap();
-            request.truncate(count);
+            let request = request_headers(&mut stream).unwrap();
             let _ = stream.write_all(&response);
             request
         });
@@ -148,6 +185,7 @@ mod tests {
         assert_eq!(assets.monsters, assets.maps);
         for request in [maps_server.join().unwrap(), monsters_server.join().unwrap()] {
             let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+            assert!(request.starts_with("get /asset http/1.1\r\n"));
             assert!(!request.contains("authorization:"));
             assert!(!request.contains("cookie:"));
         }
@@ -181,8 +219,8 @@ mod tests {
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
-            let mut request = [0; 4096];
-            stream.read(&mut request).unwrap();
+            let request = request_headers(&mut stream).unwrap();
+            assert!(request.starts_with(b"GET /asset HTTP/1.1\r\n"));
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\n{")
                 .unwrap();
