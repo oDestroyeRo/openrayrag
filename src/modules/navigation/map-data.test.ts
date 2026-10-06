@@ -2,6 +2,7 @@ import { mapCode } from '../../shared/domain-values';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { currentMapInfo, loadMapCatalog, loadNativeMapCatalog, MapCatalogLoader, parseMapCatalog, validMapInfo, MAP_DATA_URL, type MapCatalog } from './map-data';
 import { type Entity } from '../protocol/protocol';
+import { MapDataError } from './map-data-policy';
 
 // Public prt_fild05 rows from the deployed map/monster JSON, 2026-10-01.
 const rows = [
@@ -78,6 +79,25 @@ describe('official map information', () => {
 
 describe('runtime catalogue availability',()=>{
   afterEach(()=>vi.useRealTimers());
+  it.each([
+    new MapDataError({kind:'http',status:404}),
+    new MapDataError({kind:'size-limit'}),
+    new MapDataError({kind:'invalid-data',message:'Invalid map metadata'}),
+  ])('does not retry a permanent failure: %s',async failure=>{
+    vi.useFakeTimers();
+    const read=vi.fn(async()=>{throw failure;}),loader=new MapCatalogLoader(read,()=>{});
+    await loader.start();await vi.advanceTimersByTimeAsync(12_000);
+    expect(read).toHaveBeenCalledOnce();expect(loader.loading).toBe(false);
+    expect(loader.failure).toEqual(failure.cause);expect(vi.getTimerCount()).toBe(0);
+  });
+  it('does not retry malformed native assets or publish a partial catalogue',async()=>{
+    vi.useFakeTimers();
+    const invoke=vi.fn(async()=>({maps:'{broken',monsters:JSON.stringify(monsters)}));
+    const loader=new MapCatalogLoader(()=>loadNativeMapCatalog(invoke),()=>{});
+    await loader.start();await vi.advanceTimersByTimeAsync(12_000);
+    expect(invoke).toHaveBeenCalledOnce();expect(loader.catalog).toBeNull();
+    expect(loader.failure?.kind).toBe('invalid-data');expect(loader.loading).toBe(false);
+  });
   it('retries a transient failure and publishes only a complete validated database',async()=>{
     vi.useFakeTimers();
     const catalog=parseMapCatalog(maps,monsters);

@@ -1,5 +1,6 @@
 //! Fixed TLS transport for the bundled controller. Authentication remains native.
 use crate::{
+    session::direct_compatibility_logic::VerifiedProtocol,
     session::direct_wire,
     session::login::{ConnectionMode, SharedLogin},
     session::login_logic::DirectCredentials,
@@ -473,17 +474,6 @@ async fn public_text(client: &reqwest::Client, url: &str, limit: usize) -> Resul
     }
     Ok(bytes)
 }
-fn verified_build(bytes: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return false;
-    };
-    // Inert text only: exactly one pinned declaration, no execution or Unity downloads.
-    let declaration = format!(
-        "var buildUrl = \"{}\";",
-        crate::session::login::VERIFIED_BUILD
-    );
-    text.matches("var buildUrl").count() == 1 && text.contains(&declaration)
-}
 pub(crate) async fn server_version() -> Result<(), String> {
     let client = reqwest::Client::builder()
         .https_only(true)
@@ -492,20 +482,13 @@ pub(crate) async fn server_version() -> Result<(), String> {
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|_| "Compatibility check unavailable.")?;
-    let bytes = public_text(&client, VERSION_URL, 64).await?;
-    if bytes
-        .iter()
-        .copied()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect::<Vec<_>>()
-        != b"8"
-    {
-        return Err("This server protocol version is not verified.".into());
-    }
-    if !verified_build(&public_text(&client, crate::GAME_URL, 128 * 1024).await?) {
-        return Err("This game build is not verified.".into());
-    }
-    Ok(())
+    let protocol = VerifiedProtocol::admit(&public_text(&client, VERSION_URL, 64).await?)
+        .map_err(String::from)?;
+    let build = public_text(&client, crate::GAME_URL, 128 * 1024).await?;
+    protocol
+        .admit_build(&build)
+        .map(|_| ())
+        .map_err(String::from)
 }
 fn config() -> WebSocketConfig {
     WebSocketConfig::default()
@@ -1156,7 +1139,7 @@ mod tests {
         }
     }
     #[test]
-    fn urls_and_build_are_exact_and_compatibility_text_is_inert() {
+    fn connection_urls_are_exact() {
         assert_eq!(
             mode_for_url(&runtime_url()).unwrap(),
             ConnectionMode::BotOnly
@@ -1173,15 +1156,6 @@ mod tests {
         ] {
             assert!(mode_for_url(&url.parse().unwrap()).is_err());
         }
-        let declaration = format!(
-            "var buildUrl = \"{}\";",
-            crate::session::login::VERIFIED_BUILD
-        );
-        assert!(verified_build(declaration.as_bytes()));
-        assert!(!verified_build(b"var buildUrl = \"other\";"));
-        assert!(!verified_build(
-            format!("{declaration}{declaration}").as_bytes()
-        ));
     }
     #[test]
     fn stale_send_failure_cannot_cancel_replacement_and_delivery_fences_settlement() {

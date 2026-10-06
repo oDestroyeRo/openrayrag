@@ -1,3 +1,4 @@
+pub(crate) use crate::session::direct_compatibility_logic::VERIFIED_BUILD;
 pub(crate) use crate::session::login_logic::{
     ConnectionMode, LoginProfile, LoginRequest, SavedLogin, UpdateAccount,
 };
@@ -7,7 +8,6 @@ use std::time::{Duration, Instant};
 use tauri::{Manager, Webview};
 
 pub(crate) mod local_store;
-pub(crate) const VERIFIED_BUILD: &str = "Build_2569-09-01-01-55";
 
 pub(crate) struct PendingLogin {
     profile: LoginProfile,
@@ -235,15 +235,21 @@ pub(crate) fn saved_account_matches(app_data: std::path::PathBuf, account: &Upda
 #[tauri::command]
 pub(crate) async fn saved_login(window: Webview) -> Result<Option<SavedLogin>, String> {
     crate::require_view(&window, "main")?;
-    Ok(login_store(window.app_handle())?
-        .load()?
-        .map(SavedLogin::from))
+    let store = login_store(window.app_handle())?;
+    tauri::async_runtime::spawn_blocking(move || store.load().map(|p| p.map(SavedLogin::from)))
+        .await
+        .map_err(|_| {
+            "Could not read the local saved login. Forget it or enter your account manually."
+        })?
 }
 
 #[tauri::command]
 pub(crate) async fn forget_login(window: Webview) -> Result<(), String> {
     crate::require_view(&window, "main")?;
-    login_store(window.app_handle())?.forget()
+    let store = login_store(window.app_handle())?;
+    tauri::async_runtime::spawn_blocking(move || store.forget())
+        .await
+        .map_err(|_| "Could not remove the local saved login.")?
 }
 
 fn resolve_profile(

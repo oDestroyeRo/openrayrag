@@ -1,20 +1,67 @@
 import { GAME_URL } from '../protocol/protocol';
+import { MapDataError, MAX_MAP_DOCUMENT_BYTES } from './map-data-policy';
 export const MAP_DATA_URL = `${GAME_URL}StreamingAssets/ClientConfigGenerated/`;
+
+/** Bound bytes while receiving, before text/JSON allocation. Own the reader to its exit. */
+export async function readMapDataResponse(response: Response, signal: AbortSignal): Promise<string> {
+  const body = response.body;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let completed = false;
+  const abort = () => { void reader?.cancel().catch(() => {}); };
+  try {
+    if (!response.ok) throw new MapDataError({ kind: 'http', status: response.status });
+    const declared = response.headers.get('content-length');
+    if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > MAX_MAP_DOCUMENT_BYTES)) {
+      throw new MapDataError({ kind: 'size-limit' });
+    }
+    if (!body) return '';
+    reader = body.getReader();
+    signal.addEventListener('abort', abort, { once: true });
+    // A fixed buffer also bounds overhead when a server sends tiny chunks.
+    const bytes = new Uint8Array(MAX_MAP_DOCUMENT_BYTES);
+    let size = 0;
+    while (true) {
+      if (signal.aborted) throw signal.reason;
+      const chunk = await reader.read();
+      if (signal.aborted) throw signal.reason;
+      if (chunk.done) break;
+      if (chunk.value.byteLength > MAX_MAP_DOCUMENT_BYTES - size) throw new MapDataError({ kind: 'size-limit' });
+      bytes.set(chunk.value, size);
+      size += chunk.value.byteLength;
+    }
+    let text: string;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, size)); }
+    catch { throw new MapDataError({ kind: 'invalid-data', message: 'Invalid map database text' }); }
+    completed = true;
+    return text;
+  } finally {
+    signal.removeEventListener('abort', abort);
+    // A cleanup rejection must preserve the HTTP/read/admission failure.
+    if (!completed) {
+      try { void (reader ? reader.cancel() : body?.cancel())?.catch(() => {}); } catch { /* best effort after failure */ }
+    }
+    try { reader?.releaseLock(); } catch (error) { if (completed) throw error; }
+  }
+}
 
 /** Both asset requests share one bounded lifetime; retire it on every exit path. */
 export async function withMapDataRequests<T>(action: (read: (file: string) => Promise<string>) => Promise<T>, fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<T> {
   const controller = new AbortController();
-  const abort = () => controller.abort();
+  const abort = () => controller.abort(new MapDataError({ kind: 'cancelled' }));
   signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) abort();
-  const timer = setTimeout(() => controller.abort(), 12_000);
+  const timer = setTimeout(() => controller.abort(new MapDataError({ kind: 'timeout' })), 12_000);
   try {
     const read = async (file: string) => {
+      if (controller.signal.aborted) throw controller.signal.reason;
       const response = await fetcher(`${MAP_DATA_URL}${file}`, { signal: controller.signal, credentials: 'omit' });
-      if (!response.ok) throw new Error('Map database unavailable');
-      return response.text();
+      return readMapDataResponse(response, controller.signal);
     };
     return await action(read);
+  } catch (error) {
+    if (error instanceof MapDataError) throw error;
+    if (controller.signal.aborted) throw controller.signal.reason;
+    throw new MapDataError({ kind: 'network' });
   } finally { clearTimeout(timer); controller.abort(); signal?.removeEventListener('abort', abort); }
 }
 

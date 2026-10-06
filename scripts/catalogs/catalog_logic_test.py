@@ -350,19 +350,78 @@ class NavigationEffects(unittest.TestCase):
             output.write_bytes(b'old cache')
 
             def download(args, **kwargs):
+                if args == ['curl', '--version']:
+                    self.assertEqual(kwargs['timeout'], 10)
+                    return types.SimpleNamespace(stdout='curl 8.4.0 supported\n')
+                self.assertEqual(args[args.index('--max-filesize') + 1], str(len(content)))
+                self.assertEqual(args[args.index('--max-time') + 1], '120')
+                self.assertEqual(args[args.index('--retry') + 1], '1')
+                self.assertTrue(kwargs['check'])
                 Path(args[args.index('--output') + 1]).write_bytes(content)
 
             with mock.patch.object(fetch.subprocess, 'run', side_effect=download) as curl:
                 self.assertTrue(fetch.fetch(source, destination))
                 self.assertEqual(output.read_bytes(), content)
                 self.assertFalse(fetch.fetch(source, destination))
-                self.assertEqual(curl.call_count, 1)
+                self.assertEqual(curl.call_count, 2)
             output.write_bytes(b'old cache')
             with mock.patch.object(fetch.subprocess, 'run', side_effect=lambda args, **kw: Path(args[args.index('--output') + 1]).write_bytes(b'unreviewed')):
                 with self.assertRaisesRegex(ValueError, 'downloaded asset differs'):
                     fetch.fetch(source, destination)
             self.assertEqual(output.read_bytes(), b'old cache')
             self.assertEqual(list(destination.iterdir()), [output])
+
+    def test_fetch_rejects_partial_oversized_transfers_and_retains_verified_previous_cache(self):
+        import tempfile
+        fetch = load_script('fetch-navigation')
+        previous, content = b'previous reviewed bundle', b'new reviewed bundle'
+        source = {'map': 'town', 'sourceUrl': 'https://websea01.rayrag.com/StreamingAssets/aa/WebGL/scenes_scenes_assets_scenes_maps_town.unity.bundle',
+                  'bundleBytes': len(content), 'sourceSha256': hashlib.sha256(content).hexdigest()}
+        old_source = {**source, 'bundleBytes': len(previous), 'sourceSha256': hashlib.sha256(previous).hexdigest()}
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder)
+            output = destination / 'rayrag-town-scene.bundle'
+            output.write_bytes(previous)
+
+            def download(args, **kwargs):
+                if args == ['curl', '--version']:
+                    return types.SimpleNamespace(stdout='curl 8.7.1 supported\n')
+                bound = int(args[args.index('--max-filesize') + 1])
+                self.assertEqual(bound, source['bundleBytes'])
+                Path(args[args.index('--output') + 1]).write_bytes(b'x' * bound)
+                raise fetch.subprocess.CalledProcessError(63, args)
+
+            with mock.patch.object(fetch.subprocess, 'run', side_effect=download):
+                with self.assertRaises(fetch.subprocess.CalledProcessError) as failure:
+                    fetch.fetch(source, destination)
+                self.assertEqual(failure.exception.returncode, 63)
+            self.assertTrue(fetch.matches(output, old_source))
+            self.assertEqual(list(destination.iterdir()), [output])
+
+    def test_fetch_reuses_verified_cache_without_curl_and_rejects_unbounded_versions(self):
+        import tempfile
+        fetch = load_script('fetch-navigation')
+        content = b'reviewed bundle'
+        source = {'map': 'town', 'sourceUrl': 'https://websea01.rayrag.com/StreamingAssets/aa/WebGL/scenes_scenes_assets_scenes_maps_town.unity.bundle',
+                  'bundleBytes': len(content), 'sourceSha256': hashlib.sha256(content).hexdigest()}
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder)
+            output = destination / 'rayrag-town-scene.bundle'
+            output.write_bytes(content)
+            with mock.patch.object(fetch.subprocess, 'run', side_effect=AssertionError('cache required curl')):
+                self.assertFalse(fetch.fetch(source, destination))
+            output.write_bytes(b'previous cache')
+            for version in ['curl 8.3.0 supported\n', 'unrecognized curl']:
+                with mock.patch.object(fetch.subprocess, 'run', return_value=types.SimpleNamespace(stdout=version)) as curl:
+                    with self.assertRaisesRegex(ValueError, 'curl 8.4\\+'):
+                        fetch.fetch(source, destination)
+                    curl.assert_called_once_with(['curl', '--version'], check=True, capture_output=True, text=True, timeout=10)
+                self.assertEqual(output.read_bytes(), b'previous cache')
+                self.assertEqual(list(destination.iterdir()), [output])
+            for bound in [0, -1, True, '10']:
+                with mock.patch.object(fetch.subprocess, 'run', side_effect=AssertionError('invalid bound ran curl')):
+                    with self.assertRaisesRegex(ValueError, 'invalid reviewed bundle byte bound'):
+                        fetch.fetch({**source, 'bundleBytes': bound}, destination)
 
     def test_failed_travel_validation_does_not_replace_existing_output(self):
         import tempfile

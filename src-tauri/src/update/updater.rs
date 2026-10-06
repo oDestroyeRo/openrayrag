@@ -1,5 +1,8 @@
 use crate::update::update_install_logic::VerifiedArchive as Candidate;
-use crate::update::updater_logic::{parse_feed, CandidateAsset, MAX_METADATA};
+use crate::update::updater_logic::{
+    check_deadline, check_due, parse_feed, CandidateAsset, CheckAdmission, ScheduleOutcome,
+    UpdateSchedule, MAX_METADATA,
+};
 use crate::{
     session::maintenance::{GameIdentity, SharedGate},
     settings::current_form::{self, FormDocument},
@@ -34,8 +37,7 @@ pub(crate) struct UpdateState {
     status: Status,
     candidate: Option<Candidate>,
     busy: bool,
-    next: Instant,
-    failures: u8,
+    schedule: UpdateSchedule,
 }
 pub(crate) type SharedUpdate = Mutex<UpdateState>;
 impl UpdateState {
@@ -69,8 +71,7 @@ impl Default for UpdateState {
             },
             candidate: None,
             busy: false,
-            next: Instant::now(),
-            failures: 0,
+            schedule: UpdateSchedule::initial(Instant::now()),
         }
     }
 }
@@ -199,29 +200,26 @@ async fn check(app: tauri::AppHandle) {
     .await;
     if let Ok(mut u) = app.state::<SharedUpdate>().lock() {
         u.busy = false;
-        match result {
+        let outcome = match result {
             Ok(Some(c)) => {
                 u.status.phase = "waiting".into();
                 u.status.message =
                     "Update verified. Waiting for all game and login actions to stop.".into();
                 u.candidate = Some(c);
-                u.failures = 0;
-                u.next = Instant::now() + Duration::from_secs(3600);
+                ScheduleOutcome::CheckSucceeded
             }
             Ok(None) => {
                 u.status.phase = "current".into();
                 u.status.message = "Client is up to date.".into();
-                u.failures = 0;
-                u.next = Instant::now() + Duration::from_secs(3600);
+                ScheduleOutcome::CheckSucceeded
             }
             Err(e) => {
                 u.status.phase = "error".into();
                 u.status.message = e;
-                u.failures = (u.failures + 1).min(6);
-                u.next = Instant::now()
-                    + Duration::from_secs((60u64 * 2u64.pow(u.failures as u32)).min(3600));
+                ScheduleOutcome::CheckFailed
             }
-        }
+        };
+        u.schedule = u.schedule.after(outcome, Instant::now());
     }
 }
 pub(crate) fn schedule(app: &tauri::AppHandle) {
@@ -233,7 +231,13 @@ pub(crate) fn schedule(app: &tauri::AppHandle) {
     }
     let shared = app.state::<SharedUpdate>();
     let Ok(mut u) = shared.lock() else { return };
-    if u.busy || u.candidate.is_some() || Instant::now() < u.next {
+    if !check_deadline(CheckAdmission {
+        busy: u.busy,
+        candidate_available: u.candidate.is_some(),
+        due_at: u.schedule.next,
+    })
+    .is_some_and(|due_at| check_due(due_at, Instant::now()))
+    {
         return;
     }
     u.busy = true;
@@ -606,7 +610,9 @@ pub(crate) async fn update_install(
             u.status.phase = "error".into();
             u.status.message = e.clone();
             u.candidate = None;
-            u.next = Instant::now() + Duration::from_secs(3600);
+            u.schedule = u
+                .schedule
+                .after(ScheduleOutcome::InstallationFailed, Instant::now());
         }
         return Err(e);
     }
