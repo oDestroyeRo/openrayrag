@@ -1,3 +1,4 @@
+import type { Revision } from './domain-values';
 import { itemId as domainItemId } from './domain-values';
 import { inventoryItemCount } from './character-state-logic';
 import type { Position } from './protocol';
@@ -52,8 +53,8 @@ export interface SupplyContext {
   settled: boolean;
   canPrepare: boolean;
   fieldRequested: boolean;
-  inventoryRevision: number;
-  currencyRevision: number;
+  inventoryRevision: Revision<'inventory'>;
+  currencyRevision: Revision<'currency'>;
   economicUncertain: boolean;
   disposition: DispositionContext;
 }

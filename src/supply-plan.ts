@@ -8,13 +8,16 @@ import { DEFAULT_SUPPLY, validateSupplySettings } from './supply-trip-logic';
 import type { Settings } from './settings';
 import type { SupplyContext, SupplyGoal, SupplyNext, SupplySettings } from './supply-trip-logic';
 
+// Planning/display does not capture or confirm resource revision evidence.
+export type SupplyPlanningContext = Omit<SupplyContext,'inventoryRevision'|'currencyRevision'> & {readonly inventoryRevision?:number;readonly currencyRevision?:number};
+
 /** One authoritative phase only. Other service prerequisites cannot invalidate
  * this phase, and no unknown preferred destination authorizes a fallback sale. */
 export interface SupplyPhaseEvidence {
   storageFull: { character: string; epoch: string; revision: string } | null;
 }
 export function nextSupplyAction(
-  context: SupplyContext,
+  context: SupplyPlanningContext,
   goals: SupplyGoal[],
   policy: DispositionPolicy,
   supply: SupplySettings,
@@ -161,7 +164,7 @@ export function nextSupplyAction(
  * Unknown prices/capacity remain prerequisites; this is never an execution token. */
 export function previewSupplyTrip(
   settings: Settings,
-  context: SupplyContext,
+  context: SupplyPlanningContext,
 ): string {
   const supply = validateSupplySettings(
       settings.automation?.supply ?? DEFAULT_SUPPLY,

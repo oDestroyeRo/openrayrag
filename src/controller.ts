@@ -1,4 +1,4 @@
-import { quantity, revisionFor, type ItemId, type Quantity } from './domain-values';
+import { quantity, revisionFor, partyMemberId, type ItemId, type Quantity } from './domain-values';
 import { skillId as domainSkillId, itemId as domainItemId, bagId as domainBagId } from './domain-values';
 import { filter, map } from 'remeda';
 import { fieldIdentityWaitReason, fieldResumeDecision } from './controller-field-policy';
@@ -201,7 +201,7 @@ export class CompanionController {
     this.engine = new BotEngine(action=>this.send(action), now, gridFor, entityId => {
       if (!this.world.party) return null;
       const members = [...this.world.party.members.values()].filter(member=>member.entityId===entityId);
-      return members.length===1 ? this.world.partyActors.get(members[0]!.memberId) : null;
+      return members.length===1 ? this.world.partyActors.get(partyMemberId(members[0]!.memberId)) : null;
     });
     this.partyFollow=new PartyFollowRuntime(now);
     this.engine.partyFollowBinding=()=>this.partyFollow.visibleLeader(this.partyFollowContext());
@@ -264,7 +264,7 @@ export class CompanionController {
     const e=this.engine,p=e.player;
     if(!policy||!p||!this.runRequested||!this.heartbeatHealthy||!this.movementSettled()||this.refineBlocksAutomation||this.warp.blocked||this.partyFollow.ownsTravel||this.returning||this.deathCycle||this.pending||this.featureReceipt||this.unresolvedWorld||this.workflowOutstanding||this.travel.active||this.service.active||this.workflow.snapshot().running||['running','waiting'].includes(this.routine.snapshot().state)||this.supply.ownsField||this.supply.uncertain||this.escape.busy||this.memo.blocked||this.socket.busy||this.social.busy||this.now()<this.fencedUntil||this.now()<this.yieldUntil||this.world.npc.id!==null||this.world.npc.mode!=='idle'||this.world.vending){this.partyHeal.wait('Waiting for higher-priority owners or physical movement.');return false;}
     this.world.refreshPartyActors(e.observations,p.id);
-    const bindings=[...(this.world.party?.members.keys()??[])].flatMap(id=>{const binding=this.world.partyActors.get(id);return binding?[binding]:[];});
+    const bindings=[...(this.world.party?.members.keys()??[])].flatMap(id=>{const binding=this.world.partyActors.get(partyMemberId(id));return binding?[binding]:[];});
     const observations=e.actorObservation(bindings.map(binding=>partyHpCondition(binding,policy.hpBelowPercent)));
     if(!this.partyHeal.resourcesReadBack(observations)){this.partyHeal.wait('Waiting for fresh own SP readback after Heal.');return false;}
     const candidates=partyHealCandidates(bindings,e.actors,p.id,observations,policy.hpBelowPercent);
@@ -1062,7 +1062,7 @@ export class CompanionController {
     if(this.partyHeal.awaitingSpReadback&&events.some(event=>event.type==='sp'||event.type==='stats'&&event.sp!==undefined))
       this.partyHeal.resourcesReadBack(this.engine.actorObservation([]));
     if(this.partyHeal.busy){
-      const state=this.partyHeal.snapshot(),binding=state.targetMemberId===null?null:this.world.partyActors.get(state.targetMemberId);
+      const state=this.partyHeal.snapshot(),binding=state.targetMemberId===null?null:this.world.partyActors.get(partyMemberId(state.targetMemberId));
       if(!binding||events.some(event=>event.type==='map'||event.type==='clear'||event.type==='death'||event.type==='remove'||event.type==='partyAffiliation')||worldEvents.some(event=>['partyJoined','partyLeft','partyMember','partyRemove','partyMap'].includes(event.type)))this.partyHeal.cancel('Party or actor lifetime evidence changed.');
     }
     this.reconcileFeature(events);
@@ -1135,7 +1135,7 @@ export class CompanionController {
     const settled=this.engine.idleForActions()&&noOwner;
     return {character:p?.name??this.characterName??'',epoch:String(this.connectionEpoch),map:this.engine.map,position:p?{x:Math.floor(p.x),y:Math.floor(p.y)}:null,
       connected:this.engine.connected&&this.engine.compatible,alive:!!p&&!p.dead,loading:this.travel.active&&this.travel.snapshot().state==='transition',fresh:this.now()-this.lastFrame<=15000&&this.supplyInventoryFresh&&this.supplyCurrencyFresh,
-      settled,canPrepare:noOwner&&this.engine.featureActionsSettled,fieldRequested:this.runRequested,inventoryRevision:this.supplyInventoryRevision,currencyRevision:this.supplyCurrencyRevision,
+      settled,canPrepare:noOwner&&this.engine.featureActionsSettled,fieldRequested:this.runRequested,inventoryRevision:revisionFor('inventory',this.supplyInventoryRevision),currencyRevision:revisionFor('currency',this.supplyCurrencyRevision),
       economicUncertain:!!this.unresolvedWorld||!!this.featureReceipt,
       disposition:{revision:`${this.connectionEpoch}:${this.world.generation}:${this.world.revision}:${c.inventoryRevision}:${c.statsRevision}:${c.equipmentRevision}`,
         containers:{inventory:{items:c.inventoryKnown?[...c.inventory.values()]:null,slots:200,weight:c.stats?.weight??null,maxWeight:c.stats?.maxWeight??null},

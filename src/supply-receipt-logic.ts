@@ -1,3 +1,4 @@
+import type { Revision } from './domain-values';
 import { bagId, itemId, quantity, regularItemBagId, type ItemId } from './domain-values';
 import { filter, sort, sumBy } from 'remeda';
 import type { InventoryItemInput as InventoryItem } from './protocol-feature';
@@ -12,8 +13,8 @@ export interface SupplyReceipt {
   epoch: string;
   map: string;
   generation: number;
-  inventoryRevision: number;
-  currencyRevision: number;
+  inventoryRevision: Revision<'inventory'>;
+  currencyRevision: Revision<'currency'>;
   source: InventoryItem | null;
   containerBefore: InventoryItem[] | null;
   containerAfter: InventoryItem[] | null;

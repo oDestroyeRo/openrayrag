@@ -1,3 +1,4 @@
+import { partyMemberId } from './domain-values';
 import { itemId as domainItemId } from './domain-values';
 import { manualTargetPolicy } from './manual-target';
 import { DEFAULT_MAP_POLICY } from './map-policy';
@@ -238,7 +239,7 @@ describe('retreat ownership with stationary availability',()=>{
   });
   it.each([0,1])('keeps needy party Heal behind own%s unsent and sent retreat ownership',id=>{
     const f=fixture(id),p=party(f);f.engage();p.health(40);f.step();
-    expect(f.c.world.partyActors.get(7)).not.toBeNull();expect(f.c.engine.stationaryForPartySupport()).toBe(false);
+    expect(f.c.world.partyActors.get(partyMemberId(7))).not.toBeNull();expect(f.c.engine.stationaryForPartySupport()).toBe(false);
     expect(f.c.engine.partyHealReadiness(3,1,10)).toContain('movement');expect(p.heals()).toEqual([]);
     f.clear();f.step();expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(1);
     f.look();f.stopCast();f.advance(300);expect(f.c.engine.retreatOwned).toBe(true);

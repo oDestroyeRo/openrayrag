@@ -1,4 +1,4 @@
-import { itemId, bagId, quantity } from './domain-values';
+import { itemId, bagId, quantity, revisionFor, incrementRevision } from './domain-values';
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SUPPLY,
@@ -78,8 +78,8 @@ function context(stock = 4): SupplyContext & { disposition: SupplyContext['dispo
     settled: true,
     canPrepare: true,
     fieldRequested: true,
-    inventoryRevision: 1,
-    currencyRevision: 1,
+    inventoryRevision: revisionFor('inventory', 1),
+    currencyRevision: revisionFor('currency', 1),
     economicUncertain: false,
     disposition: {
       revision: "1",
@@ -117,7 +117,7 @@ function setStock(c: SupplyContext, n: number) {
     : [];
   c.disposition.containers.inventory.items = items;
   c.disposition.workflow.inventory = items;
-  c.inventoryRevision++;
+  c.inventoryRevision=incrementRevision(c.inventoryRevision);
 }
 function setup(settings = configured) {
   let now = 100_000;
@@ -332,10 +332,10 @@ describe("bounded supply runtime", () => {
     f.runtime.observe(f.c);
     expect(f.runtime.uncertain).toBe(true);
     f.c.fresh = true;
-    f.c.inventoryRevision++;
+    f.c.inventoryRevision=incrementRevision(f.c.inventoryRevision);
     f.runtime.observe(f.c);
     expect(f.runtime.uncertain).toBe(true);
-    f.c.currencyRevision++;
+    f.c.currencyRevision=incrementRevision(f.c.currencyRevision);
     f.runtime.observe(f.c);
     expect(f.runtime.uncertain).toBe(false);
     expect(f.runtime.next(f.c)).toBeNull();
@@ -758,7 +758,7 @@ describe("phase planning and exact receipts", () => {
     setStock(c, 10);
     expect(confirmSupplyReceipt(r, c)).toBe(false);
     c.disposition.workflow.zeny = 700;
-    c.currencyRevision++;
+    c.currencyRevision=incrementRevision(c.currencyRevision);
     expect(confirmSupplyReceipt(r, c)).toBe(true);
     setStock(c, 11);
     expect(confirmSupplyReceipt(r, c)).toBe(false);

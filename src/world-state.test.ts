@@ -1,3 +1,4 @@
+import { partyMemberId } from './domain-values';
 import { describe, expect, it } from 'vitest';
 import { WorldState } from './world-state';
 import { ActorObservations, evaluateActorPredicate } from './actor-observations';
@@ -97,7 +98,7 @@ describe('world-owned party observations', () => {
     world.observe({ type: 'partyJoined', partyId: 3, name: 'Helpers', login: false, members: rows.slice(0, count) }, observations, 0);
     const resource = (id: number) => evaluateActorPredicate({ field: 'actorSpPercent', actor: { scope: 'target' }, operator: 'gte', value: 0 },
       observations.snapshot(0, row(id).entityId, true));
-    const bindings = () => [...world.party!.members.keys()].filter(id => world.partyActors.get(id));
+    const bindings = () => [...world.party!.members.keys()].filter(id => world.partyActors.get(partyMemberId(id)));
     return { world, observations, rows, resource, bindings };
   }
 
@@ -109,13 +110,13 @@ describe('world-owned party observations', () => {
       observed = true;
       expect(before?.members.get(1)?.map).toBe(map);
       expect(f.world.party?.members.get(1)?.map).toBe('prontera');
-      expect(f.world.partyActors.get(1)).not.toBeNull();
+      expect(f.world.partyActors.get(partyMemberId(1))).not.toBeNull();
       before!.members.get(1)!.name = 'Detached';
       before!.members.delete(1);
     });
     expect(observed).toBe(true);
     expect(f.world.party?.members.get(1)?.name).toBe('Member1');
-    expect(f.world.partyActors.get(1)).toBeNull();
+    expect(f.world.partyActors.get(partyMemberId(1))).toBeNull();
     expect(f.resource(1).state).toBe('unavailable');
   });
 
@@ -126,28 +127,28 @@ describe('world-owned party observations', () => {
     f.world.observe({ type: 'partyMember', change: 'add', member: next }, f.observations, 0);
     expect(f.world.party?.members.size).toBe(count);
     expect(f.world.party?.members.has(next.memberId)).toBe(false);
-    expect(f.world.partyActors.get(next.memberId)).toBeNull();
+    expect(f.world.partyActors.get(partyMemberId(next.memberId))).toBeNull();
     expect(f.resource(next.memberId).state).toBe('unavailable');
 
     const retained = row(count);
     f.world.observe({ type: 'partyMember', change: 'update', member: { ...retained, sp: 25 } }, f.observations, 0);
     expect(f.world.party?.members.get(count)?.sp).toBe(25);
-    expect(f.world.partyActors.get(count) === null).toBe(count === 33);
+    expect(f.world.partyActors.get(partyMemberId(count)) === null).toBe(count === 33);
     expect(f.bindings()).toHaveLength(32);
 
     // Removing a bound row frees association capacity. At 33 rows the existing
     // overflow row may update; at 32 rows a new incremental row may now enter.
     f.world.observe({ type: 'partyRemove', memberId: 1 }, f.observations, 0);
-    expect(f.world.partyActors.get(1)).toBeNull();
+    expect(f.world.partyActors.get(partyMemberId(1))).toBeNull();
     expect(f.resource(1).state).toBe('unavailable');
     f.world.observe({ type: 'partyMember', change: count === 33 ? 'update' : 'add', member: row(33) }, f.observations, 0);
     expect(f.world.party?.members.size).toBe(32);
     expect(f.bindings()).toHaveLength(32);
-    expect(f.world.partyActors.get(33)).not.toBeNull();
+    expect(f.world.partyActors.get(partyMemberId(33))).not.toBeNull();
     expect(f.resource(33).state).toBe('matched');
     f.world.observe({ type: 'partyMember', change: 'add', member: row(34) }, f.observations, 0);
     expect(f.world.party?.members.has(34)).toBe(false);
-    expect(f.world.partyActors.get(34)).toBeNull();
+    expect(f.world.partyActors.get(partyMemberId(34))).toBeNull();
   });
 
   it('uses overflow full-roster rows to revoke conflicting entity associations', () => {
@@ -155,15 +156,15 @@ describe('world-owned party observations', () => {
     f.world.observe({ type: 'partyJoined', partyId: 3, name: 'Helpers', login: false, members: [...f.rows.slice(0, 32), duplicate] }, f.observations, 0);
     expect(f.world.party?.members.size).toBe(33);
     expect(f.bindings()).toHaveLength(31);
-    expect(f.world.partyActors.get(1)).toBeNull();
-    expect(f.world.partyActors.get(33)).toBeNull();
+    expect(f.world.partyActors.get(partyMemberId(1))).toBeNull();
+    expect(f.world.partyActors.get(partyMemberId(33))).toBeNull();
     expect(f.resource(1).state).toBe('unavailable');
     f.world.observe({ type: 'partyRemove', memberId: 33 }, f.observations, 0);
     f.world.observe({ type: 'partyHealth', memberId: 1, hp: 70, maxHp: 81, sp: 20, maxSp: 30 }, f.observations, 0);
-    expect(f.world.partyActors.get(1)).toBeNull();
+    expect(f.world.partyActors.get(partyMemberId(1))).toBeNull();
     expect(f.resource(1).state).toBe('unavailable');
     f.world.observe({ type: 'partyMember', change: 'update', member: row(1) }, f.observations, 0);
-    expect(f.world.partyActors.get(1)).not.toBeNull();
+    expect(f.world.partyActors.get(partyMemberId(1))).not.toBeNull();
     expect(f.resource(1).state).toBe('matched');
   });
 });

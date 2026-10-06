@@ -1,3 +1,4 @@
+import { partyMemberId } from './domain-values';
 import { actionIdentity } from './actor-identity';
 import { describe, expect, it } from 'vitest';
 import { ActorObservations } from './actor-observations';
@@ -72,7 +73,7 @@ describe('captured party follow allowance',()=>{
  it('preserves the exact association and deadline across verified portal worlds, then waits for actual leader visibility',()=>{
   const f=fixture();f.start();f.hide();f.remote();const deadline=f.runtime.prepared()!.deadline;f.runtime.travelling(1);f.advance(4000);f.arrive('prontera');
   f.runtime.travelComplete();f.update();expect(f.runtime.snapshot().state).toBe('awaitingLeader');expect(f.runtime.snapshot().remainingSeconds).toBe((deadline-104000)/1000);
-  f.actors.set(2,{...leader,x:158,y:26});f.observations.spawn({...leader,x:158,y:26},1,0);f.update();expect(f.runtime.snapshot().state).toBe('following');expect(f.runtime.completed).toBe(true);expect(f.world.partyActors.get(7)).toBeNull();
+  f.actors.set(2,{...leader,x:158,y:26});f.observations.spawn({...leader,x:158,y:26},1,0);f.update();expect(f.runtime.snapshot().state).toBe('following');expect(f.runtime.completed).toBe(true);expect(f.world.partyActors.get(partyMemberId(7))).toBeNull();
  });
  it('preserves the original allowance over intermediate portals without retargeting',()=>{
   const f=fixture();f.settings.automation.follow.lostSeconds=30;f.start();f.hide();f.remote('payon');f.runtime.travelling(1);f.advance(3000);f.arrive('prontera');f.advance(5000);f.arrive('payon');f.runtime.travelComplete();f.update();
@@ -121,5 +122,5 @@ it('captures destination lifetime before final travel completion and rejects reu
  f.actors.set(2,{...leader,x:158,y:26});f.observations.spawn({...leader,x:158,y:26},1,0);f.update();
  expect(f.runtime.snapshot().state).toBe('travelling');
  f.observations.remove(2);f.observations.spawn({...leader,x:158,y:26},1,0);f.update();f.runtime.travelComplete();
- expect(f.runtime.snapshot().state).toBe('cancelled');expect(f.world.partyActors.get(7)).toBeNull();expect(f.runtime.completed).toBe(false);
+ expect(f.runtime.snapshot().state).toBe('cancelled');expect(f.world.partyActors.get(partyMemberId(7))).toBeNull();expect(f.runtime.completed).toBe(false);
 });

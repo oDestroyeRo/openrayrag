@@ -1,3 +1,4 @@
+import type { Revision } from './domain-values';
 import { insideLockArea, mapAllowed, mapPolicy } from './map-policy-logic';
 import type { SettingsInput as Settings, ReadonlyData } from './settings';
 import type { DispositionPolicy } from './disposition';
@@ -35,8 +36,8 @@ export class SupplyTripRuntime<Receipt> {
     sent: boolean;
     cost: number;
     reservation: number;
-    inventoryRevision: number;
-    currencyRevision: number;
+    inventoryRevision: Revision<'inventory'>;
+    currencyRevision: Revision<'currency'>;
     epoch: string;
     generation: number;
     since: number;

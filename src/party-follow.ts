@@ -1,3 +1,4 @@
+import { partyMemberId } from './domain-values';
 import { filter } from 'remeda';
 import { RESOURCE_STALE_MS } from './actor-resources';
 import { onlinePartyMembers, distinctPartyActors, type PartyActorBinding } from './party-actors-logic';
@@ -111,7 +112,7 @@ export class PartyFollowRuntime {
     if(leaders.length!==1||!distinctPartyActors(online))return null;
     const member=leaders[0]!;
     if(this.selected&&(member.memberId!==this.selected.memberId||!this.consistent(context,this.selected)))return null;
-    const binding=context.bindings.get(member.memberId)??this.arrivalBinding;
+    const binding=context.bindings.get(partyMemberId(member.memberId))??this.arrivalBinding;
     const actor=context.actors.get(member.entityId),evidence=context.observations.partyActor(member.entityId);
     const unavailable=this.arrivalUnavailable;
     if(binding&&unavailable&&unavailable.epoch===this.epoch&&unavailable.partyId===binding.partyId&&unavailable.memberId===binding.memberId

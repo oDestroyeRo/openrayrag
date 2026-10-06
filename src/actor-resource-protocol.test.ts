@@ -1,3 +1,4 @@
+import { partyMemberId } from './domain-values';
 import { describe, expect, it } from 'vitest';
 import { BitWriter } from './binary';
 import { decode, OP } from './protocol';
@@ -38,8 +39,8 @@ describe('pinned resource identity protocol',()=>{
  });
  it('preserves a leading BOM through MemoryPack, roster and actor affiliation identity',()=>{
   const name='\uFEFFParty';expect(decode(player(2,5,name))[0]).toMatchObject({type:'spawn',entity:{partyName:name}});
-  const c=new CompanionController(()=>{},()=>1000);c.connect(true);c.receive(new BitWriter().u8(OP.enter).i32(1).string('prontera').finish());c.receive(player(2,5,name));c.receive(joined('prontera',name));expect(c.world.party?.name).toBe(name);expect(c.world.partyActors.get(7)).not.toBeNull();
-  c.receive(new BitWriter().u8(103).i32(2).u8(1).i32(5).string(name).bool(false).finish());expect(c.engine.observations.partyActor(2)?.partyName).toBe(name);expect(c.world.partyActors.get(7)).not.toBeNull();
+  const c=new CompanionController(()=>{},()=>1000);c.connect(true);c.receive(new BitWriter().u8(OP.enter).i32(1).string('prontera').finish());c.receive(player(2,5,name));c.receive(joined('prontera',name));expect(c.world.party?.name).toBe(name);expect(c.world.partyActors.get(partyMemberId(7))).not.toBeNull();
+  c.receive(new BitWriter().u8(103).i32(2).u8(1).i32(5).string(name).bool(false).finish());expect(c.engine.observations.partyActor(2)?.partyName).toBe(name);expect(c.world.partyActors.get(partyMemberId(7))).not.toBeNull();
  });
  it('decodes actor-zero join and leave notifications with a one-bit owner flag',()=>{
   expect(decode(new BitWriter().u8(103).i32(0).u8(1).i32(5).string('Party').bool(true).finish())).toEqual([{type:'partyAffiliation',id:0,partyId:5,partyName:'Party'}]);
@@ -56,7 +57,7 @@ describe('pinned resource identity protocol',()=>{
  });
  it('keeps cross-map resource packets and map-only rows unable to establish binding',()=>{
   const c=new CompanionController(()=>{},()=>1000);c.connect(true);c.receive(new BitWriter().u8(OP.enter).i32(1).string('prontera').finish());c.receive(player());c.receive(joined('geffen'));c.receive(health());
-  c.receive(new BitWriter().u8(102).u8(9).i32(7).string('prontera').finish());c.receive(health());expect(c.world.partyActors.get(7)).toBeNull();expect(c.engine.observations.snapshot(1,2,true).actors[0]?.sp).toBeUndefined();
+  c.receive(new BitWriter().u8(102).u8(9).i32(7).string('prontera').finish());c.receive(health());expect(c.world.partyActors.get(partyMemberId(7))).toBeNull();expect(c.engine.observations.snapshot(1,2,true).actors[0]?.sp).toBeUndefined();
  });
  it('does not create or settle action ownership when party resources update during maintenance checks',()=>{
   let at=1000;const sent:unknown[]=[];const c=new CompanionController(action=>sent.push(action),()=>at);c.connect(true);
