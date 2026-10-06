@@ -35,7 +35,28 @@ TypeScript and checked Bun JavaScript use opaque or branded primitives and reado
 
 Arithmetic returns an ordinary primitive. Revalidate results that could violate a brand, including quantity subtraction, revision increments and unit conversion overflow, before changing owned state or dispatching an effect. Distinguish revision channels and use explicit seconds/milliseconds conversions. Preserve signed protocol timing and zero/negative wire sentinels in their actual owners; a general domain constructor does not replace narrower schema bounds or admit a sentinel as an identity.
 
-Keep primitives for binary offsets, opcodes, flags, search indexes and scratch arithmetic, platform handles, display text and unvalidated drafts. A wrapper must protect an actual domain distinction or construction invariant. Compile-time tests should call real domain consumers with incompatible values; runtime tests cover malformed input, alias mutation, boundary values, arithmetic, unchanged serialization and failure ordering. These checks prove the declared admission contracts, not the safety of deliberate unchecked casts or arbitrary reflective construction.
+Keep primitives for binary offsets, opcodes, flags, search indexes and scratch arithmetic, platform handles, display text and unvalidated drafts. A wrapper must protect an actual domain distinction or construction invariant. Compile-time tests should call real domain consumers with incompatible values; runtime tests cover malformed input, alias mutation, boundary values, arithmetic, unchanged serialization and failure ordering. These checks enforce selected compile-time contracts and exercise runtime admission contracts; they do not establish the safety of deliberate unchecked casts or arbitrary reflective construction.
+
+### Ownership and audit scope
+
+The domain audit covers the production owners in `architecture.json`, including native entrypoints, browser/Bun code, release scripts, Python generators and root configuration. Generated catalogs, vendored sources and external schemas keep their upstream representation. The useful distinction is an admitted value reaching a consumer, rather than the number of primitive fields replaced.
+
+| Family | Protected boundary and consumers |
+| --- | --- |
+| Gameplay | Item versus bag identities in inventory and receipts; learned skills; actor lifetime identities; revision channels; admitted form/run settings; explicit configuration time units; available versus unavailable resource evidence. |
+| Frontend and persistence | Profile identities/names/timestamps, form revisions, login slots, close capabilities, update correlation, registry documents and readonly map/recovery projections. Editable drafts are detached from admitted settings. |
+| Native admission | Checked credential components, form metadata, command/run admission, recovery thresholds, continuation ownership and close lifecycle. Raw serde records retain the existing schema; private aggregates retain admission through their consumer. |
+| Native update and geometry | Stable candidate versions and verified archive ownership; requested view extents are distinct from valid clipped extents, which may be smaller than one pixel. |
+| Bun release and CI | Source versus tag-object identity, distinct digest purposes, workflow/job/artifact identity, typed release planning/provenance and closed platform/process outcomes. Runtime constructors and checked JSDoc connect policy outputs to effects. |
+| Python catalogs and packaging | Frozen scene/grid/position/portal records, recovery/refine rules and asset/archive evidence at parsing and calculation boundaries. Validate grid dimensions once per used map. |
+
+Several apparently similar values intentionally have different policies. Actor zero is valid, while item/bag zero and offline protocol sentinels are not admitted IDs. Learned skill IDs have a wider range than byte-sized actions. An absent form map is allowed before Start. A respawn identity may carry an unknown self incarnation of zero. Signed wire timing is not a positive duration. Native credentials and update accounts have stronger validation than the existing browser login form.
+
+Compatibility adapters also retain historical loose inputs. Game-status session observations are not verified continuation identities. Continuation account mode is checked using its existing string coercion but retained as an unknown raw value; it is not falsely declared a canonical mode. The frontend forwards a native updater reservation as an opaque payload and preserves its existing cleanup condition. Narrowing these contracts belongs to a separately specified behavior change.
+
+Ordinary primitives remain in binary/ELF/FFI decoding, navigation search and per-cell probes, scratch counters, uninterpreted telemetry, authoring/display values and declarative external configuration. Typed records already distinguish benchmark measurements by field; branding each local sample or loop index adds no useful boundary. Native `Instant`, `Duration`, platform handles and archive-library records retain their existing types and lifetime rules.
+
+Verification combines the normal compiler gates with negative examples at actual consumers, Rust constructor/serde/Frunk bypass checks, runtime boundary and alias tests, and existing composed regression suites. Offline packet, routing and catalog comparisons provide bounded behavior/performance evidence; they do not establish live gameplay, deployed updates or external catalog regeneration.
 
 ## Unary functions and composition
 
