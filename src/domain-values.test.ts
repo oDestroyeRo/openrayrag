@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   actorId, itemId, bagId, skillId, speciesId, dropId, partyId, partyMemberId,
-  quantity, percentage, seconds, milliseconds, revision, regularItemBagId,
+  quantity, percentage, seconds, milliseconds, revision, revisionFor, incarnation, worldId, mapCode, regularItemBagId,
   addQuantities, subtractQuantities, incrementRevision, secondsToMilliseconds,
   millisecondsToSeconds, addMilliseconds, DomainValueError,
   type ActorId, type ItemId, type BagId, type SkillId, type Quantity,
@@ -32,6 +32,12 @@ function incompatibleDomains(actor: ActorId, item: ItemId, bag: BagId, skill: Sk
   acceptsQuantity(count + count);
   // @ts-expect-error Raw unit arithmetic must be revalidated.
   addMilliseconds(elapsed, duration * 1000);
+  const acceptsInventoryRevision = (_: Revision<'inventory'>) => undefined;
+  acceptsInventoryRevision(incrementRevision(revisionFor('inventory', 0)));
+  // @ts-expect-error Resource revision channels must not be interchangeable.
+  acceptsInventoryRevision(revisionFor('equipment', 0));
+  // @ts-expect-error An unscoped revision is not evidence for any resource channel.
+  acceptsInventoryRevision(version);
 }
 void incompatibleDomains;
 
@@ -58,6 +64,17 @@ describe('validated domain values', () => {
     }
     expect(percentage(0)).toBe(0); expect(percentage(100)).toBe(100); expect(percentage(0.5)).toBe(0.5);
     for (const value of [-0.1, 100.1, NaN, Infinity]) expect(() => percentage(value)).toThrow(DomainValueError);
+  });
+
+  it('preserves world spelling and separates map absence from validated identity', () => {
+    const mixed = 'ABCDEF00-0123-4567-89ab-0123456789ab';
+    expect(worldId(mixed)).toBe(mixed);
+    expect(mapCode('prt_fild08')).toBe('prt_fild08');
+    expect(incarnation(1)).toBe(1);
+    expect(() => incarnation(0)).toThrow(DomainValueError);
+    for (const invalid of ['', 'prt/fild08', 'x'.repeat(65), null]) expect(() => mapCode(invalid)).toThrow(DomainValueError);
+    for (const invalid of ['', 'not-a-world', mixed + ' ', null]) expect(() => worldId(invalid)).toThrow(DomainValueError);
+    expect(incrementRevision(revisionFor('inventory', 1))).toBe(2);
   });
 
   it('revalidates arithmetic instead of retaining an invalid brand', () => {
