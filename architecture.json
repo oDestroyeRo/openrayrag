@@ -70,6 +70,7 @@
   "src-tauri/src/current_form_logic.rs": "logic",
   "src-tauri/src/current_form.rs": "orchestration",
   "src-tauri/src/direct_wire.rs": "logic",
+  "src-tauri/src/domain_values.rs": "logic",
   "src-tauri/src/direct.rs": "orchestration",
   "src-tauri/src/lib.rs": "orchestration",
   "src-tauri/src/local_login_logic.rs": "logic",
