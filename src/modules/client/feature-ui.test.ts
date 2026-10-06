@@ -62,3 +62,20 @@ it('locks the actual follow controls according to mutually exclusive mode and co
  mode.value='name';sync();expect(name.disabled).toBe(false);expect(rendezvous.disabled).toBe(true);
  view.locked=true;mode.value='partyLeader';sync();expect(name.disabled).toBe(true);expect(rendezvous.disabled).toBe(true);
 });
+
+
+import { featureNpcChoices, featureVendorChoices, featureServiceEvidence, featureVendingText } from './feature-ui-logic';
+it('separates Tools choices and invalidates NPC service previews when metadata changes family', () => {
+  const actors = [{ id: 0, kind: 2, name: 'Player shop', npcSpawn: { displayType: 3 } },
+    { id: 1, kind: 4, name: 'Guide', npcSpawn: { displayType: 3 } }, { id: 2, kind: 2, name: 'Ordinary' }];
+  expect(featureNpcChoices(actors).map(actor => actor.value)).toEqual(['1', '2']);
+  expect(featureVendorChoices(actors).map(actor => actor.value)).toEqual(['0']);
+  const before = featureServiceEvidence({ actors }); actors[2]!.npcSpawn = { displayType: 3 };
+  expect(featureServiceEvidence({ actors })).not.toBe(before);
+});
+it('shows server-confirmed player shop rows with sale IDs, stock, prices and distinct seller identity', () => {
+  expect(featureVendingText(undefined)).toContain('explicit sale IDs');
+  const summary = featureVendingText({ id: 999, name: 'Supply shop', entries: [{ item: { bagId: 512, itemId: 512, count: 3 }, price: 10 }] });
+  expect(summary).toContain('Supply shop'); expect(summary).toContain('Seller #999'); expect(summary).toContain('Sale 512'); expect(summary).toContain('× 3'); expect(summary).toContain('10 zeny each');
+  expect(featureVendingText({ id: 0, name: '', entries: [] })).toContain('0 sale entries');
+});

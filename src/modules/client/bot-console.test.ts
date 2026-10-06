@@ -6,7 +6,7 @@ import { actorKey, manualTargetView } from '../combat/manual-target-view';
 import { GridNavigator, searchGrid } from '../navigation/navigation';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from '../settings/settings';
 import type { Entity } from '../protocol/protocol';
-import { consoleNpcs, consoleNpcAt } from './bot-console-logic';
+import { consoleNpcs, consolePlayerShops, consoleInteractionAt } from './bot-console-logic';
 
 class Node {
   children: Node[] = []; parent: Node | null = null; id = ''; className = ''; type = ''; title = ''; disabled = false; hidden = false;
@@ -47,13 +47,13 @@ function fixture() {
   const engine = new BotEngine(() => {}); engine.connect(true);
   engine.receive([{ type: 'enter', id: 0, map: 'prt_fild08' }, { type: 'spawn', entity: { ...player } }, { type: 'spawn', entity: { ...monster } }, { type: 'inventory', items: [{ itemId: 501, bagId: 501, count: 3, type: 1 }, { itemId: 610, bagId: 610, count: 2, type: 1 }], equipment: Array(10).fill(0), ammoId: -1 }]);
   const host = new Node('main');
-  const ids = ['radar', 'console-walk-x', 'console-walk-y', 'console-item', 'console-use-item', 'console-walk-form', 'console-walk', 'console-action', 'console-item-info', 'console-item-result', 'console-latest-action', 'console-target-result', 'console-lock', 'console-loot-settings', 'console-item-tools', 'open', 'console-levels', 'console-weight', 'console-zeny', 'console-experience', 'console-base-experience', 'console-job-experience', 'console-stock-count', 'monster-list', 'console-npcs', 'console-drops', 'navigation-info'];
+  const ids = ['radar', 'console-walk-x', 'console-walk-y', 'console-item', 'console-use-item', 'console-walk-form', 'console-walk', 'console-action', 'console-item-info', 'console-item-result', 'console-latest-action', 'console-target-result', 'console-lock', 'console-loot-settings', 'console-item-tools', 'open', 'console-levels', 'console-weight', 'console-zeny', 'console-experience', 'console-base-experience', 'console-job-experience', 'console-stock-count', 'monster-list', 'console-npcs', 'console-player-shops', 'console-drops', 'navigation-info'];
   for (const id of ids) { const node = new Node(id === 'radar' ? 'canvas' : id === 'console-item' ? 'select' : id === 'console-walk-x' || id === 'console-walk-y' ? 'input' : 'div'); node.id = id; host.append(node); }
-  const command = vi.fn(async (_request: Record<string, unknown>) => {}), notify = vi.fn(), account = vi.fn(), lootSettings = vi.fn(), manualTools = vi.fn(), npcDialogue = vi.fn();
+  const command = vi.fn(async (_request: Record<string, unknown>) => {}), notify = vi.fn(), account = vi.fn(), lootSettings = vi.fn(), manualTools = vi.fn(), npcDialogue = vi.fn(), playerShop = vi.fn();
   const settings = { ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [], automation: structuredClone(DEFAULT_AUTOMATION) };
-  const view = new BotConsole(host as unknown as HTMLElement, { settings: () => settings, command, notify, account, lootSettings, manualTools, npcDialogue });
+  const view = new BotConsole(host as unknown as HTMLElement, { settings: () => settings, command, notify, account, lootSettings, manualTools, npcDialogue, playerShop });
   const render = () => view.render(engine.snapshot()); render(); view.lock(false, 'Ready');
-  return { engine, host, view, command, notify, settings, render, account, lootSettings, manualTools, npcDialogue, get: (id: string) => host.querySelector(`#${id}`)! };
+  return { engine, host, view, command, notify, settings, render, account, lootSettings, manualTools, npcDialogue, playerShop, get: (id: string) => host.querySelector(`#${id}`)! };
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -136,7 +136,7 @@ describe('bot console NPC map interactions', () => {
     const f = fixture(); spawn(f);
     const status = f.engine.snapshot(), rect = { left: 17, top: 43, width: 800, height: 200 };
     const x = rect.left + (npc.x + .5) / grid.width * rect.width, y = rect.top + (grid.height - .5 - npc.y) / grid.height * rect.height;
-    const hit = (clientX = x, clientY = y, bounds = rect) => consoleNpcAt({ status, clientX, clientY, rect: bounds, width: grid.width, height: grid.height });
+    const hit = (clientX = x, clientY = y, bounds = rect) => consoleInteractionAt({ status, clientX, clientY, rect: bounds, width: grid.width, height: grid.height });
     expect(hit()?.id).toBe(10); expect(hit(x + 7.9)?.id).toBe(10); expect(hit(x + 8.1)).toBeNull();
     expect(hit(rect.left - 1, y)).toBeNull(); expect(hit(x, rect.top + rect.height)).toBeNull();
     expect(hit(x, y, { ...rect, width: 0 })).toBeNull(); expect(hit(NaN)).toBeNull();
@@ -358,5 +358,87 @@ describe('bot console inventory and monitoring', () => {
     f.view.render({ ...s, character: { ...s.character, experience: { baseTotal: 479, baseGained: -21, jobTotal: 182, jobGained: -18 } } });
     expect(f.get('console-base-experience').textContent).toBe('479 (latest -21)');expect(f.get('console-job-experience').textContent).toBe('182 (latest -18)');
     f.view.render(null); expect(f.get('console-weight').textContent).toBe('— / —'); expect(f.get('console-levels').textContent).toBe('— / —'); expect(f.get('console-item').disabled).toBe(true);
+  });
+});
+
+
+describe('player shops are separate from NPC conversations', () => {
+  const shop: Entity = { ...player, id: 30, kind: 2, name: 'Supply stall', hp: 0, maxHp: 0,
+    x: origin.x + 8, y: origin.y + 6, npcSpawn: { displayType: 3, effectType: 0, interactable: true, ownerId: 999 } };
+  const spawn = (f: ReturnType<typeof fixture>, entity = shop) => { f.engine.receive([{ type: 'spawn', entity: { ...entity } }]); f.render(); };
+  const button = (f: ReturnType<typeof fixture>) => f.get('console-player-shops').all().find(node => node.tag === 'button')!;
+
+  it('separates metadata-confirmed shops while keeping kind4 and missing metadata as NPCs', () => {
+    const f = fixture(); spawn(f);
+    spawn(f, { ...shop, id: 31, kind: 4 }); spawn(f, { ...shop, id: 32, npcSpawn: undefined });
+    const status = f.engine.snapshot();
+    expect(consolePlayerShops(status).map(actor => actor.id)).toEqual([30]);
+    expect(consoleNpcs(status).map(actor => actor.id)).toEqual([31, 32]);
+    expect(button(f).textContent).toBe('View shop');
+    expect(f.get('console-npcs').all().filter(node => node.tag === 'button').map(node => node.textContent)).toEqual(['Talk', 'Talk']);
+  });
+
+  it('opens one guarded vending request from a marker and the player shop tools panel', async () => {
+    const f = fixture(); spawn(f);
+    const canvas = f.get('radar'), x = 50 + (shop.x + .5) / grid.width * 800, y = 100 + (grid.height - .5 - shop.y) / grid.height * 800;
+    await canvas.emit('mousemove', x, y); expect(canvas.title).toContain('Player shop'); expect(canvas.title).toContain('view shop');
+    await canvas.emit('click', x, y);
+    expect(f.command).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'manualVendingView', target: expect.objectContaining({ id: 30 }) }));
+    expect(f.playerShop).toHaveBeenCalledExactlyOnceWith(30); expect(f.npcDialogue).not.toHaveBeenCalled();
+  });
+
+  it('chooses the nearest marker across both families and uses lower IDs for equal distances', () => {
+    const f = fixture(); spawn(f); const status = f.engine.snapshot(), rect = { left: 0, top: 0, width: grid.width * 4, height: grid.height * 4 };
+    status.actors.push({ ...shop, id: 40, npcSpawn: undefined, x: shop.x + 1 });
+    const x = (shop.x + .5) * 4, y = (grid.height - .5 - shop.y) * 4;
+    const hit = (clientX: number) => consoleInteractionAt({ status, clientX, clientY: y, rect, width: grid.width, height: grid.height });
+    expect(consoleInteractionAt({ status, clientX: x - 15.9, clientY: y - 15.9, rect, width: grid.width, height: grid.height })?.id).toBe(30);
+    expect(hit(x)?.family).toBe('shop'); expect(hit(x + 2)?.id).toBe(30); expect(hit(x + 3)?.id).toBe(40);
+    status.actors[status.actors.length - 1]!.id = 20; expect(hit(x + 2)?.id).toBe(20);
+  });
+
+  it.each(['removed', 'reused', 'family', 'stale', 'missingLifetime', 'noOwner', 'world', 'dead'])('rejects a saved shop button after %s', async variant => {
+    const f = fixture(); spawn(f); const old = button(f);
+    if (variant === 'removed') { f.engine.receive([{ type: 'remove', id: shop.id, dead: false }]); f.render(); }
+    else if (variant === 'reused') spawn(f);
+    else {
+      const status = f.engine.snapshot();
+      if (variant === 'family') status.actors.find(actor => actor.id === shop.id)!.npcSpawn = undefined;
+      if (variant === 'stale') status.actorObservations.at = status.actorObservations.lastFrameAt = Date.now() - 16000;
+      if (variant === 'missingLifetime' || variant === 'noOwner') status.actorObservations.actors = status.actorObservations.actors.filter(actor => actor.id !== (variant === 'missingLifetime' ? shop.id : 0));
+      if (variant === 'world') status.actorObservations.world = '00000000-0000-0000-0000-000000000001';
+      if (variant === 'dead') status.actors.find(actor => actor.id === shop.id)!.dead = true;
+      f.view.render(status);
+    }
+    await old.emit('click'); expect(f.command).not.toHaveBeenCalled(); expect(f.playerShop).not.toHaveBeenCalled();
+  });
+
+  it('keeps missing lifetimes read-only and supports zero-ID shops without a raster', async () => {
+    const f = fixture(); f.engine.receive([{ type: 'enter', id: 1, map: 'unmapped_field' }, { type: 'spawn', entity: { ...player, id: 1 } }]);
+    spawn(f, { ...shop, id: 0 });
+    const status = f.engine.snapshot(); status.actorObservations.actors = status.actorObservations.actors.filter(actor => actor.id !== 0);
+    f.view.render(status); expect(button(f).hidden).toBe(true);
+    f.render(); await button(f).emit('click');
+    expect(f.command).toHaveBeenCalledWith(expect.objectContaining({ type: 'manualVendingView', map: 'unmapped_field', target: expect.objectContaining({ id: 0 }) }));
+  });
+
+  it('keeps locks, pending admission and failed writes from opening the shop panel', async () => {
+    const f = fixture(); spawn(f); f.view.lock(true, 'Stop automation'); await button(f).emit('click'); expect(f.command).not.toHaveBeenCalled();
+    f.view.lock(false, 'Ready'); let resolve!: () => void;
+    f.command.mockImplementationOnce(() => new Promise<void>(done => { resolve = done; }));
+    await button(f).emit('click'); await button(f).emit('click'); expect(f.command).toHaveBeenCalledOnce(); expect(button(f).disabled).toBe(true);
+    resolve(); for (let index = 0; index < 12; index++) await Promise.resolve();
+    f.playerShop.mockClear(); f.command.mockRejectedValueOnce(new Error('Shop unavailable')); await button(f).emit('click');
+    expect(f.playerShop).not.toHaveBeenCalled(); expect(f.notify).toHaveBeenLastCalledWith('Shop unavailable', true);
+  });
+
+  it('invalidates map pixels and old Talk controls on an NPC-to-shop family change', async () => {
+    const f = fixture(); spawn(f, { ...shop, npcSpawn: undefined });
+    const talk = f.get('console-npcs').all().find(node => node.tag === 'button')!, context = f.get('radar').context;
+    context.drawImage.mockClear();
+    const status = f.engine.snapshot(); status.actors.find(actor => actor.id === shop.id)!.npcSpawn = shop.npcSpawn;
+    f.view.render(status); expect(context.drawImage).toHaveBeenCalledOnce();
+    await talk.emit('click'); expect(f.command).not.toHaveBeenCalled(); expect(f.get('console-npcs').all()).not.toContain(talk);
+    expect(button(f).textContent).toBe('View shop');
   });
 });

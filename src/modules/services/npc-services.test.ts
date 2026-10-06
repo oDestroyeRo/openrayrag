@@ -187,6 +187,7 @@ describe('fresh service identity', () => {
     });
     for (const actors of [
       [{ ...npc, kind: 4 }],
+      [{ ...npc, npcSpawn: { displayType: 3, effectType: 0, interactable: true, ownerId: 999 } }],
       [{ ...npc, name: 'Kafra Staff ' }],
       [{ ...npc, x: 152 }],
       [{ ...npc, dead: true }],
@@ -217,6 +218,7 @@ describe('fresh service identity', () => {
       [{ ...npc, name: 'Different' }],
       [{ ...npc, classId: 99 }],
       [{ ...npc, id: 21 }],
+      [{ ...npc, npcSpawn: { displayType: 3, effectType: 0, interactable: true, ownerId: 999 } }],
     ]) {
       const f = setup();
       f.start();

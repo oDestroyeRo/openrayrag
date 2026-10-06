@@ -22,10 +22,14 @@ export const OP = {
 
 export interface Position { x: number; y: number }
 export interface LookAction {type:'look';direction:number;head:number}
+export interface NpcSpawnParameters {
+  displayType: number; effectType: number; interactable: boolean; ownerId: number;
+}
 export interface Entity extends Position {
   id: number; classId: number; name: string; kind: number; level: number;
   hp: number; maxHp: number; dead: boolean;
   partyId?: number; partyName?: string;
+  npcSpawn?: NpcSpawnParameters;
   sp?: number; maxSp?: number; sitting?: boolean; statuses?: { id: number; seconds: number }[];
 }
 export interface Walk { origin: Position; cells: Position[]; secondsPerCell: number; firstSeconds: number; locked: boolean }
@@ -136,6 +140,20 @@ function spawn(r: Reader): GameEvent[] {
   // the official client: only a positive maximum establishes a player SP value.
   const resources = kind === 0 && maxSp === 0 ? {} : { sp, maxSp };
   const events: GameEvent[] = [{ type: 'spawn', entryType: event, entity: { id, classId, name, kind, level, ...pos, hp, maxHp, ...resources, sitting: state === 2, statuses, dead: state === 3 } }];
+  // NPC display records are raw unmanaged MemoryPack structs, including padding.
+  // Unsupported optional layouts retain the previous entity-prefix behavior.
+  if ((kind === 2 || kind === 3) && r.data.length - r.offset >= 4) {
+    const npcSize = r.i32();
+    if (npcSize === 8) {
+      const npc = new Reader(r.take(npcSize));
+      const displayType = npc.u8(), effectType = npc.u8(), interactable = npc.u8();
+      npc.u8(); // Opaque unmanaged alignment padding; nonzero is valid.
+      const ownerId = npc.i32();
+      if (displayType > 3 || interactable > 1 || ownerId < -1) throw new Error('Invalid NPC appearance');
+      const spawned = events[0]!;
+      if (spawned.type === 'spawn') spawned.entity.npcSpawn = { displayType, effectType, interactable: interactable === 1, ownerId };
+    }
+  }
   // Older synthetic/entity-only captures remain valid, with unknown affiliation.
   // Only a complete pinned PlayerSpawnParameters block can establish party identity.
   if (kind === 0 && r.offset < r.data.length) {

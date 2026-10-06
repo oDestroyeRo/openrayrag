@@ -260,6 +260,7 @@
   "src/modules/warp/warp-ui.ts": "orchestration",
   "src/modules/warp/warp.ts": "orchestration",
   "src/modules/world/actor-identity.ts": "logic",
+  "src/modules/world/actor-interaction-logic.ts": "logic",
   "src/modules/world/actor-observations-logic.ts": "logic",
   "src/modules/world/actor-observations.ts": "orchestration",
   "src/modules/world/actor-predicate-ui-logic.ts": "logic",

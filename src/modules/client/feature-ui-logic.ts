@@ -1,4 +1,5 @@
 import { anyPass, filter, find, groupBy, map, mapValues, pipe, sumBy, take } from 'remeda';
+import { isTalkNpc, isPlayerShop } from '../world/actor-interaction-logic';
 import { actorId } from '../world/actor-identity';
 import type { ActorId } from '../../shared/domain-values';
 import type { AutomationSettingsInput } from '../settings/settings';
@@ -34,7 +35,7 @@ export function featureServiceEvidence(status: Record<string, unknown>): string 
   const stock = Array.isArray(character.inventory) ? pipe(character.inventory, map(object), map(row => [row.itemId, row.count])) : null;
   const learned = Array.isArray(character.learned) ? map(character.learned, object) : [];
   const mastery = Array.isArray(character.learned) ? find(learned, row => row.skillId === 1)?.level : null;
-  const npcs = Array.isArray(status.actors) ? pipe(status.actors, map(object), filter(actor => actor.kind === 2 || actor.kind === 4),
+  const npcs = Array.isArray(status.actors) ? pipe(status.actors, map(object), filter(isTalkNpc),
     map(actor => [actor.id, actor.kind, actor.classId, actor.name, actor.x, actor.y, actor.dead])) : null;
   return JSON.stringify([character.inventoryKnown, stats.zeny, character.skillsKnown, mastery, stock, npcs]);
 }
@@ -64,9 +65,24 @@ export function featureRuleConditionsText(value: unknown): string {
   })).join('\n');
 }
 export function featureNpcChoices(value: unknown): { value: string; label: string; key: string }[] {
-  return pipe(Array.isArray(value) ? value : [], map(object), filter(actor => actor.kind === 2 || actor.kind === 4),
+  return pipe(Array.isArray(value) ? value : [], map(object), filter(actor => isTalkNpc(actor) && actor.dead !== true),
     map(actor => ({ value: String(actor.id), label: `${text(actor.name) || 'NPC'} · #${actor.id}`, key: `${actor.id}:${text(actor.name)}` })));
 }
+export function featureVendorChoices(value: unknown): { value: string; label: string; key: string }[] {
+  return pipe(Array.isArray(value) ? value : [], map(object), filter(actor => isPlayerShop(actor) && actor.dead !== true),
+    map(actor => ({ value: String(actor.id), label: `${text(actor.name) || 'Player shop'} · #${actor.id}`, key: `${actor.id}:${text(actor.name)}` })));
+}
+
+export function featureVendingText(value: unknown): string {
+  const shop = object(value);
+  if (!Array.isArray(shop.entries)) return 'Select a player shop and request its stock. Buying requires explicit sale IDs and quantities.';
+  return `Confirmed player shop · ${text(shop.name) || 'Unnamed shop'} · Seller #${number(shop.id) ?? '?'} · ${shop.entries.length} sale entries`
+    + pipe(shop.entries, take(30), map(entry => {
+      const row = object(entry), item = object(row.item);
+      return `\nSale ${number(item.bagId) ?? '?'} · ${itemName(number(item.itemId) ?? 0)} × ${number(item.count) ?? '?'} · ${number(row.price) ?? '?'} zeny each`;
+    })).join('') + (shop.entries.length > 30 ? '\nAdditional sale entries omitted.' : '');
+}
+
 export function featureInventoryText(inventory: readonly unknown[]): string {
   return pipe(inventory, take(30), map(item => {
     const row = object(item);

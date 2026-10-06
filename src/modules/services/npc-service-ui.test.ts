@@ -98,6 +98,23 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
 }
 afterEach(() => vi.unstubAllGlobals());
 describe('NPC service UI ownership gates', () => {
+  it('excludes player shops from the actual service preview before actor projection', async () => {
+    const s = setup(), service = JSON.parse(s.field('Service definition JSON').value);
+    const npc = { id: 7, kind: 2, classId: 50, name: service.identity.name,
+      ...service.identity.anchor, level: 1, hp: 0, maxHp: 0, dead: false };
+    const shop = { ...npc, id: 8, npcSpawn: { displayType: 3 } };
+    Object.assign(s.status, { map: service.map, actors: [shop], character: {
+      inventoryKnown: true, skillsKnown: true, stats: { zeny: 2_000_000_000 },
+      learned: [{ skillId: 1, level: service.basicSkillLevel }],
+      inventory: service.workflow.minStock,
+    } });
+    await s.button('Preview').click();
+    expect(s.panel.all().some(node => node.textContent.includes('Waiting for the exact NPC'))).toBe(true);
+    s.status.actors = [shop, npc];
+    await s.button('Preview').click();
+    expect(s.panel.all().some(node => node.textContent.startsWith('Verified contract'))).toBe(true);
+    expect(s.hooks.service).not.toHaveBeenCalled();
+  });
   it('previews and saves, exports, imports and deletes configuration while offline', async () => {
     const s = setup();
     s.lock(false, true, true);

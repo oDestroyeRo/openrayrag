@@ -15,7 +15,8 @@ import {sameActionIdentity,type ActionIdentity} from '../world/actor-identity';
 import { ManualSocket, type SocketContext, type SocketSnapshot } from '../socket/socket';
 import { socketStockFloors, validateSocketEnvelope, type SocketAction } from '../socket/socket-protocol';
 import { validateManualTargetRequest } from '../combat/manual-target';
-import { validateManualNpcTalkRequest } from '../services/manual-npc-talk-logic';
+import { validateManualNpcTalkRequest, validateManualVendingViewRequest } from '../services/manual-npc-talk-logic';
+import { isTalkNpc, isPlayerShop } from '../world/actor-interaction-logic';
 import { insideLockArea, lockEntry, mapAllowed, mapPolicy } from '../navigation/map-policy';
 import type { ActorPredicate } from '../world/actor-observations';
 import { routineActorPredicates } from '../automation/routines-logic';
@@ -693,7 +694,8 @@ export class CompanionController {
     return { map: engine.map, playerId: engine.player?.id??null, alive: !!engine.player && !engine.player.dead,
       idle: engine.idleForActions(), inventory: character.inventoryKnown ? [...character.inventory.values()] : [],
       equipped: [...character.equipment, character.ammoId], zeny: character.stats?.zeny ?? -1,
-      world: this.world, itemCatalog: ITEM_CATALOG, visibleNpcIds: map(filter([...engine.actors.values()], e => e.kind === 2 || e.kind === 4), e => e.id),
+      world: this.world, itemCatalog: ITEM_CATALOG, visibleNpcIds: map(filter([...engine.actors.values()], e => isTalkNpc(e) && !e.dead), e => e.id),
+      visibleVendorIds: map(filter([...engine.actors.values()], e => isPlayerShop(e) && !e.dead), e => e.id),
       actorIdentity:id=>engine.actorActionIdentity(id)??(id===0?null:engine.actorActionIdentity()),
       visiblePlayerIds:map(filter([...engine.actors.values()], e=>e.kind===0&&!e.dead), e=>e.id),
       basicSkillLevel: character.skillsKnown ? character.skillLevel(domainSkillId(1)) : 0,
@@ -747,7 +749,7 @@ export class CompanionController {
   private refineContext():RefineContext {
     const e=this.engine,c=e.character,p=e.player,identity=this.refineIdentity(),npcId=this.world.npc.id;
     const actor=npcId===null?null:e.actors.get(npcId),candidate=npcId===null?null:this.refineIdentity(npcId);
-    const npcIdentity=actor&&(actor.kind===2||actor.kind===4)&&candidate===this.refineNpcIdentity?candidate:null;
+    const npcIdentity=actor&&isTalkNpc(actor)&&candidate===this.refineNpcIdentity?candidate:null;
     const init=this.refineInitialization;if(init&&identity&&init.identity===null)init.identity=identity;
     const readbackKey=identity?(init?.identity===identity?init.key:identity):init?.identity===null?init.key:null;
     return {ready:!!p&&!p.dead&&!!identity&&e.connected&&e.compatible&&this.heartbeatHealthy&&this.now()-this.lastFrame<=15000,
@@ -845,18 +847,19 @@ export class CompanionController {
       const blocker=this.manualWorldBlocker();if(blocker)throw new Error(blocker);
       this.engine.startManual(request);this.started=this.now();this.lastTick=this.now();return;
     }
-    if(mode==='command'&&input&&typeof input==='object'&&'type' in input&&input.type==='manualNpcTalk') {
-      const request=validateManualNpcTalkRequest(input);this.requireIdle();
-      if(!this.movementSettled())throw new Error('Wait for authoritative movement to settle before talking to an NPC.');
+    if(mode==='command'&&input&&typeof input==='object'&&'type' in input&&(input.type==='manualNpcTalk'||input.type==='manualVendingView')) {
+      const request=input.type==='manualNpcTalk'?validateManualNpcTalkRequest(input):validateManualVendingViewRequest(input);this.requireIdle();
+      const vending=request.type==='manualVendingView';
+      if(!this.movementSettled())throw new Error('Wait for authoritative movement to settle before interacting.');
       const blocker=this.manualWorldBlocker();if(blocker)throw new Error(blocker);
       const binding=this.engine.actorActionIdentity(request.target.id),npc=this.engine.actors.get(request.target.id);
       if(request.map!==this.engine.map||!binding||binding.world!==request.owner.world
         ||binding.selfId!==request.owner.id||binding.selfIncarnation!==request.owner.incarnation
         ||binding.targetIncarnation!==request.target.incarnation)
-        throw new Error('Character, map or NPC lifetime changed. Select the NPC again.');
-      if(!npc||(npc.kind!==2&&npc.kind!==4)||npc.dead)throw new Error('Selected NPC is absent, replaced or dead.');
-      if(this.engine.player!.dead||this.engine.player!.hp<=0)throw new Error('A current living character is required to talk to an NPC.');
-      this.dispatch({type:'npcTalk',id:request.target.id},null);
+        throw new Error('Character, map or actor lifetime changed. Select the NPC or player shop again.');
+      if(!npc||!(vending?isPlayerShop(npc):isTalkNpc(npc))||npc.dead)throw new Error('Selected NPC or player shop is absent, replaced or changed.');
+      if(this.engine.player!.dead||this.engine.player!.hp<=0)throw new Error('A current living character is required to interact.');
+      this.dispatch({type:vending?'vendingView':'npcTalk',id:request.target.id},null);
       this.started=this.now();this.lastTick=this.now();return;
     }
     if (mode === 'social') {
