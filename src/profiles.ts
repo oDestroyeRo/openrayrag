@@ -12,7 +12,7 @@ export class ProfileStore {
     try { const saved = readStoredText(storage, PROFILE_STORAGE_KEY); if (saved) this.profiles = parseProfileDocument(saved).profiles; }
     catch { /* A corrupt or incompatible document cannot change current settings. */ }
   }
-  list(): BotProfile[] { return map(this.profiles, checkedProfile); }
+  list(): readonly BotProfile[] { return map(this.profiles, checkedProfile); }
   private persist(profiles: BotProfile[]): void {
     writeStoredText(this.storage, PROFILE_STORAGE_KEY, encodeProfileDocument(profiles));
     this.profiles = profiles;
@@ -25,7 +25,7 @@ export class ProfileStore {
   }
   remove(id: string): void { this.persist(filter(this.profiles, profile => profile.id !== id)); }
   export(id: string): string { return exportProfile(this.profiles, id); }
-  import(text: string): BotProfile[] {
+  import(text: string): readonly BotProfile[] {
     const imported = parseProfileDocument(text).profiles;
     profileImportAllowed(this.profiles, imported);
     const copies = importedProfiles(this.profiles, imported, imported.map(() => ({ id: this.id(), savedAt: this.now() })));

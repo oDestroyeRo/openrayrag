@@ -1,4 +1,4 @@
-import { milliseconds } from './domain-values';
+import { itemId, milliseconds, quantity } from './domain-values';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
 import { checkedProfile, profileName, importedProfiles, parseProfileDocument, savedProfiles } from './profiles-logic';
@@ -49,9 +49,9 @@ describe('detached local document proposals', () => {
   it('rejects colliding service identities and detaches workflow definitions', () => {
     const original = structuredClone(BUILTIN_SERVICES[0]!), before = structuredClone(original);
     const imported = importedServices([], [original], ['fresh']);
-    imported[0]!.approach.x++;
+    Reflect.set(imported[0]!.approach, 'x', imported[0]!.approach.x + 1);
     const proposal = savedServices([original], original, original.id, original.id);
-    proposal.services[0]!.identity.name = 'Changed';
+    Reflect.set(proposal.services[0]!.identity, 'name', 'Changed');
     expect(original).toEqual(before);
     expect(() => importedServices([original], [original], [original.id])).toThrow('unique');
     expect(() => importedServices([], [original], [])).toThrow('unique');
@@ -262,14 +262,15 @@ describe('pure editor and telemetry projections', () => {
 
 describe('recovery item observation and preference projections', () => {
   it('keeps saved preference order across zero stock and returns detached display arrays', () => {
-    const stock = new Map([[501, 2], [502, 3], [503, 0]]), ids = [502, 501, 503], itemIds = [503, 501];
+    const stock = new Map([[itemId(501), quantity(2)], [itemId(502), quantity(3)], [itemId(503), quantity(0)]]),
+      ids = [itemId(502), itemId(501), itemId(503)], itemIds = [itemId(503), itemId(501)];
     const projected = recoveryChoices({ selected: true, ids, itemIds, stock });
     expect(projected).toEqual({ order: [503, 501, 502], visibleOrder: [501, 502] });
     expect(recoveryStockSummary({ ids, itemIds, stock })).toEqual({ carried: true, missing: 1 });
-    expect(carriedRecoveryItem(stock)(503)).toBe(false);
+    expect(carriedRecoveryItem(stock)(itemId(503))).toBe(false);
     projected.order.reverse(); projected.visibleOrder.length = 0;
     expect(itemIds).toEqual([503, 501]); expect(ids).toEqual([502, 501, 503]);
-    stock.set(503, 1);
+    stock.set(itemId(503), quantity(1));
     expect(recoveryChoices({ selected: true, ids, itemIds, stock }).visibleOrder).toEqual([503, 501, 502]);
     expect(recoveryChoices({ selected: false, ids, itemIds, stock }).order).toEqual(ids);
   });

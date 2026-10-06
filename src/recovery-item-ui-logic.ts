@@ -17,19 +17,19 @@ export function recoveryInventory(character: unknown): RecoveryInventory | null 
   return stock;
 }
 
-export const carriedRecoveryItem = (stock: ReadonlyMap<number, number> | null) => (itemId: number): boolean =>
+export const carriedRecoveryItem = (stock: RecoveryInventory | null) => (itemId: ItemId): boolean =>
   (stock?.get(itemId) ?? 0) > 0;
 
 export function recoveryChoices({ selected, itemIds, ids, stock }: {
-  selected: boolean; itemIds: readonly number[]; ids: readonly number[]; stock: ReadonlyMap<number, number> | null;
-}): { order: number[]; visibleOrder: number[] } {
+  selected: boolean; itemIds: readonly ItemId[]; ids: readonly ItemId[]; stock: RecoveryInventory | null;
+}): { order: ItemId[]; visibleOrder: ItemId[] } {
   const order = selected ? pipe(ids, filter(id => !itemIds.includes(id)), remaining => [...itemIds, ...remaining]) : [...ids];
   const [visibleOrder] = partition(order, carriedRecoveryItem(stock));
   return { order, visibleOrder };
 }
 
 export function recoveryStockSummary({ ids, itemIds, stock }: {
-  ids: readonly number[]; itemIds: readonly number[]; stock: ReadonlyMap<number, number> | null;
+  ids: readonly ItemId[]; itemIds: readonly ItemId[]; stock: RecoveryInventory | null;
 }): { carried: boolean; missing: number } {
   return { carried: find(ids, carriedRecoveryItem(stock)) !== undefined,
     missing: stock === null ? 0 : filter(itemIds, id => (stock.get(id) ?? 0) === 0).length };

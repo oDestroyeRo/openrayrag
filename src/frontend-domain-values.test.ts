@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { actorId, itemId, milliseconds, revisionFor, seconds, skillId, worldId } from './domain-values';
+import { actorId, bagId, itemId, milliseconds, revisionFor, seconds, skillId, worldId } from './domain-values';
 import { checkedProfile, profileId, profileName, profileSavedAt, type ProfileId, type ProfileName, type ProfileSavedAt } from './profiles-logic';
 import { formDocument, formRevision, nextFormSave, type FormRevision } from './current-form-logic';
 import { CurrentForm } from './current-form';
@@ -11,6 +11,10 @@ import { SettingsClose } from './settings-close';
 import { updateAccount, updateRequestId, type UpdateRequestId } from './update-continuation-logic';
 import { DEFAULT_SETTINGS } from './settings';
 import { parseMapCatalog } from './map-data-logic';
+import { BUILTIN_SERVICES } from './npc-services-logic';
+import { checkedSavedService, savedServiceId, serviceContractId, type ServiceContractId } from './npc-service-store-logic';
+import { NpcServiceStore } from './npc-service-store';
+import { carriedRecoveryItem, recoveryInventory } from './recovery-item-ui-logic';
 
 const settings = () => ({ ...structuredClone(DEFAULT_SETTINGS), map: 'prt_fild08', targets: [4000] });
 const token = '00000000-0000-0000-0000-000000000001';
@@ -85,6 +89,27 @@ describe('frontend admitted domains', () => {
     expect(events).toEqual(['lock:true', 'status', 'settled', 'flush', 'cancel', 'status', 'lock:false']);
   });
 
+  it('admits detached saved services without confusing registry and contract identity', () => {
+    const input = structuredClone(BUILTIN_SERVICES[0]!), expected = structuredClone(input), saved = checkedSavedService(input);
+    input.identity.name = 'Changed'; input.workflow.steps.length = 0;
+    expect(JSON.parse(JSON.stringify(saved))).toEqual(expected);
+    expect(savedServiceId('saved_service-1')).toBe('saved_service-1');
+    expect(serviceContractId(' contract:storage visit ')).toBe(' contract:storage visit ');
+    expect(() => savedServiceId('bad service')).toThrow('Invalid service identifier.');
+    expect(() => savedServiceId(' ')).toThrow('Invalid service text.');
+    expect(() => serviceContractId('a'.repeat(129))).toThrow('Invalid service text.');
+  });
+
+  it('keeps the legacy absent workflow timeout at the same persistence failure seam', () => {
+    const definition = structuredClone(BUILTIN_SERVICES[0]!);
+    const input = { ...definition, workflow: { ...definition.workflow, timeoutMs: undefined } };
+    expect(checkedSavedService(input).workflow.timeoutMs).toBeUndefined();
+    const write = vi.fn(), id = vi.fn(() => 'saved');
+    const store = new NpcServiceStore({ getItem: () => null, setItem: write }, id);
+    expect(() => store.save(input)).toThrow('Invalid service fields.');
+    expect(id).toHaveBeenCalledOnce(); expect(write).not.toHaveBeenCalled(); expect(store.list()).toEqual([]);
+  });
+
   it('uses distinct identities and units and exposes readonly admitted models', () => {
     // Compile-only contracts must not execute invalid operations.
     if (false) {
@@ -121,7 +146,17 @@ describe('frontend admitted domains', () => {
       const item: ReturnType<typeof itemId> = row.classId;
       // @ts-expect-error actor IDs are not profile timestamps
       const timestamp: ProfileSavedAt = actorId(0);
-      void [request, close, session, profile, name, savedAt, revision, item, timestamp];
+      const service = checkedSavedService(BUILTIN_SERVICES[0]!);
+      // @ts-expect-error a saved registry ID cannot identify a pinned contract
+      const contract: ServiceContractId = service.id;
+      // @ts-expect-error service registry IDs are not profile IDs
+      const serviceProfile: ProfileId = service.id;
+      // @ts-expect-error saved service workflows are readonly
+      service.workflow.steps.push({ type: 'advance' });
+      const stock = recoveryInventory({ inventoryKnown: true, inventory: [] });
+      // @ts-expect-error recovery projections select item IDs, not inventory slot IDs
+      carriedRecoveryItem(stock)(bagId(501));
+      void [request, close, session, profile, name, savedAt, revision, item, timestamp, contract, serviceProfile];
     }
   });
 });

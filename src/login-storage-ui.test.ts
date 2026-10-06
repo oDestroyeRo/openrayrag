@@ -39,7 +39,7 @@ vi.mock('./feature-ui', async () => {
     hasUnsavedMacro(): boolean { return ipc.macroDirty || ipc.editor?.unsaved === true; }
     setupDraftDirty(): boolean { return ipc.macroDirty || ipc.editor?.dirty === true; }
     syncSetup(settings: SettingsInput): void { ipc.syncSetup(settings); ipc.editor?.syncSettings(settings); }
-    setupDocument(): BotScriptDocument { if (ipc.macroDirty) throw new Error('Apply or discard your Script draft before Start.'); if(ipc.editor)return ipc.editor.configured(); return {settings: ipc.setupSettings ?? this.hooks.macroSettings(), script: ipc.setupScript}; }
+    setupDocument(): {settings: SettingsInput; script: BotScriptDocument['script']} { if (ipc.macroDirty) throw new Error('Apply or discard your Script draft before Start.'); if(ipc.editor)return ipc.editor.configured(); return {settings: ipc.setupSettings ?? this.hooks.macroSettings(), script: ipc.setupScript}; }
     clearMacro():void{ipc.clearMacro();}
     clearSocial():void{}
     clearMemo():void{}
