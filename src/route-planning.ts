@@ -23,6 +23,9 @@ export class PlanningCancelled extends Error {
 // accumulate work or displace an executing controller's job.
 export const MAX_PLANNING_JOBS = 4;
 let activeJobs = 0;
+type PlanningSettlement<T> =
+  | { type: 'completed'; value: T }
+  | { type: 'failed'; cause: unknown };
 export function completePlanning<T>(work: PlanningWork<T>): T {
   let result = work.next();
   while (!result.done) result = work.next();
@@ -38,16 +41,21 @@ export function runPlanning<T>(work: PlanningWork<T>, options: PlanningOptions =
   return new Promise<T>((resolve, reject) => {
     let settled = false;
     let cancelScheduled: (() => void) | undefined;
-    const finish = (error: unknown, result?: T) => {
+    const finish = (outcome: PlanningSettlement<T>) => {
       if (settled) return;
       settled = true;
       cancelScheduled?.();
       options.signal?.removeEventListener('abort', abort);
       activeJobs--;
-      try { work.return(undefined as T); } catch (closingError) { error ??= closingError; }
-      if (error !== undefined) reject(error); else resolve(result!);
+      try { work.return(undefined as T); }
+      catch (cause) {
+        // A thrown value may itself be undefined. Preserve the first failure
+        // explicitly instead of treating its value as a completion sentinel.
+        if (outcome.type === 'completed') outcome = { type: 'failed', cause };
+      }
+      if (outcome.type === 'failed') reject(outcome.cause); else resolve(outcome.value);
     };
-    const abort = () => finish(new PlanningCancelled());
+    const abort = () => finish({ type: 'failed', cause: new PlanningCancelled() });
     const schedule = () => {
       const queuedAt = runtime.now();
       cancelScheduled = runtime.schedule(() => {
@@ -64,11 +72,11 @@ export function runPlanning<T>(work: PlanningWork<T>, options: PlanningOptions =
           } while (!result.done && ++operations < 4096 && runtime.now() - start < budget);
           options.onSlice?.({ durationMs: runtime.now() - start, schedulingDelayMs: start - queuedAt, complete: result.done === true, ...(!result.done && result.value ? {phase: result.value} : {}) });
           if (settled) return;
-          if (result.done) finish(undefined, result.value); else schedule();
-        } catch (error) { finish(error); }
+          if (result.done) finish({ type: 'completed', value: result.value }); else schedule();
+        } catch (cause) { finish({ type: 'failed', cause }); }
       });
     };
     options.signal?.addEventListener('abort', abort, { once: true });
-    try { schedule(); } catch (error) { finish(error); }
+    try { schedule(); } catch (cause) { finish({ type: 'failed', cause }); }
   });
 }

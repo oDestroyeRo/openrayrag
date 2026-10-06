@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { Writable } from 'node:stream';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { runLoggedProcess, smokePackagingEnvironment } from './process-diagnostics.mjs';
+import { ProcessExecutionError, runLoggedProcess, smokePackagingEnvironment } from './process-diagnostics.mjs';
+import { classifyProcessOutcome, processErrorCode } from './process-outcome-policy.mjs';
 
 function collectedOutput() {
   const chunks = [];
@@ -23,12 +25,93 @@ async function fixture(t) {
   return { folder, report, out, err, options: { report, stdout: out.stream, stderr: err.stream } };
 }
 
+function processFailure(failure, message) {
+  return error => {
+    assert.ok(error instanceof ProcessExecutionError);
+    assert.equal(error.message, message);
+    assert.deepEqual(error.failure, failure);
+    assert.ok(Object.isFrozen(error.failure));
+    assert.equal(error.cause, undefined);
+    return true;
+  };
+}
+
+test('pure process outcomes preserve error precedence and distinguish signals, exits and success', () => {
+  const observations = [
+    [{ failureCode: null, exitCode: 0, signal: null, discardedBytes: 24 }, { kind: 'success', exitCode: 0, signal: null, discardedBytes: 24 }],
+    [{ failureCode: null, exitCode: 7, signal: null, discardedBytes: 0 }, { kind: 'exit', exitCode: 7 }],
+    [{ failureCode: null, exitCode: null, signal: 'SIGTERM', discardedBytes: 0 }, { kind: 'signal', signal: 'SIGTERM' }],
+    [{ failureCode: null, exitCode: null, signal: null, discardedBytes: 0 }, { kind: 'exit', exitCode: null }],
+    [{ failureCode: 'ENOENT', exitCode: 0, signal: 'SIGTERM', discardedBytes: 0 }, { kind: 'process-error', code: 'ENOENT' }],
+    [{ failureCode: 'synthetic-sensitive-error', exitCode: 7, signal: null, discardedBytes: 0 }, { kind: 'process-error', code: 'unknown' }],
+    [{ failureCode: null, exitCode: 0, signal: 'SIGTERM', discardedBytes: 0 }, { kind: 'success', exitCode: 0, signal: 'SIGTERM', discardedBytes: 0 }],
+  ];
+  for (const [observation, expected] of observations) {
+    Object.freeze(observation);
+    assert.deepEqual(classifyProcessOutcome(observation), expected);
+    assert.deepEqual(classifyProcessOutcome(observation), expected);
+  }
+  assert.equal(processErrorCode({ toString() { throw new Error('Must not coerce raw errors.'); } }), 'unknown');
+  assert.equal(processErrorCode(7), '7');
+  assert.equal(processErrorCode(0), 'unknown');
+});
+
+test('typed process failures detach only safe scalar fields from their input', () => {
+  const secret = 'synthetic-sensitive-error-context';
+  const raw = { kind: 'process-error', code: 'EPIPE', cause: new Error(secret), args: [secret], env: { SECRET: secret }, stderr: secret };
+  const error = new ProcessExecutionError(raw, 'reports/check.log');
+  raw.code = 'ENOENT';
+  assert.equal(error.name, 'ProcessExecutionError');
+  assert.equal(error.message, 'Process launch or diagnostic output failed (EPIPE). See reports/check.log.');
+  assert.deepEqual(error.failure, { kind: 'process-error', code: 'EPIPE' });
+  assert.notEqual(error.failure, raw);
+  assert.ok(Object.isFrozen(error.failure));
+  for (const key of ['cause', 'args', 'env', 'stderr']) assert.equal(error[key], undefined);
+  assert.doesNotMatch(`${error.stack}\n${JSON.stringify(error)}`, /synthetic-sensitive-error-context/);
+  assert.deepEqual(new ProcessExecutionError({ ...raw, code: secret }, 'report.log').failure, { kind: 'process-error', code: 'unknown' });
+});
+
+test('compiler rejects invalid outcome variants and values, including success as a failure', async t => {
+  const { folder } = await fixture(t);
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  const policy = JSON.stringify(fileURLToPath(new URL('./process-outcome-policy.mjs', import.meta.url)).replaceAll('\\', '/'));
+  const runner = JSON.stringify(fileURLToPath(new URL('./process-diagnostics.mjs', import.meta.url)).replaceAll('\\', '/'));
+  const source = join(folder, 'invalid-process-outcomes.mjs');
+  await writeFile(source, `
+import { classifyProcessOutcome } from ${policy};
+import { ProcessExecutionError } from ${runner};
+/** @type {import(${policy}).ProcessOutcome} */
+const unsupported = { kind: 'retry' };
+classifyProcessOutcome({ failureCode: null, exitCode: '7', signal: null, discardedBytes: 0 });
+/** @type {import(${policy}).ProcessSuccess} */
+const success = { kind: 'success', exitCode: 0, signal: null, discardedBytes: 0 };
+new ProcessExecutionError(success, 'report.log');
+`);
+  const project = join(folder, 'tsconfig.json');
+  await writeFile(project, JSON.stringify({
+    extends: join(root, 'tsconfig.release.json'),
+    compilerOptions: { typeRoots: [join(root, 'node_modules', '@types')] },
+    files: [source],
+  }));
+  const compiler = join(dirname(createRequire(import.meta.url).resolve('typescript/package.json')), 'bin', 'tsc');
+  await assert.rejects(promisify(execFile)(process.execPath, [compiler, '--project', project, '--pretty', 'false'], {
+    cwd: root, timeout: 30_000, maxBuffer: 1024 * 1024,
+  }), error => {
+    const output = error.stdout + error.stderr;
+    assert.match(output, /Type '"retry"' is not assignable/);
+    assert.match(output, /Type 'string' is not assignable to type 'number'/);
+    assert.match(output, /Type '"success"' is not assignable/);
+    assert.equal((output.match(/error TS/g) ?? []).length, 3, output);
+    return true;
+  });
+});
+
 test('real child output streams to its consoles and a retained bounded log on success', async t => {
   const { report, out, err, options } = await fixture(t);
   const outcome = await runLoggedProcess(process.execPath, ['-e', 'console.log("built"); console.error("diagnostic");'], options);
   assert.equal(out.text(), 'built\n');
   assert.equal(err.text(), 'diagnostic\n');
-  assert.equal(outcome.exitCode, 0);
+  assert.deepEqual(outcome, { exitCode: 0, signal: null, discardedBytes: 0 });
   const log = await readFile(report, 'utf8');
   assert.match(log, /built/);
   assert.match(log, /diagnostic/);
@@ -38,16 +121,16 @@ test('real child output streams to its consoles and a retained bounded log on su
 
 test('nonzero exit and launch failure retain diagnostics and identify their statuses', async t => {
   const { folder, report, options } = await fixture(t);
-  await assert.rejects(runLoggedProcess(process.execPath, ['-e', 'console.error("failed to attach image"); process.exitCode = 7;'], options), /exited with 7/);
+  await assert.rejects(runLoggedProcess(process.execPath, ['-e', 'console.error("failed to attach image"); process.exitCode = 7;'], options), processFailure({ kind: 'exit', exitCode: 7 }, `Process exited with 7. See ${report}.`));
   assert.match(await readFile(report, 'utf8'), /failed to attach image[\s\S]*exit=7/);
-  await assert.rejects(runLoggedProcess(join(folder, 'absent-executable'), [], options), /failed \(ENOENT\)/);
+  await assert.rejects(runLoggedProcess(join(folder, 'absent-executable'), [], options), processFailure({ kind: 'process-error', code: 'ENOENT' }, `Process launch or diagnostic output failed (ENOENT). See ${report}.`));
   assert.equal(await readFile(report, 'utf8'), '\n[process error: ENOENT]\n');
   assert.deepEqual(await readdir(join(folder, 'reports')), ['package.log']);
 });
 
 test('signal termination is distinct from an exit status', { skip: process.platform === 'win32' }, async t => {
   const { report, options } = await fixture(t);
-  await assert.rejects(runLoggedProcess(process.execPath, ['-e', 'process.kill(process.pid, "SIGTERM");'], options), /exited with SIGTERM/);
+  await assert.rejects(runLoggedProcess(process.execPath, ['-e', 'process.kill(process.pid, "SIGTERM");'], options), processFailure({ kind: 'signal', signal: 'SIGTERM' }, `Process exited with SIGTERM. See ${report}.`));
   assert.match(await readFile(report, 'utf8'), /exit=null; signal=SIGTERM/);
 });
 
@@ -134,11 +217,47 @@ test('console failure terminates the child and retains a safe diagnostic error',
     done(error);
   } });
   await assert.rejects(runLoggedProcess(process.execPath, ['-e', 'console.log("starting build"); setInterval(() => {}, 1000);'], {
-    ...options, stdout,
-  }), /failed \(EPIPE\)/);
+    ...options, stdout, env: { ...process.env, TEST_SECRET: 'synthetic-env-secret' },
+  }), error => {
+    processFailure({ kind: 'process-error', code: 'EPIPE' }, `Process launch or diagnostic output failed (EPIPE). See ${report}.`)(error);
+    assert.doesNotMatch(`${error.stack}\n${JSON.stringify(error)}`, /synthetic-(?:sensitive-console-error|env-secret)|starting build|setInterval/);
+    return true;
+  });
   const log = await readFile(report, 'utf8');
   assert.match(log, /process error: EPIPE/);
   assert.doesNotMatch(log, /synthetic-sensitive-console-error/);
+});
+
+test('the first observed console error survives later stream failures and child cancellation', async t => {
+  const { report, options } = await fixture(t);
+  const observed = [];
+  const failures = [];
+  const failingConsole = code => new Writable({ write(_chunk, _encoding, done) {
+    const error = new Error(`synthetic-private-${code}`);
+    error.code = code;
+    // Let both pipes reach their consoles before either failure kills the child.
+    failures.push(() => { observed.push(code); done(error); });
+    if (failures.length === 2) for (const fail of failures) fail();
+  } });
+  await assert.rejects(runLoggedProcess(process.execPath, ['-e', 'console.log("out"); console.error("err"); setInterval(() => {}, 1000);'], {
+    ...options, stdout: failingConsole('EPIPE'), stderr: failingConsole('EIO'),
+  }), error => {
+    assert.equal(observed.length, 2);
+    return processFailure({ kind: 'process-error', code: observed[0] }, `Process launch or diagnostic output failed (${observed[0]}). See ${report}.`)(error);
+  });
+  assert.match(await readFile(report, 'utf8'), new RegExp(`process error: ${observed[0]}`));
+});
+
+test('report publication failure takes precedence over process outcome and removes its temporary file', async t => {
+  const { folder, report, options } = await fixture(t);
+  await mkdir(report, { recursive: true });
+  await assert.rejects(runLoggedProcess(process.execPath, ['-e', 'process.exitCode = 7;'], options), error => {
+    assert.ok(!(error instanceof ProcessExecutionError));
+    assert.ok(['EISDIR', 'EEXIST', 'EPERM', 'EACCES'].includes(error.code));
+    return true;
+  });
+  assert.deepEqual(await readdir(join(folder, 'reports')), ['package.log']);
+  assert.deepEqual(await readdir(report), []);
 });
 
 test('actual smoke entry point rejects signing credentials before any version stamping', {

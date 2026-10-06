@@ -1,4 +1,5 @@
 import { filter, flatMap, map } from 'remeda';
+import { foldConditions, unmatchedFirstConditions, type ConditionState } from './condition-logic';
 import { actorPredicateEvaluator, validActorPredicate, type ActorPredicate, type ActorObservationSnapshot } from './actor-observations-logic';
 export type NumericOperator = 'lt' | 'lte' | 'eq' | 'gte' | 'gt';
 
@@ -51,7 +52,7 @@ export interface RoutineSelectorCheckpoint<Action> {
 }
 
 export interface ConditionTrace {
-  condition: RoutineCondition; state: 'matched' | 'unmatched' | 'unavailable'; reason: string;
+  condition: RoutineCondition; state: ConditionState; reason: string;
 }
 
 export interface RuleTrace<Action> {
@@ -261,8 +262,7 @@ export function traceRules<Action>({ spec, observation, progress, now = 0, allow
   const evaluate = routineConditionEvaluator({ observation, allowExtendedElapsed });
   const rules = map(spec.rules, (rule, index): RuleTrace<Action> => {
     const conditions = map(rule.conditions, evaluate);
-    let state: RuleTrace<Action>['state'] = conditions.some(condition => condition.state === 'unmatched') ? 'unmatched'
-      : conditions.some(condition => condition.state === 'unavailable') ? 'unavailable' : 'matched';
+    let state: RuleTrace<Action>['state'] = foldConditions(conditions, unmatchedFirstConditions);
     let reason = state === 'matched' ? 'All conditions matched.'
       : state === 'unavailable' ? 'Required observation is unavailable.' : 'A condition did not match.';
     const current = progress?.[index];

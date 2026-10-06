@@ -5,6 +5,17 @@ import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { classifyProcessOutcome, processErrorCode, processFailureDetails, processFailureMessage } from './process-outcome-policy.mjs';
+
+export class ProcessExecutionError extends Error {
+  /** @param {import('./process-outcome-policy.mjs').ProcessFailure} failure @param {string} report */
+  constructor(failure, report) {
+    const details = processFailureDetails(failure);
+    super(processFailureMessage(details, report));
+    this.name = 'ProcessExecutionError';
+    this.failure = Object.freeze(details);
+  }
+}
 
 const FOOTER_RESERVE = 512;
 const SIGNING_CREDENTIAL = /^(TAURI_SIGNING_PRIVATE_KEY(?:_PASSWORD)?|APPLE_(?:CERTIFICATE(?:_PASSWORD)?|ID|PASSWORD|API_KEY(?:_PATH)?|API_ISSUER)|WINDOWS_CERTIFICATE(?:_PASSWORD)?)$/i;
@@ -21,7 +32,8 @@ export function smokePackagingEnvironment(environment) {
 }
 
 async function writeConsole(stream, chunk) {
-  await new Promise((resolve, reject) => {
+  /** @type {Promise<void>} */
+  const written = new Promise((resolve, reject) => {
     const failed = error => { stream.off('error', failed); reject(error); };
     stream.once('error', failed);
     try {
@@ -31,6 +43,7 @@ async function writeConsole(stream, chunk) {
       });
     } catch (error) { stream.off('error', failed); reject(error); }
   });
+  await written;
 }
 
 /** Stream a child without a shell; retain a bounded report even when it fails. */
@@ -68,8 +81,9 @@ export async function runLoggedProcess(file, args, {
   };
   try {
     child = spawn(file, args, { cwd, env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    /** @type {Promise<void>} */
     const completed = new Promise(resolve => {
-      child.once('error', error => { failure = error; });
+      child.once('error', error => { failure ??= error; });
       child.once('close', (code, stoppedBy) => { exitCode = code; signal = stoppedBy; resolve(); });
     });
     const pump = (source, target) => pipeline(source, new Writable({
@@ -88,7 +102,7 @@ export async function runLoggedProcess(file, args, {
     try {
       if (discardedBytes) await log.writeFile(`\n[diagnostic output truncated: ${discardedBytes} bytes omitted; final output follows]\n`);
       if (tail.length) await log.writeFile(tail);
-      const launchCode = failure?.code && /^[A-Z0-9_]+$/.test(failure.code) ? failure.code : 'unknown';
+      const launchCode = processErrorCode(failure?.code);
       await log.writeFile(failure
         ? `\n[process error: ${launchCode}]\n`
         : `\n[process status: exit=${exitCode}; signal=${signal ?? 'none'}]\n`);
@@ -100,10 +114,9 @@ export async function runLoggedProcess(file, args, {
       finally { await rm(temporary, { force: true }); }
     }
   }
-  if (failure) {
-    const code = failure.code && /^[A-Z0-9_]+$/.test(failure.code) ? failure.code : 'unknown';
-    throw new Error(`Process launch or diagnostic output failed (${code}). See ${report}.`);
-  }
-  if (exitCode !== 0) throw new Error(`Process exited with ${signal ?? exitCode}. See ${report}.`);
-  return { exitCode, signal, discardedBytes };
+  const outcome = classifyProcessOutcome({
+    failureCode: failure ? processErrorCode(failure.code) : null, exitCode, signal, discardedBytes,
+  });
+  if (outcome.kind !== 'success') throw new ProcessExecutionError(outcome, report);
+  return { exitCode: outcome.exitCode, signal: outcome.signal, discardedBytes: outcome.discardedBytes };
 }

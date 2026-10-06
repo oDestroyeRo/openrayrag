@@ -1,4 +1,5 @@
 import { map } from 'remeda';
+import { foldConditions, unavailableFirstConditions } from './condition-logic';
 import type { AutomationScheduler } from './automation';
 import type { ActionIdentity } from './actor-identity';
 import type { matchesSkillExecution } from './skill-execution';
@@ -16,8 +17,9 @@ export function acceptsMonster(a: AutomationSettings, e: Entity, player: Entity,
   let rule = monsterRule(a,e.classId);
   if(rule?.conditions?.length) {
     const traces=map(rule.conditions, actorPredicateEvaluator(observations));
-    if(traces.some(trace=>trace.state==='unavailable'))return false;
-    if(traces.some(trace=>trace.state==='unmatched')) {
+    const state=foldConditions(traces,unavailableFirstConditions);
+    if(state==='unavailable')return false;
+    if(state==='unmatched') {
       if(rule.action==='attack')return false;
       rule=undefined; // A known-false ignore condition leaves ordinary selection in control.
     }
@@ -47,6 +49,48 @@ export interface PendingFeature { sequence:number; identity?:ActionIdentity; aft
 export type ActionReceipts = Pick<AutomationScheduler, 'receipt' | 'discardReceipt' | 'retireReceipt' | 'reconcileReceipt'>;
 
 export interface ActionResult { sequence: number; status: 'idle' | 'pending' | 'confirmed' | 'failed'; reason: string }
+
+/** Internal causes determine receipt policy; user-facing text never does. */
+export type ActionFailure =
+  | { type: 'server-rejection'; reason: string }
+  | { type: 'cancel'; reason: string }
+  | { type: 'send-failure'; reason: string }
+  | { type: 'timeout'; reason: string };
+
+export type AutomationOutcome =
+  | { sequence: number; status: 'idle' | 'pending' | 'confirmed'; reason: string }
+  | { sequence: number; status: 'failed'; failure: ActionFailure };
+
+export type ObserveSettlement =
+  | { state: 'ignored' }
+  | { state: 'confirmed' }
+  | { state: 'rejected'; failure: Extract<ActionFailure, { type: 'server-rejection' }> };
+
+/** Retain the published contract without exposing internal failure tags. */
+export function publishedActionResult(outcome: AutomationOutcome): ActionResult {
+  return { sequence: outcome.sequence, status: outcome.status,
+    reason: outcome.status === 'failed' ? outcome.failure.reason : outcome.reason };
+}
+
+export type ReceiptRetirement =
+  | { state: 'rejected'; discard: true }
+  | { state: 'uncertain' | 'retained'; discard: false }
+  | { state: 'released'; discard: boolean };
+
+export function receiptRetirement({ continuing, actionType, failure }: {
+  continuing: boolean; actionType: ExpandedAction['type'] | null; failure: ActionFailure | null;
+}): ReceiptRetirement {
+  if (!continuing) {
+    const discard = actionType === 'sit' || actionType === 'respawn';
+    if (actionType && !discard) return { state: 'retained', discard: false };
+    return { state: 'released', discard };
+  }
+  if (failure?.type === 'server-rejection') return { state: 'rejected', discard: true };
+  if (actionType && ['useItem', 'allocateStats', 'allocateSkill', 'skill'].includes(actionType)) {
+    return { state: 'uncertain', discard: false };
+  }
+  return { state: 'released', discard: true };
+}
 
 // Pinned player spells include Magnus Exorcismus (12s), Storm Gust and Lord
 // of Vermilion (up to 15s). Allow a bounded cast and response margin. Equipment

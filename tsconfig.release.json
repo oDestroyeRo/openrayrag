@@ -13,5 +13,5 @@
     "noImplicitAny": false,
     "skipLibCheck": true
   },
-  "files": ["scripts/release.mjs"]
+  "files": ["scripts/release.mjs", "scripts/process-outcome-policy.mjs", "scripts/process-diagnostics.mjs"]
 }

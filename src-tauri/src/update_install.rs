@@ -135,6 +135,67 @@ fn sync_tree(path: &Path) -> io::Result<()> {
     }
     fs::File::open(path)?.sync_all()
 }
+#[cfg(any(target_os = "macos", test))]
+trait ReplacementEffects {
+    type Error;
+    fn swap(&mut self) -> Result<(), Self::Error>;
+    fn sync(&mut self) -> Result<(), Self::Error>;
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, PartialEq)]
+enum ReplacementFailure<E> {
+    Swap(E),
+    Sync(E),
+}
+
+#[cfg(target_os = "macos")]
+impl<E> ReplacementFailure<E> {
+    fn into_error(self) -> E {
+        match self {
+            Self::Swap(error) | Self::Sync(error) => error,
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn replacement_program<E: ReplacementEffects>(
+    effects: &mut E,
+) -> Result<(), ReplacementFailure<E::Error>> {
+    effects.swap().map_err(ReplacementFailure::Swap)?;
+    if let Err(error) = effects.sync() {
+        // Recovery sync must run even if the rollback exchange fails. Neither
+        // recovery failure replaces the original durability error.
+        let _ = effects.swap();
+        let _ = effects.sync();
+        return Err(ReplacementFailure::Sync(error));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+struct NativeReplacement<'a, Swap, Sync> {
+    current: &'a Path,
+    staged: &'a Path,
+    swap: Swap,
+    sync: Sync,
+}
+
+#[cfg(target_os = "macos")]
+impl<Swap, Sync> ReplacementEffects for NativeReplacement<'_, Swap, Sync>
+where
+    Swap: Fn(&Path, &Path) -> io::Result<()>,
+    Sync: Fn() -> io::Result<()>,
+{
+    type Error = io::Error;
+    fn swap(&mut self) -> io::Result<()> {
+        (self.swap)(self.current, self.staged)
+    }
+    fn sync(&mut self) -> io::Result<()> {
+        (self.sync)()
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn replace(
     current: &Path,
@@ -142,13 +203,13 @@ fn replace(
     swap: impl Fn(&Path, &Path) -> io::Result<()>,
     sync: impl Fn() -> io::Result<()>,
 ) -> io::Result<()> {
-    swap(current, staged)?;
-    if let Err(error) = sync() {
-        let _ = swap(current, staged);
-        let _ = sync();
-        return Err(error);
-    }
-    Ok(())
+    replacement_program(&mut NativeReplacement {
+        current,
+        staged,
+        swap,
+        sync,
+    })
+    .map_err(ReplacementFailure::into_error)
 }
 #[cfg(target_os = "macos")]
 fn lock_cache(cache: &Path) -> io::Result<crate::login::local_store::FileLock> {
@@ -267,6 +328,111 @@ fn install_at(bytes: &[u8], version: &str, current: &Path) -> io::Result<()> {
 mod tests {
     #[cfg(target_os = "macos")]
     use super::*;
+    mod replacement_program_tests {
+        use super::super::{replacement_program, ReplacementEffects, ReplacementFailure};
+
+        struct Recorder {
+            calls: Vec<&'static str>,
+            swap_errors: [Option<&'static str>; 2],
+            sync_errors: [Option<&'static str>; 2],
+            swaps: usize,
+            syncs: usize,
+        }
+        impl Recorder {
+            fn new(
+                swap_errors: [Option<&'static str>; 2],
+                sync_errors: [Option<&'static str>; 2],
+            ) -> Self {
+                Self {
+                    calls: Vec::new(),
+                    swap_errors,
+                    sync_errors,
+                    swaps: 0,
+                    syncs: 0,
+                }
+            }
+        }
+        impl ReplacementEffects for Recorder {
+            type Error = &'static str;
+            fn swap(&mut self) -> Result<(), Self::Error> {
+                self.calls.push("swap");
+                let error = self.swap_errors[self.swaps];
+                self.swaps += 1;
+                error.map_or(Ok(()), Err)
+            }
+            fn sync(&mut self) -> Result<(), Self::Error> {
+                self.calls.push("sync");
+                let error = self.sync_errors[self.syncs];
+                self.syncs += 1;
+                error.map_or(Ok(()), Err)
+            }
+        }
+
+        #[test]
+        fn successful_replacement_swaps_then_syncs_once() {
+            let mut effects = Recorder::new([None, None], [None, None]);
+            assert_eq!(replacement_program(&mut effects), Ok(()));
+            assert_eq!(effects.calls, ["swap", "sync"]);
+        }
+
+        #[test]
+        fn initial_swap_failure_never_attempts_sync_or_rollback() {
+            let mut effects = Recorder::new([Some("initial swap"), None], [None, None]);
+            assert_eq!(
+                replacement_program(&mut effects),
+                Err(ReplacementFailure::Swap("initial swap"))
+            );
+            assert_eq!(effects.calls, ["swap"]);
+        }
+
+        #[test]
+        fn sync_failure_attempts_both_recovery_effects_and_preserves_its_original_cause() {
+            for rollback in [None, Some("rollback swap")] {
+                for recovery in [None, Some("recovery sync")] {
+                    let mut effects =
+                        Recorder::new([None, rollback], [Some("initial sync"), recovery]);
+                    assert_eq!(
+                        replacement_program(&mut effects),
+                        Err(ReplacementFailure::Sync("initial sync"))
+                    );
+                    assert_eq!(effects.calls, ["swap", "sync", "swap", "sync"]);
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn native_boundary_returns_original_sync_io_error_when_recovery_also_fails() {
+            use super::super::{io, replace, Path};
+            use std::cell::Cell;
+            let swaps = Cell::new(0);
+            let syncs = Cell::new(0);
+            let error = replace(
+                Path::new("current"),
+                Path::new("staged"),
+                |_, _| {
+                    swaps.set(swaps.get() + 1);
+                    if swaps.get() == 1 {
+                        Ok(())
+                    } else {
+                        Err(io::Error::from_raw_os_error(202))
+                    }
+                },
+                || {
+                    syncs.set(syncs.get() + 1);
+                    Err(io::Error::from_raw_os_error(if syncs.get() == 1 {
+                        101
+                    } else {
+                        303
+                    }))
+                },
+            )
+            .unwrap_err();
+            assert_eq!(swaps.get(), 2);
+            assert_eq!(syncs.get(), 2);
+            assert_eq!(error.raw_os_error(), Some(101));
+        }
+    }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     mod public_fixtures {
         use super::*;

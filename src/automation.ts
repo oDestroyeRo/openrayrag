@@ -1,4 +1,5 @@
 import { map } from 'remeda';
+import { foldConditions, unavailableFirstConditions } from './condition-logic';
 import { sameActionIdentity, type ActionIdentity } from './actor-identity';
 import { isRecoveryItem, recoveryItemIds } from './recovery-items';
 import { matchesSkillExecution } from './skill-execution';
@@ -11,7 +12,7 @@ import type { CharacterState } from './character-state';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost, skillPrerequisites } from './game-catalog';
 import type { ExpandedAction, FeatureEvent, Attributes } from './protocol-feature';
 
-import { percent, type AutomationTask, type PendingFeature, type ActionResult, actionConfirmationTimeout, effectiveSkillLevel, distanceBetween } from './automation-logic';
+import { percent, type AutomationTask, type PendingFeature, type ActionResult, type AutomationOutcome, type ObserveSettlement, publishedActionResult, receiptRetirement, actionConfirmationTimeout, effectiveSkillLevel, distanceBetween } from './automation-logic';
 
 export { monsterRule, lootRule, acceptsMonster, acceptsLoot, inSchedule, percent, type AutomationTask, type ActionReceipts, type ActionResult, actionConfirmationTimeout, effectiveSkillLevel } from './automation-logic';
 
@@ -21,7 +22,7 @@ export class AutomationScheduler {
     if(!conditions?.length)return 'matched';
     const traces=map(conditions, actorPredicateEvaluator(observations));
     if(this.ruleConditions.length<32)this.ruleConditions.push({rule,conditions:traces});
-    return traces.some(trace=>trace.state==='unavailable')?'unavailable':traces.some(trace=>trace.state==='unmatched')?'unmatched':'matched';
+    return foldConditions(traces,unavailableFirstConditions);
   }
   private matches(rule:string,conditions:ActorPredicate[]|undefined,observations:ActorObservationSnapshot|undefined):boolean {
     return this.conditionState(rule,conditions,observations)==='matched';
@@ -31,7 +32,8 @@ export class AutomationScheduler {
   private sequence = 0;
   private settlingUntil = 0;
   private canceledUntil = 0;
-  result: ActionResult = {sequence:0,status:'idle',reason:''};
+  private outcome: AutomationOutcome = {sequence:0,status:'idle',reason:''};
+  get result(): ActionResult { return publishedActionResult(this.outcome); }
   private cooldown = new Map<string, number>();
   private recoverySince: number | null = null;
   private resting = false;
@@ -46,14 +48,10 @@ export class AutomationScheduler {
   discardReceipt():void { this.captured=null; }
   /** The caller decides whether intent continues; receipt policy stays here. */
   retireReceipt(continuing:boolean):'rejected'|'uncertain'|'released'|'retained' {
-    const action=this.captured?.action;
-    if(!continuing){
-      if(action?.type==='sit'||action?.type==='respawn')this.discardReceipt();
-      return this.captured?'retained':'released';
-    }
-    if(this.result.reason.startsWith('Server rejected')){this.discardReceipt();return 'rejected';}
-    if(action&&['useItem','allocateStats','allocateSkill','skill'].includes(action.type))return 'uncertain';
-    this.discardReceipt();return 'released';
+    const decision=receiptRetirement({continuing,actionType:this.captured?.action.type??null,
+      failure:this.outcome.status==='failed'?this.outcome.failure:null});
+    if(decision.discard)this.discardReceipt();
+    return decision.state;
   }
   /** Late readback drains uncertainty without confirming a retired caller's step.
    * Unlike active confirmation, item readback may be a complete inventory.
@@ -84,7 +82,7 @@ export class AutomationScheduler {
     if(this.sequence!==sequence||this.pending)return;
     this.canceledUntil=0;this.settleSkill(motion,afterCast);
   }
-  reset(connection=false): void { this.ruleConditions.length=0; if(connection){this.settlingUntil=0;this.canceledUntil=0;} else if(this.pending)this.canceledUntil=Math.max(this.canceledUntil,this.pending.deadline); if(this.pending)this.result={sequence:this.sequence,status:'failed',reason:'Action canceled.'}; this.pending = null; this.recoverySince = null; this.resting = false; this.cooldown.clear(); }
+  reset(connection=false): void { this.ruleConditions.length=0; if(connection){this.settlingUntil=0;this.canceledUntil=0;} else if(this.pending)this.canceledUntil=Math.max(this.canceledUntil,this.pending.deadline); if(this.pending)this.outcome={sequence:this.sequence,status:'failed',failure:{type:'cancel',reason:'Action canceled.'}}; this.pending = null; this.recoverySince = null; this.resting = false; this.cooldown.clear(); }
   task(): AutomationTask {
     return { kind:this.pending?.action.type ?? (this.now()<this.canceledUntil?'settling':this.now()<this.settlingUntil?'skill':this.recovering?'recover':'idle'),
       label:this.pending ? `Waiting for ${this.pending.action.type} confirmation.` : this.now()<this.canceledUntil?'Waiting for the canceled action deadline.':this.now()<this.settlingUntil?'Waiting for skill motion to finish.':this.recovering?'Resting until HP and SP recover.':'Ready.',
@@ -99,19 +97,22 @@ export class AutomationScheduler {
     this.pending = { sequence:++this.sequence,...(identity?{identity}:{}),action,since,equipmentReceipt,skillReceipt:reservation?.receipt,afterCastSeconds,deadline:since+actionConfirmationTimeout(action),inventory:state.inventoryRevision,equipment:state.equipmentRevision,
       stats:state.statsRevision,skills:state.skillsRevision,count,skillLevel,attributes:state.stats?.attributes?.slice() as Attributes ?? null };
     this.captured=reservation?.retainReceipt===false?null:this.pending;
-    this.result={sequence:this.sequence,status:'pending',reason:`Waiting for ${action.type} confirmation.`};
-    try { if(reservation){if(!identity)throw new Error('Observed identity required.');reservation.reserved(this.sequence,identity);} this.send(action); } catch (error) { this.pending = null; this.result={sequence:this.sequence,status:'failed',reason:'Connection failed while sending action.'}; throw error; }
+    this.outcome={sequence:this.sequence,status:'pending',reason:`Waiting for ${action.type} confirmation.`};
+    try { if(reservation){if(!identity)throw new Error('Observed identity required.');reservation.reserved(this.sequence,identity);} this.send(action); } catch (error) { this.pending = null; this.outcome={sequence:this.sequence,status:'failed',failure:{type:'send-failure',reason:'Connection failed while sending action.'}}; throw error; }
   }
-  observe(event: FeatureEvent | {type:'map'|'resurrection'}, state: CharacterState, playerId: number | null, respawnTransition=false): { confirmed: boolean; failure: string | null } {
+  observe(event: FeatureEvent | {type:'map'|'resurrection'}, state: CharacterState, playerId: number | null, respawnTransition=false): ObserveSettlement {
     const pending = this.pending;
-    if (!pending || playerId===null) return {confirmed:false,failure:null};
+    if (!pending || playerId===null) return {state:'ignored'};
     const current=this.identity?.(pending.action);
     // Only the engine's verified own respawn transition may cross a world/incarnation.
     const respawnRebound=respawnTransition&&pending.action.type==='respawn'&&(event.type==='map'||event.type==='resurrection')&&current?.selfId===pending.identity?.selfId;
-    if(pending.identity&&!sameActionIdentity(pending.identity,current)&&!respawnRebound)return {confirmed:false,failure:null};
-    if (event.type === 'featureError') {this.pending=null;this.result={sequence:this.sequence,status:'failed',reason:`Server rejected ${pending.action.type}: ${event.message.slice(0,120)}`};return {confirmed:false,failure:this.result.reason};}
-    if (event.type === 'skillFailure' || event.type === 'requestFailure') {
-      this.pending = null; this.result={sequence:this.sequence,status:'failed',reason:`Server rejected ${pending.action.type} (code ${event.reason}).`}; return {confirmed:false,failure:`Server rejected ${pending.action.type} (code ${event.reason}).`};
+    if(pending.identity&&!sameActionIdentity(pending.identity,current)&&!respawnRebound)return {state:'ignored'};
+    if (event.type === 'featureError' || event.type === 'skillFailure' || event.type === 'requestFailure') {
+      const failure={type:'server-rejection' as const,reason:event.type==='featureError'
+        ?`Server rejected ${pending.action.type}: ${event.message.slice(0,120)}`
+        :`Server rejected ${pending.action.type} (code ${event.reason}).`};
+      this.pending=null;this.outcome={sequence:this.sequence,status:'failed',failure};
+      return {state:'rejected',failure:{...failure}};
     }
     const action = pending.action;
     let confirmed = false;
@@ -128,7 +129,7 @@ export class AutomationScheduler {
     }
     if (confirmed) {
       if(event.type==='skillResult')this.settleSkill(event.motionSeconds,pending.afterCastSeconds);
-      this.pending = null; this.result={sequence:this.sequence,status:'confirmed',reason:`${action.type} confirmed by the server.`};
+      this.pending = null; this.outcome={sequence:this.sequence,status:'confirmed',reason:`${action.type} confirmed by the server.`};
       this.discardReceipt();
       if (action.type==='sit') { this.resting=action.sitting; if(!action.sitting)this.recoverySince=null; }
       const key = action.type==='useItem'?`item:${action.itemId}`:action.type==='skill'?`skill:${action.skillId}`:action.type;
@@ -137,10 +138,10 @@ export class AutomationScheduler {
         if(isRecoveryItem(action.itemId,resource))this.cooldown.set(`${resource}-potions`,this.now());
       }
     }
-    return {confirmed,failure:null};
+    return {state:confirmed?'confirmed':'ignored'};
   }
   timeout(): string | null {
-    if (this.pending && this.now()>=this.pending.deadline) { const type=this.pending.action.type;this.pending=null;this.result={sequence:this.sequence,status:'failed',reason:`No server confirmation for ${type}.`};return `No server confirmation for ${type}; stopped to avoid duplicate actions.`; }
+    if (this.pending && this.now()>=this.pending.deadline) { const type=this.pending.action.type;this.pending=null;this.outcome={sequence:this.sequence,status:'failed',failure:{type:'timeout',reason:`No server confirmation for ${type}.`}};return `No server confirmation for ${type}; stopped to avoid duplicate actions.`; }
     return null;
   }
   wantsRecovery(a: AutomationSettings, p: Entity, state: CharacterState): boolean {

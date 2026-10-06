@@ -1,4 +1,5 @@
-use serde::Serialize;
+pub(crate) use crate::settings_close_logic::Request;
+use crate::settings_close_logic::{exit_intent, Completion, Intent, Lifecycle, RequestPlan};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, Webview};
 
@@ -83,82 +84,36 @@ mod macos {
 #[cfg(target_os = "macos")]
 pub(crate) use macos::install as install_macos_quit;
 
-#[derive(Clone, Serialize)]
-pub(crate) struct Request {
-    token: String,
+pub(crate) type SharedClose = Mutex<Lifecycle>;
+
+fn generate_token() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Intent {
-    Close,
-    Quit(i32),
+fn request(
+    state: &mut Lifecycle,
+    intent: Intent,
+    generate: impl FnOnce() -> String,
+) -> Option<Request> {
+    let (request, intent) = match state.request_plan(intent) {
+        RequestPlan::Allow => return None,
+        RequestPlan::GenerateToken(intent) => (Request { token: generate() }, intent),
+        RequestPlan::Reuse { request, intent } => (request, intent),
+    };
+    *state = Lifecycle::pending(request.clone(), intent);
+    Some(request)
 }
 
-#[derive(Default)]
-pub(crate) struct CloseState {
-    ready: bool,
-    pending: Option<(Request, Intent)>,
-    completing: bool,
-}
-pub(crate) type SharedClose = Mutex<CloseState>;
-
-impl CloseState {
-    fn request(&mut self, intent: Intent) -> Option<Request> {
-        // Before registration the controller keeps its form inert. Allow shutdown
-        // if its JS never initializes; there cannot be an editable unsaved draft.
-        if !self.ready || self.completing {
-            return None;
-        }
-        let (request, current) = self.pending.get_or_insert_with(|| {
-            (
-                Request {
-                    token: uuid::Uuid::new_v4().to_string(),
-                },
-                intent,
-            )
-        });
-        if matches!(intent, Intent::Quit(_)) {
-            *current = intent;
-        }
-        Some(request.clone())
-    }
-
-    fn request_exit(&mut self, code: Option<i32>) -> Option<Request> {
-        if code == Some(tauri::RESTART_EXIT_CODE) {
-            return None;
-        }
-        self.request(Intent::Quit(code.unwrap_or(0)))
-    }
-
-    fn complete(
-        &mut self,
-        token: &str,
-        saved_revision: Option<u64>,
-        revision: u64,
-    ) -> Result<Intent, String> {
-        if saved_revision != Some(revision) {
-            return Err(ERROR.into());
-        }
-        let (_, intent) = self
-            .pending
-            .as_ref()
-            .filter(|(request, _)| request.token == token)
-            .ok_or(ERROR)?;
-        let intent = *intent;
-        self.pending = None;
-        self.completing = true;
-        Ok(intent)
-    }
-
-    fn cancel(&mut self, token: &str) {
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|(request, _)| request.token == token)
-        {
-            self.pending = None;
-        }
-    }
+fn request_exit(
+    state: &mut Lifecycle,
+    code: Option<i32>,
+    generate: impl FnOnce() -> String,
+) -> Option<Request> {
+    request(
+        state,
+        exit_intent(code, tauri::RESTART_EXIT_CODE)?,
+        generate,
+    )
 }
 
 pub(crate) fn close_requested(app: &tauri::AppHandle, api: &tauri::CloseRequestApi) {
@@ -166,7 +121,7 @@ pub(crate) fn close_requested(app: &tauri::AppHandle, api: &tauri::CloseRequestA
         .state::<SharedClose>()
         .lock()
         .ok()
-        .and_then(|mut state| state.request(Intent::Close));
+        .and_then(|mut state| request(&mut state, Intent::Close, generate_token));
     if let Some(request) = request {
         api.prevent_close();
         // Never hold the state or maintenance mutex across UI dispatch.
@@ -186,7 +141,7 @@ pub(crate) fn exit_requested(
         .state::<SharedClose>()
         .lock()
         .ok()
-        .and_then(|mut state| state.request_exit(code));
+        .and_then(|mut state| request_exit(&mut state, code, generate_token));
     if let Some(request) = request {
         api.prevent_exit();
         let _ = app.emit_to("main", "settings-close-request", request);
@@ -201,8 +156,8 @@ pub(crate) fn settings_close_ready(
     crate::require_view(&window, "main")?;
     let shared = app.state::<SharedClose>();
     let mut state = shared.lock().map_err(|_| ERROR)?;
-    state.ready = true;
-    Ok(state.pending.as_ref().map(|(request, _)| request.clone()))
+    *state = state.register();
+    Ok(state.pending_request())
 }
 
 #[tauri::command]
@@ -212,10 +167,9 @@ pub(crate) fn settings_close_cancel(
     token: String,
 ) -> Result<(), String> {
     crate::require_view(&window, "main")?;
-    app.state::<SharedClose>()
-        .lock()
-        .map_err(|_| ERROR)?
-        .cancel(&token);
+    let shared = app.state::<SharedClose>();
+    let mut state = shared.lock().map_err(|_| ERROR)?;
+    *state = state.cancel(&token);
     Ok(())
 }
 
@@ -231,19 +185,25 @@ pub(crate) async fn settings_close_complete(
         // Only the existing validated, private settings writer can prove this
         // revision. Its update/install admission fence still applies to shutdown.
         let gate = crate::maintenance::admit(&app)?;
-        app.state::<SharedClose>()
-            .lock()
-            .map_err(|_| ERROR)?
-            .complete(&token, gate.form_revision, revision)?
+        let shared = app.state::<SharedClose>();
+        let mut state = shared.lock().map_err(|_| ERROR)?;
+        let (next, intent) = state
+            .complete(Completion {
+                token: &token,
+                saved_revision: gate.form_revision,
+                revision,
+            })
+            .map_err(|_| ERROR)?;
+        *state = next;
+        intent
     };
     crate::ci_smoke::milestone("close-save-confirmed");
     match intent {
         Intent::Close => {
             if window.window().destroy().is_err() {
-                app.state::<SharedClose>()
-                    .lock()
-                    .map_err(|_| ERROR)?
-                    .completing = false;
+                let shared = app.state::<SharedClose>();
+                let mut state = shared.lock().map_err(|_| ERROR)?;
+                *state = state.completion_failed();
                 return Err(ERROR.into());
             }
         }
@@ -255,86 +215,75 @@ pub(crate) async fn settings_close_complete(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
-    fn startup_without_a_controller_can_close_but_registered_restore_must_acknowledge() {
-        let mut state = CloseState::default();
-        assert!(state.request(Intent::Close).is_none());
-        assert!(state.request(Intent::Quit(0)).is_none());
-        state.ready = true;
-        let request = state.request(Intent::Close).unwrap();
-        assert!(state.complete("unknown", Some(1), 1).is_err());
-        assert_eq!(
-            state.complete(&request.token, Some(1), 1).unwrap(),
-            Intent::Close
-        );
+    fn token_effect_runs_only_when_a_registered_controller_starts_a_fresh_handshake() {
+        let calls = Cell::new(0);
+        let generate = || {
+            calls.set(calls.get() + 1);
+            format!("token-{}", calls.get())
+        };
+        let mut state = Lifecycle::Unregistered;
+        assert!(request(&mut state, Intent::Close, generate).is_none());
+        assert!(request_exit(&mut state, None, generate).is_none());
+        assert_eq!(calls.get(), 0);
+
+        state = state.register();
+        let first = request(&mut state, Intent::Close, generate).unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(request(&mut state, Intent::Close, generate).unwrap(), first);
+        assert_eq!(request_exit(&mut state, Some(7), generate).unwrap(), first);
+        let (next, intent) = state
+            .complete(Completion {
+                token: &first.token,
+                saved_revision: Some(1),
+                revision: 1,
+            })
+            .unwrap();
+        assert_eq!(intent, Intent::Quit(7));
+        state = next;
+        assert!(request(&mut state, Intent::Close, generate).is_none());
+        assert!(request_exit(&mut state, None, generate).is_none());
+        assert_eq!(calls.get(), 1);
+
+        state = state.completion_failed();
+        let retry = request(&mut state, Intent::Close, generate).unwrap();
+        assert_eq!(calls.get(), 2);
+        assert_ne!(retry, first);
+        state = state.cancel(&retry.token);
+        assert!(request_exit(&mut state, None, generate).is_some());
+        assert_eq!(calls.get(), 3);
     }
 
     #[test]
-    fn duplicate_requests_keep_one_token_and_quit_promotes_close() {
-        let mut state = CloseState {
-            ready: true,
-            ..Default::default()
-        };
-        let request = state.request(Intent::Close).unwrap();
-        assert_eq!(state.request(Intent::Close).unwrap().token, request.token);
-        assert_eq!(state.request(Intent::Quit(7)).unwrap().token, request.token);
-        assert_eq!(state.request(Intent::Close).unwrap().token, request.token);
-        assert_eq!(
-            state.complete(&request.token, Some(1), 1).unwrap(),
-            Intent::Quit(7)
+    fn updater_restart_preserves_ready_and_pending_states_without_generating_a_token() {
+        let mut state = Lifecycle::Ready;
+        assert!(
+            request_exit(&mut state, Some(tauri::RESTART_EXIT_CODE), || panic!(
+                "restart must not generate a token"
+            ))
+            .is_none()
         );
-        assert!(state.request(Intent::Quit(7)).is_none());
-        assert!(state.complete(&request.token, Some(1), 1).is_err());
-    }
-
-    #[test]
-    fn failed_save_cancels_only_its_token_and_allows_a_new_attempt() {
-        let mut state = CloseState {
-            ready: true,
-            ..Default::default()
-        };
-        let request = state.request(Intent::Close).unwrap();
-        state.cancel("unknown");
-        assert_eq!(state.request(Intent::Close).unwrap().token, request.token);
-        state.cancel(&request.token);
-        let retry = state.request(Intent::Quit(0)).unwrap();
-        assert_ne!(retry.token, request.token);
-        assert!(state.complete(&request.token, Some(1), 1).is_err());
-        assert_eq!(
-            state.complete(&retry.token, Some(1), 1).unwrap(),
-            Intent::Quit(0)
+        assert_eq!(state, Lifecycle::Ready);
+        let request = request(&mut state, Intent::Close, || "owned".into()).unwrap();
+        let before = state.clone();
+        assert!(
+            request_exit(&mut state, Some(tauri::RESTART_EXIT_CODE), || panic!(
+                "restart must reuse no token"
+            ))
+            .is_none()
         );
-    }
-
-    #[test]
-    fn only_the_saved_revision_can_acknowledge_shutdown() {
-        let mut state = CloseState {
-            ready: true,
-            ..Default::default()
-        };
-        let request = state.request_exit(None).unwrap();
-        assert!(state.complete(&request.token, None, 1).is_err());
-        assert!(state.complete(&request.token, Some(1), 2).is_err());
-        assert_eq!(state.request_exit(None).unwrap().token, request.token);
+        assert_eq!(state, before);
         assert_eq!(
-            state.complete(&request.token, Some(2), 2).unwrap(),
-            Intent::Quit(0)
-        );
-    }
-
-    #[test]
-    fn updater_restart_bypasses_the_save_handshake_even_with_a_pending_close() {
-        let mut state = CloseState {
-            ready: true,
-            ..Default::default()
-        };
-        assert!(state.request_exit(Some(tauri::RESTART_EXIT_CODE)).is_none());
-        assert!(state.pending.is_none());
-        let request = state.request(Intent::Close).unwrap();
-        assert!(state.request_exit(Some(tauri::RESTART_EXIT_CODE)).is_none());
-        assert_eq!(
-            state.complete(&request.token, Some(1), 1).unwrap(),
+            state
+                .complete(Completion {
+                    token: &request.token,
+                    saved_revision: Some(1),
+                    revision: 1
+                })
+                .unwrap()
+                .1,
             Intent::Close
         );
     }

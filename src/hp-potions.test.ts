@@ -71,8 +71,8 @@ describe('automatic HP potion use', () => {
     expect(first).toEqual({ type: 'useItem', itemId: 501 });
     f.scheduler.submit(first, f.state);
     expect(f.scheduler.next(a, player, f.state, null)).toEqual({});
-    expect(f.consume(504).confirmed).toBe(false);
-    expect(f.consume(501).confirmed).toBe(true);
+    expect(f.consume(504).state).toBe('ignored');
+    expect(f.consume(501).state).toBe('confirmed');
     f.advance(4999); expect(f.scheduler.next(a, player, f.state, null)).toEqual({});
     f.advance(1); expect(f.scheduler.next(a, player, f.state, null).action).toEqual({ type: 'useItem', itemId: 504 });
   });

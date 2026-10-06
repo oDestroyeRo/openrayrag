@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Writable } from 'node:stream';
 import { verificationPlan, invocation, executePlan } from './check.mjs';
+import { ProcessExecutionError, runLoggedProcess } from './process-diagnostics.mjs';
 import { BUN_VERSION } from './release-core.mjs';
 
 test('the local, hosted, package-manager and release runtime pins agree', async () => {
@@ -57,4 +61,36 @@ test('verification stops at the first failure and retains the failing step repor
     if (args[0] === 'failure') throw new Error('controlled failure');
   }), /controlled failure/);
   assert.deepEqual(ran, ['first', 'failure']);
+});
+
+test('verification awaits each real child and propagates its typed failure before any later step', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'rayrag-check-outcomes-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const steps = [
+    { tool: 'bun', args: ['-e', 'setTimeout(() => console.log("completed first"), 10);'], report: 'first.log' },
+    { tool: 'bun', args: ['-e', 'console.error("failed second"); process.exitCode = 7;'], report: 'failure.log' },
+    { tool: 'bun', args: ['-e', 'console.log("unrun");'], report: 'unrun.log' },
+  ];
+  const ran = [];
+  let active = false, failure;
+  const discard = () => new Writable({ write(_chunk, _encoding, done) { done(); } });
+  await assert.rejects(executePlan(steps, async (file, args, options) => {
+    assert.equal(active, false);
+    active = true;
+    ran.push(options.report);
+    if (ran.length === 2) assert.match(await readFile(join(directory, 'reports', 'first.log'), 'utf8'), /completed first[\s\S]*exit=0/);
+    try { return await runLoggedProcess(file, args, { ...options, stdout: discard(), stderr: discard() }); }
+    catch (error) { failure = error; throw error; }
+    finally { active = false; }
+  }, directory), error => {
+    assert.equal(error, failure);
+    assert.ok(error instanceof ProcessExecutionError);
+    assert.equal(error.message, `Process exited with 7. See ${join(directory, 'reports', 'failure.log')}.`);
+    assert.deepEqual(error.failure, { kind: 'exit', exitCode: 7 });
+    return true;
+  });
+  assert.equal(active, false);
+  assert.deepEqual(ran, [join(directory, 'reports', 'first.log'), join(directory, 'reports', 'failure.log')]);
+  assert.deepEqual((await readdir(join(directory, 'reports'))).sort(), ['failure.log', 'first.log']);
+  assert.match(await readFile(join(directory, 'reports', 'failure.log'), 'utf8'), /failed second[\s\S]*exit=7/);
 });
