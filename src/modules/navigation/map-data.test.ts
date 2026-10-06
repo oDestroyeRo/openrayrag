@@ -1,6 +1,6 @@
 import { mapCode } from '../../shared/domain-values';
-import { describe, expect, it, vi } from 'vitest';
-import { currentMapInfo, loadMapCatalog, parseMapCatalog, validMapInfo, MAP_DATA_URL } from './map-data';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { currentMapInfo, loadMapCatalog, loadNativeMapCatalog, MapCatalogLoader, parseMapCatalog, validMapInfo, MAP_DATA_URL, type MapCatalog } from './map-data';
 import { type Entity } from '../protocol/protocol';
 
 // Public prt_fild05 rows from the deployed map/monster JSON, 2026-10-01.
@@ -55,5 +55,78 @@ describe('official map information', () => {
     expect(fetcher.mock.calls.map(call=>call[0])).toEqual([`${MAP_DATA_URL}maps.json`,`${MAP_DATA_URL}monsterdatabase.json`]);
     expect(fetcher.mock.calls.every(call=>call[1]?.credentials==='omit')).toBe(true);
     await expect(loadMapCatalog(async()=>new Response('',{status:404}))).rejects.toThrow('unavailable');
+  });
+  it('admits the same complete roster through Bot-only native IPC without a browser fetch', async () => {
+    const invoke=vi.fn(async()=>({maps:JSON.stringify(maps),monsters:JSON.stringify(monsters)}));
+    const catalog=await loadNativeMapCatalog(invoke);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('map_database',{});
+    const info=currentMapInfo('prt_fild05',[entity],catalog,false);
+    expect(info).toMatchObject({name:'Prontera Field 5',source:'database'});
+    expect(info.monsters).toHaveLength(7);
+    expect(info.monsters.find(monster=>monster.classId===4002)).toMatchObject({spawnCount:30,visibleCount:0});
+  });
+  it.each([
+    null, {maps:maps,monsters:monsters}, {maps:'{}',monsters:JSON.stringify(monsters)},
+    {maps:JSON.stringify(maps),monsters:'{broken'},
+    {maps:JSON.stringify(maps),monsters:JSON.stringify(monsters),extra:'untrusted'},
+    {maps:JSON.stringify(maps),monsters:JSON.stringify({Items:[{...monsters.Items[0],Id:0}]})},
+    {maps:' '.repeat(2_000_001),monsters:'{}'},
+  ])('rejects unadmitted native data before exposing it to targets', async value => {
+    await expect(loadNativeMapCatalog(async()=>value)).rejects.toThrow();
+  });
+});
+
+describe('runtime catalogue availability',()=>{
+  afterEach(()=>vi.useRealTimers());
+  it('retries a transient failure and publishes only a complete validated database',async()=>{
+    vi.useFakeTimers();
+    const catalog=parseMapCatalog(maps,monsters);
+    const read=vi.fn<(_:AbortSignal)=>Promise<typeof catalog>>().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(catalog);
+    const changed=vi.fn(),loader=new MapCatalogLoader(read,changed),pending=loader.start();
+    await Promise.resolve();
+    expect(loader.catalog).toBeNull();expect(loader.loading).toBe(true);
+    expect(currentMapInfo('prt_fild05',[entity],loader.catalog,loader.loading).source).toBe('loading');
+    await vi.advanceTimersByTimeAsync(2_000);await pending;
+    expect(read).toHaveBeenCalledTimes(2);expect(changed).toHaveBeenCalledTimes(2);
+    expect(currentMapInfo('prt_fild05',[entity],loader.catalog,loader.loading)).toMatchObject({source:'database',monsters:expect.any(Array)});
+    expect(loader.catalog?.get(mapCode('prt_fild05'))?.monsters).toHaveLength(7);
+    await loader.start();expect(read).toHaveBeenCalledTimes(2);expect(vi.getTimerCount()).toBe(0);
+  });
+  it('bounds retries, retains an honest observed fallback, and can retry on a new request',async()=>{
+    vi.useFakeTimers();
+    const read=vi.fn<()=>Promise<MapCatalog>>(async()=>{throw new Error('offline');}),loader=new MapCatalogLoader(read,()=>{});
+    const pending=loader.start();await vi.advanceTimersByTimeAsync(12_000);await pending;
+    expect(read).toHaveBeenCalledTimes(3);expect(loader.loading).toBe(false);
+    expect(currentMapInfo('prt_fild05',[entity],loader.catalog,loader.loading)).toMatchObject({source:'observed',name:'prt_fild05'});
+    expect(vi.getTimerCount()).toBe(0);
+    read.mockImplementation(async()=>parseMapCatalog(maps,monsters));await loader.start();
+    expect(read).toHaveBeenCalledTimes(4);expect(loader.catalog).not.toBeNull();
+  });
+  it('cancels a backoff without another request or publication',async()=>{
+    vi.useFakeTimers();
+    const read=vi.fn(async()=>{throw new Error('offline');}),changed=vi.fn(),loader=new MapCatalogLoader(read,changed);
+    const pending=loader.start();await Promise.resolve();loader.dispose();await pending;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(read).toHaveBeenCalledTimes(1);expect(changed).toHaveBeenCalledTimes(1);expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(['success','failure'] as const)('does not admit, publish or retry a late native %s after mode/runtime retirement',async outcome=>{
+    const catalog=parseMapCatalog(maps,monsters);
+    let finish!:(value:MapCatalog)=>void;
+    let fail!:(error:Error)=>void;
+    const read=vi.fn(()=>new Promise<typeof catalog>((resolve,reject)=>{finish=resolve;fail=reject;}));
+    const changed=vi.fn(),loader=new MapCatalogLoader(read,changed);
+    const pending=loader.start();loader.dispose();if(outcome==='success')finish(catalog);else fail(new Error('late failure'));
+    await pending;await loader.start();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(loader.catalog).toBeNull();expect(changed).toHaveBeenCalledTimes(1);
+  });
+  it('aborts browser requests and retires their deadline when the runtime closes',async()=>{
+    const signals:AbortSignal[]=[];
+    const fetcher=vi.fn<typeof fetch>(async(_url,init)=>{
+      signals.push(init!.signal!);
+      return new Promise<Response>((_resolve,reject)=>init!.signal!.addEventListener('abort',()=>reject(new Error('aborted'))));
+    });
+    const loader=new MapCatalogLoader(signal=>loadMapCatalog(fetcher,signal),()=>{}),pending=loader.start();
+    loader.dispose();await pending;expect(signals).toHaveLength(2);expect(signals.every(signal=>signal.aborted)).toBe(true);
   });
 });

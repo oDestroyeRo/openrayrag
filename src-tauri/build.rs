@@ -29,6 +29,7 @@ fn main() {
             "set_game_view",
             "control_bot",
             "bridge_status",
+            "map_database",
             "direct_connect",
             "direct_poll",
             "direct_observed",

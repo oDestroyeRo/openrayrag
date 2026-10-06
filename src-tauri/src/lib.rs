@@ -496,6 +496,7 @@ pub fn run() {
             shell::client_view::set_game_view,
             control_bot,
             bridge_status,
+            game::map_data::map_database,
             session::direct::direct_connect,
             session::direct::direct_poll,
             session::direct::direct_observed,

@@ -66,6 +66,7 @@
   "src-tauri/build.rs": "orchestration",
   "src-tauri/src/game/catalog_logic.rs": "logic",
   "src-tauri/src/game/control.rs": "logic",
+  "src-tauri/src/game/map_data.rs": "effects",
   "src-tauri/src/game/mod.rs": "orchestration",
   "src-tauri/src/lib.rs": "orchestration",
   "src-tauri/src/main.rs": "orchestration",

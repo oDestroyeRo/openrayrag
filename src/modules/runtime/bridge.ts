@@ -11,7 +11,8 @@ import type { ControllerUpdateCheckpoint, ControllerUpdateRestore } from '../upd
 import { wireController } from './controller-wire';
 import type { LiveSettingsGuard } from '../settings/live-settings-logic';
 import { LoginController, loginDriver, loginReady, type LoginProfile, type LoginStatus, type UnityClient } from '../session/login';
-import { currentMapInfo, loadMapCatalog, type MapCatalog } from '../navigation/map-data';
+import { currentMapInfo } from '../navigation/map-data-logic';
+import { loadMapCatalog, MapCatalogLoader } from '../navigation/map-data';
 import type { SupplyResumeGuard } from '../services/supply-trip';
 import type { EscapeResumeGuard } from '../recovery/escape';
 
@@ -61,8 +62,6 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   let capturedUnity = false;
   let claimStarted = false;
   let unityClient: UnityClient | undefined;
-  let catalog: MapCatalog | null = null;
-  let catalogLoading = true;
   const guardHeldAtStart=localStorage.getItem('rayrag.warp.uncertain.v1')!==null;
   let guardResetAllowed=false;
   let guardNonce:string|null=null;
@@ -86,7 +85,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   });
   const engine = controller.engine;
   const runtimeStatus=(status=controller.snapshot())=>({...status,sessionId,connectionId,maintenanceWaiting:officialUncertain,
-    login:login?.status??loginStatus,mapInfo:currentMapInfo(engine.map,engine.entities.values(),catalog,catalogLoading),
+    login:login?.status??loginStatus,mapInfo:currentMapInfo(engine.map,engine.entities.values(),catalogue.catalog,catalogue.loading),
     reconnectAvailable:false,build:page.buildUrl??'',connectionMode:'gameClient'});
   const checkpoint=():ControllerUpdateCheckpoint|null=>{const value=controller.updateCheckpoint();return value?{...value,status:runtimeStatus(value.status)}:null;};
   const confirmPrepared=()=>{
@@ -110,8 +109,9 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   };
   // Fixed, public, same-origin assets. Failures fall back to live observations;
   // no credentials are sent and the official game connection is unaffected.
-  void loadMapCatalog().then(value => { catalog = value; }).catch(() => {})
-    .finally(() => { catalogLoading = false; publish(); });
+  const catalogue = new MapCatalogLoader(signal => loadMapCatalog(fetch, signal), () => { void publish(); });
+  page.addEventListener('pagehide', () => catalogue.dispose(), { once: true });
+  void catalogue.start();
   const stop = (reason: string) => {
     try { controller.stop(reason); } catch { controller.disconnect(); }
     publish();

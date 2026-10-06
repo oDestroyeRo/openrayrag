@@ -24,7 +24,7 @@ vi.mock('./controller',async original=>{
     }
   }};
 });
-vi.mock('../navigation/map-data',()=>({loadMapCatalog:async()=>null,currentMapInfo:()=>null}));
+vi.mock('../navigation/map-data',async original=>({...await original<typeof import('../navigation/map-data')>(),loadMapCatalog:async()=>null,currentMapInfo:()=>null}));
 
 class NativeSocket extends EventTarget {
   static readonly OPEN=1;
