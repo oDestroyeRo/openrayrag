@@ -1,7 +1,7 @@
 import resourceCases from './data/actor-resource-condition-cases.json';
 import { describe, expect, it } from 'vitest';
 import { ActorObservations, evaluateActorPredicate, validActorConditions, validActorSnapshot, type ActorPredicate } from './actor-observations';
-import { RESOURCE_OPERATORS } from './actor-resources';
+import { absoluteResource, RESOURCE_OPERATORS } from './actor-resources';
 import { BotEngine } from './engine';
 import type { Entity } from './protocol';
 import { WorldState } from './world-state';
@@ -38,7 +38,7 @@ describe('observed actor resource predicates',()=>{
  it('does not infer nonparty or enemy SP even from nonzero spawn data',()=>{
   const s=setup();for(const kind of [0,1,2,4]){s.observations.spawn({...entity,kind,sp:99,maxSp:100});expect(s.trace(sp).state).toBe('unavailable');}
  });
- it('does not interpret unsupported snapshot SP provenance as enemy or arbitrary-player evidence',()=>{const s=setup();const snap=s.snapshot();for(const kind of [0,1]){snap.actors[0]!.kind=kind;snap.actors[0]!.sp={value:50,max:100,at:1000,source:'spawn',reason:null};expect(evaluateActorPredicate(sp,snap).state).toBe('unavailable');}snap.actors[0]!.sp!.source='party';expect(evaluateActorPredicate(sp,snap).state).toBe('unavailable');});
+ it('does not interpret unsupported snapshot SP provenance as enemy or arbitrary-player evidence',()=>{const s=setup();const snap=s.snapshot();for(const kind of [0,1]){snap.actors[0]!.kind=kind;snap.actors[0]!.sp=absoluteResource(50,100,1000,'spawn');expect(evaluateActorPredicate(sp,snap).state).toBe('unavailable');}Object.assign(snap.actors[0]!.sp!,{source:'party'});expect(evaluateActorPredicate(sp,snap).state).toBe('unavailable');});
  it('applies spawn, damage and recovery in exact order, ignoring visual combat',()=>{
   const s=setup();const hit={type:'hit' as const,id:2,damage:20,position:{x:10,y:10}};
   s.observations.apply(hit);expect(s.trace({...hp,value:80}).state).toBe('matched');
@@ -74,7 +74,7 @@ describe('observed actor resource predicates',()=>{
  });
  it('does not match SP for a known zero-HP actor',()=>{const s=setup();s.join();s.event({type:'partyHealth',memberId:7,hp:0,maxHp:100,sp:50,maxSp:100});expect(s.trace(sp).state).toBe('unavailable');});
  it('publishes bounded detached resource observations and rejects malformed snapshots',()=>{
-  const s=setup();s.join();const snap=s.snapshot();expect(validActorSnapshot(snap)).toBe(true);snap.actors[0]!.hp!.value=1;expect(s.trace().state).toBe('matched');
+  const s=setup();s.join();const snap=s.snapshot();expect(validActorSnapshot(snap)).toBe(true);Object.assign(snap.actors[0]!.hp!,{value:1});expect(s.trace().state).toBe('matched');
   for(const change of [{max:0},{value:101},{at:Infinity},{source:'skill-cost'},{reason:'code'},{extra:1}]){const value=s.snapshot();Object.assign(value.actors[0]!.hp!,change);expect(validActorSnapshot(value)).toBe(false);}
   for(let id=3;id<400;id++)s.observations.spawn({...entity,id});expect(s.snapshot().actors).toHaveLength(64);expect(JSON.stringify(s.snapshot()).length).toBeLessThan(65_536);
  });
