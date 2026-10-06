@@ -77,12 +77,12 @@ jobs:
           bun run check
       - name: Build, inspect, and smoke secret-free platform installers
         if: matrix.platform != 'linux'
-        run: bun scripts/ci-platform.mjs build ${{ matrix.platform }} --smoke
+        run: bun scripts/quality/ci-platform.mjs build ${{ matrix.platform }} --smoke
       - name: Build, inspect, and smoke Linux packages under Xvfb
         if: matrix.platform == 'linux'
         env:
           WEBKIT_DISABLE_DMABUF_RENDERER: "1"
-        run: xvfb-run -a bun scripts/ci-platform.mjs build linux --smoke
+        run: xvfb-run -a bun scripts/quality/ci-platform.mjs build linux --smoke
       - uses: actions/upload-artifact@v7.0.1
         if: always()
         with:

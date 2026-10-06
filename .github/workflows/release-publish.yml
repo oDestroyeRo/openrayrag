@@ -50,7 +50,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           bun install --cwd tools/release --frozen-lockfile --ignore-scripts
-          bun scripts/release.mjs preflight
+          bun scripts/release/release.mjs preflight
       - name: Share the reserved plan with every release stage
         uses: actions/upload-artifact@v7.0.1
         if: steps.preflight.outputs.state != 'skip'
@@ -113,7 +113,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           test "$(uname -m)" = arm64
-          bun scripts/release.mjs stamp
+          bun scripts/release/release.mjs stamp
           bun install --frozen-lockfile
       - name: Build signed updater archive and bootstrap DMG
         if: needs.reconcile.outputs.state == 'build'
@@ -194,11 +194,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          bun scripts/release.mjs stamp
+          bun scripts/release/release.mjs stamp
           bun install --frozen-lockfile
       - name: Build and inspect platform release installers
         if: needs.reconcile.outputs.state == 'build'
-        run: bun scripts/ci-platform.mjs build ${{ matrix.platform }} --release
+        run: bun scripts/quality/ci-platform.mjs build ${{ matrix.platform }} --release
       - uses: actions/upload-artifact@v7.0.1
         if: needs.reconcile.outputs.state == 'build'
         with:
@@ -249,7 +249,7 @@ jobs:
         if: needs.reconcile.outputs.state == 'build'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: bun scripts/release.mjs stamp
+        run: bun scripts/release/release.mjs stamp
       - uses: actions/download-artifact@v8.0.1
         if: needs.reconcile.outputs.state == 'build'
         with:
@@ -269,7 +269,7 @@ jobs:
         if: needs.reconcile.outputs.state == 'build'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: bun scripts/release.mjs prepare
+        run: bun scripts/release/release.mjs prepare
       - uses: actions/upload-artifact@v7.0.1
         if: needs.reconcile.outputs.state == 'build'
         id: upload
@@ -288,7 +288,7 @@ jobs:
           RELEASE_ARTIFACT_ID: ${{ needs.reconcile.outputs.artifact-id }}
           RELEASE_ARTIFACT_RUN_ID: ${{ needs.reconcile.outputs.artifact-run-id }}
           RELEASE_ARTIFACT_DIGEST: ${{ needs.reconcile.outputs.artifact-digest }}
-        run: bun scripts/release.mjs restore
+        run: bun scripts/release/release.mjs restore
 
   publish:
     needs: [reconcile, assemble]
@@ -324,7 +324,7 @@ jobs:
           RELEASE_ARTIFACT_ID: ${{ needs.assemble.outputs.artifact-id }}
           RELEASE_ARTIFACT_RUN_ID: ${{ needs.assemble.outputs.artifact-run-id }}
           RELEASE_ARTIFACT_DIGEST: ${{ needs.assemble.outputs.artifact-digest }}
-        run: bun scripts/release.mjs restore
+        run: bun scripts/release/release.mjs restore
       - name: Stage, verify and publish without moving latest backwards
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -332,4 +332,4 @@ jobs:
           RELEASE_ARTIFACT_ID: ${{ needs.assemble.outputs.artifact-id }}
           RELEASE_ARTIFACT_RUN_ID: ${{ needs.assemble.outputs.artifact-run-id }}
           RELEASE_ARTIFACT_DIGEST: ${{ needs.assemble.outputs.artifact-digest }}
-        run: bun scripts/release.mjs publish
+        run: bun scripts/release/release.mjs publish
