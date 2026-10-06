@@ -14,7 +14,9 @@ export function createVerificationPlan(platform, scriptNames) {
   const steps = [
     { tool: 'bun', args: ['install', '--cwd', 'tools/release', '--frozen-lockfile', '--ignore-scripts'], report: 'release-tools.log' },
     { tool: 'bun', args: ['run', 'typecheck:release'], report: 'release-types.log' },
-    { tool: 'python', args: ['vendor/glib/verify.py', ...(platform === 'linux' ? ['--test'] : [])], report: 'glib.log' },
+    // The scratch crate/probe stays fresh; its dependencies share the app cache.
+    { tool: 'python', args: ['vendor/glib/verify.py', ...(platform === 'linux' ? ['--test'] : [])], report: 'glib.log',
+      ...(platform === 'linux' ? { cargoTargetDirectory: 'src-tauri/target' } : {}) },
     // Process/packaging regressions can exceed Bun's five-second default on CI.
     { tool: 'bun', args: ['test', '--timeout', '120000', ...map(scripts, name => `./${name}`)], report: 'scripts.log' },
     { tool: 'python', args: ['-m', 'unittest', 'discover', '-s', 'scripts/catalogs', '-p', 'catalog_logic_test.py'], report: 'catalogs.log' },

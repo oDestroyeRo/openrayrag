@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+import { posix } from 'node:path';
 import { parse } from 'yaml';
 
 const readYaml = async path => parse(await readFile(new URL(path, import.meta.url), 'utf8'));
@@ -37,6 +38,58 @@ test('native security is shared by PR, merge queue, main release and daily scans
   assert.equal(setup.if, "matrix.language == 'rust'");
   assert.ok(setup.run.includes('bun run bridge'));
   assert.ok(setup.run.includes('libwebkit2gtk-4.1-dev'));
+});
+
+test('Rust extraction restores only its Cargo dependencies and still creates a fresh security database', () => {
+  const job = security.jobs.codeql;
+  const prepare = job.steps.findIndex(step => step.run?.includes('rustup'));
+  const cache = job.steps.findIndex(step => step.uses?.startsWith('Swatinem/rust-cache@'));
+  const init = job.steps.findIndex(step => step.uses?.startsWith('github/codeql-action/init@'));
+  const analyze = job.steps.findIndex(step => step.uses?.startsWith('github/codeql-action/analyze@'));
+  assert.ok(prepare < cache && cache < init && init < analyze);
+  const step = job.steps[cache];
+  assert.equal(step.if, "matrix.language == 'rust'");
+  const [workspace, target] = step.with.workspaces.split(' -> ');
+  assert.equal(workspace, 'src-tauri');
+  const cachePath = posix.resolve('/checkout', workspace, target);
+  const extractorPath = posix.resolve(job.env.CODEQL_EXTRACTOR_RUST_OPTION_CARGO_TARGET_DIR.replace('${{ github.workspace }}', '/checkout'));
+  assert.equal(cachePath, extractorPath);
+  // Generated dependency sources must remain outside the scanned checkout.
+  assert.equal(cachePath.startsWith('/checkout/'), false);
+  assert.equal(step.with['env-vars'], 'CODEQL_EXTRACTOR_RUST_OPTION_');
+  assert.equal(step.with.key, `codeql-rust-${job.steps[init].uses.split('@')[1]}-` + "${{ hashFiles('vendor/glib/**') }}");
+  assert.equal(step.with['shared-key'], undefined);
+  assert.equal(step.with['cache-directories'], undefined);
+  assert.notEqual(step.with['cache-workspace-crates'], true);
+  assert.notEqual(step.with['cache-all-crates'], true);
+  // A cold or missing cache must never skip extraction or query evaluation.
+  assert.equal(job.steps[init].if, undefined);
+  assert.equal(job.steps[analyze].if, undefined);
+  const bunCache=job.steps.findIndex(step=>step.id==='bun-cache');
+  assert.ok(bunCache>=0 && bunCache<prepare);
+  assert.equal(job.steps[bunCache].if,"matrix.language == 'rust'");
+  assert.equal(job.env.BUN_INSTALL_CACHE_DIR,desktop.env.BUN_INSTALL_CACHE_DIR);
+  assert.deepEqual(job.steps[bunCache].with,desktop.jobs.quality.steps.find(step=>step.id==='bun-cache').with);
+  assert.ok(!job.steps.some(step=>step.uses?.startsWith('actions/cache/save@')));
+});
+
+test('only superseded scans for the same PR and language cancel each other', () => {
+  const concurrency = security.jobs.codeql.concurrency;
+  function group(github, matrix) {
+    return concurrency.group.replace(/\$\{\{\s*(.*?)\s*\}\}/g,
+      (_, expression) => new Function('github', 'matrix', `return (${expression});`)(github, matrix));
+  }
+  const pr = { event_name: 'pull_request', ref: 'refs/pull/1/merge', run_id: 1 };
+  const rust = { language: 'rust' };
+  assert.equal(group(pr, rust), group({ ...pr, run_id: 2 }, rust));
+  assert.notEqual(group(pr, rust), group({ ...pr, ref: 'refs/pull/2/merge' }, rust));
+  assert.notEqual(group(pr, rust), group(pr, { language: 'python' }));
+  for (const event of ['pull_request', 'merge_group', 'push', 'schedule', 'workflow_dispatch']) {
+    const github = { ...pr, event_name: event, ref: event === 'pull_request' ? pr.ref : 'refs/heads/main' };
+    const cancel = new Function('github', `return (${concurrency['cancel-in-progress'].slice(3, -2)});`)(github);
+    assert.equal(cancel, event === 'pull_request');
+    if (!cancel) assert.notEqual(group(github, rust), group({ ...github, run_id: 2 }, rust));
+  }
 });
 
 test('dependency review covers development, runtime and unknown packages on PRs and merge groups', () => {

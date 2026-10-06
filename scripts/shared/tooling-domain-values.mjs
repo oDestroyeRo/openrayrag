@@ -58,7 +58,7 @@
 /** @typedef {CandidateContext & {readonly files?: Map<string, Buffer>, readonly artifact?: ArtifactIdentity}} PublicationContext */
 /** @typedef {Readonly<{state: 'build', artifact?: never}> | Readonly<{state: 'reuse' | 'published', artifact: ArtifactIdentity}>} PreflightResult */
 /** @typedef {Readonly<{state: 'skip', reason: string, id?: never, plan?: never, artifact?: never}> | (PreflightResult & Readonly<{id: ReleaseIdentity, plan: ReleasePlan, reason?: never}>)} ProductionPlanResult */
-/** @typedef {Readonly<{tool: 'bun' | 'python' | 'cargo', args: readonly string[], report: string}>} VerificationStep */
+/** @typedef {Readonly<{tool: 'bun' | 'python' | 'cargo', args: readonly string[], report: string, cargoTargetDirectory?: string}>} VerificationStep */
 /** @typedef {Readonly<{file: string, args: readonly string[]}>} ProcessInvocation */
 /** @typedef {Readonly<{binary: string, report: string}>} PackageSmoke */
 /** @typedef {'save' | 'reopen'} SmokeStage */

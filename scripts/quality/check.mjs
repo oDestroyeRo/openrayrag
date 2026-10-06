@@ -33,8 +33,12 @@ export async function executePlan(steps, run = runLoggedProcess, directory = roo
   for (const step of steps) {
     console.log(`Checking ${step.report.replace(/\.log$/, '')}…`);
     const command = invocation(step, env);
+    /** @type {NodeJS.ProcessEnv} */
+    const stepEnv = { ...env, PYTHONDONTWRITEBYTECODE: '1' };
+    if (step.cargoTargetDirectory && stepEnv.CARGO_TARGET_DIR === undefined)
+      stepEnv.CARGO_TARGET_DIR = resolve(directory, step.cargoTargetDirectory);
     await run(command.file, command.args, {
-      cwd: directory, env: { ...env, PYTHONDONTWRITEBYTECODE: '1' }, report: join(directory, 'reports', step.report),
+      cwd: directory, env: stepEnv, report: join(directory, 'reports', step.report),
     });
   }
 }
