@@ -3,8 +3,10 @@ import { validateHpPotions, type HpPotionSettings } from './hp-potions';
 import { validateRecoveryItems, type RecoveryItemSettings } from './recovery-items';
 import type { Position } from './protocol';
 import { validActorConditions, type ActorPredicate } from './actor-observations-logic';
-import { validateDispositionPolicy, type DispositionPolicy } from './disposition';
+import { validateDispositionPolicy, type DispositionPolicy, type ValidatedDispositionPolicy } from './disposition';
 import { validateSupplySettings, type SupplySettings } from './supply-trip-logic';
+import { itemId, skillId, speciesId, quantity, percentage, seconds, minutes, mapCode,
+  type ItemId, type SkillId, type SpeciesId, type Quantity, type Percentage, type Seconds, type Minutes, type MapCode } from './domain-values';
 
 export const MAX_TARGETS = 64;
 export interface MonsterRule { classId: number; action: 'attack' | 'ignore'; priority: number; conditions?: ActorPredicate[] }
@@ -54,6 +56,66 @@ export interface Settings {
   route_randomWalk_maxRouteTime: number; attackRouteMaxPathDistance: number; attackMaxRouteTime: number;
   automation?: AutomationSettings;
 }
+
+/** Drafts and external JSON keep their original mutable scalar schema. */
+export type SettingsDraft = Settings;
+export type ReadonlyData<T> = T extends string | number | boolean | bigint | symbol | null | undefined ? T
+  : T extends readonly (infer Value)[] ? readonly ReadonlyData<Value>[]
+  : T extends object ? { readonly [Key in keyof T]: ReadonlyData<T[Key]> } : T;
+export type SettingsInput = ReadonlyData<Settings>;
+export type AutomationSettingsInput = ReadonlyData<AutomationSettings>;
+
+type DomainItemRule = Omit<ItemRule, 'itemId' | 'belowPercent' | 'minStock' | 'cooldownSeconds'>
+  & { itemId: ItemId; belowPercent: Percentage; minStock: Quantity; cooldownSeconds: Seconds };
+type DomainSkillRule = Omit<SkillRule, 'skillId' | 'hpBelowPercent' | 'spAbovePercent' | 'cooldownSeconds'>
+  & { skillId: SkillId; hpBelowPercent: Percentage; spAbovePercent: Percentage; cooldownSeconds: Seconds };
+type DomainEscape = Omit<EscapeSettings, 'hpBelowPercent' | 'minStock' | 'cooldownSeconds' | 'threatWindowSeconds'>
+  & { hpBelowPercent: Percentage; minStock: Quantity; cooldownSeconds: Seconds; threatWindowSeconds?: Seconds };
+type DomainRecoveryItems = Omit<RecoveryItemSettings, 'itemIds' | 'belowPercent' | 'minStock' | 'cooldownSeconds'>
+  & { itemIds: ItemId[]; belowPercent: Percentage; minStock: Quantity; cooldownSeconds: Seconds };
+type DomainAttackStrategy = Omit<AttackStrategyRule, 'speciesIds' | 'skillId' | 'maxAttempts' | 'maxUses' | 'cooldownSeconds'>
+  & { speciesIds: SpeciesId[]; skillId: SkillId & (11 | 12 | 16); maxAttempts: Quantity; maxUses: Quantity; cooldownSeconds: Seconds };
+type DomainAutomation = Omit<AutomationSettings, 'loadout' | 'combat' | 'loot' | 'recovery' | 'escape' | 'items'
+  | 'hpPotions' | 'spPotions' | 'skills' | 'equipment' | 'attackStrategies' | 'allocation' | 'follow' | 'travel' | 'limits' | 'partyHeal' | 'disposition'> & {
+  disposition?: ValidatedDispositionPolicy;
+  loadout: Omit<LoadoutSettings, 'minAmmoStock' | 'ammoPreferences' | 'cooldownSeconds'>
+    & { minAmmoStock: Quantity; ammoPreferences: { itemId: ItemId }[]; cooldownSeconds: Seconds };
+  combat: Omit<AutomationSettings['combat'], 'rules'> & { rules: (Omit<MonsterRule, 'classId'> & { classId: SpeciesId })[] };
+  loot: Omit<AutomationSettings['loot'], 'rules'> & { rules: (Omit<LootRule, 'itemId'> & { itemId: ItemId })[] };
+  recovery: Omit<AutomationSettings['recovery'], 'hpStart' | 'hpEnd' | 'spStart' | 'spEnd' | 'timeoutSeconds'>
+    & { hpStart: Percentage; hpEnd: Percentage; spStart: Percentage; spEnd: Percentage; timeoutSeconds: Seconds };
+  escape?: DomainEscape; items: DomainItemRule[]; hpPotions?: DomainRecoveryItems; spPotions?: DomainRecoveryItems;
+  skills: DomainSkillRule[]; equipment: (Omit<EquipmentRule, 'itemId' | 'hpBelowPercent' | 'monsterClassId'>
+    & { itemId: ItemId; hpBelowPercent: Percentage; monsterClassId: SpeciesId | 0 })[];
+  attackStrategies?: DomainAttackStrategy[];
+  allocation: Omit<AutomationSettings['allocation'], 'skills'> & { skills: { skillId: SkillId; target: number }[] };
+  follow: Omit<AutomationSettings['follow'], 'lostSeconds'> & { lostSeconds: Seconds };
+  travel: Omit<AutomationSettings['travel'], 'destinationMap' | 'waypoints'>
+    & { destinationMap: MapCode | ''; waypoints: (Position & { map: MapCode })[] };
+  limits: Omit<AutomationSettings['limits'], 'minutes' | 'kills' | 'pickups' | 'weightPercent'>
+    & { minutes: Minutes; kills: Quantity; pickups: Quantity; weightPercent: Percentage };
+  partyHeal?: Omit<PartyHealSettings, 'hpBelowPercent' | 'spReserve' | 'cooldownSeconds' | 'maxAttempts'>
+    & { hpBelowPercent: Percentage; spReserve: Quantity; cooldownSeconds: Seconds; maxAttempts: Quantity };
+};
+// Erased private fields disappear from object spreads, so an edited structural
+// copy must pass aggregate admission again without changing the JSON model.
+declare class AutomationAdmission { private readonly automationAdmission: void }
+/** Read-only decision view supports safe field filtering without claiming aggregate admission. */
+export type AutomationPolicy = ReadonlyData<Omit<DomainAutomation,'disposition'>>
+  & {readonly disposition?:ValidatedDispositionPolicy};
+export type ValidatedAutomationSettings = AutomationPolicy & AutomationAdmission;
+type DomainSettings = Omit<Settings, 'map' | 'targets' | 'minHpPercent' | 'route_randomWalk_maxRouteTime' | 'attackMaxRouteTime' | 'automation'>
+  & { map: MapCode | ''; targets: SpeciesId[]; minHpPercent: Percentage;
+    route_randomWalk_maxRouteTime: Seconds; attackMaxRouteTime: Seconds; automation?: ValidatedAutomationSettings };
+declare class FormAdmission { private readonly formAdmission: void }
+declare class RunAdmission { private readonly runAdmission: void }
+export type ValidatedFormSettings = ReadonlyData<Omit<DomainSettings,'automation'>>
+  & {readonly automation?:ValidatedAutomationSettings} & FormAdmission;
+export type RunSettings = ValidatedFormSettings & RunAdmission;
+
+/** Mutable editor projections are detached; admitted models remain read-only. */
+export function settingsDraft(value: SettingsInput): Settings { return structuredClone(value) as Settings; }
+export function automationDraft(value: AutomationSettingsInput): AutomationSettings { return structuredClone(value) as AutomationSettings; }
 export const DEFAULT_LOADOUT: LoadoutSettings = { enabled:false, autoAmmo:true, minAmmoStock:0, ammoPreferences:[], restore:'conditionEnd', cooldownSeconds:3 };
 export const DEFAULT_AUTOMATION: AutomationSettings = {
   loadout: DEFAULT_LOADOUT,
@@ -75,21 +137,24 @@ export const DEFAULT_SETTINGS: Settings = {
 const bounded = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
 const id = (v: number) => bounded(v, 1, 2_147_483_647);
 const map = (v: string, empty = false) => typeof v === 'string' && ((empty && v === '') || /^[a-zA-Z0-9_-]{1,64}$/.test(v));
-const list = <T>(v: T[], max: number, valid: (entry: T) => boolean, key: (entry: T) => number) => Array.isArray(v)
+const list = <T>(v: readonly T[], max: number, valid: (entry: T) => boolean, key: (entry: T) => number) => Array.isArray(v)
   && v.length <= max && v.every(valid) && new Set(v.map(key)).size === v.length;
 function strictKeys(v: unknown, keys: string[]): void {
   if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).some(k=>!keys.includes(k))) throw new Error('Unknown settings field.');
 }
-export function automationSettings(settings: Settings): AutomationSettings { return settings.automation ?? DEFAULT_AUTOMATION; }
-export function escapeSettings(settings: Settings): EscapeSettings { return { ...DEFAULT_ESCAPE, ...automationSettings(settings).escape }; }
-export function retreatSettings(settings:Settings):RetreatSettings {return automationSettings(settings).retreat??DEFAULT_RETREAT;}
+export function automationSettings(settings: Pick<ValidatedFormSettings, 'automation'>): ValidatedAutomationSettings;
+export function automationSettings(settings: SettingsInput): AutomationSettingsInput;
+export function automationSettings(settings: SettingsInput | Pick<ValidatedFormSettings, 'automation'>): AutomationSettingsInput { return settings.automation ?? VALIDATED_DEFAULT_AUTOMATION; }
+export function escapeSettings(settings: SettingsInput): ReadonlyData<EscapeSettings> { return { ...DEFAULT_ESCAPE, ...automationSettings(settings).escape }; }
+export function retreatSettings(settings:SettingsInput):ReadonlyData<RetreatSettings> {return automationSettings(settings).retreat??DEFAULT_RETREAT;}
 export function validateRetreat(value:RetreatSettings):RetreatSettings {
   strictKeys(value,['enabled','triggerDistance','desiredDistance','maxPathSteps','maxAttempts']);
   if(typeof value.enabled!=='boolean'||!bounded(value.triggerDistance,1,13)||!bounded(value.desiredDistance,2,14)
     ||value.desiredDistance<=value.triggerDistance||!bounded(value.maxPathSteps,1,20)||!bounded(value.maxAttempts,1,10))throw new Error('Invalid ranged retreat settings.');
   return {...value};
 }
-export function validateAutomation(a: AutomationSettings): AutomationSettings {
+export function validateAutomation(a: AutomationSettingsInput): ValidatedAutomationSettings {
+  let disposition: ValidatedDispositionPolicy | undefined;
   try {
     strictKeys(a,['loadout','combat','loot','recovery','escape','items','skills','equipment','allocation','follow','travel','limits','respawn','schedule','disposition','supply','attackStrategies','mapPolicy','partyHeal','retreat','hpPotions','spPotions']);
     if(Object.hasOwn(a,'partyHeal')) {
@@ -109,7 +174,7 @@ export function validateAutomation(a: AutomationSettings): AutomationSettings {
       || Object.hasOwn(escape,'threatWindowSeconds') && !bounded(escape.threatWindowSeconds!,1,60)) throw new Error();
     if (typeof escape.enabled !== 'boolean' || !bounded(escape.hpBelowPercent,1,95) || !['random','save'].includes(escape.mode)
       || !['item','skill'].includes(escape.method) || !bounded(escape.minStock,0,9999) || !bounded(escape.cooldownSeconds,1,3600)) throw new Error();
-    if (Object.hasOwn(a,'disposition')) validateDispositionPolicy(a.disposition);
+    if (Object.hasOwn(a,'disposition')) disposition = validateDispositionPolicy(a.disposition);
     if(Object.hasOwn(a,'attackStrategies')) {
       if(!Array.isArray(a.attackStrategies)||a.attackStrategies.length>32||new Set(a.attackStrategies.map(r=>r.id)).size!==a.attackStrategies.length)throw new Error();
       for(const r of a.attackStrategies){
@@ -160,12 +225,55 @@ export function validateAutomation(a: AutomationSettings): AutomationSettings {
       || !bounded(a.limits.weightPercent,0,100) || typeof a.respawn.enabled !== 'boolean' || !bounded(a.respawn.maxDeaths,0,100)
       || typeof a.schedule.enabled !== 'boolean' || !bounded(a.schedule.startHour,0,23) || !bounded(a.schedule.endHour,0,23)) throw new Error();
   } catch { throw new Error('Invalid automation settings. Check rules, recovery thresholds and session limits.'); }
-  return structuredClone({ ...a, escape: a.escape ?? DEFAULT_ESCAPE });
+  return admitAutomation(structuredClone({ ...a, escape: a.escape ?? DEFAULT_ESCAPE }), disposition);
 }
-export function validateSettings(value: Settings): Settings { return checkSettings(value, false); }
+function admitRecoveryItems(value: ReadonlyData<RecoveryItemSettings>): DomainRecoveryItems {
+  return { ...value, itemIds: value.itemIds.map(value => itemId(value)), belowPercent: percentage(value.belowPercent),
+    minStock: quantity(value.minStock), cooldownSeconds: seconds(value.cooldownSeconds) };
+}
+function admitEscape(value: ReadonlyData<EscapeSettings>): ReadonlyData<DomainEscape> {
+  const { threatWindowSeconds, ...base } = value;
+  return { ...base, hpBelowPercent: percentage(value.hpBelowPercent), minStock: quantity(value.minStock),
+    cooldownSeconds: seconds(value.cooldownSeconds), ...(threatWindowSeconds !== undefined ? { threatWindowSeconds: seconds(threatWindowSeconds) } : {}) };
+}
+/** Called only after the original ordered schema checks have all succeeded. */
+function admitAutomation(a: AutomationSettingsInput, disposition: ValidatedDispositionPolicy | undefined): ValidatedAutomationSettings {
+  const { escape, hpPotions, spPotions, attackStrategies, partyHeal, disposition: _rawDisposition, ...base } = a;
+  const domain: AutomationPolicy = { ...base,
+    ...(disposition ? { disposition } : {}),
+    loadout: { ...a.loadout, minAmmoStock: quantity(a.loadout.minAmmoStock), cooldownSeconds: seconds(a.loadout.cooldownSeconds),
+      ammoPreferences: a.loadout.ammoPreferences.map(row => ({ itemId: itemId(row.itemId) })) },
+    combat: { ...a.combat, rules: a.combat.rules.map(rule => ({ ...rule, classId: speciesId(rule.classId) })) },
+    loot: { ...a.loot, rules: a.loot.rules.map(rule => ({ ...rule, itemId: itemId(rule.itemId) })) },
+    recovery: { ...a.recovery, hpStart: percentage(a.recovery.hpStart), hpEnd: percentage(a.recovery.hpEnd),
+      spStart: percentage(a.recovery.spStart), spEnd: percentage(a.recovery.spEnd), timeoutSeconds: seconds(a.recovery.timeoutSeconds) },
+    ...(escape ? { escape: admitEscape(escape) } : {}),
+    items: a.items.map(rule => ({ ...rule, itemId: itemId(rule.itemId), belowPercent: percentage(rule.belowPercent),
+      minStock: quantity(rule.minStock), cooldownSeconds: seconds(rule.cooldownSeconds) })),
+    skills: a.skills.map(rule => ({ ...rule, skillId: skillId(rule.skillId), hpBelowPercent: percentage(rule.hpBelowPercent),
+      spAbovePercent: percentage(rule.spAbovePercent), cooldownSeconds: seconds(rule.cooldownSeconds) })),
+    equipment: a.equipment.map(rule => ({ ...rule, itemId: itemId(rule.itemId), hpBelowPercent: percentage(rule.hpBelowPercent),
+      monsterClassId: rule.monsterClassId === 0 ? 0 : speciesId(rule.monsterClassId) })),
+    ...(hpPotions ? { hpPotions: admitRecoveryItems(hpPotions) } : {}),
+    ...(spPotions ? { spPotions: admitRecoveryItems(spPotions) } : {}),
+    ...(attackStrategies ? { attackStrategies: attackStrategies.map(rule => ({ ...rule, speciesIds: rule.speciesIds.map(value => speciesId(value)),
+      skillId: skillId(rule.skillId) as SkillId & (11 | 12 | 16), maxAttempts: quantity(rule.maxAttempts), maxUses: quantity(rule.maxUses),
+      cooldownSeconds: seconds(rule.cooldownSeconds) })) } : {}),
+    allocation: { ...a.allocation, skills: a.allocation.skills.map(rule => ({ ...rule, skillId: skillId(rule.skillId) })) },
+    follow: { ...a.follow, lostSeconds: seconds(a.follow.lostSeconds) },
+    travel: { ...a.travel, destinationMap: a.travel.destinationMap === '' ? '' : mapCode(a.travel.destinationMap),
+      waypoints: a.travel.waypoints.map(point => ({ ...point, map: mapCode(point.map) })) },
+    limits: { ...a.limits, minutes: minutes(a.limits.minutes), kills: quantity(a.limits.kills), pickups: quantity(a.limits.pickups), weightPercent: percentage(a.limits.weightPercent) },
+    ...(partyHeal ? { partyHeal: { ...partyHeal, hpBelowPercent: percentage(partyHeal.hpBelowPercent), spReserve: quantity(partyHeal.spReserve),
+      cooldownSeconds: seconds(partyHeal.cooldownSeconds), maxAttempts: quantity(partyHeal.maxAttempts) } } : {}),
+  };
+  return { ...a, ...domain } as ValidatedAutomationSettings;
+}
+const VALIDATED_DEFAULT_AUTOMATION = validateAutomation(DEFAULT_AUTOMATION);
+export function validateSettings(value: SettingsInput): RunSettings { return checkSettings(value, false) as RunSettings; }
 /** A form can be configured before a map or monsters are available; Start remains stricter. */
-export function validateFormSettings(value: Settings): Settings { return checkSettings(value, true); }
-function checkSettings(value: Settings, form: boolean): Settings {
+export function validateFormSettings(value: SettingsInput): ValidatedFormSettings { return checkSettings(value, true) as ValidatedFormSettings; }
+function checkSettings(value: SettingsInput, form: boolean): ReadonlyData<DomainSettings> {
   strictKeys(value,['map','targets','radius','minHpPercent','loot','route_randomWalk','route_step','route_avoidWalls','route_randomWalk_maxRouteTime','attackRouteMaxPathDistance','attackMaxRouteTime','automation']);
   if (!bounded(value.radius,1,20) || !bounded(value.minHpPercent,20,95)
     || ![0,2].includes(value.route_randomWalk) || !bounded(value.route_step,1,20)
@@ -180,5 +288,8 @@ function checkSettings(value: Settings, form: boolean): Settings {
   if (!form && !value.targets.length && automation && ['selected','both'].includes(automation.combat.mode) && !automation.combat.rules.some(r=>r.action==='attack')) throw new Error('Choose selected monsters or disable selected combat.');
   if (automation?.mapPolicy?.lockArea && (automation.mapPolicy.lockArea.map !== value.map || (automation.travel.destinationMap && automation.travel.destinationMap !== value.map))) throw new Error('The field lock map, rectangle map and field destination must match.');
   if (automation?.recovery.enabled && automation.recovery.hpStart <= value.minHpPercent) throw new Error('Recovery HP start must be above the emergency HP stop limit.');
-  return { ...value, targets: value.targets.slice(), ...(automation ? { automation } : {}) };
+  const { automation: _automation, ...base } = value;
+  return { ...base, map: value.map === '' ? '' : mapCode(value.map), targets: value.targets.map(value => speciesId(value)),
+    minHpPercent: percentage(value.minHpPercent), route_randomWalk_maxRouteTime: seconds(value.route_randomWalk_maxRouteTime),
+    attackMaxRouteTime: seconds(value.attackMaxRouteTime), ...(automation ? { automation } : {}) };
 }

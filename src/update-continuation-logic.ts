@@ -1,12 +1,32 @@
-import { formDocument, type FormDocument } from './current-form-logic';
-import { validateControllerUpdateCheckpoint, type ControllerUpdateCheckpoint } from './controller-update-logic';
-import { validStatus, type GameStatus } from './game-status';
+import { formDocument, type FormDocument, type FormDocumentInput } from './current-form-logic';
+import { validateControllerUpdateCheckpoint, type ControllerUpdateCheckpoint, type ValidatedControllerUpdateCheckpoint } from './controller-update-logic';
+import { validStatus, type GameStatus, type ValidatedGameStatus } from './game-status';
+import { characterSlot, type CharacterSlot } from './login-logic';
 import { validateFieldRunCheckpoint, type FieldRunCheckpoint } from './reconnect-logic';
 export interface UpdateAccount { username: string; characterSlot: number; mode: 'botOnly' | 'gameClient' }
+/** The legacy continuation codec coerces mode only for admission and retains its raw value. */
+export interface UpdateAccountInput { username: string; characterSlot: number; mode: unknown }
+declare const updateValue: unique symbol;
+export type UpdateUsername = string & { readonly [updateValue]: 'UpdateUsername' };
+export type UpdateRequestId = string & { readonly [updateValue]: 'UpdateRequestId' };
+export interface ValidatedUpdateAccount { readonly username: UpdateUsername; readonly characterSlot: CharacterSlot; readonly mode: unknown }
+/** Correlation IDs intentionally accept every string, including custom/empty test IDs. */
+export function updateRequestId(value: unknown): UpdateRequestId {
+  if (typeof value !== 'string') throw new Error('Update handoff is unavailable.');
+  return value as UpdateRequestId;
+}
+/** Opaque native reply: the frontend forwards its exact payload without interpreting it. */
+declare const reservationValue: unique symbol;
+export interface NativeUpdateReservation { readonly rawNonce: unknown; readonly [reservationValue]: true }
+export function nativeUpdateReservation(rawNonce: unknown): NativeUpdateReservation { return { rawNonce } as NativeUpdateReservation; }
+export interface UpdateContinuationInput {
+  version: 1; account: UpdateAccountInput; form: FormDocumentInput; field: FieldRunCheckpoint | null;
+  runtime: ControllerUpdateCheckpoint & { status: ControllerUpdateCheckpoint['status'] & GameStatus }; savedAccount: boolean;
+}
 
 export interface UpdateContinuation {
-  version: 1; account: UpdateAccount; form: FormDocument; field: FieldRunCheckpoint | null;
-  runtime: ControllerUpdateCheckpoint & { status: ControllerUpdateCheckpoint['status'] & GameStatus }; savedAccount: boolean;
+  readonly version: 1; readonly account: ValidatedUpdateAccount; readonly form: FormDocument; readonly field: FieldRunCheckpoint | null;
+  readonly runtime: ValidatedControllerUpdateCheckpoint & { readonly status: ValidatedControllerUpdateCheckpoint['status'] & ValidatedGameStatus }; readonly savedAccount: boolean;
 }
 
 export type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -18,31 +38,38 @@ const keys = (v: Record<string, unknown>, expected: string[]) => Object.keys(v).
 
 export const ERROR = 'Update continuation could not be verified. Start the bot explicitly.';
 
+/** Keep the existing account policy, including the legacy coercive mode guard. */
+export function updateAccount(value: unknown): ValidatedUpdateAccount {
+  if (!record(value) || !keys(value, ['username', 'characterSlot', 'mode'])
+    || typeof value.username !== 'string' || !value.username.trim() || value.username.length > 64
+    || /[\u0000-\u001f\u007f]/.test(value.username) || !Number.isInteger(value.characterSlot)
+    || Number(value.characterSlot) < 0 || Number(value.characterSlot) > 2
+    || !['botOnly', 'gameClient'].includes(String(value.mode))) throw new Error(ERROR);
+  return { username: value.username as UpdateUsername, characterSlot: characterSlot(value.characterSlot),
+    mode: value.mode };
+}
+
 export function validateUpdateContinuation(input: unknown, now: number): UpdateContinuation {
   if (!record(input) || !keys(input, ['version', 'account', 'form', 'field', 'runtime', 'savedAccount'])
     || input.version !== 1 || typeof input.savedAccount !== 'boolean' || !record(input.account)
     || !keys(input.account, ['username', 'characterSlot', 'mode'])) throw new Error(ERROR);
-  const account = input.account;
-  if (typeof account.username !== 'string' || !account.username.trim() || account.username.length > 64
-    || /[\u0000-\u001f\u007f]/.test(account.username) || !Number.isInteger(account.characterSlot)
-    || Number(account.characterSlot) < 0 || Number(account.characterSlot) > 2
-    || !['botOnly', 'gameClient'].includes(String(account.mode))) throw new Error(ERROR);
+  const account = updateAccount(input.account);
   const runtime = validateControllerUpdateCheckpoint(input.runtime, now);
   if (!validStatus(runtime.status) || !runtime.status.connected || !runtime.status.compatible
     || !runtime.status.player) throw new Error(ERROR);
   const field = input.field === null ? null : validateFieldRunCheckpoint(input.field, now);
   if (field && (field.character !== runtime.status.player.name || field.session !== runtime.status.sessionId)
     || !field && !runtime.macro && !runtime.settings) throw new Error(ERROR);
-  return { version: 1, account: { username: account.username, characterSlot: Number(account.characterSlot),
-    mode: account.mode as UpdateAccount['mode'] }, form: formDocument(input.form), field, runtime:{...runtime,status:runtime.status},
+  return { version: 1, account, form: formDocument(input.form), field, runtime:{...runtime,status:runtime.status},
   savedAccount: input.savedAccount };
 }
 
-export function sameUpdateAccount(a: UpdateAccount, b: UpdateAccount): boolean {
+export function sameUpdateAccount(a: Readonly<UpdateAccountInput>, b: Readonly<UpdateAccountInput>): boolean {
   return a.username === b.username && a.characterSlot === b.characterSlot && a.mode === b.mode;
 }
 
-export interface Reply { id: string; command: string; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
+export type UpdateCommand = 'update_prepare' | 'update_restore';
+export interface Reply { readonly id: UpdateRequestId; readonly command: UpdateCommand; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
 
 export interface InstallationAdapter {
   flush(): Promise<FormDocument>;

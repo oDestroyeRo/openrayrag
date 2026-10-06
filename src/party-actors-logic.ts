@@ -1,9 +1,17 @@
+import { actorId, partyId, partyMemberId, worldId, incarnation, mapCode, revisionFor, type ActorId, type PartyId, type PartyMemberId, type WorldId, type Incarnation, type MapCode, type Revision } from './domain-values';
 import { filter, uniqueBy } from 'remeda';
 import type { ObservationContext, PartyActorEvidence } from './actor-observations-logic';
 import type { PartyMember } from './world-protocol';
 export interface PartyActorBinding {
-  partyId: number; memberId: number; entityId: number; map: string;
-  world: string; incarnation: number; affiliationRevision: number;
+  readonly partyId:PartyId;readonly memberId:PartyMemberId;readonly entityId:ActorId;readonly map:MapCode;
+  readonly world:WorldId;readonly incarnation:Incarnation;readonly affiliationRevision:Revision<'affiliation'>;
+}
+
+/** Admit an association only after the roster/visible lifetime owner proves it. */
+export function partyActorBinding(input:{partyId:number;memberId:number;entityId:number;map:string;world:string;incarnation:number;affiliationRevision:number}):PartyActorBinding {
+  if(input.entityId<=0)throw new Error('Party actor binding requires an online member.');
+  return {partyId:partyId(input.partyId),memberId:partyMemberId(input.memberId),entityId:actorId(input.entityId),map:mapCode(input.map),
+    world:worldId(input.world),incarnation:incarnation(input.incarnation),affiliationRevision:revisionFor('affiliation',input.affiliationRevision)};
 }
 
 export type Party = { id: number; name: string; members: Map<number,PartyMember> } | null;

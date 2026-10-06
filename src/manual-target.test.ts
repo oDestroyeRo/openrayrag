@@ -1,9 +1,10 @@
+import { validateFormSettings } from './settings';
 import { describe, expect, it } from 'vitest';
 import { BotEngine, type Action } from './engine';
 import { CompanionController } from './controller';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
 import { DEFAULT_MAP_POLICY } from './map-policy';
-import { manualTargetPolicy, validateManualTargetRequest, type ManualTargetRequest } from './manual-target';
+import { manualTargetPolicy, validateManualTargetRequest, type ManualTargetRequestInput } from './manual-target';
 import { command, decode, OP, type Entity, type GameEvent, type Position } from './protocol';
 import { BitWriter } from './binary';
 import { FEATURE_OP } from './protocol-feature';
@@ -19,12 +20,20 @@ const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[],automation:struc
 function setup(grid:WalkGrid={width:200,height:200,walkable:()=>true}) {
   let now=100000;const sent:Action[]=[];const engine=new BotEngine(a=>sent.push(a),()=>now,()=>grid);
   engine.connect(true);engine.receive([{type:'enter',id:1,map:'prt_fild08'},{type:'spawn',entity:{...p}},{type:'spawn',entity:{...enemy}},{type:'inventory',items:[],equipment:Array(10).fill(0),ammoId:-1}]);
-  const request=(kind:'walk'|'attack'='attack'):ManualTargetRequest=>({type:'manualTarget',map:engine.map,owner:engine.manualActorIdentity(1)!,command:kind==='walk'?{type:'walk',destination:{x:104,y:100}}:{type:'attack',target:engine.manualActorIdentity(2)!},timeoutSeconds:30,policy:manualTargetPolicy(settings)});
+  const request=(kind:'walk'|'attack'='attack'):ManualTargetRequestInput=>({type:'manualTarget',map:engine.map,owner:engine.manualActorIdentity(1)!,command:kind==='walk'?{type:'walk',destination:{x:104,y:100}}:{type:'attack',target:engine.manualActorIdentity(2)!},timeoutSeconds:30,policy:manualTargetPolicy(settings)});
   const step=(ms=100)=>{now+=ms;engine.tick();};
   const ack=(cells:Position[],seconds=.1,locked=false)=>engine.receive([{type:'walk',id:1,walk:{origin:cells[0]!,cells,secondsPerCell:seconds,firstSeconds:seconds,locked}}]);
   return {engine,sent,request,step,ack,receive:(events:GameEvent[])=>engine.receive(events),time:()=>now};
 }
 describe('bounded manual target owner',()=>{
+  it('admits observed monster class zero without making it a configured species selection',()=>{
+    const f=setup();f.receive([{type:'spawn',entity:{...enemy,classId:0}}]);
+    const request=f.request();expect(f.engine.previewManual(request).length).toBeGreaterThan(1);
+    expect(()=>f.engine.startManual(request)).not.toThrow();expect(f.engine.settings.targets).toEqual([0]);
+    f.step();expect(f.sent).toEqual([{type:'attack',id:2}]);
+    expect(()=>validateFormSettings({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[0]})).toThrow('Invalid settings');
+    expect(settings.targets).toEqual([]);
+  });
   it('accepts default selected combat with no species selected without changing saved settings',()=>{
     const f=setup(),request=f.request('walk');expect(settings.targets).toEqual([]);f.engine.startManual(request);f.step();
     expect(f.sent[0]?.type).toBe('walk');expect(f.engine.running).toBe(false);expect(f.engine.runIntent).toBe(false);expect(settings.targets).toEqual([]);
@@ -180,7 +189,7 @@ describe('manual ranged attack and cancellation receipts',()=>{
 });
 
 describe('controller manual task exclusivity',()=>{
-  function controllerFixture(){let now=100000;const sent:Action[]=[];const c=new CompanionController(a=>sent.push(a as Action),()=>now,()=>({width:200,height:200,walkable:()=>true}));c.connect(true);c.engine.receive([{type:'enter',id:1,map:'prt_fild08'},{type:'spawn',entity:{...p}},{type:'spawn',entity:{...enemy}},{type:'inventory',items:[],equipment:Array(10).fill(0),ammoId:-1}]);const request=():ManualTargetRequest=>({type:'manualTarget',map:'prt_fild08',owner:c.engine.manualActorIdentity(1)!,command:{type:'walk',destination:{x:104,y:100}},timeoutSeconds:30,policy:manualTargetPolicy(settings)});return {c,sent,request,step:(ms=100)=>{now+=ms;c.tick();}};}
+  function controllerFixture(){let now=100000;const sent:Action[]=[];const c=new CompanionController(a=>sent.push(a as Action),()=>now,()=>({width:200,height:200,walkable:()=>true}));c.connect(true);c.engine.receive([{type:'enter',id:1,map:'prt_fild08'},{type:'spawn',entity:{...p}},{type:'spawn',entity:{...enemy}},{type:'inventory',items:[],equipment:Array(10).fill(0),ammoId:-1}]);const request=():ManualTargetRequestInput=>({type:'manualTarget',map:'prt_fild08',owner:c.engine.manualActorIdentity(1)!,command:{type:'walk',destination:{x:104,y:100}},timeoutSeconds:30,policy:manualTargetPolicy(settings)});return {c,sent,request,step:(ms=100)=>{now+=ms;c.tick();}};}
   it('is command-only, nonpersistent, and prevents all competing owners',()=>{
     const f=controllerFixture();f.c.perform('command',f.request());f.step();expect(f.c.engine.running).toBe(false);expect(f.c.runRequested).toBe(false);expect(f.c.active).toBe(true);
     for(const mode of ['command','workflow','routine','service','social'] as const)expect(()=>f.c.perform(mode,{type:'sit',sitting:false})).toThrow();expect(()=>f.c.start({...settings,targets:[4000]})).toThrow();
@@ -212,7 +221,7 @@ describe('combined actor-zero manual wire ownership',()=>{
   function spawn(actor:Entity):Uint8Array {
     const name=new TextEncoder().encode(actor.name);const body=new BitWriter().u8(15).i32(actor.id).i32(actor.classId).i32(0).i32(~name.length).i32(actor.name.length).take(name).u8(actor.kind).u8(0).u8(actor.dead?3:0).i32(actor.x).i32(actor.y).u8(actor.level).i32(actor.hp).i32(actor.maxHp).i32(0).i32(0).i32(0).u8(0).finish();return new BitWriter().u8(OP.spawn).u8(0).i32(body.length).take(body).finish();
   }
-  function wire(ownId:number,targetId:number){let now=100000;const sent:Action[]=[];const c=new CompanionController(a=>sent.push(a as Action),()=>now,()=>({width:200,height:200,walkable:()=>true}));c.connect(true);c.receive(new BitWriter().u8(OP.enter).i32(ownId).string('prt_fild08').finish());c.receive(spawn({...p,id:ownId}));c.receive(spawn({...enemy,id:targetId}));c.engine.receive([{type:'inventory',items:[],equipment:Array(10).fill(0),ammoId:-1}]);const request=():ManualTargetRequest=>({type:'manualTarget',map:'prt_fild08',owner:c.engine.manualActorIdentity(ownId)!,command:{type:'attack',target:c.engine.manualActorIdentity(targetId)!},timeoutSeconds:30,policy:manualTargetPolicy(settings)});const packet=(w:BitWriter)=>c.receive(w.finish());return {c,sent,request,packet,step:(ms=100)=>{now+=ms;c.tick();}};}
+  function wire(ownId:number,targetId:number){let now=100000;const sent:Action[]=[];const c=new CompanionController(a=>sent.push(a as Action),()=>now,()=>({width:200,height:200,walkable:()=>true}));c.connect(true);c.receive(new BitWriter().u8(OP.enter).i32(ownId).string('prt_fild08').finish());c.receive(spawn({...p,id:ownId}));c.receive(spawn({...enemy,id:targetId}));c.engine.receive([{type:'inventory',items:[],equipment:Array(10).fill(0),ammoId:-1}]);const request=():ManualTargetRequestInput=>({type:'manualTarget',map:'prt_fild08',owner:c.engine.manualActorIdentity(ownId)!,command:{type:'attack',target:c.engine.manualActorIdentity(targetId)!},timeoutSeconds:30,policy:manualTargetPolicy(settings)});const packet=(w:BitWriter)=>c.receive(w.finish());return {c,sent,request,packet,step:(ms=100)=>{now+=ms;c.tick();}};}
   it.each([[0,2],[1,0]])('retains bounded normal attack with own %s / monster %s', (self,target)=>{
     const f=wire(self,target);f.c.perform('command',f.request());f.step();expect(f.sent).toEqual([{type:'attack',id:target}]);expect(command('attack',target)[0]).toBe(11);
     f.packet(new BitWriter().u8(OP.attack).i32(self).i32(target).i32(0).position({x:103,y:100}));expect(f.c.engine.snapshot().manualTarget.state).toBe('attacking');expect(f.c.engine.manualTargetActive).toBe(true);
@@ -231,7 +240,7 @@ describe('combined actor-zero manual wire ownership',()=>{
   it.each([0,1])('does not turn own %s manual death into configured automatic respawn or return',self=>{
     const f=wire(self,2),automation=structuredClone(DEFAULT_AUTOMATION);
     automation.respawn.enabled=true;automation.respawn.maxDeaths=3;automation.travel.returnToLockMap=true;
-    f.c.engine.settings={...settings,automation};f.c.engine.deaths=2;
+    f.c.engine.settings=validateFormSettings({...settings,automation});f.c.engine.deaths=2;
     const request=f.request();request.policy=manualTargetPolicy({...settings,automation});
     f.c.perform('command',request);f.step();expect(f.c.engine.deaths).toBe(2);
     f.packet(new BitWriter().u8(OP.death).i32(self));for(let i=0;i<4;i++)f.step(1000);

@@ -4,7 +4,7 @@ import { BOT_SCRIPT_LIMITS, formatBotScript, parseBotScript } from './bot-script
 import * as botScript from './bot-script';
 import { MacroDraft, MacroUi, macroActive, macroExample, macroBaseSettings, validMacroSnapshot } from './macro-ui';
 import { dryRunMacro, MacroRuntime } from './macros';
-import { DEFAULT_SETTINGS, DEFAULT_AUTOMATION, validateFormSettings, type Settings } from './settings';
+import { DEFAULT_SETTINGS, DEFAULT_AUTOMATION, validateFormSettings, type SettingsInput } from './settings';
 
 class Store {
   data = new Map<string, string>();
@@ -117,7 +117,7 @@ describe('macro editor documents', () => {
     const configured = draft.configured();
     expect(configured).toEqual({ settings, script: macroExample('continuous') });
     expect(configured).toEqual(draft.read());
-    configured.settings.radius = 1; configured.script!.rules.length = 0; settings.radius = 19;
+    Reflect.set(configured.settings, 'radius', 1); configured.script!.rules.length = 0; settings.radius = 19;
     expect(draft.configured().settings.radius).toBe(18); expect(draft.enabledScript?.rules).toHaveLength(2);
     expect(draft.text).toContain('# applied notes\r\n'); expect(draft.unsaved).toBe(true);
     draft.text += '\r\ninvalid manual draft'; const manual = draft.text;
@@ -307,7 +307,7 @@ it('preserves custom tab-separated rule budgets while appending examples', () =>
   expect(document.script?.rules).toHaveLength(2); expect(f.input.value).toContain('duration\t7200s');
 });
 
-function largeSettings(scope: 'self' | 'actor'): Settings {
+function largeSettings(scope: 'self' | 'actor'): SettingsInput {
   const automation = structuredClone(DEFAULT_AUTOMATION);
   automation.combat.rules = Array.from({length:32},(_,i)=>({classId:4000+i,action:'attack',priority:0,
     conditions:Array.from({length:16},()=>({field:'actorHpPercent',actor:scope==='self'?{scope:'self'}:{scope:'actor',id:1,world:'00000000-0000-0000-0000-000000000001',incarnation:1},operator:'gte',value:0}))}));
@@ -329,7 +329,7 @@ it('uses the cached applied document for unchanged refreshes and draft keystroke
   // An unchanged sync must not inspect or rewrite user text, and configured
   // getters retain only the already validated source rather than compiling it.
   expect(()=>draft.syncSettings(settings)).not.toThrow();expect(draft.text).toContain('# manual draft');
-  draft.discard();const initial=draft.configured();initial.settings.radius=1;
+  draft.discard();const initial=draft.configured();Reflect.set(initial.settings,'radius',1);
   expect(draft.configured().settings.radius).toBe(12);expect(draft.enabledScript).toBeNull();
   expect(replace).not.toHaveBeenCalled(); expect(parse).not.toHaveBeenCalled();
 });

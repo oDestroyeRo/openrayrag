@@ -1,5 +1,5 @@
 import type { PlanningOptions } from './route-planning';
-import type { MapPolicy } from './map-policy-logic';
+import type { MapPolicyInput as MapPolicy } from './map-policy-logic';
 import type { Entity, GameEvent, Position } from './protocol';
 import type { routeBetweenMapsAsync } from './travel';
 export interface TravelSnapshot {

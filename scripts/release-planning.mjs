@@ -1,8 +1,9 @@
+import { releaseBridgeValues } from './tooling-domain-values.mjs';
 import { find } from "remeda";
 // Trusted-source orchestration. The pure engines and reservation ledger own policy;
 // callers inject Git history, commit ranges, API access and native verification.
 import {
-  validatePlan,
+  validatePlan, parsePlan,
   serializePlan,
   planSha256,
   MAX_PLAN_BYTES,
@@ -18,9 +19,11 @@ import {
   migrationBridge,
   legacyFeed,
   verifiedRelease,
-  preflight,
+  preflight, fileBytes,
 } from "./release-core.mjs";
+/** @param {import('./tooling-domain-values.mjs').ReleaseIdentity | import('./tooling-domain-values.mjs').ReleasePlan} value @returns {import('./tooling-domain-values.mjs').ReleaseBase} */
 const baseOf = ({ sourceSha, version, tag }) => ({ sourceSha, version, tag });
+/** @param {import('./tooling-domain-values.mjs').ReleasePlan} plan @returns {import('./tooling-domain-values.mjs').ReleaseIdentity} */
 export const planIdentity = (plan) => ({
   sourceSha: plan.sourceSha,
   firstParentCount: plan.firstParentCount,
@@ -30,12 +33,16 @@ export const planIdentity = (plan) => ({
   releasePlan: plan,
 });
 
+/** @param {import('./tooling-domain-values.mjs').PlanningContext} ctx @param {import('./tooling-domain-values.mjs').ReleaseBridgeDto} [bridge] */
 export async function reservationContext(ctx, bridge = migrationBridge) {
   requireValue(
     ctx.history[bridge.firstParentCount - 1] === bridge.sourceSha,
     "Migration bridge is outside current main ancestry.",
   );
+  ctx = { ...ctx, history: [...ctx.history] };
+  bridge = { ...bridge };
   const plans = await readReservations({ ...ctx, bridge });
+  /** @param {import('./tooling-domain-values.mjs').ReleasePlan} plan */
   const verifyPlan = async (plan) => {
     validatePlan(plan);
     const reserved = find(plans, (p) => p.sourceSha === plan.sourceSha);
@@ -44,14 +51,16 @@ export async function reservationContext(ctx, bridge = migrationBridge) {
       "Release does not match its durable reservation.",
     );
   };
-  return { ...ctx, bridge, plans, verifyPlan };
+  return { ...ctx, bridge: releaseBridgeValues(bridge), plans, verifyPlan };
 }
+/** @param {import('./tooling-domain-values.mjs').PlanningContext} ctx @param {{bridge?: import('./tooling-domain-values.mjs').ReleaseBridgeDto, feed?: () => Buffer}} [options] @returns {Promise<import('./tooling-domain-values.mjs').ProductionPlanResult>} */
 export async function planProduction(
   ctx,
   { bridge = migrationBridge, feed = legacyFeed } = {},
 ) {
   const index = ctx.history.indexOf(ctx.sha);
   requireValue(index >= 0, "Release source is outside current main ancestry.");
+  ctx = { ...ctx, history: [...ctx.history] };
   let context = await reservationContext(ctx, bridge);
   const anchor = await ctx.api.release(context.bridge.tag);
   requireValue(
@@ -61,7 +70,7 @@ export async function planProduction(
   const verifiedBridge = await verifiedRelease(context, anchor);
   requireValue(
     verifiedBridge.id.sourceSha === context.bridge.sourceSha &&
-      verifiedBridge.files.get("latest.json").equals(feed()),
+      fileBytes(verifiedBridge.files, "latest.json").equals(feed()),
     "Migration bridge/feed changed.",
   );
   const latest = await ctx.api.latest();
@@ -115,6 +124,7 @@ export async function planProduction(
   const id = planIdentity(plan);
   return { ...(await preflight({ ...context, id })), id, plan };
 }
+/** @param {import('./tooling-domain-values.mjs').PlanningContext} ctx @param {Buffer} bytes */
 export async function loadProductionPlan(ctx, bytes) {
   requireValue(
     Buffer.isBuffer(bytes) &&
@@ -128,7 +138,8 @@ export async function loadProductionPlan(ctx, bytes) {
   } catch {
     throw new Error("Malformed transported plan.");
   }
-  validatePlan(plan);
+  plan = parsePlan(plan);
+  ctx = { ...ctx, history: [...ctx.history] };
   requireValue(
     bytes.equals(Buffer.from(serializePlan(plan))) &&
       plan.sourceSha === ctx.sha &&

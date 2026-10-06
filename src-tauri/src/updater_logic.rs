@@ -14,6 +14,61 @@ pub(crate) struct Platform {
     pub url: String,
     pub signature: String,
 }
+#[derive(Clone, Debug)]
+pub(crate) struct StableUpdateVersion {
+    text: String,
+    parsed: semver::Version,
+}
+#[derive(Debug, PartialEq)]
+pub(crate) struct UnsupportedVersion;
+#[derive(Debug)]
+pub(crate) struct InstalledVersion(semver::Version);
+impl TryFrom<&str> for InstalledVersion {
+    type Error = semver::Error;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        semver::Version::parse(value).map(Self)
+    }
+}
+impl TryFrom<String> for StableUpdateVersion {
+    type Error = UnsupportedVersion;
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        let parsed = version(&text).ok_or(UnsupportedVersion)?;
+        Ok(Self { text, parsed })
+    }
+}
+impl StableUpdateVersion {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.text
+    }
+    fn newer_than(&self, installed: &InstalledVersion) -> bool {
+        self.parsed > installed.0
+    }
+}
+
+// URL and signature are admitted in the context of this exact version. Neither
+// serde nor Frunk may rebuild this relational aggregate without that check.
+pub(crate) struct CandidateAsset {
+    version: StableUpdateVersion,
+    platform: Platform,
+}
+impl CandidateAsset {
+    pub(crate) fn version(&self) -> &StableUpdateVersion {
+        &self.version
+    }
+    pub(crate) fn url(&self) -> &str {
+        &self.platform.url
+    }
+    pub(crate) fn signature(&self) -> &str {
+        &self.platform.signature
+    }
+    pub(crate) fn into_version(self) -> StableUpdateVersion {
+        self.version
+    }
+    #[cfg(test)]
+    fn into_parts(self) -> (StableUpdateVersion, Platform) {
+        (self.version, self.platform)
+    }
+}
 pub(crate) fn version(v: &str) -> Option<semver::Version> {
     let n = semver::Version::parse(v).ok()?;
     if !n.pre.is_empty() || !n.build.is_empty() || n.to_string() != v {
@@ -21,17 +76,15 @@ pub(crate) fn version(v: &str) -> Option<semver::Version> {
     }
     Some(n)
 }
-pub(crate) fn parse_feed(
-    bytes: &[u8],
-    current: &str,
-) -> Result<Option<(String, Platform)>, String> {
+pub(crate) fn parse_feed(bytes: &[u8], current: &str) -> Result<Option<CandidateAsset>, String> {
     if bytes.len() > MAX_METADATA {
         return Err("Update metadata is too large.".into());
     }
     let f: Feed = serde_json::from_slice(bytes).map_err(|_| "Update metadata is invalid.")?;
-    let v = version(&f.version).ok_or("Update version is unsupported.")?;
-    let c = semver::Version::parse(current).map_err(|_| "Installed version is unavailable.")?;
-    if v <= c {
+    let v =
+        StableUpdateVersion::try_from(f.version).map_err(|_| "Update version is unsupported.")?;
+    let c = InstalledVersion::try_from(current).map_err(|_| "Installed version is unavailable.")?;
+    if !v.newer_than(&c) {
         return Ok(None);
     }
     let p = f
@@ -40,11 +93,14 @@ pub(crate) fn parse_feed(
         .find(|(k, _)| k == "darwin-aarch64")
         .map(|(_, v)| v)
         .ok_or("No Apple Silicon update is available.")?;
-    let expected=format!("https://github.com/oDestroyeRo/openrayrag/releases/download/v{}/Rayrag_Companion_{}_aarch64.app.tar.gz",f.version,f.version);
+    let expected=format!("https://github.com/oDestroyeRo/openrayrag/releases/download/v{}/Rayrag_Companion_{}_aarch64.app.tar.gz",v.as_str(),v.as_str());
     if p.url != expected || p.signature.len() > 4096 {
         return Err("Update download metadata is invalid.".into());
     }
-    Ok(Some((f.version, p)))
+    Ok(Some(CandidateAsset {
+        version: v,
+        platform: p,
+    }))
 }
 
 #[cfg(test)]
@@ -60,6 +116,19 @@ mod tests {
             }}
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn current_feed_does_not_validate_asset_metadata_and_installed_prereleases_remain_supported() {
+        let malformed = serde_json::json!({"version":"1.2.3", "platforms":{"other":{"url":"wrong", "signature":"x".repeat(4097)}}});
+        let bytes = serde_json::to_vec(&malformed).unwrap();
+        for installed in ["1.2.3", "2.0.0", "1.2.3+installed"] {
+            assert!(parse_feed(&bytes, installed).unwrap().is_none());
+        }
+        assert!(parse_feed(&feed("1.2.3"), "1.2.3-beta.1")
+            .unwrap()
+            .is_some());
+        assert!(parse_feed(&bytes, "invalid").is_err());
     }
 
     #[test]
@@ -90,7 +159,14 @@ mod tests {
         for v in ["0.2.10", "0.3.0", "1.0.0", "12.30.100"] {
             assert!(version(v).is_some());
             let metadata = feed(v);
-            assert_eq!(parse_feed(&metadata, "0.2.9").unwrap().unwrap().0, v);
+            assert_eq!(
+                parse_feed(&metadata, "0.2.9")
+                    .unwrap()
+                    .unwrap()
+                    .version()
+                    .as_str(),
+                v
+            );
             assert!(parse_feed(&metadata, v).unwrap().is_none());
             assert!(parse_feed(&metadata, "13.0.0").unwrap().is_none());
         }
@@ -133,12 +209,17 @@ mod tests {
             metadata["platforms"]["darwin-aarch64"]["signature"] = signed["signature"].clone();
             let (v, platform) = parse_feed(&serde_json::to_vec(&metadata).unwrap(), "0.1.0")
                 .unwrap()
-                .unwrap();
+                .unwrap()
+                .into_parts();
             assert_eq!(
-                update_install::verify(&payload, &platform.signature, public_key, &v).is_ok(),
+                update_install::verify(&payload, &platform.signature, public_key, v.as_str())
+                    .is_ok(),
                 advertised == "0.2.27"
             );
-            assert!(update_install::verify(&payload, &platform.signature, "invalid", &v).is_err());
+            assert!(
+                update_install::verify(&payload, &platform.signature, "invalid", v.as_str())
+                    .is_err()
+            );
         }
     }
 }

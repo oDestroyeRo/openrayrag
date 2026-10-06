@@ -1,6 +1,6 @@
 import { parseMapCatalog, parseMapDataText, type MapCatalog } from './map-data-logic';
 import { withMapDataRequests } from './map-data-effects';
-export { currentMapInfo, parseMapCatalog, validMapInfo, type MapMonster, type MapInfo, type MapCatalog } from './map-data-logic';
+export { currentMapInfo, parseMapCatalog, validMapInfo, type MapMonster, type MapInfo, type MapCatalog, type CatalogMonster } from './map-data-logic';
 export { MAP_DATA_URL } from './map-data-effects';
 
 export async function loadMapCatalog(fetcher: typeof fetch = fetch): Promise<MapCatalog> {

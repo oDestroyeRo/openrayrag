@@ -1,5 +1,6 @@
-import { filter, find } from 'remeda';
-import { carriedRecoveryItem, recoveryChoices, recoveryInventory, recoveryStockSummary } from './recovery-item-ui-logic';
+import { filter, find, map } from 'remeda';
+import { carriedRecoveryItem, recoveryChoices, recoveryInventory, recoveryStockSummary, type RecoveryInventory } from './recovery-item-ui-logic';
+import { itemId, type ItemId } from './domain-values';
 import { itemName } from './game-catalog';
 import { DEFAULT_RECOVERY_ITEMS, DEFAULT_SP_ITEMS, RECOVERY_ITEM_IDS, type RecoveryItemSettings, type RecoveryResource } from './recovery-items';
 
@@ -28,15 +29,15 @@ export class RecoveryItemUi {
   private readonly guide = document.createElement('p');
   private readonly stopWarning = document.createElement('p');
   private readonly inventoryMessage = document.createElement('p');
-  private readonly rows = new Map<number, PotionRow>();
-  private readonly ids: readonly number[];
-  private stock: Map<number, number> | null = null;
-  private itemIds: number[] = [];
+  private readonly rows = new Map<ItemId, PotionRow>();
+  private readonly ids: readonly ItemId[];
+  private stock: RecoveryInventory | null = null;
+  private itemIds: ItemId[] = [];
   private locked = false;
 
   constructor(private readonly changed: () => void, private readonly stopLimit: () => number, private readonly resource: RecoveryResource = 'hp') {
     const name = resource.toUpperCase();
-    this.ids = RECOVERY_ITEM_IDS[resource];
+    this.ids = map(RECOVERY_ITEM_IDS[resource], id => itemId(id));
     this.belowPercent = this.numberInput('belowPercent', `Use below ${name} %`, 1, 100);
     this.minStock = this.numberInput('minStock', 'Keep quantity of each item', 0, 9999);
     this.cooldownSeconds = this.numberInput('cooldownSeconds', 'Shared cooldown, seconds', 1, 3600);
@@ -79,8 +80,9 @@ export class RecoveryItemUi {
   }
 
   write(settings: RecoveryItemSettings): void {
+    const itemIds = map(settings.itemIds, id => itemId(id));
     this.mode.value = settings.mode;
-    this.itemIds = [...settings.itemIds];
+    this.itemIds = itemIds;
     for (const key of ['belowPercent', 'minStock', 'cooldownSeconds'] as const) {
       const value = String(settings[key]);
       if (this[key].value !== value) this[key].value = value;
@@ -108,7 +110,7 @@ export class RecoveryItemUi {
     const title = document.createElement('span'); title.textContent = text; label.append(title, input); return label;
   }
 
-  private addPotion(itemId: number): void {
+  private addPotion(itemId: ItemId): void {
     const root = document.createElement('div'); root.className = 'hp-potion-row'; root.dataset.itemId = String(itemId);
     const label = document.createElement('label'); label.className = 'hp-potion-choice';
     const choice = document.createElement('input'); choice.type = 'checkbox'; choice.dataset.config = 'true'; choice.dataset.potion = String(itemId);

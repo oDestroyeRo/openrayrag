@@ -1,6 +1,7 @@
 //! Version-8 native authentication. Neither handshake nor optional token leaves native memory.
+use crate::domain_values::CharacterSlot;
 const VERSION: i16 = 8;
-pub(crate) fn authentication(username: &str, password: &str) -> Vec<u8> {
+pub(crate) fn authentication(credentials: &crate::login_logic::DirectCredentials) -> Vec<u8> {
     fn string(out: &mut Vec<u8>, value: &str) {
         let mut len = value.len();
         while len >= 128 {
@@ -12,8 +13,8 @@ pub(crate) fn authentication(username: &str, password: &str) -> Vec<u8> {
     }
     let mut out = VERSION.to_le_bytes().to_vec();
     out.extend_from_slice(&[0, 0, 0]);
-    string(&mut out, username);
-    string(&mut out, password);
+    string(&mut out, credentials.username());
+    string(&mut out, credentials.password());
     out
 }
 struct Reader<'a> {
@@ -50,8 +51,8 @@ impl Reader<'_> {
         String::from_utf8(bytes).map_err(|_| "Invalid character name encoding.".into())
     }
 }
-pub(crate) fn selected_character(bytes: &[u8], chosen: u8) -> Result<String, String> {
-    if bytes.first() != Some(&0) || bytes.len() > 16_384 || chosen > 2 {
+pub(crate) fn selected_character(bytes: &[u8], chosen: CharacterSlot) -> Result<String, String> {
+    if bytes.first() != Some(&0) || bytes.len() > 16_384 {
         return Err("Unknown character approval.".into());
     }
     let mut reader = Reader { bytes, bit: 8 };
@@ -70,18 +71,17 @@ pub(crate) fn selected_character(bytes: &[u8], chosen: u8) -> Result<String, Str
         let slot = reader.bits(32)? as usize;
         reader.string()?;
         let length = reader.bits(32)? as usize;
-        if name.is_empty()
-            || name.chars().any(char::is_control)
-            || slot > 2
-            || slots[slot]
-            || length > 256
-            || length % 4 != 0
-        {
+        if name.is_empty() || name.chars().any(char::is_control) {
+            return Err("Unknown character approval layout.".into());
+        }
+        let slot =
+            CharacterSlot::try_from(slot).map_err(|_| "Unknown character approval layout.")?;
+        if slots[slot.index()] || length > 256 || length % 4 != 0 {
             return Err("Unknown character approval layout.".into());
         }
         reader.skip(length)?;
-        slots[slot] = true;
-        if slot == usize::from(chosen) {
+        slots[slot.index()] = true;
+        if slot == chosen {
             selected = Some(name);
         }
     }
@@ -91,7 +91,7 @@ pub(crate) fn selected_character(bytes: &[u8], chosen: u8) -> Result<String, Str
     selected.ok_or_else(|| {
         format!(
             "Character slot {} is empty. Choose an existing character.",
-            chosen + 1
+            chosen.index() + 1
         )
     })
 }
@@ -117,6 +117,22 @@ pub(crate) fn enter(name: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn authentication(username: &str, password: &str) -> Vec<u8> {
+        let profile = crate::login_logic::LoginProfile {
+            username: username.into(),
+            password: password.into(),
+            character_slot: 0,
+            mode: crate::login_logic::ConnectionMode::BotOnly,
+            auto_login: false,
+        };
+        super::authentication(&profile.try_into().unwrap())
+    }
+    fn selected_character(bytes: &[u8], chosen: u8) -> Result<String, String> {
+        super::selected_character(
+            bytes,
+            CharacterSlot::try_from(chosen).map_err(|_| "Unknown character approval.")?,
+        )
+    }
     fn approval(names: &[(&str, u32)], token: bool) -> Vec<u8> {
         let mut out = vec![0];
         let mut bit = 8;

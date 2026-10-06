@@ -1,3 +1,4 @@
+import { bagId as domainBagId, skillId as domainSkillId } from './domain-values';
 import weapons from './data/weapon-catalog.json';
 import { ITEM_CATALOG } from './game-catalog';
 import type { CharacterSnapshot } from './character-state-logic';
@@ -24,7 +25,7 @@ export function normalAttackProfile(state: CharacterState | CharacterSnapshot): 
   if (!state.inventoryKnown || state.equipment[4] === undefined) return fallback('Equipment is not verified.');
   const bagId = state.equipment[4]!;
   if (bagId === 0) return { range: 1, sourceRange: 1, weaponItemId: null, source: 'Unarmed', limitation: '' };
-  const item = state.inventory instanceof Map ? state.inventory.get(bagId) : state.inventory.find(item => item.bagId === bagId);
+  const item = state.inventory instanceof Map ? (bagId>0?state.inventory.get(domainBagId(bagId)):undefined) : state.inventory.find(item => item.bagId === bagId);
   if (!item) return fallback('The equipped weapon is missing from the verified inventory.');
   const info = catalog[item.itemId];
   if (!info) return { ...fallback('Weapon range is absent or does not match the pinned source.'), weaponItemId: item.itemId };
@@ -34,7 +35,7 @@ export function normalAttackProfile(state: CharacterState | CharacterSnapshot): 
   let source = `${ITEM_CATALOG[item.itemId]?.name ?? `Weapon #${item.itemId}`} · weapon ${range}`;
   if (info.weaponClass === 12) {
     if (state.skillsKnown) {
-      const learned = state.learned instanceof Map ? state.learned.get(29) ?? 0 : state.learned.find(skill => skill.skillId === 29)?.level ?? 0;
+      const learned = state.learned instanceof Map ? state.learned.get(domainSkillId(29)) ?? 0 : state.learned.find(skill => skill.skillId === 29)?.level ?? 0;
       range += learned;
       sourceRange = range;
       source += ` + Vulture Eye ${learned}`;

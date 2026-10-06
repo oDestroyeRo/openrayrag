@@ -35,7 +35,7 @@ describe('disposition policy boundaries', () => {
   it('preserves legacy/default items and validates detached policies', () => {
     const ctx = context(); const result = planDisposition(DEFAULT_DISPOSITION, ctx);
     expect(result.actions).toEqual([]); expect(result.protections[0]?.reason).toContain('No disposition rule');
-    const original = policy(); const parsed = validateDispositionPolicy(original); parsed.rules[0]!.keep = 0; expect(original.rules[0]!.keep).toBe(2);
+    const original = policy(); const parsed = validateDispositionPolicy(original); original.rules[0]!.keep = 0; expect(parsed.rules[0]!.keep).toBe(2);
   });
   it.each([
     { keep: 4 }, { minimum: 6 }, { desired: 7 }, { maximum: 32768 }, { itemId: 0 }, { maximum: 0.5 },
@@ -202,7 +202,7 @@ describe('revision-bound preview and future execution boundary', () => {
   it('requires revalidation for revision, money, inventory, equipment and policy changes', () => {
     const ctx = context(); const configured = policy({ sell: true }); const result = planDisposition(configured, ctx);
     expect(revalidateDisposition(result, configured, ctx)).toEqual({ ok: true, reasons: [] });
-    const mutations = [() => { ctx.revision += ':new'; }, () => { ctx.workflow.zeny++; }, () => { ctx.containers.inventory.items![0]!.count++; }, () => { ctx.equipment!.push(501); }, () => { configured.rules[0]!.maximum++; }];
+    const mutations = [() => { ctx.revision += ':new'; }, () => { ctx.workflow.zeny++; }, () => { Object.assign(ctx.containers.inventory.items![0]!,{count:ctx.containers.inventory.items![0]!.count+1}); }, () => { ctx.equipment!.push(501); }, () => { configured.rules[0]!.maximum++; }];
     for (const mutate of mutations) { const before = planDisposition(configured, ctx); mutate(); expect(revalidateDisposition(before, configured, ctx).ok).toBe(false); }
     expect(dispositionPreviewIsCurrent(result, configured, ctx)).toBe(false);
   });

@@ -16,7 +16,7 @@ import tempfile
 
 from catalog_effects import write_catalog
 from catalog_logic import catalog_json
-from navigation_logic import reviewed_bundle_matches, validate_grid, validate_inventory
+from navigation_logic import SceneMapCode, reviewed_bundle_matches, validate_grid, validate_inventory
 
 
 def extract_grid(source, bundle_dir, temp, scripts):
@@ -24,7 +24,8 @@ def extract_grid(source, bundle_dir, temp, scripts):
     map_code = source['map']
     if not re.fullmatch(r'[a-z0-9_-]{1,64}', map_code):
         raise ValueError('Invalid map key')
-    bundle = bundle_dir / f'rayrag-{map_code}-scene.bundle'
+    code = SceneMapCode(map_code)
+    bundle = bundle_dir / code.bundle_filename
     with bundle.open('rb') as handle:
         digest = hashlib.file_digest(handle, 'sha256').hexdigest()
     if not reviewed_bundle_matches(source, bundle.stat().st_size, digest):
@@ -32,7 +33,7 @@ def extract_grid(source, bundle_dir, temp, scripts):
     output = Path(temp) / f'{map_code}.json'
     subprocess.run([
         sys.executable, str(scripts / 'extract-navigation.py'),
-        str(bundle), map_code, str(output), source['sourceUrl'],
+        str(bundle), code.value, str(output), source['sourceUrl'],
     ], check=True, stdout=subprocess.DEVNULL)
     return json.loads(output.read_text())
 

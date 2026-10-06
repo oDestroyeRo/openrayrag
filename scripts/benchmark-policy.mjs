@@ -1,10 +1,12 @@
-import { find, fromEntries, map, sort } from 'remeda';
+import { find, map, sort } from 'remeda';
 
 // Pure benchmark inputs and report comparison. Measurements are effect-owned.
 import { isDeepStrictEqual } from 'node:util';
 
+/** @param {readonly number[]} values @returns {number} */
 export const median = values => sort(values, (a, b) => a - b)[Math.floor(values.length / 2)];
 
+/** @param {readonly string[]} args @returns {import("./tooling-domain-values.mjs").RendererOptions} */
 export function rendererOptions(args) {
   const options = new Map();
   for (let i = 0; i < args.length; i += 2) {
@@ -16,6 +18,7 @@ export function rendererOptions(args) {
   return { options, samples, iterations };
 }
 
+/** @param {import("./tooling-domain-values.mjs").RenderingReport} report @param {import("./tooling-domain-values.mjs").RenderingReport} baseline */
 export function compareRenderingReports(report, baseline) {
   const { samples: _samples, ...methodology } = report.methodology;
   const { samples: _oldSamples, ...oldMethodology } = baseline.methodology;
@@ -27,9 +30,11 @@ export function compareRenderingReports(report, baseline) {
   });
 }
 
+/** @param {string} baseline @param {import("./tooling-domain-values.mjs").PacketReplay} beforeCounts @param {import("./tooling-domain-values.mjs").PacketReplay} afterCounts @param {import("./tooling-domain-values.mjs").PacketReplay} beforeTime @param {import("./tooling-domain-values.mjs").PacketReplay} afterTime @returns {import("./tooling-domain-values.mjs").PacketReport} */
 export function packetReport(baseline, beforeCounts, afterCounts, beforeTime, afterTime) {
   const frames = afterCounts.frames;
-  const modes = fromEntries(map(['gameClient', 'botOnly'], mode => [mode, {
+  /** @param {"gameClient" | "botOnly"} mode @returns {import("./tooling-domain-values.mjs").PacketModeReport} */
+  const modeReport = mode => ({
     generalDecodes: { before: beforeCounts[mode].counts.general, after: afterCounts[mode].counts.general },
     worldDecodes: { before: beforeCounts[mode].counts.world, after: afterCounts[mode].counts.world },
     snapshotEqual: JSON.stringify(beforeCounts[mode].snapshot) === JSON.stringify(afterCounts[mode].snapshot),
@@ -37,13 +42,23 @@ export function packetReport(baseline, beforeCounts, afterCounts, beforeTime, af
     outgoing: afterCounts[mode].writes,
     medianMs: { before: beforeTime[mode].medianMs, after: afterTime[mode].medianMs },
     samplesMs: { before: beforeTime[mode].samplesMs, after: afterTime[mode].samplesMs },
-  }]));
+  });
+  const modes = {gameClient: modeReport("gameClient"), botOnly: modeReport("botOnly")};
   return { baseline, frames, modes };
 }
 
+/** @param {import("./tooling-domain-values.mjs").PacketReport} result */
 export function validatePacketReport(result) {
   if (Object.values(result.modes).some(mode => !mode.snapshotEqual || !mode.outgoingEqual
     || mode.generalDecodes.after !== result.frames || mode.worldDecodes.after !== result.frames)) {
     throw new Error('Packet replay differed or an accepted frame was decoded more than once.');
   }
+}
+
+/** Error names cross the VM/browser boundary; realm-specific prototypes do not.
+ * @param {unknown} error
+ */
+export function isBenchmarkCancellation(error) {
+  return error !== null && (typeof error === 'object' || typeof error === 'function')
+    && 'name' in error && error.name === 'AbortError';
 }

@@ -84,7 +84,7 @@ test("request method, path and uploaded bytes have checked input contracts", asy
 const apiTypeFixture = new GitHubReleaseApi("synthetic-token");
 apiTypeFixture.request("DELETE", "releases/latest");
 apiTypeFixture.request("GET", 42);
-apiTypeFixture.upload(1, "bundle.zip", "invalid-byte-body");
+apiTypeFixture.upload(releaseId(1), "bundle.zip", "invalid-byte-body");
 `,
   );
   assert.notEqual(result.status, 0);
@@ -92,4 +92,44 @@ apiTypeFixture.upload(1, "bundle.zip", "invalid-byte-body");
   assert.match(result.output, /Argument of type 'number'.*parameter of type 'string'/);
   assert.match(result.output, /Argument of type 'string'.*parameter of type 'Buffer/);
   assert.equal((result.output.match(/error TS/g) ?? []).length, 3, result.output);
+});
+
+test("compiler rejects identity and digest swaps in actual API and policy consumers", async () => {
+  const result = await compileMutation(source => `${source}
+import { workflowRunId, workflowJobId, actionsArtifactId, pullRequestNumber,
+  fileDigest, policyDigest, releaseTag, stableReleaseVersion, workflowAttempt } from './tooling-domain-values.mjs';
+import { downloadActionsZip } from './release-public-io.mjs';
+import { validateRun, createPullRequestStatus } from './hosted-status-policy.mjs';
+import { compareVersions, parsePlan, planSha256 } from './semantic-release-policy.mjs';
+import { releaseBody } from './release-policy.mjs';
+const domainApi = new GitHubReleaseApi('synthetic-token');
+const sourceValue = sourceCommitSha('${'1'.repeat(40)}');
+const tagObjectValue = gitTagObjectSha('${'1'.repeat(40)}');
+domainApi.tagObject(sourceValue);
+annotatedTag(sourceValue, Buffer.alloc(0));
+domainApi.createPlanRef('refs/tags/fixture', sourceValue);
+domainApi.createTag(releaseTag('v1.2.3'), tagObjectValue);
+domainApi.createPlanTag('fixture', 'message', tagObjectValue, 'date');
+domainApi.assets(workflowAttempt(1));
+downloadActionsZip('oDestroyeRo/openrayrag', workflowRunId(1), '/tmp/fixture.zip', 10);
+validateRun(workflowJobId(1), {id: 1, head_sha: sourceValue, status: 'completed', run_attempt: 1});
+createPullRequestStatus(workflowRunId(1), {headRefOid: sourceValue, state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: []}, sourceValue);
+compareVersions(releaseTag('v1.2.3'), stableReleaseVersion('1.2.3'));
+/** @type {import('./tooling-domain-values.mjs').ReleasePlan} */
+const checkedPlan = parsePlan(JSON.parse('{}'));
+planSha256({...checkedPlan, policySha256: fileDigest('${'2'.repeat(64)}')});
+planSha256({...checkedPlan, predecessorPlanSha256: policyDigest('${'2'.repeat(64)}')});
+releaseBody({sourceSha: sourceValue, version: stableReleaseVersion('1.2.3'), tag: releaseTag('v1.2.3'), pubDate: 'date'},
+  {id: actionsArtifactId(1), runId: workflowRunId(1), digest: fileDigest('${'2'.repeat(64)}')});
+/** @type {import('./tooling-domain-values.mjs').FirstParentCount} */
+const countSwap = workflowAttempt(1);
+checkedPlan.analysisBase.version = stableReleaseVersion('9.9.9');
+`);
+  assert.notEqual(result.status, 0);
+  for (const name of ['GitTagObjectSha', 'SourceCommitSha', 'ActionsArtifactId', 'WorkflowRunId',
+    'PullRequestNumber', 'StableReleaseVersion', 'PolicyDigest', 'PlanDigest', 'ArtifactDigest', 'FirstParentCount']) {
+    assert.match(result.output, new RegExp(name), result.output);
+  }
+  assert.match(result.output, /read-only property/, result.output);
+  assert.equal((result.output.match(/error TS/g) ?? []).length, 15, result.output);
 });

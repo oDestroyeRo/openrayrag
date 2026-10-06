@@ -1,11 +1,11 @@
 import { validateControllerUpdateCheckpoint } from './controller-update';
-import type { ControllerUpdateCheckpoint } from './controller-update-logic';
+import type { ValidatedControllerUpdateCheckpoint } from './controller-update-logic';
 import { validStatus, type GameStatus } from './game-status';
 import type { PersistentFieldRun } from './reconnect';
 
-import { type UpdateAccount, type UpdateContinuation, type Invoke, record, ERROR, validateUpdateContinuation as validateUpdateContinuationAt, sameUpdateAccount, type Reply, type InstallationAdapter, type UpdateInstallationResult, type UpdateStep, deferredReason } from './update-continuation-logic';
+import { type UpdateAccount, type ValidatedUpdateAccount, type UpdateContinuation, type Invoke, record, ERROR, updateRequestId, nativeUpdateReservation, type NativeUpdateReservation, type UpdateCommand, validateUpdateContinuation as validateUpdateContinuationAt, sameUpdateAccount, type Reply, type InstallationAdapter, type UpdateInstallationResult, type UpdateStep, deferredReason } from './update-continuation-logic';
 
-export { type UpdateAccount, type UpdateContinuation, sameUpdateAccount, type UpdateInstallationResult } from './update-continuation-logic';
+export { type UpdateAccount, type UpdateContinuation, type UpdateContinuationInput, type ValidatedUpdateAccount, sameUpdateAccount, type UpdateInstallationResult } from './update-continuation-logic';
 
 /** Own update installation and its one-shot claim. Stop invalidates every outstanding reply. */
 export class UpdateContinuationOwner {
@@ -22,7 +22,7 @@ export class UpdateContinuationOwner {
   get inFlight(): boolean { return this.restoring; }
   get confirmationLost(): boolean { return this.blocked; }
   get stopped(): boolean { return this.stoppedByUser; }
-  get account(): UpdateAccount | null { return this.continuation ? { ...this.continuation.account } : null; }
+  get account(): ValidatedUpdateAccount | null { return this.continuation ? { ...this.continuation.account } : null; }
   get needsSignIn(): boolean { return this.continuation !== null && !this.continuation.savedAccount; }
   claim(input: unknown, fieldRun: PersistentFieldRun): UpdateContinuation | null {
     if (input === null) return null;
@@ -59,7 +59,7 @@ export class UpdateContinuationOwner {
     const epoch = this.epoch;
     const preparing = () => epoch === this.epoch && !adapter.interrupted();
     const result: UpdateInstallationResult = { continuation: null, retired: false, recoveryFailed: false };
-    let nonce: string | null = null;
+    let reservation: NativeUpdateReservation | null = null;
     let step: UpdateStep = 'settings';
     try {
       adapter.status('Saving current settings before updating.');
@@ -80,21 +80,21 @@ export class UpdateContinuationOwner {
       }
       step = 'reserve';
       adapter.status('Preparing the connection for update confirmation.');
-      nonce = await this.invoke('update_reserve', {
+      reservation = nativeUpdateReservation(await this.invoke('update_reserve', {
         document, continuation: active ? { version: 1, field: fieldRun.checkpoint() } : null,
-      }) as string;
+      }));
       if (!preparing()) return result;
       step = 'confirmation';
       adapter.status('Update waits for game confirmation that all actions have stopped. It will retry automatically.');
       for (let attempt = 0; attempt < 20; attempt++) {
         if (epoch !== this.epoch) return result;
-        if (await this.invoke('update_install', { nonce })) break;
+        if (await this.invoke('update_install', { nonce: reservation.rawNonce })) break;
         await new Promise(resolve => setTimeout(resolve, 100));
       }
     } catch (error) {
       adapter.status(deferredReason(step, error));
     } finally {
-      if (nonce) await this.invoke('update_release', { nonce }).catch(() => {});
+      if (reservation?.rawNonce) await this.invoke('update_release', { nonce: reservation.rawNonce }).catch(() => {});
       if (!adapter.game().open && epoch === this.epoch) {
         try { result.continuation = await this.claimFrom(this.invoke('update_continuation'), fieldRun, true); }
         catch { result.recoveryFailed = true; }
@@ -114,9 +114,9 @@ export class UpdateContinuationOwner {
   automaticLogin(profile: UpdateAccount | null): boolean {
     return !!this.continuation?.savedAccount && !!profile && sameUpdateAccount(this.continuation.account, profile);
   }
-  private exchange(command: string, args: Record<string, unknown>): Promise<unknown> {
+  private exchange(command: UpdateCommand, args: Record<string, unknown>): Promise<unknown> {
     if (this.reply) return Promise.reject(new Error('An update handoff is already pending.'));
-    const requestId = this.id();
+    const requestId = updateRequestId(this.id());
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.reply?.id !== requestId) return;
@@ -140,7 +140,7 @@ export class UpdateContinuationOwner {
     if (input.success) reply.resolve(true);
     else reply.reject(new Error('Waiting for fresh, settled character data before continuing.'));
   }
-  async prepare(): Promise<ControllerUpdateCheckpoint> {
+  async prepare(): Promise<ValidatedControllerUpdateCheckpoint> {
     return validateControllerUpdateCheckpoint(await this.exchange('update_prepare', {}));
   }
   async resume(status: GameStatus, account: UpdateAccount, fieldRun: PersistentFieldRun): Promise<boolean> {

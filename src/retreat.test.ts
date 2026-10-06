@@ -1,3 +1,4 @@
+import { actionIdentity } from './actor-identity';
 import {describe,it,expect,vi} from 'vitest';
 import {RetreatLedger,planRetreat} from './retreat';
 import {GridNavigator,type WalkGrid} from './navigation';
@@ -29,7 +30,7 @@ describe('retreat candidate geometry and bounded work',()=>{
  });
 });
 describe('durable per-lifetime retreat budget',()=>{
- const identity=(id=0,incarnation=1):ActionIdentity=>({world:'00000000-0000-0000-0000-000000000001',selfId:0,selfIncarnation:1,targetId:id,targetIncarnation:incarnation});
+ const identity=(id=0,incarnation=1):ActionIdentity=>actionIdentity({world:'00000000-0000-0000-0000-000000000001',selfId:0,selfIncarnation:1,targetId:id,targetIncarnation:incarnation});
  it('preserves total/no-progress anchors and spent attempts across dispatches',()=>{
   const ledger=new RetreatLedger(),entry=ledger.dispatch(identity(),100)!;entry.accepted=true;entry.progress=200;entry.attempts=2;
   expect(ledger.dispatch(identity(),500)).toBe(entry);expect(entry).toMatchObject({since:100,progress:200,attempts:2,accepted:false});

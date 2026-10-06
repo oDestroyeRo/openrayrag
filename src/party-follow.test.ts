@@ -1,3 +1,5 @@
+import { partyMemberId } from './domain-values';
+import { actionIdentity } from './actor-identity';
 import { describe, expect, it } from 'vitest';
 import { ActorObservations } from './actor-observations';
 import { DEFAULT_MAP_POLICY } from './map-policy';
@@ -16,7 +18,7 @@ function fixture() {
  const observations=new ActorObservations(()=>now),world=new WorldState(),runtime=new PartyFollowRuntime(()=>now);
  world.reset('prt_fild08');observations.spawn(own,1,1);observations.spawn(leader,1,0);observations.frame();
  const context=():PartyFollowContext=>{const self=observations.partyActor(1);return {party:world.party,bindings:world.partyActors,observations,actors,map:world.map,player,connection,
-   own:self?{world:self.world,selfId:1,selfIncarnation:self.incarnation}:null};};
+   own:self?actionIdentity({world:self.world,selfId:1,selfIncarnation:self.incarnation}):null};};
  const event=(event:WorldEvent)=>world.observe(event,observations,1,before=>runtime.observeParty(event,before,context()));
  event({type:'partyJoined',partyId:5,name:'Party',login:false,members:[{...member}]});
  const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[],automation:structuredClone(DEFAULT_AUTOMATION)};
@@ -52,7 +54,7 @@ describe('captured party follow allowance',()=>{
  it('captures original loss time, independent map revision and detached policy/settings',()=>{
   const f=fixture();f.start();f.hide();f.advance(5000);f.remote();const trip=f.runtime.prepared()!;
   expect(trip.deadline).toBe(120_000);expect(trip.mapObservedAt).toBe(105_000);expect(trip.destination).toBe('prontera');
-  expect(trip).not.toHaveProperty('position');f.settings.automation.follow.lostSeconds=120;trip.policy.deny.push('prontera');
+  expect(trip).not.toHaveProperty('position');f.settings.automation.follow.lostSeconds=120;Array.prototype.push.call(trip.policy.deny,'prontera');
   expect(f.runtime.prepared()!.policy.deny).toEqual([]);expect(f.runtime.prepared()!.deadline).toBe(120_000);
  });
  it('health and arbitrary traffic cannot refresh an old map row or create coordinates',()=>{
@@ -71,7 +73,7 @@ describe('captured party follow allowance',()=>{
  it('preserves the exact association and deadline across verified portal worlds, then waits for actual leader visibility',()=>{
   const f=fixture();f.start();f.hide();f.remote();const deadline=f.runtime.prepared()!.deadline;f.runtime.travelling(1);f.advance(4000);f.arrive('prontera');
   f.runtime.travelComplete();f.update();expect(f.runtime.snapshot().state).toBe('awaitingLeader');expect(f.runtime.snapshot().remainingSeconds).toBe((deadline-104000)/1000);
-  f.actors.set(2,{...leader,x:158,y:26});f.observations.spawn({...leader,x:158,y:26},1,0);f.update();expect(f.runtime.snapshot().state).toBe('following');expect(f.runtime.completed).toBe(true);expect(f.world.partyActors.get(7)).toBeNull();
+  f.actors.set(2,{...leader,x:158,y:26});f.observations.spawn({...leader,x:158,y:26},1,0);f.update();expect(f.runtime.snapshot().state).toBe('following');expect(f.runtime.completed).toBe(true);expect(f.world.partyActors.get(partyMemberId(7))).toBeNull();
  });
  it('preserves the original allowance over intermediate portals without retargeting',()=>{
   const f=fixture();f.settings.automation.follow.lostSeconds=30;f.start();f.hide();f.remote('payon');f.runtime.travelling(1);f.advance(3000);f.arrive('prontera');f.advance(5000);f.arrive('payon');f.runtime.travelComplete();f.update();
@@ -120,5 +122,5 @@ it('captures destination lifetime before final travel completion and rejects reu
  f.actors.set(2,{...leader,x:158,y:26});f.observations.spawn({...leader,x:158,y:26},1,0);f.update();
  expect(f.runtime.snapshot().state).toBe('travelling');
  f.observations.remove(2);f.observations.spawn({...leader,x:158,y:26},1,0);f.update();f.runtime.travelComplete();
- expect(f.runtime.snapshot().state).toBe('cancelled');expect(f.world.partyActors.get(7)).toBeNull();expect(f.runtime.completed).toBe(false);
+ expect(f.runtime.snapshot().state).toBe('cancelled');expect(f.world.partyActors.get(partyMemberId(7))).toBeNull();expect(f.runtime.completed).toBe(false);
 });

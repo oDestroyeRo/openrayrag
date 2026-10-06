@@ -1,5 +1,5 @@
 import { map } from 'remeda';
-import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_LOADOUT, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT, DEFAULT_SETTINGS, validateFormSettings, type Settings } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_LOADOUT, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT, DEFAULT_SETTINGS, validateFormSettings, settingsDraft, type Settings, type SettingsInput } from './settings';
 import { MACRO_LIMITS, validateMacroScript, validMacroStep, type MacroRule, type MacroScript, type MacroStep } from './macros-logic';
 import { validRoutineCondition, type RoutineCondition } from './routines-logic';
 import type { ActorSelector } from './actor-observations-logic';
@@ -9,6 +9,7 @@ import { DEFAULT_DISPOSITION } from './disposition';
 import { DEFAULT_SUPPLY } from './supply-trip-logic';
 
 export interface BotScriptDocument { settings: Settings; script: MacroScript | null }
+export interface BotScriptDocumentInput { settings: SettingsInput; script: MacroScript | null }
 export class BotScriptError extends Error {
   constructor(message: string, readonly line: number) {
     super(`Line ${line}: ${message}`);
@@ -257,12 +258,12 @@ function hydrate(value: unknown, schema: Schema, line: number): unknown {
   }
   return result;
 }
-function checkedSettings(input: Settings, line: number): Settings {
+function checkedSettings(input: SettingsInput, line: number): Settings {
   try { validateFormSettings(input); }
   catch (error) { fail(error instanceof Error ? error.message : 'Invalid settings.', line); }
   if (utf8.encode(JSON.stringify(input)).length > BOT_SCRIPT_LIMITS.settingsBytes) fail('Compiled settings are too large.', line);
   // Validation supplies runtime defaults, but authoring retains optional absence.
-  return structuredClone(input);
+  return settingsDraft(input);
 }
 const operatorNames: Record<string, 'lt' | 'lte' | 'eq' | 'gte' | 'gt' | 'ne'> =
   { '<': 'lt', '<=': 'lte', '==': 'eq', '>=': 'gte', '>': 'gt', '!=': 'ne' };
@@ -347,7 +348,7 @@ function readStep(command: string, reader: LineReader): MacroStep {
   if (!validMacroStep(step)) fail('Invalid action. Check map/target IDs, supported skill mode and NPC service type.', reader.line);
   return step;
 }
-function validateDocument(document: BotScriptDocument, line: number): BotScriptDocument {
+function validateDocument(document: BotScriptDocumentInput, line: number): BotScriptDocument {
   const settings = checkedSettings(document.settings, line);
   let script: MacroScript | null = null;
   try { if (document.script !== null) script = validateMacroScript(document.script); }
@@ -359,7 +360,7 @@ function validateDocument(document: BotScriptDocument, line: number): BotScriptD
 }
 
 /** Compile data into existing settings/actions. This function never executes a command. */
-export function parseBotScript(text: string, legacySettings: Settings = DEFAULT_SETTINGS): BotScriptDocument {
+export function parseBotScript(text: string, legacySettings: SettingsInput = DEFAULT_SETTINGS): BotScriptDocument {
   if (typeof text !== 'string' || utf8.encode(text).length > BOT_SCRIPT_LIMITS.authoringBytes) fail('Script source is too large.', 1);
   if (text.trimStart().startsWith('{')) {
     try { return validateDocument({ settings: legacySettings, script: validateMacroScript(JSON.parse(text)) }, 1); }
@@ -445,7 +446,7 @@ export function parseBotScript(text: string, legacySettings: Settings = DEFAULT_
     script: script.rules.length ? script : null }, lastSettingLine);
 }
 
-function settingLines(settings: Settings): string[] {
+function settingLines(settings: SettingsInput): string[] {
   const result: string[] = [];
   function visit(value: unknown, path: string, schema: Schema): void {
     if (value === undefined) return;
@@ -488,7 +489,7 @@ function formatStep(step: MacroStep): string {
   }
 }
 /** Explicit canonical conversion; use replaceBotScriptSettings for ordinary form synchronization. */
-export function formatBotScript(input: BotScriptDocument): string {
+export function formatBotScript(input: BotScriptDocumentInput): string {
   const document = validateDocument(input, 1), script = document.script;
   const lines = [`script ${JSON.stringify(script?.name ?? 'My bot')}`, ...settingLines(document.settings)];
   if (script) {
@@ -504,7 +505,7 @@ export function formatBotScript(input: BotScriptDocument): string {
 }
 
 /** Preserve rule/limit spelling and comments while replacing the settings view. Invalid drafts never change. */
-export function updateBotScriptSettings(text: string, settings: Settings): { text: string; document: BotScriptDocument } {
+export function updateBotScriptSettings(text: string, settings: SettingsInput): { text: string; document: BotScriptDocument } {
   const original = parseBotScript(text, settings), checked = checkedSettings(settings, 1);
   if (text.trimStart().startsWith('{')) {
     const document = { ...original, settings: checked };
@@ -527,6 +528,6 @@ export function updateBotScriptSettings(text: string, settings: Settings): { tex
 }
 
 /** String-only adapter for callers that do not retain a compiled document. */
-export function replaceBotScriptSettings(text: string, settings: Settings): string {
+export function replaceBotScriptSettings(text: string, settings: SettingsInput): string {
   return updateBotScriptSettings(text, settings).text;
 }

@@ -1,5 +1,5 @@
 import { farmingDestination, validateDeathRecoveryGuard, type DeathRecoveryGuard } from './death-recovery';
-import { validateSettings, type Settings } from './settings';
+import { validateSettings, type SettingsInput as Settings, type RunSettings } from './settings';
 import { validateSupplyResumeGuard, type SupplyResumeGuard } from './supply-trip-logic';
 import { validateEscapeResumeGuard, type EscapeRecovery, type EscapeResumeGuard, type EscapeSnapshot } from './escape-logic';
 export const INITIAL_DELAY = 5_000;
@@ -50,7 +50,8 @@ function checkpointRecord(value: unknown, required: string[], optional: string[]
 }
 
 /** Validate completely before any run intent or retained allowance can change. */
-export function validateFieldRunCheckpoint(value: unknown, now: number): FieldRunCheckpoint {
+export type ValidatedFieldRunCheckpoint = Omit<FieldRunCheckpoint, 'desired'> & {desired:RunSettings};
+export function validateFieldRunCheckpoint(value: unknown, now: number): ValidatedFieldRunCheckpoint {
   const v = checkpointRecord(value, ['version', 'desired', 'character', 'session', 'generation', 'startedAt', 'metricsSession',
     'previous', 'totals', 'escapeGuard', 'supplyGuard', 'deathGuard', 'escapeOverflowUncertain', 'supplyOverflow', 'deathOverflow']);
   if (v.version !== 1 || typeof v.character !== 'string' || !v.character.trim() || v.character.length > 64

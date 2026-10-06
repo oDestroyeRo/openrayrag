@@ -1,6 +1,6 @@
+import { actionIdentity } from './actor-identity';
 import { describe, expect, it } from 'vitest';
 import { ObservedThreats, THREAT_LIMIT } from './observed-threats';
-import type { ActionIdentity } from './actor-identity';
 import { BotEngine } from './engine';
 import type { Entity, GameEvent } from './protocol';
 import { evaluateActorPredicate } from './actor-observations';
@@ -77,10 +77,10 @@ describe('bounded received Attack observations', () => {
     f.receive(attack()); expect(f.sample().count).toBeNull();
   });
   it('rejects stale world, incarnation and observation-time contexts', () => {
-    const store = new ObservedThreats(), own: ActionIdentity = { world: 'world', selfId: 0, selfIncarnation: 1 };
-    const current = () => ({ ...own, targetId: 1, targetIncarnation: 2 });
-    for (const identity of [{ ...current(), world: 'old' }, { ...current(), selfIncarnation: 9 }, { ...current(), targetIncarnation: 1 }])
-      store.observe(1, 0, own, identity, 100, 100, current);
+    const store = new ObservedThreats(), own=actionIdentity({ world: '00000000-0000-0000-0000-000000000001', selfId: 0, selfIncarnation: 1 });
+    const current = () => actionIdentity({ ...own, targetId: 1, targetIncarnation: 2 });
+    for (const identity of [{ ...current(), world:'00000000-0000-0000-0000-000000000002' }, { ...current(), selfIncarnation: 9 }, { ...current(), targetIncarnation: 1 }])
+      store.observe(1, 0, own, actionIdentity(identity), 100, 100, current);
     store.observe(1, 0, own, current(), 101, 100, current);
     expect(store.snapshot(10, own, 100, current).count).toBe(0);
     store.observe(1, 0, own, current(), 100, 100, current);

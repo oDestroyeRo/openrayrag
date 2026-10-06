@@ -1,7 +1,7 @@
 import { find, map } from 'remeda';
 import { clientStatus } from './client-status';
 import type { MapInfo } from './map-data-logic';
-import type { Settings } from './settings';
+import type { SettingsInput } from './settings';
 
 const targetName = (monsters: MapInfo['monsters']) => (id: number) =>
   find(monsters, monster => monster.classId === id)?.name;
@@ -17,7 +17,7 @@ export function dashboardTaskLabel(value: unknown): string {
 }
 
 /** Display-only projection. Neither target presence nor log text proves an action. */
-export function clientDashboard(value: unknown, context: Parameters<typeof clientStatus>[1] & { fresh?: boolean }, settings: Settings | null, mapInfo?: MapInfo) {
+export function clientDashboard(value: unknown, context: Parameters<typeof clientStatus>[1] & { fresh?: boolean }, settings: SettingsInput | null, mapInfo?: MapInfo) {
   const status = clientStatus(value, context);
   const stale = context.fresh === false && value && typeof value === 'object' && 'connected' in value && value.connected === true
     && status.state !== 'WAITING' && !context.limitReason;

@@ -1,9 +1,10 @@
+import { itemId, bagId, quantity, type ItemId } from './domain-values';
 import { sameActionIdentity, type ActionIdentity } from './actor-identity';
 import type { WorldAction, WorldEvent } from './world-protocol';
 
 import { type WorkflowSpec, type WorkflowContext, type WorkflowSnapshot, type WorkflowPreview, validateWorkflowSpec, stock, shopQuote, saleProceeds, barterConsumption, worldActionBlockers, actionFor, dryRunWorkflow, type WorkflowReceipt, type Pending, npcResponses, confirmWorkflowReceipt } from './workflows-logic';
 
-export { type WorkflowStep, type WorkflowSpec, type WorkflowContext, type WorkflowSnapshot, type WorkflowPreview, validateWorkflowSpec, shopQuote, saleProceeds, worldActionBlockers, type VendingReceipt, createVendingReceipt, confirmVendingReceipt, dryRunWorkflow, type WorkflowReceipt, confirmWorkflowReceipt } from './workflows-logic';
+export { type WorkflowStep, type WorkflowSpec, type WorkflowContext, type WorkflowSnapshot, type WorkflowPreview, validateWorkflowSpec, stock, shopQuote, saleProceeds, worldActionBlockers, type VendingReceipt, createVendingReceipt, confirmVendingReceipt, dryRunWorkflow, type WorkflowReceipt, confirmWorkflowReceipt } from './workflows-logic';
 
 /** A bounded script of normal actions, each confirmed before the next is sent. */
 export class NpcWorkflow {
@@ -103,7 +104,7 @@ export class NpcWorkflow {
     if (pending.budget > context.zeny) { this.fail('Insufficient zeny for the expected NPC charge.'); return null; }
     if (this.spent + pending.budget > this.spec.maxSpend) { this.fail('Purchase would exceed the workflow budget.'); return null; }
     for (const rule of this.spec.minStock) {
-      if ((pending.itemChanges.get(rule.itemId) ?? 0) < 0 && (pending.items.get(rule.itemId) ?? 0) + (pending.itemChanges.get(rule.itemId) ?? 0) < rule.count) {
+      if ((pending.itemChanges.get(itemId(rule.itemId)) ?? 0) < 0 && (pending.items.get(itemId(rule.itemId)) ?? 0) + (pending.itemChanges.get(itemId(rule.itemId)) ?? 0) < rule.count) {
         this.fail(`Operation would use the minimum stock for item ${rule.itemId}.`); return null;
       }
     }
@@ -113,32 +114,32 @@ export class NpcWorkflow {
   private prepare(action: WorldAction, context: WorkflowContext): Pending {
     const pending: Pending = {
       action, sentAt: this.now(), acknowledged: false, zeny: context.zeny, cost: 0, budget: 0, credit: 0,
-      items: stock(context.inventory), bags: new Map(context.inventory.map(item => [item.bagId, item.count])),
+      items: stock(context.inventory), bags: new Map(context.inventory.map(item => [bagId(item.bagId), quantity(item.count)])),
       itemChanges: new Map(), bagChanges: new Map(), strictStock: this.strictStock,
     };
-    const change = (itemId: number, count: number) => pending.itemChanges.set(itemId, (pending.itemChanges.get(itemId) ?? 0) + count);
+    const change = (id: ItemId, count: number) => pending.itemChanges.set(id, (pending.itemChanges.get(id) ?? 0) + count);
     if (action.type === 'shop') {
       if (action.mode === 'buy') {
         const quote = shopQuote(action.rows, context)!;
         pending.cost = quote.cost; pending.budget = quote.budget;
-        for (const row of action.rows) change(row.id, row.count);
+        for (const row of action.rows) change(itemId(row.id), row.count);
       } else {
         pending.credit = saleProceeds(action.rows, context) ?? 0;
         for (const row of action.rows) {
           const item = context.inventory.find(item => item.bagId === row.id)!;
-          change(item.itemId, -row.count); pending.bagChanges.set(row.id, -row.count);
+          change(itemId(item.itemId), -row.count); pending.bagChanges.set(bagId(row.id), -row.count);
         }
       }
     } else if (action.type === 'storage' && action.operation !== 'close') {
       const item = action.operation === 'deposit' ? context.inventory.find(item => item.bagId === action.bagId)! : context.world.storage.get(action.bagId)!;
-      pending.storageItemId = item.itemId; change(item.itemId, action.operation === 'deposit' ? -action.count : action.count);
-      if (action.operation === 'deposit') pending.bagChanges.set(action.bagId, -action.count);
+      pending.storageItemId = item.itemId; change(itemId(item.itemId), action.operation === 'deposit' ? -action.count : action.count);
+      if (action.operation === 'deposit') pending.bagChanges.set(bagId(action.bagId), -action.count);
     } else if (action.type === 'npcBarter') {
       const offer = context.world.barter[action.choice]!; pending.cost = offer.zenyCost * action.count;
       pending.budget = pending.cost;
-      change(offer.item.itemId, offer.count * action.count);
-      for (const ingredient of barterConsumption(action, context)!) change(ingredient.itemId, -ingredient.count);
-      for (const bagId of action.bagIds) pending.bagChanges.set(bagId, -1);
+      change(itemId(offer.item.itemId), offer.count * action.count);
+      for (const ingredient of barterConsumption(action, context)!) change(itemId(ingredient.itemId), -ingredient.count);
+      for (const id of action.bagIds) pending.bagChanges.set(bagId(id), -1);
     }
     return pending;
   }

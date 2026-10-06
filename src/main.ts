@@ -1,17 +1,17 @@
 import { accountHasDraft, panelUpdateWaitReason, panelDisconnectReady, panelControls } from './runtime-panel-policy';
 import { CurrentForm } from './current-form';
-import { SettingsClose, type CloseRequest } from './settings-close';
+import { SettingsClose } from './settings-close';
 import { BotConsole } from './bot-console';
 import { ActivityLog } from './activity-log';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { validateSettings, type Settings } from './settings';
+import { validateSettings, type SettingsInput, type RunSettings } from './settings';
 import { FeatureUi } from './feature-ui';
 import { macroBaseSettings } from './macro-ui';
 import { ReconnectPolicy, PersistentFieldRun } from './reconnect';
 import { RunIntentDispatch } from './run-intent-dispatch';
 import { UpdateContinuationOwner, type UpdateAccount, type UpdateContinuation } from './update-continuation';
-import { validStatus, statusHeartbeatFresh, type GameStatus } from './game-status';
+import { validStatus, statusHeartbeatFresh, type GameStatus, type ValidatedGameStatus } from './game-status';
 import { SettingsForm, type SettingsFormProjection } from './settings-form';
 import { normalAttackProfile } from './combat';
 import { canStartField } from './field-controls';
@@ -52,7 +52,7 @@ let updateFinished:()=>void=()=>{};
 let updatePolling=false;
 let saveTimer:ReturnType<typeof setTimeout>|undefined;
 let gameOpen = false;
-let latest: GameStatus | null = null;
+let latest: ValidatedGameStatus | null = null;
 let receivedAt = 0;
 let busy = false;
 let heartbeatPending = false;
@@ -96,7 +96,7 @@ function selectUpdateAccount(): void {
   const account=updateContinuation.account;if(!account)return;
   element<HTMLInputElement>('username').value=account.username;
   element<HTMLSelectElement>('character-slot').value=String(account.characterSlot);
-  element<HTMLSelectElement>('connection-mode').value=account.mode;
+  element<HTMLSelectElement>('connection-mode').value=String(account.mode);
   const savedMatches=!!savedLogin&&savedLogin.username===account.username&&savedLogin.characterSlot===account.characterSlot
     &&(savedLogin.mode??'gameClient')===account.mode;
   element<HTMLInputElement>('remember-login').checked=savedMatches;
@@ -245,7 +245,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   syncGameView();
   const navigation = new Set(shell.main.querySelectorAll<HTMLButtonElement>('button[data-client-page-nav], button[data-client-bot-nav], button[data-client-inspector-nav], button[data-client-navigation], #client-manual-index > button'));
   for (const button of navigation) button.disabled = false;
-  let dashboardSettings: Settings | null = null;
+  let dashboardSettings: SettingsInput | null = null;
   let formError: unknown = null;
   try { dashboardSettings = projection.snapshot().settings; } catch (error) { formError = error; /* Keep invalid drafts editable on Setup. */ }
   if (dashboardSettings) features.syncSetup(dashboardSettings);
@@ -259,7 +259,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   if(!closeRegistered||closeBusy||updateBusy){botConsole.lock(true,closeBusy?'Saving current settings before closing.':!closeRegistered?'Preparing saved settings.':'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.withSettings(projection.runSettings,()=>features.lock(true,true,true));if(updateBusy&&!closeBusy)stopButton.disabled=dispatches.stopping||updateContinuation.stopped;return;}
   if (features.setupDraftDirty()) for (const id of ['radius', 'min-hp', 'loot', 'random-walk', 'route-step', 'route-time', 'attack-distance', 'attack-time', 'avoid-walls']) element<HTMLInputElement>(id).disabled = true;
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
-  let checked:Settings|null = null;
+  let checked:RunSettings|null = null;
   let scripted = false;
   try {
     if (!dashboardSettings) throw formError ?? new Error('Finish valid Form settings before Start.');
@@ -388,7 +388,7 @@ stopButton.addEventListener('click', () => {
     else if (result.status === 'failed') message('Run cancelled. The game controller is unavailable.');
   }).finally(updateButtons);
 });
-function render(s: GameStatus): void {
+function render(s: ValidatedGameStatus): void {
   // Navigation is asynchronous: the previous page may still publish its terminal
   // login status while the next official client is loading.
   if (s.sessionId === previousSession) return;
@@ -436,8 +436,8 @@ if (!native) message('Browser preview · Launch the desktop app with bun run app
 if (native) {
   void (async () => {
   try {
-    await listen<CloseRequest>('settings-close-request',event=>{void settingsClose.request(event.payload);});
-    const pending=await invoke<CloseRequest|null>('settings_close_ready');
+    await listen<unknown>('settings-close-request',event=>{void settingsClose.request(event.payload);});
+    const pending=await invoke<unknown>('settings_close_ready');
     closeRegistered=true;root.inert=closeBusy;updateButtons();
     if(pending)void settingsClose.request(pending);
   }catch{element('update-status').textContent='Settings could not be initialized. Reopen the app to edit them safely.';return;}

@@ -126,6 +126,26 @@ const writes = (api) =>
 const tagFor = (api, plan) =>
   api.tags.get(api.refs.get(planRefName(plan)).object.sha);
 
+test('reservation retains the admitted created tag SHA across asynchronous readback', async () => {
+  const ctx = context(), plan = await planAt();
+  let borrowed, originalSha;
+  ctx.api.onCreateTag = (name, message, sourceSha) => {
+    const stored = ctx.api.tag(name, message, sourceSha);
+    borrowed = structuredClone(stored);
+    originalSha = stored.sha;
+    return borrowed;
+  };
+  const read = ctx.api.tagObject.bind(ctx.api);
+  ctx.api.tagObject = async objectSha => {
+    const value = await read(objectSha);
+    if (borrowed) borrowed.sha = sha(999);
+    return value;
+  };
+  assert.equal(serializePlan(await reservePlan(ctx, plan)), serializePlan(plan));
+  assert.equal(ctx.api.calls.find(([method]) => method === 'createPlanRef')[2], originalSha);
+  assert.equal(ctx.api.refs.get(planRefName(plan)).object.sha, originalSha);
+});
+
 test("failed A build still reserves A; B increments from A and A retry reuses its frozen bytes", async () => {
   const ctx = context();
   const a = await planAt();

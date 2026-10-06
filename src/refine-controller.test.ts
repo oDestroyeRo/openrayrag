@@ -1,3 +1,6 @@
+import { validateFormSettings } from './settings';
+import { inventoryItemDraft } from './character-state-logic';
+import { bagId as domainBagId } from './domain-values';
 import {describe,it,expect} from 'vitest';
 import {CompanionController,type ControllerAction} from './controller';
 import type {Action} from './engine';
@@ -38,8 +41,8 @@ function fixture(ownId=1,rawInitialization=false){let now=1000;const packets:Ref
 }
 describe('manual refine controller and shared protocol owner',()=>{
  it.each([0,1])('accepts ready own actor%s, NPC0, source-shaped double currency and exact shared opcode63 mutation',id=>{const f=fixture(id);f.send();expect(f.packets).toEqual([{targetBagId:700,oreItemId:1010,catalystBagId:0}]);expect(f.controller.snapshot().refine.state).toBe('pending');expect(f.controller.snapshot().running).toBe(true);
-  f.ore();f.balance();f.balance();f.mutation();expect(f.controller.snapshot().refine.state).toBe('improved');expect(f.controller.engine.character.inventory.get(700)?.refine).toBe(1);expect(f.commands).toEqual([]);});
- it('captures current supplied visible stock/budget policy, independent of prior engine Start settings',()=>{const f=fixture();f.controller.engine.settings={...DEFAULT_SETTINGS,automation:{...structuredClone(DEFAULT_AUTOMATION),items:[]}};f.input.policy.items=[{itemId:1010,resource:'hp',belowPercent:50,minStock:3,cooldownSeconds:1}];expect(()=>f.preview()).toThrow('protected');expect(f.packets).toEqual([]);});
+  f.ore();f.balance();f.balance();f.mutation();expect(f.controller.snapshot().refine.state).toBe('improved');expect(f.controller.engine.character.inventory.get(domainBagId(700))?.refine).toBe(1);expect(f.commands).toEqual([]);});
+ it('captures current supplied visible stock/budget policy, independent of prior engine Start settings',()=>{const f=fixture();f.controller.engine.settings=validateFormSettings({...DEFAULT_SETTINGS,automation:{...structuredClone(DEFAULT_AUTOMATION),items:[]}});f.input.policy.items=[{itemId:1010,resource:'hp',belowPercent:50,minStock:3,cooldownSeconds:1}];expect(()=>f.preview()).toThrow('protected');expect(f.packets).toEqual([]);});
  it('fences all action owners and start/advance while pending and after Stop, then accepts a late exact receipt without restarting',()=>{const f=fixture();f.send();const token=f.controller.snapshot().refine.dialogueToken!;
   for(const [mode,request] of [['command',{type:'sit',sitting:true}],['social',{type:'chat',channel:0,text:'test'}],['refineAdvance',{promptToken:token}]] as const)expect(()=>f.controller.perform(mode,request)).toThrow();
   expect(()=>f.controller.start({...DEFAULT_SETTINGS,map:'prt_in',targets:[4000]})).toThrow();f.controller.stop();expect(f.controller.snapshot().refine.state).toBe('uncertain');expect(()=>f.preview()).toThrow();f.ore();f.balance();f.mutation();expect(f.controller.snapshot().refine.state).toBe('reconciled');expect(f.controller.runRequested).toBe(false);expect(f.packets).toHaveLength(1);});
@@ -230,9 +233,9 @@ describe('refining with merged party owners',()=>{
 
 function retreatFixture(id:number){
  const f=fixture(id,true),request=f.preview();f.receive(new BitWriter().u8(77).u8(3));
- f.controller.engine.receive([{type:'inventory',items:[...f.controller.engine.character.inventory.values(),
+ f.controller.engine.receive([{type:'inventory',items:[...f.controller.engine.character.inventory.values()].map(inventoryItemDraft).concat([
   {bagId:77,itemId:1701,type:2,count:1,guid:'bow',flags:0,refine:0,slots:[0,0,0,0]},
-  {bagId:1750,itemId:1750,type:1,count:20}],equipment:[0,0,0,0,77,0,0,0,0,0],ammoId:1750},
+  {bagId:1750,itemId:1750,type:1,count:20}]),equipment:[0,0,0,0,77,0,0,0,0,0],ammoId:1750},
   {type:'skills',learned:[{skillId:1,level:2},{skillId:29,level:5}]}]);
  f.receive(ownSpawn({...f.own,id:3,classId:4000,name:'Poring',kind:1,level:1,x:11},0));
  const automation=structuredClone(DEFAULT_AUTOMATION);automation.retreat={...DEFAULT_RETREAT,enabled:true};

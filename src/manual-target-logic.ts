@@ -1,24 +1,30 @@
-import type { EngagementIdentity } from './attack-strategy-logic';
+import { bagId as domainBagId, speciesId, worldId, type SpeciesId } from './domain-values';
+import { checkedEngagementIdentity, type EngagementIdentity, type UuidEngagementIdentity } from './attack-strategy-logic';
 import type { ActorObservationSnapshot } from './actor-observations-logic';
 import type { CharacterSnapshot } from './character-state-logic';
 import type { CharacterState } from './character-state';
 import { AMMO_CATALOG, WEAPON_CATALOG } from './loadout-logic';
-import { validateMapPolicy, type MapPolicy } from './map-policy-logic';
+import { validateMapPolicy, type MapPolicyInput as MapPolicy } from './map-policy-logic';
 import { mapDimensions } from './navigation-logic';
 import type { Entity, Position } from './protocol';
-import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateAutomation, type MonsterRule, type Settings } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateAutomation, validateFormSettings, type ValidatedFormSettings, type MonsterRule, type ReadonlyData, type SettingsInput as Settings } from './settings';
 /** Command-only policy. No automatic action, saved run, or selected-species list. */
 export interface ManualTargetPolicy {
   minHpPercent:number; routeStep:number; avoidWalls:boolean; walkSeconds:number;
   approachSeconds:number; maxPathDistance:number; levelDifference:number;
-  monsterRules:MonsterRule[]; minAmmoStock:number; mapPolicy?:MapPolicy;
+  monsterRules:ReadonlyData<MonsterRule>[]; minAmmoStock:number; mapPolicy?:MapPolicy;
 }
 
-export interface ManualTargetRequest {
-  type:'manualTarget'; map:string; owner:EngagementIdentity;
-  command:{type:'walk';destination:Position}|{type:'attack';target:EngagementIdentity};
+/** Editable/wire DTO. Only the parser admits its actor lifetime identities. */
+export interface ManualTargetRequestInput {
+  type:'manualTarget'; map:string; owner:{world:string;id:number;incarnation:number};
+  command:{type:'walk';destination:Position}|{type:'attack';target:{world:string;id:number;incarnation:number}};
   timeoutSeconds:number; policy:ManualTargetPolicy;
 }
+export type ManualTargetRequest = Omit<ManualTargetRequestInput,'owner'|'command'> & {
+  readonly owner:UuidEngagementIdentity;
+  readonly command:{type:'walk';destination:Position}|{type:'attack';target:UuidEngagementIdentity};
+};
 
 export interface ManualTargetSnapshot {
   sequence:number; kind:'walk'|'attack'|null;
@@ -37,10 +43,10 @@ const keys=(v:unknown,allowed:string[]):Record<string,unknown>=>{
 
 const integer=(v:unknown,min:number,max:number):boolean=>typeof v==='number'&&Number.isInteger(v)&&v>=min&&v<=max;
 
-export function validateActionIdentity(value:unknown):EngagementIdentity {
+export function validateActionIdentity(value:unknown):UuidEngagementIdentity {
   const v=keys(value,['world','id','incarnation']);
   if(typeof v.world!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v.world)||!integer(v.id,0,0x7fffffff)||!integer(v.incarnation,1,0x7fffffff))throw new Error('Invalid observed actor identity.');
-  return structuredClone(value) as EngagementIdentity;
+  return checkedEngagementIdentity({world:worldId(v.world),id:v.id,incarnation:v.incarnation});
 }
 
 export function validateManualTargetPolicy(value:unknown):ManualTargetPolicy {
@@ -48,7 +54,10 @@ export function validateManualTargetPolicy(value:unknown):ManualTargetPolicy {
   if(!integer(v.minHpPercent,20,95)||!integer(v.routeStep,1,20)||typeof v.avoidWalls!=='boolean'||!integer(v.walkSeconds,1,600)||!integer(v.approachSeconds,1,60)||!integer(v.maxPathDistance,1,200)||!integer(v.levelDifference,-100,100)||!integer(v.minAmmoStock,0,9999))throw new Error('Invalid bounded manual policy.');
   const automation=validateAutomation({...structuredClone(DEFAULT_AUTOMATION),combat:{mode:'selected',levelDifference:v.levelDifference as number,rules:v.monsterRules as MonsterRule[]}});
   const mapPolicy=Object.hasOwn(v,'mapPolicy')?validateMapPolicy(v.mapPolicy):undefined;
-  return {...v,monsterRules:automation.combat.rules,...(mapPolicy?{mapPolicy}:{})} as ManualTargetPolicy;
+  return {minHpPercent:v.minHpPercent as number,routeStep:v.routeStep as number,avoidWalls:v.avoidWalls,
+    walkSeconds:v.walkSeconds as number,approachSeconds:v.approachSeconds as number,maxPathDistance:v.maxPathDistance as number,
+    levelDifference:v.levelDifference as number,minAmmoStock:v.minAmmoStock as number,
+    monsterRules:automation.combat.rules.map(rule=>({...rule,conditions:rule.conditions?.map(condition=>({...condition}))})),...(mapPolicy?{mapPolicy}:{})};
 }
 
 export function manualTargetPolicy(settings:Settings):ManualTargetPolicy {
@@ -62,15 +71,18 @@ export function validateManualTargetRequest(value:unknown):ManualTargetRequest {
   if(v.type!=='manualTarget'||typeof v.map!=='string'||!mapDimensions(v.map)||!integer(v.timeoutSeconds,1,120))throw new Error('Invalid manual command map or deadline.');
   const owner=validateActionIdentity(v.owner),policy=validateManualTargetPolicy(v.policy);
   const command=keys(v.command,['type',...(keys(v.command,['type','destination','target']).type==='walk'?['destination']:['target'])]);
+  let admittedCommand:ManualTargetRequest['command'];
   if(command.type==='walk'){
     const destination=keys(command.destination,['x','y']),grid=mapDimensions(v.map)!;
     if(!integer(destination.x,0,grid.width-1)||!integer(destination.y,0,grid.height-1))throw new Error('Destination is outside the current map.');
+    admittedCommand={type:'walk',destination:{x:destination.x as number,y:destination.y as number}};
   } else if(command.type==='attack'){
     const target=validateActionIdentity(command.target);
     if(target.world!==owner.world)throw new Error('Target belongs to another world.');
+    admittedCommand={type:'attack',target};
   } else throw new Error('Unknown manual target command.');
   if(policy.mapPolicy?.lockArea&&policy.mapPolicy.lockArea.map!==v.map)throw new Error('Manual commands require the current lock map.');
-  return structuredClone({...v,owner,policy}) as ManualTargetRequest;
+  return {type:'manualTarget',map:v.map,owner,command:admittedCommand,timeoutSeconds:v.timeoutSeconds as number,policy};
 }
 
 /** Detached settings let existing physical route owners share exactly one navigator. */
@@ -79,14 +91,26 @@ export function manualTargetSettings(request:ManualTargetRequest):Settings {
   return {...DEFAULT_SETTINGS,map:request.map,targets:[],loot:false,route_step:p.routeStep,route_avoidWalls:p.avoidWalls,route_randomWalk_maxRouteTime:p.walkSeconds,attackMaxRouteTime:p.approachSeconds,attackRouteMaxPathDistance:p.maxPathDistance,minHpPercent:p.minHpPercent,automation:{...structuredClone(DEFAULT_AUTOMATION),combat:{mode:'selected',levelDifference:p.levelDifference,rules:structuredClone(p.monsterRules)},loadout:{...DEFAULT_AUTOMATION.loadout,enabled:true,autoAmmo:false,minAmmoStock:p.minAmmoStock},...(p.mapPolicy?{mapPolicy:structuredClone(p.mapPolicy)}:{})}};
 }
 
+/** Observed monsters may have protocol class zero, outside configured species IDs. */
+declare class ManualSettingsAdmission {private readonly manualSettingsAdmission:void}
+export type ManualEngineSettings = Omit<ValidatedFormSettings,'targets'> & ManualSettingsAdmission & {
+  readonly targets:readonly (SpeciesId|0)[];
+};
+export function manualEngineSettings(request:ManualTargetRequest,observedClass:number|null):ManualEngineSettings {
+  const base=validateFormSettings(manualTargetSettings(request));
+  const targets=observedClass===null?[]:[observedClass===0?0 as const:speciesId(observedClass)];
+  // This parser is the sole constructor of the erased aggregate proof.
+  return {...base,targets} as unknown as ManualEngineSettings;
+}
+
 export function manualAmmoGuard(policy:Pick<ManualTargetPolicy,'minAmmoStock'>,player:Entity,state:CharacterState|CharacterSnapshot):string|null {
   if(!state.inventoryKnown||state.equipment.length<10)return 'Verify weapon and ammo inventory before attacking.';
   const inventory=state.inventory instanceof Map?state.inventory:new Map(state.inventory.map(item=>[item.bagId,item]));
   const weaponId=state.equipment[4]??0;if(!weaponId)return null;
-  const weaponItem=inventory.get(weaponId),weapon=weaponItem?WEAPON_CATALOG[weaponItem.itemId]:undefined;
+  const weaponItem=inventory.get(domainBagId(weaponId)),weapon=weaponItem?WEAPON_CATALOG[weaponItem.itemId]:undefined;
   if(!weapon)return 'Normal-attack weapon compatibility is not verified.';
   if(weapon.weaponClass!==12)return null;
-  const item=inventory.get(state.ammoId),ammo=item?AMMO_CATALOG[item.itemId]:undefined;
+  const item=state.ammoId>0?inventory.get(domainBagId(state.ammoId)):undefined,ammo=item?AMMO_CATALOG[item.itemId]:undefined;
   if(!item||!ammo||ammo.ammoType!==0)return 'Equip verified arrows before attacking.';
   if(player.level<ammo.minLevel)return `Ammo needs level ${ammo.minLevel}.`;
   return item.count<=policy.minAmmoStock?`Observed arrows ${item.count} reached reserve ${policy.minAmmoStock}.`:null;

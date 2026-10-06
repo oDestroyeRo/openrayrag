@@ -1,3 +1,4 @@
+import { validateAutomation } from './settings';
 import { acceptsMonster } from './automation-logic';
 import { normalAttackProfile } from './combat';
 import { DEFAULT_MAP_POLICY, fieldGrid, insideLockArea, mapAllowed } from './map-policy-logic';
@@ -7,7 +8,7 @@ import type { Position } from './protocol';
 
 import { type ManualTargetRequest, manualTargetSettings, manualAmmoGuard, type ManualPreviewContext, sameActionIdentity, manualStateBlocker } from './manual-target-logic';
 
-export { type ManualTargetPolicy, type ManualTargetRequest, type ManualTargetSnapshot, IDLE_MANUAL_TARGET, validateActionIdentity, validateManualTargetPolicy, manualTargetPolicy, validateManualTargetRequest, manualTargetSettings, manualAmmoGuard, type ManualPreviewContext, sameActionIdentity, manualStateBlocker } from './manual-target-logic';
+export { type ManualTargetPolicy, type ManualTargetRequestInput, type ManualTargetRequest, type ManualTargetSnapshot, IDLE_MANUAL_TARGET, validateActionIdentity, validateManualTargetPolicy, manualTargetPolicy, validateManualTargetRequest, manualTargetSettings, manualEngineSettings, type ManualEngineSettings, manualAmmoGuard, type ManualPreviewContext, sameActionIdentity, manualStateBlocker } from './manual-target-logic';
 
 export function previewManualTarget(request:ManualTargetRequest,c:ManualPreviewContext,gridFor:(map:string)=>WalkGrid|null=searchGrid):Position[] {
   const p=c.player,policy=request.policy,area=policy.mapPolicy??DEFAULT_MAP_POLICY;
@@ -29,7 +30,7 @@ export function previewManualTarget(request:ManualTargetRequest,c:ManualPreviewC
   const target=c.target;
   if(!sameActionIdentity(request.command.target,c.targetIdentity)||!target||target.kind!==1||target.dead||target.hp<=0||c.foreignTarget)throw new Error('Selected monster is absent, replaced, dead or already engaged.');
   if(!insideLockArea(area,c.map,target))throw new Error('Monster is outside the field lock area.');
-  const a=manualTargetSettings(request).automation!;
+  const a=validateAutomation(manualTargetSettings(request).automation!);
   if(!acceptsMonster(a,target,p,[target.classId],false,c.observations))throw new Error('Monster level or conditional rules do not permit this attack.');
   const ammo=manualAmmoGuard(policy,p,c.character);if(ammo)throw new Error(ammo);
   const range=normalAttackProfile(c.character).range;

@@ -1,30 +1,37 @@
+import { releaseTagFor, releaseId, ownedReleaseDto } from './tooling-domain-values.mjs';
 import { find, map } from "remeda";
 // Publication orchestration. API, dates, reservations and native verification
 // are injected; release-policy owns all deterministic bundle/source contracts.
 import { compareVersions, planSha256 } from "./semantic-release-policy.mjs";
 import {
   requireValue, identity, countOf, expectedNames, validateBundle, validateArtifact,
-  releaseBody, releaseMetadata, parseJson, sourceCount, isNewer,
+  releaseBody, releaseMetadata, parseJson, sourceCount, isNewer, fileBytes,
   validateReleaseAncestry,
 } from "./release-policy.mjs";
 
-async function assertRelease(ctx, release) {
-  const meta = validateReleaseAncestry(ctx.history, release);
+/** @param {import('./tooling-domain-values.mjs').ReleaseContext} ctx @param {import('./tooling-domain-values.mjs').ReleaseDto} release @param {import('./tooling-domain-values.mjs').ReleaseMetadata} [metadata] */
+async function assertRelease(ctx, release, metadata) {
+  const meta = metadata ?? validateReleaseAncestry(ctx.history, release);
   requireValue(
-    (await ctx.api.tagSha(release.tag_name)) === meta.sourceSha,
+    (await ctx.api.tagSha(releaseTagFor(meta.version))) === meta.sourceSha,
     "Existing release tag points to another commit.",
   );
   return meta;
 }
+/** @param {import('./tooling-domain-values.mjs').ReleaseContext} ctx @param {import('./tooling-domain-values.mjs').ReleaseDto} release */
 export async function verifiedRelease(ctx, release) {
-  const meta = await assertRelease(ctx, release),
-    id =
+  const metadata = validateReleaseAncestry(ctx.history, release);
+  ctx = { ...ctx, history: Array.isArray(ctx.history) ? [...ctx.history] : ctx.history };
+  release = structuredClone(release);
+  const meta = await assertRelease(ctx, release, metadata);
+  /** @type {import('./tooling-domain-values.mjs').ReleaseIdentity} */
+  let id =
       meta.schemaVersion === 3
         ? {
             sourceSha: meta.sourceSha,
             firstParentCount: meta.firstParentCount,
             version: meta.version,
-            tag: `v${meta.version}`,
+            tag: releaseTagFor(meta.version),
             pubDate: await ctx.dateFor(meta.sourceSha),
           }
         : identity(
@@ -41,20 +48,23 @@ export async function verifiedRelease(ctx, release) {
     p.runId === meta.artifact.runId && p.schemaVersion === meta.schemaVersion,
     "Release and build run provenance differ.",
   );
-  if (meta.schemaVersion === 3) {
+  if (meta.schemaVersion === 3 && p.schemaVersion === 3) {
     requireValue(
       typeof ctx.verifyPlan === "function" &&
         planSha256(p.releasePlan) === meta.planSha256,
       "Published release is missing its exact reserved plan.",
     );
     await ctx.verifyPlan(p.releasePlan);
-    id.releasePlan = p.releasePlan;
+    id = { ...id, releasePlan: p.releasePlan };
   }
   await ctx.verifyNative(files, id);
   return { meta, id, files };
 }
+/** @param {import('./tooling-domain-values.mjs').CandidateContext} ctx @returns {Promise<import('./tooling-domain-values.mjs').PreflightResult>} */
 export async function preflight(ctx) {
-  const release = await ctx.api.release(ctx.id.tag);
+  ctx = { ...ctx, history: Array.isArray(ctx.history) ? [...ctx.history] : ctx.history, id: structuredClone(ctx.id) };
+  const rawRelease = await ctx.api.release(ctx.id.tag);
+  const release = rawRelease && ownedReleaseDto(rawRelease);
   if (!release) {
     const tag = await ctx.api.tagSha(ctx.id.tag);
     requireValue(
@@ -77,8 +87,10 @@ export async function preflight(ctx) {
   }
   return { state: "reuse", artifact: meta.artifact };
 }
+/** @param {import('./tooling-domain-values.mjs').ReleaseContext} ctx */
 async function latestState(ctx) {
-  const latest = await ctx.api.latest();
+  const rawLatest = await ctx.api.latest();
+  const latest = rawLatest && ownedReleaseDto(rawLatest);
   if (!latest) return null;
   requireValue(!latest.draft, "Latest release cannot be a draft.");
   const { meta } = await verifiedRelease(ctx, latest);
@@ -89,13 +101,16 @@ async function latestState(ctx) {
     version: meta.version,
   };
 }
+/** @param {import('./tooling-domain-values.mjs').PublicationContext} ctx */
 export async function publishRelease(ctx) {
+  ctx = { ...ctx, history: Array.isArray(ctx.history) ? [...ctx.history] : ctx.history, id: structuredClone(ctx.id), artifact: ctx.artifact && { ...ctx.artifact } };
   requireValue(
     ctx.history[sourceCount(ctx.id) - 1] === ctx.id.sourceSha,
     "Candidate is not the current main first-parent version.",
   );
   let latest = await latestState(ctx),
     release = await ctx.api.release(ctx.id.tag);
+  if (release) release = ownedReleaseDto(release);
   if (release && !release.draft) {
     await verifiedRelease(ctx, release);
     requireValue(
@@ -119,6 +134,7 @@ export async function publishRelease(ctx) {
     await ctx.verifyPlan(candidate.releasePlan);
   }
   await ctx.verifyNative(ctx.files, ctx.id);
+  requireValue(ctx.artifact, "Invalid workflow artifact fields.");
   validateArtifact(ctx.artifact);
   const provenance = parseJson(ctx.files.get("provenance.json"), "provenance");
   requireValue(
@@ -156,6 +172,7 @@ export async function publishRelease(ctx) {
       "Draft creation not confirmed; rerun with the same workflow artifact.",
     );
   }
+  release = ownedReleaseDto(release);
   const meta = await assertRelease(ctx, release);
   requireValue(
     release.draft &&
@@ -168,7 +185,7 @@ export async function publishRelease(ctx) {
   );
   const releaseNames = expectedNames(ctx.id.version, provenance.schemaVersion);
   for (const name of releaseNames) {
-    let assets = await ctx.api.assets(release.id);
+    let assets = await ctx.api.assets(releaseId(release.id));
     requireValue(
       assets.length <= releaseNames.length &&
         new Set(map(assets, (a) => a.name)).size === assets.length &&
@@ -178,11 +195,11 @@ export async function publishRelease(ctx) {
     let asset = find(assets, (a) => a.name === name);
     if (!asset) {
       try {
-        await ctx.api.upload(release.id, name, ctx.files.get(name));
+        await ctx.api.upload(releaseId(release.id), name, fileBytes(ctx.files, name));
       } catch {
         /* Reconcile a lost upload response without replacing any asset. */
       }
-      assets = await ctx.api.assets(release.id);
+      assets = await ctx.api.assets(releaseId(release.id));
       asset = find(assets, (a) => a.name === name);
     }
     requireValue(
@@ -191,21 +208,24 @@ export async function publishRelease(ctx) {
     );
     const bytes = await ctx.api.downloadAsset(asset);
     requireValue(
-      bytes.equals(ctx.files.get(name)),
+      bytes !== null && bytes.equals(fileBytes(ctx.files, name)),
       `Asset ${name} conflicts with the original bundle. Draft left unpublished.`,
     );
   }
   release = await ctx.api.release(ctx.id.tag);
   requireValue(release?.draft, "Draft changed while staging.");
+  release = ownedReleaseDto(release);
   await verifiedRelease(ctx, release);
   latest = await latestState(ctx);
   const makeLatest = !latest || isNewer(ctx.id, latest);
   await promote(ctx, release, makeLatest, latest);
   return makeLatest ? "published-latest" : "published-older";
 }
+/** @param {import('./tooling-domain-values.mjs').CandidateContext} ctx @param {import('./tooling-domain-values.mjs').ReleaseDto} release @param {boolean} makeLatest @param {Awaited<ReturnType<typeof latestState>>} minimumLatest */
 async function promote(ctx, release, makeLatest, minimumLatest) {
+  release = ownedReleaseDto(release);
   try {
-    await ctx.api.publish(release.id, {
+    await ctx.api.publish(releaseId(release.id), {
       draft: false,
       prerelease: false,
       make_latest: makeLatest ? "true" : "false",

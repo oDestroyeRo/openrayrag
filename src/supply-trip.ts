@@ -1,16 +1,17 @@
+import { quantity, type Revision } from './domain-values';
 import { insideLockArea, mapAllowed, mapPolicy } from './map-policy-logic';
-import type { Settings } from './settings';
-import type { DispositionPolicy } from './disposition';
+import type { SettingsInput as Settings } from './settings';
+import { VALIDATED_DEFAULT_DISPOSITION, type ValidatedDispositionPolicy } from './disposition';
 
-import { type SupplySettings, DEFAULT_SUPPLY, type SupplyGoal, type SupplyContext, type SupplyPorts, type SupplyIntent, type SupplyPhase, type SupplySnapshot, type SupplyResumeGuard, integer, validateSupplySettings, validateSupplyResumeGuard, count } from './supply-trip-logic';
+import { type SupplySettings, DEFAULT_SUPPLY, type SupplyGoal, type SupplyPolicySettings, type SupplyContext, type SupplyPorts, type SupplyIntent, type SupplyPhase, type SupplySnapshot, type SupplyResumeGuard, integer, validateSupplySettings, validateSupplyResumeGuard, count } from './supply-trip-logic';
 
-export { type SupplySettings, DEFAULT_SUPPLY, type SupplyGoal, type SupplyContext, type SupplyNext, type SupplyPorts, type SupplyIntent, type SupplyPhase, type SupplySnapshot, type SupplyResumeGuard, validateSupplySettings, validateSupplyResumeGuard } from './supply-trip-logic';
+export { type SupplySettings, DEFAULT_SUPPLY, type SupplyGoal, type SupplyPolicySettings, type SupplyContext, type SupplyNext, type SupplyPorts, type SupplyIntent, type SupplyPhase, type SupplySnapshot, type SupplyResumeGuard, validateSupplySettings, validateSupplyResumeGuard } from './supply-trip-logic';
 
 /** Sender-free trip owner. An intention is single-use; the controller must mark
  * economic send before calling its sole transport, including send exceptions. */
 export class SupplyTripRuntime<Receipt> {
   private policy: SupplySettings = DEFAULT_SUPPLY;
-  private disposition: DispositionPolicy = { maxSpend: 0, rules: [] };
+  private disposition: ValidatedDispositionPolicy = VALIDATED_DEFAULT_DISPOSITION;
   private settings: Settings | null = null;
   private character = "";
   private epoch = "";
@@ -35,8 +36,8 @@ export class SupplyTripRuntime<Receipt> {
     sent: boolean;
     cost: number;
     reservation: number;
-    inventoryRevision: number;
-    currencyRevision: number;
+    inventoryRevision: Revision<'inventory'>;
+    currencyRevision: Revision<'currency'>;
     epoch: string;
     generation: number;
     since: number;
@@ -66,7 +67,7 @@ export class SupplyTripRuntime<Receipt> {
     return !!this.receipt?.sent || this.reloadUncertainty;
   }
   configure(
-    settings: Settings,
+    settings: SupplyPolicySettings,
     context: SupplyContext,
     guard?: SupplyResumeGuard,
   ): void {
@@ -105,7 +106,7 @@ export class SupplyTripRuntime<Receipt> {
     }
     const copiedSettings = structuredClone(settings);
     const disposition = structuredClone(
-      settings.automation?.disposition ?? { maxSpend: 0, rules: [] },
+      settings.automation?.disposition ?? VALIDATED_DEFAULT_DISPOSITION,
     );
     const previouslyRetained =
       this.retained && this.character === context.character;
@@ -403,8 +404,8 @@ export class SupplyTripRuntime<Receipt> {
         0,
         this.policy.maxSpend - this.committed - this.held,
       );
-      const policy = structuredClone(this.disposition);
-      policy.maxSpend = Math.min(policy.maxSpend, remaining);
+      const policy = { ...this.disposition, rules: this.disposition.rules.map(rule => ({ ...rule })) };
+      policy.maxSpend = quantity(Math.min(policy.maxSpend, remaining));
       for (const goal of this.goals) {
         const rule = policy.rules.find((rule) => rule.itemId === goal.itemId);
         if (rule) {

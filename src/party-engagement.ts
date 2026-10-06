@@ -1,4 +1,4 @@
-import type { EngagementIdentity } from './attack-strategy-logic';
+import { checkedEngagementIdentity, type EngagementIdentity } from './attack-strategy-logic';
 import type { PartyActorBinding } from './party-actors-logic';
 
 import { PARTY_ENGAGEMENT_LIMITS, sameMonster, samePartyBinding, type Blocker, type PartyEngagementSnapshot, type Claims, partyEngagementSnapshot, partyEngagementReason } from './party-engagement-logic';
@@ -17,7 +17,7 @@ export class PartyEngagements {
       if (this.claims.size >= PARTY_ENGAGEMENT_LIMITS.monsters) return;
       // The owner retains foreign participation even when this bounded cache was full.
       // Missing earlier provenance can never authorize a later party-only claim.
-      claims = { monster: {...monster}, sources: new Map(), blocker: alreadyForeign ? 'source capacity' : null }; this.claims.set(monster.id, claims);
+      claims = { monster: checkedEngagementIdentity(monster), sources: new Map(), blocker: alreadyForeign ? 'source capacity' : null }; this.claims.set(monster.id, claims);
     }
     if (claims.blocker) return; // A later party join cannot erase an earlier foreign claim.
     if (!binding) { claims.blocker = blocker; return; }

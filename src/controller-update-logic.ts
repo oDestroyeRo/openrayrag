@@ -1,7 +1,8 @@
+import { milliseconds, quantity, type Milliseconds, type Quantity } from './domain-values';
 import type { CompanionSnapshot } from './controller';
 import { validateMacroCheckpoint, type MacroCheckpoint } from './macros-logic';
 import { validatePartyHealCheckpoint, type PartyHealCheckpoint } from './party-heal-logic';
-import { validateSettings, type Settings } from './settings';
+import { validateSettings, type SettingsInput, type RunSettings } from './settings';
 import type { EscapeResumeGuard } from './escape-logic';
 import type { SupplyResumeGuard } from './supply-trip-logic';
 import type { DeathRecoveryGuard } from './death-recovery';
@@ -9,19 +10,28 @@ export interface ControllerUpdateCheckpoint {
   version:1;
   frozenAt:number;
   status:CompanionSnapshot;
-  settings:Settings|null;
+  settings:SettingsInput|null;
   macro:MacroCheckpoint|null;
   partyHeal:PartyHealCheckpoint;
   run:{startedAt:number;kills:number;pickups:number;deaths:number}|null;
 }
 
+export interface ValidatedControllerRunAllowance {
+  readonly startedAt: Milliseconds; readonly kills: Quantity; readonly pickups: Quantity; readonly deaths: Quantity;
+}
+export interface ValidatedControllerUpdateCheckpoint {
+  readonly version: 1; readonly frozenAt: Milliseconds; readonly status: CompanionSnapshot;
+  readonly settings: RunSettings | null; readonly macro: MacroCheckpoint | null;
+  readonly partyHeal: PartyHealCheckpoint; readonly run: ValidatedControllerRunAllowance | null;
+}
+
 export interface ControllerUpdateRestore {
-  requestId:string; checkpoint:unknown; settings?:Settings; escapeGuard?:EscapeResumeGuard;
+  requestId:string; checkpoint:unknown; settings?:SettingsInput; escapeGuard?:EscapeResumeGuard;
   supplyGuard?:SupplyResumeGuard; deathRecoveryGuard?:DeathRecoveryGuard;
 }
 
 /** Resource owners and actor observations are deliberately absent from restore authority. */
-export function validateControllerUpdateCheckpoint(value:unknown,now:number):ControllerUpdateCheckpoint {
+export function validateControllerUpdateCheckpoint(value:unknown,now:number):ValidatedControllerUpdateCheckpoint {
   const c=value as ControllerUpdateCheckpoint;
   if(!c||typeof c!=='object'||Array.isArray(c)||Object.keys(c).length!==7||c.version!==1
     ||!Number.isSafeInteger(c.frozenAt)||c.frozenAt<0||c.frozenAt>now
@@ -41,5 +51,5 @@ export function validateControllerUpdateCheckpoint(value:unknown,now:number):Con
     ||c.status.running||c.status.partyHeal&&['pending','uncertain'].includes(c.status.partyHeal.state))throw new Error('Update checkpoint has unresolved or inconsistent active ownership.');
   const cooldownSeconds=settings?.automation?.partyHeal?.enabled?settings.automation.partyHeal.cooldownSeconds:3600;
   if(partyHeal.cooldownUntil>c.frozenAt+Math.max(1,cooldownSeconds)*1000)throw new Error('Update party Heal cooldown exceeds its configured allowance.');
-  return {version:1,frozenAt:c.frozenAt,status:structuredClone(c.status),settings,macro,partyHeal,run:structuredClone(run)};
+  return {version:1,frozenAt:milliseconds(c.frozenAt),status:structuredClone(c.status),settings,macro,partyHeal,run:run === null ? null : { startedAt: milliseconds(run.startedAt), kills: quantity(run.kills), pickups: quantity(run.pickups), deaths: quantity(run.deaths) }};
 }

@@ -1,3 +1,5 @@
+import { itemId as domainItemId } from './domain-values';
+import { validateAutomation } from './settings';
 import { describe, expect, it } from 'vitest';
 import cases from './data/recovery-item-cases.json';
 import catalog from './data/recovery-item-catalog.json';
@@ -52,36 +54,36 @@ describe('carried HP and SP recovery items',()=>{
   });
   it('uses carried HP food while excluding unrelated consumables and SP-only food',()=>{
     const f=fixture([[512,2],[514,20],[511,20],[601,20]]);
-    expect(f.scheduler.next(f.automation,player,f.state,null).action).toEqual({type:'useItem',itemId:512});
+    expect(f.scheduler.next(validateAutomation(f.automation),player,f.state,null).action).toEqual({type:'useItem',itemId:512});
   });
   it('uses carried SP food at its own threshold with HP full',()=>{
     const f=fixture([[512,20],[514,2],[505,10]]),fullHp={...player,hp:100};
-    expect(f.scheduler.next(f.automation,fullHp,f.state,null).action).toEqual({type:'useItem',itemId:514});
+    expect(f.scheduler.next(validateAutomation(f.automation),fullHp,f.state,null).action).toEqual({type:'useItem',itemId:514});
     f.automation.spPotions!.belowPercent=9;
-    expect(f.scheduler.next(f.automation,fullHp,f.state,null)).toEqual({});
+    expect(f.scheduler.next(validateAutomation(f.automation),fullHp,f.state,null)).toEqual({});
   });
   it('honors selected SP order and server-confirmed fallback through the shared cooldown',()=>{
     const f=fixture([[514,2],[505,1]]),fullHp={...player,hp:100};
     f.automation.spPotions={...DEFAULT_SP_ITEMS,mode:'selected',itemIds:[505,514]};
-    const action=f.scheduler.next(f.automation,fullHp,f.state,null).action!;
+    const action=f.scheduler.next(validateAutomation(f.automation),fullHp,f.state,null).action!;
     expect(action).toEqual({type:'useItem',itemId:505});f.scheduler.submit(action,f.state);
-    expect(f.scheduler.next(f.automation,fullHp,f.state,null)).toEqual({});
+    expect(f.scheduler.next(validateAutomation(f.automation),fullHp,f.state,null)).toEqual({});
     expect(f.consume(514).state).toBe('ignored');expect(f.consume(505).state).toBe('confirmed');
-    f.advance(4999);expect(f.scheduler.next(f.automation,fullHp,f.state,null)).toEqual({});
-    f.advance(1);expect(f.scheduler.next(f.automation,fullHp,f.state,null).action).toEqual({type:'useItem',itemId:514});
+    f.advance(4999);expect(f.scheduler.next(validateAutomation(f.automation),fullHp,f.state,null)).toEqual({});
+    f.advance(1);expect(f.scheduler.next(validateAutomation(f.automation),fullHp,f.state,null).action).toEqual({type:'useItem',itemId:514});
   });
   it('requires observed SP and full inventory before choosing SP items',()=>{
     const f=fixture([[514,3]]),fullHp={...player,hp:100};f.state.inventoryKnown=false;
-    expect(f.scheduler.next(f.automation,fullHp,f.state,null).failure).toContain('full inventory');
+    expect(f.scheduler.next(validateAutomation(f.automation),fullHp,f.state,null).failure).toContain('full inventory');
     f.state.inventoryKnown=true;f.state.stats=null;
-    expect(f.scheduler.next(f.automation,fullHp,f.state,null).failure).toContain('SP is unavailable');
-    f.automation.spPotions!.mode='off';expect(f.scheduler.next(f.automation,fullHp,f.state,null)).toEqual({});
+    expect(f.scheduler.next(validateAutomation(f.automation),fullHp,f.state,null).failure).toContain('SP is unavailable');
+    f.automation.spPotions!.mode='off';expect(f.scheduler.next(validateAutomation(f.automation),fullHp,f.state,null)).toEqual({});
   });
   it('protects the larger reserve when an item is selected for both resources',()=>{
     const f=fixture([[518,5]]);
     f.automation.hpPotions={...DEFAULT_RECOVERY_ITEMS,mode:'selected',itemIds:[518],minStock:0};
     f.automation.spPotions={...DEFAULT_SP_ITEMS,mode:'selected',itemIds:[518],minStock:5};
-    expect(f.scheduler.next(f.automation,player,f.state,null)).toEqual({});
+    expect(f.scheduler.next(validateAutomation(f.automation),player,f.state,null)).toEqual({});
     expect(dispositionStockFloors(f.automation)).toEqual([{itemId:518,count:5}]);
   });
   it('keeps combined recovery, advanced, ammo and escape reserves within the workflow contract',()=>{
@@ -100,28 +102,28 @@ describe('carried HP and SP recovery items',()=>{
     const f=fixture([[518,20],[512,2],[514,2]]),p=shortResource==='hp'?player:{...player,hp:100};
     f.automation.hpPotions={...DEFAULT_RECOVERY_ITEMS,mode:'selected',itemIds:[518],cooldownSeconds:shortResource==='hp'?5:30};
     f.automation.spPotions={...DEFAULT_SP_ITEMS,mode:'selected',itemIds:[518],cooldownSeconds:shortResource==='sp'?5:30};
-    const action=f.scheduler.next(f.automation,p,f.state,null).action!;
+    const action=f.scheduler.next(validateAutomation(f.automation),p,f.state,null).action!;
     f.scheduler.submit(action,f.state);expect(f.consume(518).state).toBe('confirmed');
-    f.advance(5000);expect(f.scheduler.next(f.automation,p,f.state,null)).toEqual({});
+    f.advance(5000);expect(f.scheduler.next(validateAutomation(f.automation),p,f.state,null)).toEqual({});
     const shortPolicy=shortResource==='hp'?f.automation.hpPotions:f.automation.spPotions,fallback=shortResource==='hp'?512:514;
     shortPolicy.itemIds.push(fallback);
-    expect(f.scheduler.next(f.automation,p,f.state,null).action).toEqual({type:'useItem',itemId:fallback});
+    expect(f.scheduler.next(validateAutomation(f.automation),p,f.state,null).action).toEqual({type:'useItem',itemId:fallback});
     // The mixed item's effect starts both group timers even when the other group selects different items.
     const otherPolicy=shortResource==='hp'?f.automation.spPotions:f.automation.hpPotions;
     otherPolicy.itemIds=[shortResource==='hp'?514:512];shortPolicy.itemIds=[518];
-    expect(f.scheduler.next(f.automation,p,f.state,null)).toEqual({});
-    otherPolicy.mode='off';expect(f.scheduler.next(f.automation,p,f.state,null).action).toEqual({type:'useItem',itemId:518});
+    expect(f.scheduler.next(validateAutomation(f.automation),p,f.state,null)).toEqual({});
+    otherPolicy.mode='off';expect(f.scheduler.next(validateAutomation(f.automation),p,f.state,null).action).toEqual({type:'useItem',itemId:518});
     otherPolicy.mode='selected';
-    f.advance(25000);expect(f.scheduler.next(f.automation,p,f.state,null).action).toEqual({type:'useItem',itemId:518});
-    expect(recoveryItemCooldown(f.automation,518)).toBe(30);
+    f.advance(25000);expect(f.scheduler.next(validateAutomation(f.automation),p,f.state,null).action).toEqual({type:'useItem',itemId:518});
+    expect(recoveryItemCooldown(validateAutomation(f.automation), domainItemId(518))).toBe(30);
   });
   it('keeps advanced conditions authoritative for SP items and protects SP stock in workflows',()=>{
     const f=fixture([[514,20],[505,3]]),fullHp={...player,hp:100};
     f.automation.items=[{itemId:514,resource:'sp',belowPercent:5,minStock:4,cooldownSeconds:20}];
     f.automation.spPotions!.minStock=2;
-    expect(f.scheduler.next(f.automation,fullHp,f.state,null).action).toEqual({type:'useItem',itemId:505});
+    expect(f.scheduler.next(validateAutomation(f.automation),fullHp,f.state,null).action).toEqual({type:'useItem',itemId:505});
     expect(dispositionStockFloors(f.automation).find(row=>row.itemId===514)).toEqual({itemId:514,count:4});
-    expect(recoveryItemCooldown(f.automation,514)).toBe(20);
+    expect(recoveryItemCooldown(validateAutomation(f.automation), domainItemId(514))).toBe(20);
   });
   it.each(['hp','sp'] as const)('validates every %s policy field, including explicit null',resource=>{
     const valid={...DEFAULT_RECOVERY_ITEMS,mode:'selected',itemIds:[resource==='hp'?512:514]};

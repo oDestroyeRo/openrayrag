@@ -1,5 +1,6 @@
 import { flatMap, map, pipe, sort } from "remeda";
 import { createHash } from "node:crypto";
+import { policyDigest } from './scripts/tooling-domain-values.mjs';
 
 // Only these pure plugins run. Artifact signing and publication stay in release.mjs.
 export const RELEASE_POLICY_VERSION = 1;
@@ -65,20 +66,21 @@ export const RELEASE_POLICY = freeze({
 
 // Sorting every object key makes policy and reservation hashes independent of
 // property insertion order. Inputs to the planner are validated before encoding.
+/** @param {unknown} value @returns {string | undefined} */
 export function canonicalJson(value) {
   if (Array.isArray(value)) return `[${map(value, canonicalJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
     return `{${pipe(Object.keys(value),
       sort((a, b) => a < b ? -1 : a > b ? 1 : 0),
-      map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`),
+      map((key) => `${JSON.stringify(key)}:${canonicalJson(Reflect.get(value, key))}`),
     ).join(",")}}`;
   }
   return JSON.stringify(value);
 }
 
-export const RELEASE_POLICY_SHA256 = createHash("sha256")
+export const RELEASE_POLICY_SHA256 = policyDigest(createHash("sha256")
   .update(canonicalJson(RELEASE_POLICY) + "\n")
-  .digest("hex");
+  .digest("hex"));
 
 export default freeze({
   branches: ["main"],

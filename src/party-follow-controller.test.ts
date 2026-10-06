@@ -1,3 +1,4 @@
+import { partyMemberId } from './domain-values';
 import { describe, expect, it, vi } from 'vitest';
 import { BitWriter } from './binary';
 import { CompanionController } from './controller';
@@ -110,7 +111,7 @@ describe('single rendezvous movement owner',()=>{
  it('actual own zero removal invalidates local association before a new automatic trip',()=>{
   const f=fixture(0);f.controller.start(f.settings);f.map();f.controller.receive(new BitWriter().u8(WORLD_OP.partyUpdate).u8(1).i32(8).finish());
   expect(f.controller.snapshot().partyFollow.state).toBe('cancelled');expect(f.controller.engine.running).toBe(false);
-  expect(f.controller.world.party).toBeNull();expect(f.controller.world.partyActors.get(7)).toBeNull();
+  expect(f.controller.world.party).toBeNull();expect(f.controller.world.partyActors.get(partyMemberId(7))).toBeNull();
   f.controller.stop();f.controller.travel.observe([{type:'map',map:'prontera'},{type:'spawn',entity:{...own,id:0,x:156,y:26},entryType:1}]);
   f.controller.start(f.settings);expect(f.controller.snapshot().partyFollow.state).toBe('selecting');
  });
@@ -244,7 +245,7 @@ it.each([0,1])('own roster removal %i wins while the verified portal is still lo
  f.controller.receive(new BitWriter().u8(WORLD_OP.partyUpdate).u8(2).i32(7).i32(2).i16(10).string('Leader').u8(1).string('prontera').i32(100).i32(100).i32(50).i32(100).finish());
  f.map();f.controller.receive(new BitWriter().u8(WORLD_OP.partyUpdate).u8(8).i32(7).i32(100).i32(100).i32(50).i32(100).finish());
  f.spawn({...own,id:3,classId:4000,name:'Monster',kind:1,x:157,y:26});f.controller.receive(attack(2,3));
- expect(f.controller.world.party).toBeNull();expect(f.controller.world.partyActors.get(7)).toBeNull();expect(f.controller.snapshot().partyEngagement.accepted).toBe(0);
+ expect(f.controller.world.party).toBeNull();expect(f.controller.world.partyActors.get(partyMemberId(7))).toBeNull();expect(f.controller.snapshot().partyEngagement.accepted).toBe(0);
  expect(f.controller.snapshot().partyFollow.state).toBe('cancelled');expect(f.controller.engine.running).toBe(false);expect(f.controller.runRequested).toBe(true);
 });
 it('passive escape recovery cannot freeze the existing living death-cycle deadline',()=>{
@@ -262,11 +263,11 @@ it('passive escape recovery cannot freeze the existing living death-cycle deadli
 describe('rendezvous on merged party engagement owners',()=>{
  it('captured arrival cannot lend shared combat permission before a fresh ordinary member row',()=>{
   const f=fixture();f.settings.automation.combat.partyEngagement=true;f.controller.start(f.settings);f.map();f.arrive();f.spawn({...leader,x:158,y:26});f.affiliation();
-  expect(f.controller.snapshot().partyFollow.state).toBe('following');expect(f.controller.world.partyActors.get(7)).toBeNull();
+  expect(f.controller.snapshot().partyFollow.state).toBe('following');expect(f.controller.world.partyActors.get(partyMemberId(7))).toBeNull();
   f.spawn({...own,id:3,classId:4000,name:'Monster',kind:1,x:159,y:26});f.controller.receive(attack(2,3));
   expect(f.controller.snapshot().partyEngagement).toMatchObject({accepted:0,blocked:1});
   f.controller.receive(new BitWriter().u8(WORLD_OP.partyUpdate).u8(2).i32(7).i32(2).i16(10).string('Leader').u8(1).string('prontera').i32(100).i32(100).i32(50).i32(100).finish());
-  expect(f.controller.world.partyActors.get(7)).not.toBeNull();f.controller.receive(attack(2,3));
+  expect(f.controller.world.partyActors.get(partyMemberId(7))).not.toBeNull();f.controller.receive(attack(2,3));
   expect(f.controller.snapshot().partyEngagement).toMatchObject({accepted:0,blocked:1});
   f.spawn({...own,id:9,classId:4000,name:'New monster',kind:1,x:159,y:26});f.controller.receive(attack(2,9));
   expect(f.controller.snapshot().partyEngagement).toMatchObject({accepted:1,blocked:1});expect(f.controller.snapshot().partyFollow.state).toBe('following');
@@ -329,7 +330,7 @@ describe('rendezvous on merged party engagement owners',()=>{
 it.each([0,1])('ordered same-map clear retains own identity %i for shared membership removal',ownId=>{
  const f=fixture(ownId);f.join(true);f.controller.start(f.settings);f.controller.receive(Uint8Array.of(OP.clear));
  expect(f.controller.engine.player).toBeUndefined();expect(f.controller.engine.playerId).toBe(ownId);
- f.controller.receive(new BitWriter().u8(WORLD_OP.partyUpdate).u8(1).i32(8).finish());expect(f.controller.world.party).toBeNull();expect(f.controller.world.partyActors.get(7)).toBeNull();
+ f.controller.receive(new BitWriter().u8(WORLD_OP.partyUpdate).u8(1).i32(8).finish());expect(f.controller.world.party).toBeNull();expect(f.controller.world.partyActors.get(partyMemberId(7))).toBeNull();
 });
 it.each(['enter','connect'] as const)('old own identity cannot be borrowed after %s before a fresh own spawn',kind=>{
  const f=fixture(0);f.join(true);f.controller.start(f.settings);const oldConnection=f.controller.connectionGeneration;
@@ -469,11 +470,11 @@ describe('raw retired travel and observed leader availability',()=>{
   const f=fixture(id);f.settings.automation.follow.lostSeconds=2;f.controller.start(f.settings);f.map();f.arrive();f.spawn({...leader,x:158,y:26});
   const before=f.controller.engine.observations.snapshot(null,2,true,[],false).actors[0]!;
   f.controller.receive(leaderHealth(0));f.affiliation();
-  expect(f.controller.world.party?.members.get(7)?.hp).toBe(0);expect(f.controller.world.partyActors.get(7)).toBeNull();expect(f.controller.engine.observations.livingPlayer(2)).toBe(true);
+  expect(f.controller.world.party?.members.get(7)?.hp).toBe(0);expect(f.controller.world.partyActors.get(partyMemberId(7))).toBeNull();expect(f.controller.engine.observations.livingPlayer(2)).toBe(true);
   expect(f.controller.snapshot().partyFollow.state).toBe('awaitingLeader');expect(f.controller.engine.running).toBe(false);
   f.advance(1000);f.controller.receive(leaderHealth(0));expect(f.controller.snapshot().partyFollow.remainingSeconds).toBe(1);
   f.controller.receive(leaderHealth(100));expect(f.controller.snapshot().partyFollow.state).toBe('following');expect(f.controller.engine.running).toBe(true);
-  expect(f.controller.world.partyActors.get(7)).toBeNull();const after=f.controller.engine.observations.snapshot(null,2,true,[],false).actors[0]!;
+  expect(f.controller.world.partyActors.get(partyMemberId(7))).toBeNull();const after=f.controller.engine.observations.snapshot(null,2,true,[],false).actors[0]!;
   expect(after).toMatchObject({hp:before.hp,observedAt:before.observedAt});expect(after.sp).toEqual(before.sp);
  });
  it.each([0,1])('partial zero HP after own %i detached follow completion starts one finite loss allowance',id=>{
@@ -482,7 +483,7 @@ describe('raw retired travel and observed leader availability',()=>{
   f.controller.receive(leaderHealth(0));expect(f.controller.snapshot().partyFollow.state).toBe('waiting');expect(f.controller.engine.running).toBe(false);
   f.advance(1000);f.controller.receive(leaderHealth(0));expect(f.controller.snapshot().partyFollow.remainingSeconds).toBe(1);f.advance(1000);
   expect(f.controller.snapshot().partyFollow.state).toBe('expired');f.controller.receive(leaderHealth(100));expect(f.controller.snapshot().partyFollow.state).toBe('expired');expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(walks);
-  expect(f.controller.world.partyActors.get(7)).toBeNull();expect(f.controller.runRequested).toBe(true);
+  expect(f.controller.world.partyActors.get(partyMemberId(7))).toBeNull();expect(f.controller.runRequested).toBe(true);
  });
  it.each(['replace','remove','party-change','stale-positive'] as const)('partial HP recovery cannot borrow %s destination evidence',kind=>{
   const f=fixture();f.settings.automation.follow.lostSeconds=20;f.controller.start(f.settings);f.map();f.arrive();f.spawn({...leader,x:158,y:26});f.controller.receive(leaderHealth(0));f.affiliation();
@@ -492,7 +493,7 @@ describe('raw retired travel and observed leader availability',()=>{
   f.controller.receive(leaderHealth(100));expect(f.controller.engine.running).toBe(false);expect(f.controller.snapshot().partyFollow.state).toBe(kind==='stale-positive'?'awaitingLeader':'cancelled');
   if(kind==='stale-positive'){
    f.controller.receive(new BitWriter().u8(OP.stopImmediate).i32(2).position({x:158,y:26}).finish());expect(f.controller.snapshot().partyFollow.state).toBe('following');
-   expect(f.controller.world.partyActors.get(7)).toBeNull();expect(f.controller.engine.observations.snapshot(null,2,true,[],false).actors[0]?.sp).toBeUndefined();
+   expect(f.controller.world.partyActors.get(partyMemberId(7))).toBeNull();expect(f.controller.engine.observations.snapshot(null,2,true,[],false).actors[0]?.sp).toBeUndefined();
   }
  });
  it.each(['partial','full-row','heal'] as const)('fresh %s recovery retains the owning source for shared permissions',kind=>{
@@ -501,14 +502,14 @@ describe('raw retired travel and observed leader availability',()=>{
   if(kind==='partial')f.controller.receive(leaderHealth(100));else if(kind==='full-row')f.controller.receive(new BitWriter().u8(WORLD_OP.partyUpdate).u8(2).i32(7).i32(2).i16(10).string('Leader').u8(1).string('prontera').i32(100).i32(100).i32(50).i32(100).finish());
   else f.controller.receive(new BitWriter().u8(OP.heal).i32(2).i32(0).i32(100).i32(100).finish());
   expect(f.controller.snapshot().partyFollow.state).toBe('following');expect(f.controller.engine.running).toBe(true);
-  expect(f.controller.world.partyActors.get(7)!==null).toBe(kind==='full-row');expect(f.controller.engine.observations.visibleAt(2)).toBe(100000);
+  expect(f.controller.world.partyActors.get(partyMemberId(7))!==null).toBe(kind==='full-row');expect(f.controller.engine.observations.visibleAt(2)).toBe(100000);
  });
  it('foreign positive HP cannot release captured negative evidence and motion cannot replace it',()=>{
   const f=fixture();f.settings.automation.follow.lostSeconds=20;f.controller.start(f.settings);f.map();f.arrive();f.spawn({...leader,x:158,y:26});f.controller.receive(leaderHealth(0));f.affiliation();
   f.advance(16000);f.controller.receive(new BitWriter().u8(WORLD_OP.partyUpdate).u8(8).i32(8).i32(100).i32(100).i32(50).i32(100).finish());
   f.controller.receive(new BitWriter().u8(OP.stopImmediate).i32(2).position({x:158,y:26}).finish());
   expect(f.controller.snapshot().partyFollow).toMatchObject({state:'awaitingLeader',remainingSeconds:4});expect(f.controller.engine.running).toBe(false);
-  f.controller.receive(leaderHealth(100));expect(f.controller.snapshot().partyFollow.state).toBe('following');expect(f.controller.world.partyActors.get(7)).toBeNull();
+  f.controller.receive(leaderHealth(100));expect(f.controller.snapshot().partyFollow.state).toBe('following');expect(f.controller.world.partyActors.get(partyMemberId(7))).toBeNull();
  });
  it.each([0,1])('verified shortened own %i walk releases both movement owners after physical settlement',ownId=>{
   const f=fixture(ownId);f.controller.start(f.settings);f.map();const prefix=f.controller.travel.snapshot().leg.slice(0,2);f.controller.stop();

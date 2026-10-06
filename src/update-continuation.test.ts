@@ -1,9 +1,10 @@
+import { formDocument } from './current-form-logic';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CompanionController } from './controller';
 import { PersistentFieldRun } from './reconnect';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
 import { validStatus } from './game-status';
-import { UpdateContinuationOwner, validateUpdateContinuation, type UpdateContinuation } from './update-continuation';
+import { UpdateContinuationOwner, validateUpdateContinuation, type UpdateContinuationInput } from './update-continuation';
 import { MacroRuntime, type MacroScript } from './macros';
 
 const account = { username: 'synthetic', characterSlot: 1, mode: 'botOnly' as const };
@@ -20,9 +21,9 @@ function fixture() {
     login:{phase:'complete' as const,message:''},mapInfo:{code:settings.map,name:'Field',source:'observed' as const,monsters:[]}};
   expect(validStatus(status)).toBe(true);
   const field=new PersistentFieldRun(()=>now);field.begin(settings,'Fixture','old');
-  const runtime:UpdateContinuation['runtime']={version:1,frozenAt:now,status,settings,macro:null,
+  const runtime:UpdateContinuationInput['runtime']={version:1,frozenAt:now,status,settings,macro:null,
     partyHeal:{version:1,attempts:0,confirmed:0,cooldownUntil:0},run:{startedAt:now,kills:0,pickups:0,deaths:0}};
-  const continuation:UpdateContinuation={version:1,account,form:{version:1,revision:2,selectedProfileId:'fixture',settings},
+  const continuation:UpdateContinuationInput={version:1,account,form:{version:1,revision:2,selectedProfileId:'fixture',settings},
     field:field.checkpoint()!,runtime,savedAccount:true};
   const invoke=vi.fn(async (_command:string,_args?:Record<string,unknown>):Promise<unknown>=>undefined);
   const owner=new UpdateContinuationOwner(invoke,()=>requestId,500);
@@ -125,7 +126,7 @@ function installationFixture() {
   const f = fixture();
   const nonce = 'f'.repeat(32);
   const adapter = {
-    flush: vi.fn(async () => f.continuation.form),
+    flush: vi.fn(async () => formDocument(f.continuation.form)),
     game: vi.fn(() => ({ open: true, status: f.fresh })),
     interrupted: vi.fn(() => false),
     status: vi.fn(),
@@ -140,9 +141,21 @@ function installationFixture() {
   return { ...f, adapter, nonce, calls, install: () => f.owner.install(f.field, adapter) };
 }
 describe('update installation transaction', () => {
+  it.each([null, undefined, '', 0, 7, { opaque: 'native-handle' }])('forwards opaque native reservation %j and preserves its cleanup truthiness', async nonce => {
+    const f = installationFixture();
+    f.invoke.mockImplementation(async command => {
+      if (command === 'update_reserve') return nonce;
+      if (command === 'update_install') return true;
+      return undefined;
+    });
+    await f.install();
+    expect(f.calls('update_install')).toEqual([['update_install', { nonce }]]);
+    expect(f.calls('update_release')).toEqual(nonce ? [['update_release', { nonce }]] : []);
+    expect(f.calls('update_install')[0]![1]!.nonce).toBe(nonce);
+  });
   it('flushes before reservation and bounds unconfirmed installation to 20 retries before release', async () => {
     vi.useFakeTimers();
-    const f = installationFixture(), saving = pending<typeof f.continuation.form>(), reservation = pending<string>();
+    const f = installationFixture(), saving = pending<ReturnType<typeof formDocument>>(), reservation = pending<string>();
     f.adapter.flush.mockReturnValue(saving.promise);
     f.invoke.mockImplementation(async command => {
       if (command === 'update_reserve') return reservation.promise;
@@ -152,7 +165,7 @@ describe('update installation transaction', () => {
     const installation = f.install();
     expect(f.adapter.status).toHaveBeenLastCalledWith('Saving current settings before updating.');
     expect(f.calls('update_reserve')).toEqual([]);
-    saving.resolve(f.continuation.form); await settle();
+    saving.resolve(formDocument(f.continuation.form)); await settle();
     expect(f.adapter.status).toHaveBeenLastCalledWith('Preparing the connection for update confirmation.');
     expect(f.calls('update_install')).toEqual([]);
     reservation.resolve(f.nonce); await settle();
@@ -205,10 +218,10 @@ describe('update installation transaction', () => {
     expect(f.adapter.status).toHaveBeenLastCalledWith('Update deferred. Game activity changed during update confirmation. It will retry automatically.');
   });
   it('stops before reservation when Close interrupts the pending settings flush', async () => {
-    const f = installationFixture(), saving = pending<typeof f.continuation.form>();
+    const f = installationFixture(), saving = pending<ReturnType<typeof formDocument>>();
     f.adapter.flush.mockReturnValue(saving.promise);
     const installation = f.install(); f.adapter.interrupted.mockReturnValue(true);
-    saving.resolve(f.continuation.form); await installation;
+    saving.resolve(formDocument(f.continuation.form)); await installation;
     expect(f.calls('update_reserve')).toEqual([]);
     expect(f.calls('update_install')).toEqual([]);
     expect(f.calls('update_cancel')).toHaveLength(1);
@@ -216,7 +229,7 @@ describe('update installation transaction', () => {
   it.each(['settings', 'reserve', 'install', 'release', 'recovery'] as const)('Stop invalidates delayed %s without reviving continuation', async stage => {
     vi.useFakeTimers();
     const f = installationFixture(), delayed = pending<unknown>();
-    if (stage === 'settings') f.adapter.flush.mockImplementation(async () => { await delayed.promise; return f.continuation.form; });
+    if (stage === 'settings') f.adapter.flush.mockImplementation(async () => { await delayed.promise; return formDocument(f.continuation.form); });
     f.invoke.mockImplementation(async command => {
       if (command === `update_${stage}`) return delayed.promise;
       if (command === 'update_reserve') return f.nonce;

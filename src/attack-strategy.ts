@@ -1,14 +1,14 @@
 import { map } from 'remeda';
 import { foldConditions, unavailableFirstConditions } from './condition-logic';
-import type { AttackStrategyRule } from './settings';
+import type { AttackStrategyRule, ReadonlyData } from './settings';
 import type { ActorObservationSnapshot } from './actor-observations-logic';
 import { actorPredicateEvaluator } from './actor-observations-logic';
 import { castReadiness } from './cast-policy';
 import type { CharacterState } from './character-state';
 
-import { type EngagementIdentity, type Engagement, type StrategyChoice, type AttackStrategySnapshot, key } from './attack-strategy-logic';
+import { type EngagementIdentity, type Engagement, type StrategyChoice, type AttackStrategySnapshot, checkedEngagementIdentity, key } from './attack-strategy-logic';
 
-export { type EngagementIdentity, type StrategyChoice, type AttackStrategySnapshot, engagementIdentity } from './attack-strategy-logic';
+export { type EngagementIdentity, type EngagementWorld, type UuidEngagementIdentity, type StrategyChoice, type AttackStrategySnapshot, checkedEngagementIdentity, engagementIdentity } from './attack-strategy-logic';
 
 /** Per-incarnation allowances live independently of selected target and run
  * intent. Only actor/world invalidation releases them; Stop/Start never does.
@@ -19,12 +19,12 @@ export class AttackStrategyPolicy {
   private get(identity:EngagementIdentity):Engagement|null {
     const existing=this.engagements.get(key(identity));if(existing)return existing;
     if(this.engagements.size>=300)return null; // Never evict a live spent allowance.
-    const value:Engagement={identity:{...identity},normalStarted:false,rules:new Map()};this.engagements.set(key(identity),value);return value;
+    const value:Engagement={identity:checkedEngagementIdentity(identity),normalStarted:false,rules:new Map()};this.engagements.set(key(identity),value);return value;
   }
   reset():void {this.engagements.clear();this.pending=null;}
   remove(id:number):void {for(const [idKey,value] of this.engagements)if(value.identity.id===id)this.engagements.delete(idKey);if(this.pending?.identity.id===id)this.pending=null;}
   normalDispatched(identity:EngagementIdentity|null):void {if(identity){const value=this.get(identity);if(value)value.normalStarted=true;}}
-  choose(rules:AttackStrategyRule[],identity:EngagementIdentity|null,speciesId:number,state:CharacterState,observations:ActorObservationSnapshot|undefined,now:number):StrategyChoice {
+  choose(rules:readonly ReadonlyData<AttackStrategyRule>[],identity:EngagementIdentity|null,speciesId:number,state:CharacterState,observations:ActorObservationSnapshot|undefined,now:number):StrategyChoice {
     if(!rules.some(rule=>rule.speciesIds.includes(speciesId)))return {state:'normal'};
     if(!identity)return {state:'wait',reason:'Attack strategy target identity is unavailable.'};
     const engagement=this.get(identity);
@@ -46,16 +46,17 @@ export class AttackStrategyPolicy {
       const ready=castReadiness(rule.skillId,rule.level,state,observations);
       if(ready.state!=='ready')return {state:'wait',reason:`Strategy ${rule.id}: ${ready.reason}`};
       if(!ledger&&engagement.rules.size>=32)return {state:'wait',reason:'Attack strategy rule ledger is full for this actor; use a fresh actor lifetime.'};
-      return {state:'cast',rule,profile:ready.profile,identity:{...identity}};
+      return {state:'cast',rule,profile:ready.profile,identity:checkedEngagementIdentity(identity)};
     }
     return {state:'normal'};
   }
   dispatched(choice:Extract<StrategyChoice,{state:'cast'}>,sequence:number,now:number):void {
     if(this.pending)throw new Error('Attack strategy receipt is already owned.');
-    const engagement=this.get(choice.identity);if(!engagement)throw new Error('Attack strategy lifetime is unavailable.');
+    const identity=checkedEngagementIdentity(choice.identity);
+    const engagement=this.get(identity);if(!engagement)throw new Error('Attack strategy lifetime is unavailable.');
     const ledger=engagement.rules.get(choice.rule.id)??{attempts:0,uses:0,lastDispatch:null,uncertain:false,rejected:false};
     ledger.attempts++;ledger.lastDispatch=now;ledger.uncertain=true;engagement.rules.set(choice.rule.id,ledger);
-    this.pending={identity:choice.identity,ruleId:choice.rule.id,sequence};
+    this.pending={identity,ruleId:choice.rule.id,sequence};
   }
   settled(sequence:number,outcome:'confirmed'|'rejected'|'uncertain',identity:EngagementIdentity|null):void {
     const pending=this.pending;if(!pending||sequence!==pending.sequence)return;

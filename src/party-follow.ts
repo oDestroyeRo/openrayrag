@@ -1,9 +1,10 @@
+import { partyMemberId } from './domain-values';
 import { filter } from 'remeda';
 import { RESOURCE_STALE_MS } from './actor-resources';
 import { onlinePartyMembers, distinctPartyActors, type PartyActorBinding } from './party-actors-logic';
 import { mapAllowed, mapPolicy } from './map-policy-logic';
 import type { GameEvent } from './protocol';
-import { automationSettings, type Settings } from './settings';
+import { automationSettings, type SettingsInput as Settings } from './settings';
 import type { TravelTransition } from './travel-controller-logic';
 import type { PartyMember, WorldEvent } from './world-protocol';
 
@@ -111,7 +112,7 @@ export class PartyFollowRuntime {
     if(leaders.length!==1||!distinctPartyActors(online))return null;
     const member=leaders[0]!;
     if(this.selected&&(member.memberId!==this.selected.memberId||!this.consistent(context,this.selected)))return null;
-    const binding=context.bindings.get(member.memberId)??this.arrivalBinding;
+    const binding=context.bindings.get(partyMemberId(member.memberId))??this.arrivalBinding;
     const actor=context.actors.get(member.entityId),evidence=context.observations.partyActor(member.entityId);
     const unavailable=this.arrivalUnavailable;
     if(binding&&unavailable&&unavailable.epoch===this.epoch&&unavailable.partyId===binding.partyId&&unavailable.memberId===binding.memberId

@@ -1,3 +1,6 @@
+import { validateAutomation } from './settings';
+import { actionIdentity } from './actor-identity';
+import { itemId as domainItemId } from './domain-values';
 import {describe,it,expect} from 'vitest';
 import {BotEngine,DEFAULT_SETTINGS,DEFAULT_AUTOMATION,type Action,type Settings} from './engine';
 import {CharacterState} from './character-state';
@@ -29,7 +32,7 @@ describe('field automation policy and owner',()=>{
  it('stops combat, waits for sit confirmation, and stands after both recovery thresholds',()=>{const {engine,settings,sent,step,receive}=setup();settings.automation!.recovery.enabled=true;engine.start(settings);step();expect(sent.at(-1)).toEqual({type:'attack',id:2});receive({type:'heal',id:1,hp:55,maxHp:100});step();expect(sent.at(-1)).toEqual({type:'stop'});step();expect(sent.at(-1)).toEqual({type:'sit',sitting:true});step();expect(sent.filter(a=>a.type==='attack')).toHaveLength(1);receive({type:'sit',id:1,sitting:true});receive({type:'heal',id:1,hp:90,maxHp:100});step();expect(sent.at(-1)).toEqual({type:'sit',sitting:true});receive({type:'sp',sp:20,maxSp:20});step();expect(sent.at(-1)).toEqual({type:'sit',sitting:false});receive({type:'sit',id:1,sitting:false});step();expect(sent.at(-1)).toEqual({type:'attack',id:2});});
  it('uses a recovery item before sitting and preserves one outstanding action',()=>{const {engine,settings,sent,step,receive,inventory}=setup();inventory();settings.automation!.recovery.enabled=true;settings.automation!.items=[{itemId:501,resource:'hp',belowPercent:60,minStock:1,cooldownSeconds:10}];engine.player!.hp=55;engine.start(settings);step();expect(sent).toEqual([{type:'useItem',itemId:501}]);step();expect(sent).toHaveLength(1);receive({type:'inventoryDelta',add:false,bagId:501,change:1,weight:10});step();expect(sent.at(-1)).toEqual({type:'sit',sitting:true});});
  it('bounds resting when regeneration cannot reach the end thresholds',()=>{const {engine,settings,step,receive}=setup();settings.automation!.recovery.enabled=true;settings.automation!.recovery.timeoutSeconds=2;engine.player!.hp=55;engine.start(settings);step();receive({type:'sit',id:1,sitting:true});step();step();expect(engine.running).toBe(false);expect(engine.reason).toContain('Recovery time limit');});
- it('requires a complete inventory and consumes one confirmed item at a time with reserve and cooldown',()=>{const {engine,settings,sent,step,receive,inventory}=setup();settings.automation!.items=[{itemId:501,resource:'hp',belowPercent:80,minStock:2,cooldownSeconds:10}];engine.start(settings);step();expect(engine.reason).toContain('Inventory is unavailable');inventory();engine.start(settings);sent.length=0;step();expect(sent).toEqual([{type:'useItem',itemId:501}]);step();expect(sent).toHaveLength(1);receive({type:'inventoryDelta',add:false,bagId:501,change:1,weight:10});step();expect(sent.at(-1)).toEqual({type:'attack',id:2});expect(engine.character.count(501)).toBe(3);});
+ it('requires a complete inventory and consumes one confirmed item at a time with reserve and cooldown',()=>{const {engine,settings,sent,step,receive,inventory}=setup();settings.automation!.items=[{itemId:501,resource:'hp',belowPercent:80,minStock:2,cooldownSeconds:10}];engine.start(settings);step();expect(engine.reason).toContain('Inventory is unavailable');inventory();engine.start(settings);sent.length=0;step();expect(sent).toEqual([{type:'useItem',itemId:501}]);step();expect(sent).toHaveLength(1);receive({type:'inventoryDelta',add:false,bagId:501,change:1,weight:10});step();expect(sent.at(-1)).toEqual({type:'attack',id:2});expect(engine.character.count(domainItemId(501))).toBe(3);});
  it('requires a learned active skill, sufficient SP and an exact server confirmation',()=>{const {engine,settings,sent,step,receive}=setup();settings.automation!.skills=[{skillId:2,level:1,target:'self',hpBelowPercent:80,spAbovePercent:0,cooldownSeconds:10}];receive({type:'skills',learned:[{skillId:2,level:1}],granted:[]});engine.start(settings);step();expect(sent).toEqual([{type:'skill',mode:'self',skillId:2,level:1}]);receive({type:'skillResult',source:99,skillId:2,level:1,mode:'self',position:{x:100,y:100},motionSeconds:1});step();expect(sent).toHaveLength(1);receive({type:'skillResult',source:1,skillId:2,level:1,mode:'self',position:{x:100,y:100},motionSeconds:1});step();expect(sent.at(-1)).toEqual({type:'attack',id:2});});
  it('uses the server effective level and SP cost for nonadjustable buffs',()=>{const {engine,settings,sent,step,receive}=setup();receive({type:'skills',learned:[{skillId:4,level:10}]});settings.automation!.skills=[{skillId:4,level:1,target:'self',hpBelowPercent:100,spAbovePercent:0,cooldownSeconds:10}];receive({type:'sp',sp:5,maxSp:20});engine.start(settings);step();expect(sent.at(-1)).toEqual({type:'attack',id:2});engine.stop();receive({type:'sp',sp:15,maxSp:20});engine.start(settings);sent.length=0;step();expect(sent.at(-1)).toEqual({type:'skill',mode:'self',skillId:4,level:10});receive({type:'skillResult',source:1,skillId:4,level:10,mode:'self',position:{x:100,y:100},motionSeconds:2});expect(engine.actionResult.status).toBe('confirmed');step();expect(sent).toHaveLength(1);step();expect(sent.at(-1)).toEqual({type:'attack',id:2});});
  it('rejects passive skills instead of sending unsupported cast commands',()=>{const {engine,settings,sent,step,receive}=setup();settings.automation!.skills=[{skillId:1,level:1,target:'self',hpBelowPercent:100,spAbovePercent:0,cooldownSeconds:1}];receive({type:'skills',learned:[{skillId:1,level:1}]});engine.start(settings);step();expect(engine.running).toBe(false);expect(sent).toEqual([{type:'stop'}]);});
@@ -66,7 +69,7 @@ describe('automation condition precedence',()=>{
   automation.combat.rules=[{classId:4000,action:'ignore',priority:0,conditions}];
   // A known-false ignore rule would normally leave selection in control;
   // missing evidence must still prevent admission regardless of its position.
-  expect(acceptsMonster(automation,monster,player,[4000],false,snapshot)).toBe(false);
+  expect(acceptsMonster(validateAutomation(automation),monster,player,[4000],false,snapshot)).toBe(false);
   expect({snapshot,conditions}).toEqual(before);
  });
 });
@@ -113,7 +116,7 @@ describe('captured action receipts',()=>{
   expect(scheduler.receipt).toEqual({sequence:1,action:{type:'useItem',itemId:501}});
  });
  it('reserves the observed identity and receipt before a synchronous transport confirmation',()=>{
-  const identity={world:'field',selfId:1,selfIncarnation:1,targetId:2,targetIncarnation:1};
+  const identity=actionIdentity({world:'00000000-0000-0000-0000-000000000001',selfId:1,selfIncarnation:1,targetId:2,targetIncarnation:1});
   const action={type:'skill',mode:'target',skillId:3,level:1,target:2} as const;
   const response:SkillResult={type:'skillResult',mode:'target',source:1,target:2,skillId:3,level:1,motionSeconds:0,position:{x:100,y:100}};
   const state=new CharacterState(),order:string[]=[];
@@ -137,7 +140,7 @@ describe('captured action receipts',()=>{
    state.apply(inventory(3),1);scheduler.reset();
   },()=>now);
   scheduler.submit({type:'useItem',itemId:501},state);
-  expect(scheduler.reconcileReceipt([],state,1,DEFAULT_AUTOMATION)).toBe(1);
+  expect(scheduler.reconcileReceipt([],state,1,validateAutomation(DEFAULT_AUTOMATION))).toBe(1);
   expect(scheduler.receipt).toBeNull();expect(scheduler.result.status).toBe('failed');
   expect(scheduler.busy).toBe(true);now+=6000;expect(scheduler.busy).toBe(false);
  });
@@ -146,10 +149,10 @@ describe('captured action receipts',()=>{
   const scheduler=new AutomationScheduler(()=>{},()=>now);scheduler.submit({type:'useItem',itemId:501},state);
   const readback=inventory(3);state.apply(readback,1);
   expect(scheduler.observe(readback,state,1).state).toBe('ignored');
-  expect(scheduler.reconcileReceipt([readback],state,1,DEFAULT_AUTOMATION)).toBeNull();
+  expect(scheduler.reconcileReceipt([readback],state,1,validateAutomation(DEFAULT_AUTOMATION))).toBeNull();
   now+=6000;expect(scheduler.timeout()).toContain('No server confirmation');
   expect(scheduler.retireReceipt(true)).toBe('uncertain');
-  expect(scheduler.reconcileReceipt([readback],state,1,DEFAULT_AUTOMATION)).toBe(1);
+  expect(scheduler.reconcileReceipt([readback],state,1,validateAutomation(DEFAULT_AUTOMATION))).toBe(1);
   expect(scheduler.result.status).toBe('failed');
  });
  it('retains transmitted resource uncertainty when sending throws',()=>{
@@ -157,23 +160,23 @@ describe('captured action receipts',()=>{
   const scheduler=new AutomationScheduler(()=>{throw new Error('Socket write failed.');},()=>1000);
   expect(()=>scheduler.submit({type:'useItem',itemId:501},state)).toThrow('Socket write failed');
   expect(scheduler.retireReceipt(true)).toBe('uncertain');state.apply(inventory(3),1);
-  expect(scheduler.reconcileReceipt([],state,1,DEFAULT_AUTOMATION)).toBe(1);
+  expect(scheduler.reconcileReceipt([],state,1,validateAutomation(DEFAULT_AUTOMATION))).toBe(1);
  });
  it('keeps late skill identity, exact execution, motion and the canceled deadline',()=>{
-  let now=1000,identity={world:'field',selfId:0,selfIncarnation:1,targetId:2,targetIncarnation:1};
+  let now=1000,identity=actionIdentity({world:'00000000-0000-0000-0000-000000000001',selfId:0,selfIncarnation:1,targetId:2,targetIncarnation:1});
   const state=new CharacterState(),scheduler=new AutomationScheduler(()=>{},()=>now,()=>identity);
   scheduler.submit({type:'skill',mode:'target',skillId:3,level:1,target:2},state,undefined,1);scheduler.reset();
   const response:SkillResult={type:'skillResult',mode:'target',source:0,target:2,skillId:3,level:1,motionSeconds:2,position:{x:100,y:100},indirect:false};
-  identity={...identity,targetIncarnation:2};expect(scheduler.reconcileReceipt([response],state,0,DEFAULT_AUTOMATION)).toBeNull();
-  identity={...identity,targetIncarnation:1};expect(scheduler.reconcileReceipt([{...response,target:3}],state,0,DEFAULT_AUTOMATION)).toBeNull();
-  expect(scheduler.reconcileReceipt([response],state,0,DEFAULT_AUTOMATION)).toBe(1);
+  identity=actionIdentity({...identity,targetId:2,targetIncarnation:2});expect(scheduler.reconcileReceipt([response],state,0,validateAutomation(DEFAULT_AUTOMATION))).toBeNull();
+  identity=actionIdentity({...identity,targetIncarnation:1});expect(scheduler.reconcileReceipt([{...response,target:3}],state,0,validateAutomation(DEFAULT_AUTOMATION))).toBeNull();
+  expect(scheduler.reconcileReceipt([response],state,0,validateAutomation(DEFAULT_AUTOMATION))).toBe(1);
   expect(scheduler.result.status).toBe('failed');now+=29999;expect(scheduler.busy).toBe(true);now++;expect(scheduler.busy).toBe(false);
  });
  it('applies configured late after-cast motion even when an active rule used the default',()=>{
   let now=1000;const state=new CharacterState(),scheduler=new AutomationScheduler(()=>{},()=>now);
   scheduler.submit({type:'skill',mode:'ground',skillId:19,level:1,position:{x:100,y:100}},state);scheduler.reset();now+=30000;
   const response:SkillResult={type:'skillResult',mode:'ground',source:1,skillId:19,level:1,motionSeconds:0,position:{x:100,y:100},targetPosition:{x:100,y:100},indirect:false};
-  expect(scheduler.reconcileReceipt([response],state,1,DEFAULT_AUTOMATION)).toBe(1);
+  expect(scheduler.reconcileReceipt([response],state,1,validateAutomation(DEFAULT_AUTOMATION))).toBe(1);
   now+=1499;expect(scheduler.busy).toBe(true);now++;expect(scheduler.busy).toBe(false);
  });
 });

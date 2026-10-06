@@ -1,3 +1,4 @@
+import { partyMemberId } from './domain-values';
 import { describe, expect, it } from 'vitest';
 import { BitWriter } from './binary';
 import { CompanionController } from './controller';
@@ -130,7 +131,7 @@ function followFixture(id: number) {
 describe('party Heal with rendezvous ownership', () => {
   it.each([0, 1])('keeps Heal behind own%s preparation, travelling and leader reacquisition', id => {
     const f = followFixture(id); f.c.start(f.settings);
-    expect(f.c.world.partyActors.get(8)).not.toBeNull();
+    expect(f.c.world.partyActors.get(partyMemberId(8))).not.toBeNull();
     f.c.receive(new BitWriter().u8(FEATURE_OP.castStart).i32(id).i32(id).u8(11).u8(1).u8(6).position(followOwn).f32(10).u8(0).finish());
     f.depart(); expect(f.c.snapshot().partyFollow).toMatchObject({ state: 'preparing', ownsTravel: true });
     expect(f.heals()).toEqual([]); expect(f.c.snapshot().partyHeal?.attempts).toBe(0);
@@ -153,15 +154,15 @@ describe('party Heal with rendezvous ownership', () => {
   it.each([0, 1])('does not use detached own%s leader arrival or partial HP to grant Heal', id => {
     const f = followFixture(id); f.c.start(f.settings); f.depart(); f.arrive(); f.leaderArrival();
     expect(f.c.snapshot().partyFollow.state).toBe('following'); expect(f.c.engine.running).toBe(true);
-    expect(f.c.world.partyActors.get(7)).toBeNull(); f.step(); expect(f.heals()).toEqual([]);
+    expect(f.c.world.partyActors.get(partyMemberId(7))).toBeNull(); f.step(); expect(f.heals()).toEqual([]);
     f.leaderHp(0); expect(f.c.snapshot().partyFollow.state).toBe('waiting');
     f.leaderHp(40); expect(f.c.snapshot().partyFollow.state).toBe('following');
-    expect(f.c.world.partyActors.get(7)).toBeNull();
+    expect(f.c.world.partyActors.get(partyMemberId(7))).toBeNull();
     expect(f.c.engine.observations.snapshot(null, 2, true, [], false).actors[0]?.sp).toBeUndefined();
     f.step(); expect(f.heals()).toEqual([]);
     f.c.receive(new BitWriter().u8(102).u8(2).i32(7).i32(2).i16(20).string('Leader').u8(1).string('prontera')
       .i32(40).i32(100).i32(30).i32(100).finish());
-    expect(f.c.world.partyActors.get(7)).not.toBeNull(); f.advance(1100); expect(f.heals()).toHaveLength(1);
+    expect(f.c.world.partyActors.get(partyMemberId(7))).not.toBeNull(); f.advance(1100); expect(f.heals()).toHaveLength(1);
     expect(f.heals()[0]).toMatchObject({ target: 2, skillId: 41 });
   });
 });

@@ -1,11 +1,14 @@
+import { quantity, type ItemId } from './domain-values';
 import { inventoryItemCount } from './character-state-logic';
 import { sort } from 'remeda';
 import { insideLockArea, mapAllowed, mapPolicy, policySummary } from './map-policy-logic';
-import { planDisposition, type DispositionPolicy, type DispositionRule } from './disposition';
+import { planDisposition, VALIDATED_DEFAULT_DISPOSITION, type DispositionPolicyView, type DispositionRuleView } from './disposition';
 import { serviceByContractId } from './npc-services-logic';
 import { DEFAULT_SUPPLY, validateSupplySettings } from './supply-trip-logic';
-import type { Settings } from './settings';
-import type { SupplyContext, SupplyGoal, SupplyNext, SupplySettings } from './supply-trip-logic';
+import type { SupplyContext, SupplyGoal, SupplyNext, SupplySettings, SupplyPolicySettings } from './supply-trip-logic';
+
+// Planning/display does not capture or confirm resource revision evidence.
+export type SupplyPlanningContext = Omit<SupplyContext,'inventoryRevision'|'currencyRevision'> & {readonly inventoryRevision?:number;readonly currencyRevision?:number};
 
 /** One authoritative phase only. Other service prerequisites cannot invalidate
  * this phase, and no unknown preferred destination authorizes a fallback sale. */
@@ -13,17 +16,17 @@ export interface SupplyPhaseEvidence {
   storageFull: { character: string; epoch: string; revision: string } | null;
 }
 export function nextSupplyAction(
-  context: SupplyContext,
-  goals: SupplyGoal[],
-  policy: DispositionPolicy,
+  context: SupplyPlanningContext,
+  goals: readonly SupplyGoal[],
+  policy: DispositionPolicyView,
   supply: SupplySettings,
   evidence: SupplyPhaseEvidence = { storageFull: null },
 ): SupplyNext {
   const c = context.disposition,
     world = c.workflow.world;
-  const carried = (id: number) =>
+  const carried = (id: ItemId) =>
     inventoryItemCount(id)(c.containers.inventory.items ?? []);
-  const floor = (rule: DispositionRule) =>
+  const floor = (rule: DispositionRuleView) =>
     Math.max(
       rule.maximum,
       rule.keep,
@@ -159,13 +162,13 @@ export function nextSupplyAction(
 /** Sender-free explanation of triggers, captured goals and the next service.
  * Unknown prices/capacity remain prerequisites; this is never an execution token. */
 export function previewSupplyTrip(
-  settings: Settings,
-  context: SupplyContext,
+  settings: SupplyPolicySettings,
+  context: SupplyPlanningContext,
 ): string {
   const supply = validateSupplySettings(
       settings.automation?.supply ?? DEFAULT_SUPPLY,
     ),
-    policy = settings.automation?.disposition ?? { maxSpend: 0, rules: [] };
+    policy = settings.automation?.disposition ?? VALIDATED_DEFAULT_DISPOSITION;
   const executionPolicy=mapPolicy(settings);
   if(context.position&&(!mapAllowed(executionPolicy,context.map)||!insideLockArea(executionPolicy,context.map,context.position)))return 'Supply waits until the allowed field lock area has been entered. '+policySummary(executionPolicy,context.map);
   const inventory = context.disposition.containers.inventory;
@@ -178,7 +181,7 @@ export function previewSupplyTrip(
     inventory.slots === null
   )
     return "Waiting for observed stock, weight and capacity.";
-  const stock = (id: number) =>
+  const stock = (id: ItemId) =>
     inventoryItemCount(id)(inventory.items!);
   const goals = supply.stockEnabled
     ? policy.rules
@@ -196,7 +199,7 @@ export function previewSupplyTrip(
     goals,
     {
       ...policy,
-      maxSpend: Math.min(policy.maxSpend, supply.maxSpend),
+      maxSpend: quantity(Math.min(policy.maxSpend, supply.maxSpend)),
       rules: policy.rules.map((rule) =>
         goals.some((goal) => goal.itemId === rule.itemId)
           ? { ...rule, minimum: rule.desired }

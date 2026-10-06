@@ -1,3 +1,6 @@
+import { checkedEngagementIdentity } from './attack-strategy-logic';
+import { actorId, partyMemberId } from './domain-values';
+import { partyActorBinding } from './party-actors-logic';
 import { describe, expect, it } from 'vitest';
 import { BotEngine, type Action } from './engine';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateAutomation } from './settings';
@@ -17,7 +20,7 @@ const member:PartyMember={memberId:7,entityId:3,level:10,name:'Ally',leader:fals
 function fixture(grid=(p:{x:number;y:number})=>p.x>=0&&p.y>=0) {
  let at=100_000;const sent:Action[]=[];const world=new WorldState();world.reset(map);
  const engine=new BotEngine(a=>sent.push(a),()=>at,()=>({width:200,height:200,walkable:grid}),id=>{
-  const rows=[...(world.party?.members.values()??[])].filter(row=>row.entityId===id);return rows.length===1?world.partyActors.get(rows[0]!.memberId):null;
+  const rows=[...(world.party?.members.values()??[])].filter(row=>row.entityId===id);return rows.length===1?world.partyActors.get(partyMemberId(rows[0]!.memberId)):null;
  });
  const sync=()=>{world.refreshPartyActors(engine.observations,engine.player?.id??null);engine.partyChanged();};
  const receive=(...events:GameEvent[])=>{engine.receive(events);sync();};
@@ -126,27 +129,27 @@ describe('observed party combat eligibility',()=>{
  });
 });
 describe('bounded monster claim provenance',()=>{
- const binding=(memberId=7):PartyActorBinding=>({partyId:5,memberId,entityId:memberId,map,world:'world',incarnation:1,affiliationRevision:0});
- const monster=(id=2)=>({id,world:'world',incarnation:1});
- it.each([null,binding(),{...binding(),entityId:99}])('retains unknown/outside/party first overflow evidence after capacity frees: %j',source=>{
+ const binding=(memberId=7):PartyActorBinding=>partyActorBinding({partyId:5,memberId,entityId:memberId,map,world:'11111111-1111-1111-1111-111111111111',incarnation:1,affiliationRevision:0});
+ const monster=(id=2,lifetime=1)=>checkedEngagementIdentity({id,world:'world',incarnation:lifetime});
+ it.each([null,binding(),{...binding(),entityId:actorId(99)}])('retains unknown/outside/party first overflow evidence after capacity frees: %j',source=>{
   const policy=new PartyEngagements();for(let i=0;i<PARTY_ENGAGEMENT_LIMITS.monsters;i++)policy.observe(monster(i),binding(),false);
   policy.observe(monster(999),source,false);expect(policy.allows(monster(999))).toBe(false);
   policy.remove(0);policy.observe(monster(999),binding(),true);expect(policy.allows(monster(999))).toBe(false);expect(policy.snapshot(true).blocked).toBe(1);
-  policy.remove(999);const fresh={...monster(999),incarnation:2};policy.observe(fresh,binding(),false);expect(policy.allows(fresh)).toBe(true);
+  policy.remove(999);const fresh=monster(999,2);policy.observe(fresh,binding(),false);expect(policy.allows(fresh)).toBe(true);
   for(let i=0;i<=PARTY_ENGAGEMENT_LIMITS.sources;i++)policy.observe(fresh,binding(100+i),true);expect(policy.allows(fresh)).toBe(false);expect(policy.snapshot(true).blocked).toBe(1);
  });
  it('cannot erase revoked or unknown claims with replacement membership; a new monster incarnation starts fresh',()=>{
   const policy=new PartyEngagements();policy.observe(monster(),binding(),false);policy.refresh(()=>null);policy.observe(monster(),binding(),false);expect(policy.allows(monster())).toBe(false);
-  policy.observe({...monster(),incarnation:2},binding(),false);expect(policy.allows({...monster(),incarnation:2})).toBe(true);policy.observe({...monster(),incarnation:2},null,true);policy.observe({...monster(),incarnation:2},binding(),false);expect(policy.allows({...monster(),incarnation:2})).toBe(false);
+  policy.observe(monster(2,2),binding(),false);expect(policy.allows(monster(2,2))).toBe(true);policy.observe(monster(2,2),null,true);policy.observe(monster(2,2),binding(),false);expect(policy.allows(monster(2,2))).toBe(false);
  });
 });
 
 describe('party engagement projection', () => {
   it('counts accepted and blocked claims separately and keeps distinct reasons in encounter order', () => {
-    const binding: PartyActorBinding = { partyId: 5, memberId: 7, entityId: 3, map,
-      world: 'world', incarnation: 1, affiliationRevision: 1 };
+    const binding = partyActorBinding({ partyId: 5, memberId: 7, entityId: 3, map,
+      world: '11111111-1111-1111-1111-111111111111', incarnation: 1, affiliationRevision: 1 });
     const claim = (id: number, blocker: Claims['blocker'], accepted = false): Claims => ({
-      monster: { id, world: 'world', incarnation: 1 }, blocker,
+      monster: checkedEngagementIdentity({ id, world: 'world', incarnation: 1 }), blocker,
       sources: new Map(accepted ? [[7, binding]] : []),
     });
     const claims = [claim(1, 'unverified source'), claim(2, null, true), claim(3, 'source capacity'),

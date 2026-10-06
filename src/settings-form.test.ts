@@ -1,11 +1,11 @@
 import { DEFAULT_SP_ITEMS, type RecoveryItemSettings } from './recovery-items';
 import { DEFAULT_HP_POTIONS, type HpPotionSettings } from './hp-potions';
 import { describe, expect, it, vi } from 'vitest';
-import { CurrentForm, type FormDocument } from './current-form';
+import { CurrentForm, formDocument, type FormDocument } from './current-form';
 import { FeatureUi } from './feature-ui';
 import type { MapInfo } from './map-data';
 import { DEFAULT_MAP_POLICY } from './map-policy';
-import { DEFAULT_AUTOMATION, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT, DEFAULT_SETTINGS, validateSettings, type Settings } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT, DEFAULT_SETTINGS, validateSettings, type Settings, type SettingsInput } from './settings';
 import { SettingsForm, type SettingsFormContext } from './settings-form';
 
 // A local DOM adapter; projection and optional-policy conversion stay in the
@@ -64,8 +64,8 @@ function settings(): Settings {
     automation: { ...structuredClone(DEFAULT_AUTOMATION), limits: { minutes: 17, kills: 18, pickups: 19, weightPercent: 20 }, respawn: { enabled: true, maxDeaths: 1 } },
   };
 }
-function document(settings: Settings, selectedProfileId: string | null = 'saved-profile', revision = 10): FormDocument {
-  return { version: 1, revision, settings, selectedProfileId };
+function document(settings: SettingsInput, selectedProfileId: string | null = 'saved-profile', revision = 10): FormDocument {
+  return formDocument({ version: 1, revision, settings, selectedProfileId });
 }
 
 function setup() {
@@ -202,7 +202,7 @@ describe('settings form interface', () => {
 
   it('commits checkbox input before a bubbling form refresh and not again on change', () => {
     const f = setup(); f.observe();
-    const persisted: number[][] = [];
+    const persisted: Array<readonly number[]> = [];
     // Main refreshes controls synchronously when settings input bubbles.
     f.host.addEventListener('input', () => {
       persisted.push(f.form.snapshot().settings.targets);

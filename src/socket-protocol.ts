@@ -1,12 +1,16 @@
+import { bagId, itemId, quantity, type BagId, type ItemId, type Quantity } from './domain-values';
 import { BitWriter } from './binary';
-import { validateAutomation, type AutomationSettings } from './settings';
+import { validateAutomation, type AutomationSettingsInput as AutomationSettings, type ValidatedAutomationSettings } from './settings';
 import { dispositionStockFloors } from './disposition-ui';
 
-export interface SocketSelection { targetBagId: number; cardBagId: number }
+export interface SocketSelectionInput { targetBagId:number;cardBagId:number }
+export interface SocketSelection { readonly targetBagId:BagId;readonly cardBagId:BagId }
 export interface SocketRequest extends SocketSelection { previewToken: string }
-export interface SocketPreviewRequest extends SocketSelection { policy:AutomationSettings }
-export interface SocketCommitRequest extends SocketRequest { policy:AutomationSettings }
-export interface SocketAction extends SocketSelection { type: 'socket' }
+export interface SocketPreviewRequest extends SocketSelectionInput { policy:AutomationSettings }
+export interface SocketCommitRequest extends SocketSelectionInput { previewToken:string;policy:AutomationSettings }
+export type ValidatedSocketPreviewRequest = SocketSelection & {readonly policy:ValidatedAutomationSettings};
+export type ValidatedSocketCommitRequest = SocketRequest & {readonly policy:ValidatedAutomationSettings};
+export interface SocketAction extends SocketSelectionInput { type: 'socket' }
 function selection(value: unknown, commit: boolean): SocketSelection & { previewToken?: string } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid socket request.');
   const v = value as Record<string, unknown>, keys = commit ? ['targetBagId','cardBagId','previewToken'] : ['targetBagId','cardBagId'];
@@ -14,13 +18,13 @@ function selection(value: unknown, commit: boolean): SocketSelection & { preview
   for (const key of ['targetBagId','cardBagId']) if (!Number.isSafeInteger(v[key]) || Number(v[key]) <= 0 || Number(v[key]) > 2147483647) throw new Error('Socket bag IDs must be positive int32 values.');
   if (v.targetBagId === v.cardBagId) throw new Error('Choose separate target and card bags.');
   if (commit && (typeof v.previewToken !== 'string' || !/^[a-f0-9]{32}$/.test(v.previewToken))) throw new Error('Request a current socket preview first.');
-  return {targetBagId:Number(v.targetBagId),cardBagId:Number(v.cardBagId),...(commit?{previewToken:v.previewToken as string}:{})};
+  return {targetBagId:bagId(v.targetBagId),cardBagId:bagId(v.cardBagId),...(commit?{previewToken:v.previewToken as string}:{})};
 }
 export const validateSocketSelection = (value: unknown): SocketSelection => selection(value,false);
 export const validateSocketRequest = (value: unknown): SocketRequest => selection(value,true) as SocketRequest;
-export function validateSocketEnvelope(value:unknown,commit:false):SocketPreviewRequest;
-export function validateSocketEnvelope(value:unknown,commit:true):SocketCommitRequest;
-export function validateSocketEnvelope(value:unknown,commit:boolean):SocketPreviewRequest|SocketCommitRequest {
+export function validateSocketEnvelope(value:unknown,commit:false):ValidatedSocketPreviewRequest;
+export function validateSocketEnvelope(value:unknown,commit:true):ValidatedSocketCommitRequest;
+export function validateSocketEnvelope(value:unknown,commit:boolean):ValidatedSocketPreviewRequest|ValidatedSocketCommitRequest {
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Invalid socket request.');
   if(new TextEncoder().encode(JSON.stringify(value)).length>65_536)throw new Error('Socket request exceeds its 65,536-byte limit.');
   const {policy,...request}=value as Record<string,unknown>;
@@ -28,11 +32,11 @@ export function validateSocketEnvelope(value:unknown,commit:boolean):SocketPrevi
   const selected=selection(request,commit),checked=validateAutomation(policy as AutomationSettings);
   const name=checked.follow.name;
   if(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(new TextEncoder().encode(name))!==name)throw new Error('Policy contains an incomplete Unicode character.');
-  return {...selected,policy:structuredClone(checked)} as SocketPreviewRequest|SocketCommitRequest;
+  return {...selected,policy:structuredClone(checked)} as ValidatedSocketPreviewRequest|ValidatedSocketCommitRequest;
 }
-export function socketStockFloors(policy:AutomationSettings):ReadonlyMap<number,number>{
-  const floors=new Map<number,number>();
-  for(const row of [...dispositionStockFloors(policy),...(policy.disposition?.rules??[]).map(rule=>({itemId:rule.itemId,count:rule.keep}))])floors.set(row.itemId,Math.max(floors.get(row.itemId)??0,row.count));
+export function socketStockFloors(policy:AutomationSettings):ReadonlyMap<ItemId,Quantity>{
+  const floors=new Map<ItemId,Quantity>();
+  for(const row of [...dispositionStockFloors(policy),...(policy.disposition?.rules??[]).map(rule=>({itemId:rule.itemId,count:rule.keep}))]){const id=itemId(row.itemId);floors.set(id,quantity(Math.max(floors.get(id)??0,row.count)));}
   return floors;
 }
 /** Manual transport only; never accepted by generic action/routine validators. */

@@ -230,7 +230,7 @@ pub(crate) fn saved_account_matches(app_data: std::path::PathBuf, account: &Upda
         .load()
         .ok()
         .flatten()
-        .is_some_and(|profile| UpdateAccount::from_profile(&profile) == *account)
+        .is_some_and(|profile| crate::login_logic::account_matches(&profile, account))
 }
 
 #[tauri::command]

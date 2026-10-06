@@ -11,6 +11,7 @@ const PUBLIC_HOSTS = new Set([
   "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com",
 ]);
 
+/** @param {unknown} ok @param {string} message @returns {asserts ok} */
 export function requireValue(ok, message) {
   if (!ok) throw new Error(message);
 }
@@ -56,7 +57,7 @@ export function runReadOnly(command, args, options = {}) {
     });
   } catch (error) {
     // Child stderr can contain environment/configuration data. Keep it private.
-    throw new Error(`${command} verification command failed (exit ${error.status ?? "unavailable"}).`);
+    throw new Error(`${command} verification command failed (exit ${(typeof error === "object" && error !== null && "status" in error ? error.status : undefined) ?? "unavailable"}).`);
   }
 }
 
@@ -71,6 +72,7 @@ export function bunInstallCommand(migrate = false, versions = process.versions) 
   ] };
 }
 
+/** @param {string} [repository] @param {typeof runReadOnly} [execute] @returns {import("./tooling-domain-values.mjs").PublicMetadataApi} */
 export function githubMetadata(repository = REPOSITORY, execute = runReadOnly) {
   requireValue(repository === REPOSITORY, "Only the authoritative release repository is supported.");
   const cache = new Map();
@@ -120,6 +122,7 @@ export async function anonymousBytes(url, limit, fetchImpl = fetch) {
 
 // gh authenticates only the read-only Actions ZIP endpoint. Stream to a private
 // exclusive file so a compressed artifact cannot exhaust process memory.
+/** @param {string} repository @param {import("./tooling-domain-values.mjs").ActionsArtifactId} artifactId @param {string} destination @param {number} limit @param {typeof spawn} [spawnImpl] */
 export async function downloadActionsZip(repository, artifactId, destination, limit, spawnImpl = spawn) {
   requireValue(repository === REPOSITORY && /^[1-9]\d*$/.test(artifactId), "Invalid Actions artifact identity.");
   requireValue(Number.isSafeInteger(limit) && limit > 0, "Invalid Actions ZIP bound.");
@@ -129,7 +132,7 @@ export async function downloadActionsZip(repository, artifactId, destination, li
     child = spawnImpl("gh", ["api", "--hostname", "github.com", "--method", "GET", `repos/${repository}/actions/artifacts/${artifactId}/zip`], {
       stdio: ["ignore", "pipe", "ignore"], timeout: 180_000,
     });
-    const completed = new Promise((resolve, reject) => {
+    const completed = new Promise(/** @param {(value?: void) => void} resolve */ (resolve, reject) => {
       child.once("error", () => reject(new Error("Actions ZIP download could not start.")));
       child.once("close", (code, signal) => code === 0 ? resolve() : reject(new Error(`Actions ZIP download failed (${signal ?? code}).`)));
     });

@@ -1,3 +1,4 @@
+import { validateFormSettings } from './settings';
 import {describe,it,expect} from 'vitest';
 import {BotEngine,type Action} from './engine';
 import {DEFAULT_AUTOMATION,DEFAULT_RETREAT,DEFAULT_SETTINGS,type Settings} from './settings';
@@ -90,13 +91,13 @@ describe('bounded normal ranged retreat',()=>{
  it('does not reopen a spent normal-started strategy opener after retreat',()=>{
   const f=setup();f.settings.automation!.attackStrategies=[{id:'opener',speciesIds:[4000],skillId:11,level:1,behavior:'opener',maxAttempts:1,maxUses:1,cooldownSeconds:1}];
   f.engine.start({...f.settings,automation:{...f.settings.automation!,attackStrategies:[]}});f.step();f.attack();
-  f.engine.settings.automation!.attackStrategies=f.settings.automation!.attackStrategies;
+  f.engine.settings=validateFormSettings({...f.engine.settings,automation:{...f.engine.settings.automation!,attackStrategies:f.settings.automation!.attackStrategies}});
   f.step();f.clear();f.step();const cells=f.engine.snapshot().navigation!.leg;f.ack(cells);f.step(1000);
   expect(f.sent.filter(a=>a.type==='skill')).toEqual([]);expect(f.sent.at(-1)).toEqual({type:'attack',id:2});expect(f.engine.snapshot().attackStrategies.entries[0]!.normalStarted).toBe(true);
  });
  it('an applicable strategy wait cancels retreat without replacing its outstanding Walk',()=>{
   const f=setup();f.engage();f.clear();f.step();
-  f.engine.settings.automation!.attackStrategies=[{id:'repeat',speciesIds:[4000],skillId:11,level:1,behavior:'repeat',maxAttempts:1,maxUses:1,cooldownSeconds:1}];
+  f.engine.settings=validateFormSettings({...f.engine.settings,automation:{...f.engine.settings.automation!,attackStrategies:[{id:'repeat',speciesIds:[4000],skillId:11,level:1,behavior:'repeat',maxAttempts:1,maxUses:1,cooldownSeconds:1}]}});
   f.engine.character.skillsKnown=false;f.step();expect(f.engine.snapshot().retreat.state).toBe('skipped');expect(f.sent.filter(a=>a.type==='walk')).toHaveLength(1);expect(f.sent.filter(a=>a.type==='skill')).toHaveLength(0);
  });
  it('requires ammo/resource proof even when loadout management is off',()=>{

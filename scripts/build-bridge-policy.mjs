@@ -1,4 +1,5 @@
 // Deterministic build inputs; source generation is owned by build-bridge.mjs.
+/** @returns {import('esbuild').BuildOptions} */
 export function bridgeBuildOptions() {
   return {
     entryPoints: ['src/bridge.ts'],

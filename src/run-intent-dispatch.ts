@@ -1,6 +1,7 @@
+import { incrementRevision, revisionFor } from './domain-values';
 import type { PersistentFieldRun, ReconnectPolicy } from './reconnect';
 import type { RunSession } from './reconnect-logic';
-import type { Settings } from './settings';
+import type { SettingsInput } from './settings';
 
 import { type DispatchOutcome, type DispatchReceipt, retiredOutcome, type PendingKind, type NativeDispatch } from './run-intent-dispatch-logic';
 
@@ -8,9 +9,9 @@ export { type DispatchOutcome, type DispatchReceipt } from './run-intent-dispatc
 
 /** Owns dispatch lifetime; retiring intent never erases work already sent to native. */
 export class RunIntentDispatch {
-  private runOwner = 0;
-  private loginOwner = 0;
-  private connectionOwner = 0;
+  private runOwner = revisionFor('dispatch-run', 0);
+  private loginOwner = revisionFor('dispatch-login', 0);
+  private connectionOwner = revisionFor('dispatch-connection', 0);
   private held = false;
   private stopTask: Promise<DispatchReceipt> | null = null;
   private readonly work: Record<PendingKind, Set<Promise<unknown>>> = {
@@ -33,9 +34,9 @@ export class RunIntentDispatch {
   get stopping(): boolean { return this.stopTask !== null; }
   get limitHeld(): boolean { return this.held; }
 
-  start(settings: Settings, status: RunSession): Promise<DispatchReceipt> {
+  start(settings: SettingsInput, status: RunSession): Promise<DispatchReceipt> {
     if (this.stopping || !status.player) return Promise.resolve(this.receipt({ status: 'retired' }, () => false));
-    const owner = ++this.runOwner;
+    const owner = (this.runOwner = incrementRevision(this.runOwner));
     const character = status.player.name, session = status.sessionId;
     this.field.begin(settings, character, session, {
       kills: status.kills ?? 0, looted: status.looted ?? 0, deaths: status.deaths ?? 0, attacks: status.attacks ?? 0,
@@ -89,7 +90,7 @@ export class RunIntentDispatch {
   }
 
   private signIn(command: 'login_game' | 'reconnect_game', args?: Record<string, unknown>): Promise<DispatchReceipt> {
-    const owner = ++this.loginOwner;
+    const owner = (this.loginOwner = incrementRevision(this.loginOwner));
     return this.track('login', async () => {
       try {
         const value = await this.dispatch(command, args);
@@ -111,7 +112,7 @@ export class RunIntentDispatch {
     const replacesField = action === 'service' || action === 'macro';
     const manualTarget = action === 'command' && request !== null && typeof request === 'object'
       && 'type' in request && request.type === 'manualTarget';
-    const owner = replacesField || manualTarget ? ++this.runOwner : this.runOwner;
+    const owner = replacesField || manualTarget ? (this.runOwner = incrementRevision(this.runOwner)) : this.runOwner;
     const connection = this.connectionOwner;
     const pendingResume = replacesField ? [...this.work.resume] : [];
     if (replacesField) this.retireField();
@@ -134,8 +135,8 @@ export class RunIntentDispatch {
 
   stop(beforeDispatch?: Promise<unknown>): Promise<DispatchReceipt> {
     if (this.stopTask) return this.stopTask;
-    const owner = ++this.runOwner;
-    ++this.loginOwner;
+    const owner = (this.runOwner = incrementRevision(this.runOwner));
+    this.loginOwner = incrementRevision(this.loginOwner);
     this.retireField();
     // Snapshot before the first await and before registering the Stop barrier.
     // Limit holds only wait for login/resume, so neither barrier can wait on itself.
@@ -162,9 +163,9 @@ export class RunIntentDispatch {
   }
 
   gameClosed(): void {
-    ++this.connectionOwner;
-    ++this.runOwner;
-    ++this.loginOwner;
+    this.connectionOwner = incrementRevision(this.connectionOwner);
+    this.runOwner = incrementRevision(this.runOwner);
+    this.loginOwner = incrementRevision(this.loginOwner);
     this.retireField();
   }
 

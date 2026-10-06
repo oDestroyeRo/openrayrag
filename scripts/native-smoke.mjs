@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { map } from 'remeda';
+import { smokeResultValues } from './tooling-domain-values.mjs';
 /** Launch only a CI-feature package with temporary data; never use a real account. */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -11,10 +12,12 @@ import { pathToFileURL } from 'node:url';
 import { createSmokeLaunch, validateResult, verifyReopened } from './native-smoke-policy.mjs';
 export { validateResult, verifyReopened } from './native-smoke-policy.mjs';
 
+/** @param {string} binary @param {string} root @param {string} [platform] @param {NodeJS.ProcessEnv} [env] */
 export function smokeLaunch(binary, root, platform = process.platform, env = process.env) {
   return createSmokeLaunch(resolve(binary), root, platform, env);
 }
 
+/** @param {string} binary @param {import("./tooling-domain-values.mjs").SmokeStage} stage @param {import("./tooling-domain-values.mjs").SmokeStageOptions} options @returns {Promise<import("./tooling-domain-values.mjs").SmokeResult>} */
 export async function runStage(binary, stage, { root, data, result, token, timeoutMs = 45_000, prefixArgs = [], env = process.env }) {
   // A session wrapper may outlive or exit before its application. Own the whole
   // POSIX process group so a timeout also closes descendants' inherited pipes.
@@ -29,13 +32,13 @@ export async function runStage(binary, stage, { root, data, result, token, timeo
   const capture = chunk => { output = (output + chunk.toString()).slice(-12_000); };
   child.stdout.on('data', capture);
   child.stderr.on('data', capture);
-  await new Promise((resolveStage, reject) => {
+  await new Promise(/** @param {(value?: void) => void} resolveStage */ (resolveStage, reject) => {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       if (processGroup && child.pid) {
         try { process.kill(-child.pid, 'SIGKILL'); }
-        catch (error) { if (error.code !== 'ESRCH') reject(error); }
+        catch (error) { if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH')) reject(error); }
       } else child.kill('SIGKILL');
     }, timeoutMs);
     child.once('error', error => { clearTimeout(timer); reject(error); });
@@ -69,9 +72,10 @@ export async function runStage(binary, stage, { root, data, result, token, timeo
   });
   const outcome = JSON.parse(await readFile(result, 'utf8'));
   validateResult(outcome, stage, token);
-  return outcome;
+  return smokeResultValues(outcome);
 }
 
+/** @param {string} binary @param {string} outputFile */
 export async function nativeSmoke(binary, outputFile) {
   if (process.env.CI !== 'true') throw new Error('Packaged native smoke launches only on CI runners.');
   const root = await mkdtemp(join(tmpdir(), 'rayrag-native-smoke-'));
@@ -81,7 +85,9 @@ export async function nativeSmoke(binary, outputFile) {
   const launch = smokeLaunch(binary, root);
   try {
     const outcomes = [];
-    for (const stage of ['save', 'reopen']) {
+    /** @type {readonly import('./tooling-domain-values.mjs').SmokeStage[]} */
+    const stages = ['save', 'reopen'];
+    for (const stage of stages) {
       outcomes.push(await runStage(launch.binary, stage, {
         root, data, result: join(root, `${stage}.json`), token: randomUUID(),
         prefixArgs: launch.prefixArgs, env: launch.env,
@@ -93,6 +99,7 @@ export async function nativeSmoke(binary, outputFile) {
     await writeFile(outputFile, JSON.stringify({ protocol: 1, platform: process.platform, passed: true, stages: outcomes }, null, 2) + '\n');
     console.log(`Packaged ${process.platform} smoke passed: WebView boot, native settings save, immediate close, restore, and offline state.`);
   } catch (error) {
+    if (!(error instanceof Error)) throw error;
     await mkdir(dirname(resolve(outputFile)), { recursive: true });
     await writeFile(outputFile, JSON.stringify({ protocol: 1, platform: process.platform, passed: false, message: error.message.slice(-16_384) }, null, 2) + '\n');
     throw error;

@@ -1,10 +1,30 @@
 import { concat, filter, map, pipe, piped, unique } from 'remeda';
-import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateSettings, type Settings } from './settings';
+import { DomainValueError } from './domain-values';
+import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateSettings, type SettingsInput, type RunSettings } from './settings';
 
 export const MAX_PROFILES = 20;
 const MAX_DOCUMENT_BYTES = 256_000;
-export interface BotProfile { id: string; name: string; character: string; savedAt: number; settings: Settings }
-export interface ProfileDocument { version: 1; profiles: BotProfile[] }
+declare const profileValue: unique symbol;
+export type ProfileId = string & { readonly [profileValue]: 'ProfileId' };
+export type ProfileName = string & { readonly [profileValue]: 'ProfileName' };
+export type ProfileSavedAt = number & { readonly [profileValue]: 'ProfileSavedAt' };
+const INVALID_METADATA = 'Invalid profile name or metadata.';
+export function profileId(value: unknown): ProfileId {
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(value)) throw new DomainValueError('ProfileId', typeof value === 'string' ? 'range' : 'type', 'profile name or metadata.');
+  return value as ProfileId;
+}
+export function profileName(value: unknown): ProfileName {
+  if (typeof value !== 'string' || !value.trim() || value.length > 48 || /[\u0000-\u001f\u007f]/.test(value)) throw new DomainValueError('ProfileName', typeof value === 'string' ? 'range' : 'type', 'profile name or metadata.');
+  return value.trim() as ProfileName;
+}
+export function profileSavedAt(value: unknown): ProfileSavedAt {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new DomainValueError('ProfileSavedAt', typeof value === 'number' ? 'range' : 'type', 'profile name or metadata.');
+  return value as ProfileSavedAt;
+}
+/** Editable and serialized input; admission belongs to checkedProfile. */
+export interface BotProfileInput { id: string; name: string; character: string; savedAt: number; settings: SettingsInput }
+export interface BotProfile { readonly id: ProfileId; readonly name: ProfileName; readonly character: string; readonly savedAt: ProfileSavedAt; readonly settings: RunSettings }
+export interface ProfileDocument { readonly version: 1; readonly profiles: readonly BotProfile[] }
 const profileIds = piped(map<readonly BotProfile[], string>(profile => profile.id), unique());
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 function keys(value: Record<string, unknown>, expected: string[]): boolean {
@@ -14,7 +34,7 @@ function keys(value: Record<string, unknown>, expected: string[]): boolean {
 function ruleKeys(value: Record<string,unknown>, expected:string[], path:string): boolean {
   return keys(value,[...expected,...(['items','skills','equipment','combat.rules'].includes(path)&&Object.hasOwn(value,'conditions')?['conditions']:[])]);
 }
-function checkedSettings(value: unknown): Settings {
+function checkedSettings(value: unknown): RunSettings {
   const expected = [...Object.keys(DEFAULT_SETTINGS), ...(record(value) && Object.hasOwn(value, 'automation') ? ['automation'] : [])];
   if (!record(value) || !keys(value, expected)) throw new Error('Profile contains unknown or missing settings.');
   if (Object.hasOwn(value, 'automation')) {
@@ -49,7 +69,7 @@ function checkedSettings(value: unknown): Settings {
   }
   // The engine owns the settings schema. Only its validated, detached values may
   // enter a profile; account fields and controller state are never accepted.
-  return JSON.parse(JSON.stringify(validateSettings(value as unknown as Settings))) as Settings;
+  return validateSettings(JSON.parse(JSON.stringify(validateSettings(value as SettingsInput))) as SettingsInput);
 }
 export function checkedProfile(value: unknown): BotProfile {
   if (!record(value) || !keys(value, ['id', 'name', 'character', 'savedAt', 'settings'])
@@ -57,9 +77,9 @@ export function checkedProfile(value: unknown): BotProfile {
     || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 48 || /[\u0000-\u001f\u007f]/.test(value.name)
     || typeof value.character !== 'string' || value.character.length > 64 || /[\u0000-\u001f\u007f]/.test(value.character)
     || typeof value.savedAt !== 'number' || !Number.isSafeInteger(value.savedAt) || value.savedAt < 0) {
-    throw new Error('Invalid profile name or metadata.');
+    throw new Error(INVALID_METADATA);
   }
-  return { id: value.id, name: value.name.trim(), character: value.character, savedAt: value.savedAt, settings: checkedSettings(value.settings) };
+  return { id: profileId(value.id), name: profileName(value.name), character: value.character, savedAt: profileSavedAt(value.savedAt), settings: checkedSettings(value.settings) };
 }
 export function parseProfileDocument(text: string): ProfileDocument {
   if (text.length > MAX_DOCUMENT_BYTES) throw new Error('Profile document is too large.');

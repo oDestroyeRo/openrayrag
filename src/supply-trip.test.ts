@@ -1,3 +1,4 @@
+import { itemId, bagId, quantity, revisionFor, incrementRevision } from './domain-values';
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SUPPLY,
@@ -16,11 +17,11 @@ import {
 import {
   DEFAULT_AUTOMATION,
   DEFAULT_SETTINGS,
-  type Settings,
 } from "./settings";
 import { publishedDispositionMetadata } from "./disposition-ui";
 import { WorldState } from "./world-state";
-import type { DispositionAction, DispositionPolicy } from "./disposition";
+import { validateDispositionPolicy, type DispositionAction, type DispositionPolicyView } from "./disposition";
+import type { SupplyPolicySettings } from "./supply-trip-logic";
 import type { WorkflowReceipt } from "./workflows";
 const rule = {
   itemId: 501,
@@ -34,8 +35,8 @@ const rule = {
   restock: "buy" as const,
   allowUnique: false,
 };
-const policy: DispositionPolicy = { maxSpend: 1000, rules: [rule] };
-const configured: Settings = {
+const policy = validateDispositionPolicy({ maxSpend: 1000, rules: [rule] });
+const configured: SupplyPolicySettings = {
   ...DEFAULT_SETTINGS,
   map: "prt_fild05",
   targets: [4000],
@@ -77,8 +78,8 @@ function context(stock = 4): SupplyContext & { disposition: SupplyContext['dispo
     settled: true,
     canPrepare: true,
     fieldRequested: true,
-    inventoryRevision: 1,
-    currencyRevision: 1,
+    inventoryRevision: revisionFor('inventory', 1),
+    currencyRevision: revisionFor('currency', 1),
     economicUncertain: false,
     disposition: {
       revision: "1",
@@ -116,17 +117,17 @@ function setStock(c: SupplyContext, n: number) {
     : [];
   c.disposition.containers.inventory.items = items;
   c.disposition.workflow.inventory = items;
-  c.inventoryRevision++;
+  c.inventoryRevision=incrementRevision(c.inventoryRevision);
 }
 function setup(settings = configured) {
   let now = 100_000;
   const c = context();
   let confirmed = false;
-  let plannedPolicy: DispositionPolicy | undefined;
+  let plannedPolicy: DispositionPolicyView | undefined;
   const action: DispositionAction = {
     kind: "buy",
-    itemId: 501,
-    count: 2,
+    itemId: itemId(501),
+    count: quantity(2),
     from: "shop",
     to: "inventory",
     command: { type: "shop", mode: "buy", rows: [{ id: 501, count: 2 }] },
@@ -331,10 +332,10 @@ describe("bounded supply runtime", () => {
     f.runtime.observe(f.c);
     expect(f.runtime.uncertain).toBe(true);
     f.c.fresh = true;
-    f.c.inventoryRevision++;
+    f.c.inventoryRevision=incrementRevision(f.c.inventoryRevision);
     f.runtime.observe(f.c);
     expect(f.runtime.uncertain).toBe(true);
-    f.c.currencyRevision++;
+    f.c.currencyRevision=incrementRevision(f.c.currencyRevision);
     f.runtime.observe(f.c);
     expect(f.runtime.uncertain).toBe(false);
     expect(f.runtime.next(f.c)).toBeNull();
@@ -523,10 +524,10 @@ describe("supply repair regressions", () => {
         type: 1 as const,
       }),
     );
-    const p = {
+    const p = validateDispositionPolicy({
       maxSpend: 0,
       rules: [{ ...rule, store: true, cart: true, restock: "off" as const }],
-    };
+    });
     expect(nextSupplyAction(c, [], p, configured.automation!.supply!)).toEqual({
       type: "close",
     });
@@ -550,10 +551,10 @@ describe("supply repair regressions", () => {
   });
   it("does not reuse full storage evidence after character, connection or observed capacity changes", () => {
     const c = context(12),
-      p = {
+      p = validateDispositionPolicy({
         maxSpend: 0,
         rules: [{ ...rule, store: true, sell: true, restock: "off" as const }],
-      };
+      });
     c.disposition.workflow.world.apply({ type: "npcEnd" });
     const evidence = {
       storageFull: {
@@ -585,10 +586,10 @@ describe("supply repair regressions", () => {
   });
   it("retains a proven-full preferred storage phase when visiting the explicitly configured sell service", () => {
     const c = context(12);
-    const p = {
+    const p = validateDispositionPolicy({
       maxSpend: 0,
       rules: [{ ...rule, store: true, sell: true, restock: "off" as const }],
-    };
+    });
     c.disposition.workflow.world.apply({ type: "npcEnd" });
     expect(
       nextSupplyAction(c, [], p, configured.automation!.supply!, {
@@ -633,7 +634,7 @@ describe("supply repair regressions", () => {
     });
     c.disposition.workflow.inventory =
       c.disposition.containers.inventory.items!;
-    const p = {
+    const p = validateDispositionPolicy({
       ...policy,
       rules: [
         {
@@ -646,11 +647,11 @@ describe("supply repair regressions", () => {
         },
         rule,
       ],
-    };
+    });
     expect(
       nextSupplyAction(
         c,
-        [{ itemId: 501, desired: 10 }],
+        [{ itemId: itemId(501), desired: quantity(10) }],
         p,
         configured.automation!.supply!,
       ),
@@ -667,7 +668,7 @@ describe("phase planning and exact receipts", () => {
     expect(
       nextSupplyAction(
         c,
-        [{ itemId: 501, desired: 10 }],
+        [{ itemId: itemId(501), desired: quantity(10) }],
         policy,
         configured.automation!.supply!,
       ),
@@ -690,7 +691,7 @@ describe("phase planning and exact receipts", () => {
     expect(
       nextSupplyAction(
         c,
-        [{ itemId: 501, desired: 10 }],
+        [{ itemId: itemId(501), desired: quantity(10) }],
         policy,
         configured.automation!.supply!,
       ),
@@ -701,10 +702,10 @@ describe("phase planning and exact receipts", () => {
   });
   it("unknown preferred storage cannot authorize a fallback sale", () => {
     const c = context(12);
-    const p = {
+    const p = validateDispositionPolicy({
       maxSpend: 1000,
       rules: [{ ...rule, store: true, sell: true, restock: "off" as const }],
-    };
+    });
     expect(
       nextSupplyAction(c, [], p, {
         ...configured.automation!.supply!,
@@ -715,10 +716,10 @@ describe("phase planning and exact receipts", () => {
   it("disposes excess first and preserves source stock, equipped and selected ammo", () => {
     const c = context(12);
     c.disposition.workflow.world.shop!.mode = "sell";
-    const p = {
+    const p = validateDispositionPolicy({
       maxSpend: 1000,
       rules: [{ ...rule, sell: true, restock: "off" as const }],
-    };
+    });
     c.disposition.minimumStock = [{ itemId: 501, count: 11 }];
     expect(
       nextSupplyAction(c, [], p, configured.automation!.supply!),
@@ -737,7 +738,7 @@ describe("phase planning and exact receipts", () => {
     const c = context();
     const action = nextSupplyAction(
       c,
-      [{ itemId: 501, desired: 10 }],
+      [{ itemId: itemId(501), desired: quantity(10) }],
       policy,
       configured.automation!.supply!,
     );
@@ -746,9 +747,9 @@ describe("phase planning and exact receipts", () => {
       zeny: 1000,
       cost: 300,
       credit: 0,
-      items: new Map([[501, 4]]),
-      bags: new Map([[501, 4]]),
-      itemChanges: new Map([[501, 6]]),
+      items: new Map([[itemId(501), quantity(4)]]),
+      bags: new Map([[bagId(501), quantity(4)]]),
+      itemChanges: new Map([[itemId(501), 6]]),
       bagChanges: new Map(),
       strictStock: false,
     };
@@ -757,7 +758,7 @@ describe("phase planning and exact receipts", () => {
     setStock(c, 10);
     expect(confirmSupplyReceipt(r, c)).toBe(false);
     c.disposition.workflow.zeny = 700;
-    c.currencyRevision++;
+    c.currencyRevision=incrementRevision(c.currencyRevision);
     expect(confirmSupplyReceipt(r, c)).toBe(true);
     setStock(c, 11);
     expect(confirmSupplyReceipt(r, c)).toBe(false);
@@ -771,11 +772,11 @@ describe("phase planning and exact receipts", () => {
     c.disposition.containers.storage.items = [];
     const action: DispositionAction = {
       kind: "store",
-      itemId: 501,
-      count: 2,
+      itemId: itemId(501),
+      count: quantity(2),
       from: "inventory",
       to: "storage",
-      bagId: 501,
+      bagId: bagId(501),
       command: { type: "storage", operation: "deposit", bagId: 501, count: 2 },
       estimatedCost: 0,
       reservedSpend: 0,
@@ -785,10 +786,10 @@ describe("phase planning and exact receipts", () => {
       zeny: 1000,
       cost: 0,
       credit: 0,
-      items: new Map([[501, 12]]),
-      bags: new Map([[501, 12]]),
-      itemChanges: new Map([[501, -2]]),
-      bagChanges: new Map([[501, -2]]),
+      items: new Map([[itemId(501), quantity(12)]]),
+      bags: new Map([[bagId(501), quantity(12)]]),
+      itemChanges: new Map([[itemId(501), -2]]),
+      bagChanges: new Map([[bagId(501), -2]]),
       strictStock: false,
     };
     const r = createSupplyReceipt(action, economic, c);

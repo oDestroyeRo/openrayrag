@@ -30,6 +30,7 @@ let seed=25;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;retu
 try{
   const [before,after]=await Promise.all([bundle('before',true),bundle('after')]);
   const fixtures=[['prt_fild08',{x:169,y:193},'prontera'],['prt_fild08',{x:169,y:193},'payon'],['prt_fild08',{x:169,y:193},'geffen'],['moc_fild02',{x:77,y:338},'morocc']];
+  /** @type {import("./tooling-domain-values.mjs").RouteBenchmarkSummary[]} */
   const summaries=[];let comparisons=0;
   for(const fixture of fixtures){const results=[],times=[];for(const api of [before,after]){const planner=new api.TravelPlanner(),samples=[];let result;for(let n=0;n<5;n++){const started=performance.now();result=await query(planner,fixture,api===after);samples.push(performance.now()-started);}results.push(result);times.push(median(samples));}
     deepStrictEqual(results[1],results[0]);comparisons++;summaries.push({fixture:`${fixture[0]}→${fixture[2]}`,beforeMs:+times[0].toFixed(3),afterMs:+times[1].toFixed(3),crossings:results[0]?.length??null,outcomeHash:createHash('sha256').update(JSON.stringify(results[0])).digest('hex').slice(0,12)});}

@@ -1,3 +1,5 @@
+import { itemId, type ItemId } from './domain-values';
+import type { ReadonlyData, AutomationPolicy } from './settings';
 import catalog from './data/recovery-item-catalog.json';
 
 export type RecoveryResource = 'hp' | 'sp';
@@ -10,10 +12,10 @@ export interface RecoveryItemSettings {
 }
 
 /** Direct recovery effects from the pinned server, ordered by client price. */
-export const RECOVERY_ITEM_IDS: Readonly<Record<RecoveryResource, readonly number[]>> = {
-  hp: Object.freeze([...catalog.hpIds]), sp: Object.freeze([...catalog.spIds]),
+export const RECOVERY_ITEM_IDS: Readonly<Record<RecoveryResource, readonly ItemId[]>> = {
+  hp: Object.freeze(catalog.hpIds.map(value=>itemId(value))), sp: Object.freeze(catalog.spIds.map(value=>itemId(value))),
 };
-const knownIds = { hp: new Set(RECOVERY_ITEM_IDS.hp), sp: new Set(RECOVERY_ITEM_IDS.sp) };
+const knownIds = { hp: new Set<number>(RECOVERY_ITEM_IDS.hp), sp: new Set<number>(RECOVERY_ITEM_IDS.sp) };
 export const DEFAULT_RECOVERY_ITEMS: RecoveryItemSettings = {
   mode: 'off', itemIds: [], belowPercent: 60, minStock: 0, cooldownSeconds: 5,
 };
@@ -39,6 +41,8 @@ export function validateRecoveryItems(value: unknown, resource: RecoveryResource
     belowPercent: row.belowPercent as number, minStock: row.minStock as number, cooldownSeconds: row.cooldownSeconds as number };
 }
 
-export function recoveryItemIds(policy: RecoveryItemSettings | undefined, resource: RecoveryResource): readonly number[] {
+export function recoveryItemIds(policy: AutomationPolicy['hpPotions'], resource: RecoveryResource): readonly ItemId[];
+export function recoveryItemIds(policy: ReadonlyData<RecoveryItemSettings> | undefined, resource: RecoveryResource): readonly number[];
+export function recoveryItemIds(policy: ReadonlyData<RecoveryItemSettings> | undefined, resource: RecoveryResource): readonly number[] {
   return !policy || policy.mode === 'off' ? [] : policy.mode === 'any' ? RECOVERY_ITEM_IDS[resource] : policy.itemIds;
 }

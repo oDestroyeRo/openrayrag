@@ -2,7 +2,7 @@ import { omit } from 'remeda';
 import { validWarpSnapshot } from './warp-ui-logic';
 export { validWarpSnapshot } from './warp-ui-logic';
 import { WARP_RECOVERY, type WarpSnapshot } from './warp';
-import type { AutomationSettings } from './settings';
+import type { AutomationSettingsInput } from './settings';
 import { validateWarpRequest, type WarpRequest, type WarpPreviewRequest } from './warp-protocol';
 import type { MemoSlot } from './memo-protocol';
 const object=(v:unknown):Record<string,unknown>=>v&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
@@ -13,8 +13,8 @@ export class WarpUi {
   private readonly groundPreview=document.createElement('button');private readonly groundSend=document.createElement('button');
   private readonly activationPreview=document.createElement('button');private readonly activationSend=document.createElement('button');
   private readonly previewText=document.createElement('p');private readonly status=document.createElement('p');
-  private snapshot:WarpSnapshot|null=null;private request:WarpRequest|null=null;private lifecycle='';private locked=true;private sending=false;private awaitingPreview=false;private expected:WarpPreviewRequest|null=null;private policy:AutomationSettings|null=null;
-  constructor(private readonly send:(request:WarpRequest&{policy:AutomationSettings})=>Promise<unknown>,private readonly notify:(text:string,error?:boolean)=>void,private readonly prepare:(request:WarpPreviewRequest&{policy:AutomationSettings})=>Promise<unknown>,private readonly settings:()=>AutomationSettings,private readonly cancel:()=>Promise<unknown>){
+  private snapshot:WarpSnapshot|null=null;private request:WarpRequest|null=null;private lifecycle='';private locked=true;private sending=false;private awaitingPreview=false;private expected:WarpPreviewRequest|null=null;private policy:AutomationSettingsInput|null=null;
+  constructor(private readonly send:(request:WarpRequest&{policy:AutomationSettingsInput})=>Promise<unknown>,private readonly notify:(text:string,error?:boolean)=>void,private readonly prepare:(request:WarpPreviewRequest&{policy:AutomationSettingsInput})=>Promise<unknown>,private readonly settings:()=>AutomationSettingsInput,private readonly cancel:()=>Promise<unknown>){
     this.root.className='manual-group warp-panel';const title=document.createElement('summary');title.textContent='Warp Portal · manual request';
     const help=document.createElement('p');help.className='hint';help.textContent='Two explicit stages: request open ground, then review a fresh activation preview for one observed memo slot. No approach, automatic entry or retry. Creation cannot be confirmed. Activation may consume up to one Blue Gemstone, even on failure; no gemstone waiver is assumed. Ground and activation use the visible field policy and stock reserve captured by Preview. '+WARP_RECOVERY;
     this.slot.setAttribute('aria-label','Warp memo slot');for(let i=0;i<4;i++){const option=document.createElement('option');option.value=String(i);option.textContent=`Slot ${i}`;this.slot.append(option);}this.slot.value='0';

@@ -1,14 +1,15 @@
 import { map } from 'remeda';
-import type { FormDocument } from './current-form';
+import type { FormDocument, FormDocumentInput } from './current-form';
 import type { FeatureUi } from './feature-ui';
 import type { MapInfo, MapMonster } from './map-data-logic';
-import type { Settings } from './settings';
+import type { SettingsInput } from './settings';
 export type AutomationEditor = Pick<FeatureUi, 'read' | 'write' | 'levelDifference' | 'selectedProfileId' | 'restoreProfileSelection'>;
 
 export type FormSnapshot = Omit<FormDocument, 'version' | 'revision'>;
+export type FormSnapshotInput = Omit<FormDocumentInput, 'version' | 'revision'>;
 
 export interface SettingsFormProjection {
-  runSettings(): Settings;
+  runSettings(): SettingsInput;
   snapshot(): FormSnapshot;
 }
 

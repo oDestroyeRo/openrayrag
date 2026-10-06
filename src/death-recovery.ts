@@ -1,4 +1,4 @@
-import type { Settings } from './settings';
+import type { SettingsInput as Settings } from './settings';
 import { mapPolicy } from './map-policy-logic';
 
 /** Runtime-only state: profiles contain policy, never an outstanding request. */

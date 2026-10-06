@@ -79,7 +79,7 @@ try {
   server = createServer(async (request, response) => {
     try {
       if (request.url === '/') { response.setHeader('Content-Type', 'text/html'); response.end(html); return; }
-      if (!['/bundle.js', '/bundle.css'].includes(request.url)) { response.writeHead(404).end(); return; }
+      if (request.url === undefined || !['/bundle.js', '/bundle.css'].includes(request.url)) { response.writeHead(404).end(); return; }
       response.setHeader('Content-Type', request.url.endsWith('.css') ? 'text/css' : 'text/javascript');
       response.end(await readFile(join(temporary, request.url.slice(1))));
     } catch { response.writeHead(500).end(); }
@@ -93,6 +93,7 @@ try {
   }
   if (!port) throw new Error('Chrome did not expose DevTools. Set --chrome to a Chrome/Chromium executable.');
   const target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json();
+  if (typeof target !== 'object' || target === null || !('webSocketDebuggerUrl' in target) || typeof target.webSocketDebuggerUrl !== 'string') throw new Error('Chrome did not expose a target WebSocket.');
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
   cdp = new DevTools(socket);
@@ -106,8 +107,11 @@ try {
   }
   if (!ready) throw new Error('Benchmark fixture did not initialize.');
   const browser = await cdp.send('Browser.getVersion');
+  /** @type {import("./tooling-domain-values.mjs").RenderingReport} */
   const report = { schemaVersion: 2, harness, createdAt: new Date().toISOString(), source: { commit, mode: options.has('--ref') ? 'commit' : 'working-tree', loadedSourceHash: createHash('sha256').update(JSON.stringify(sort([...sourceHashes], (a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0))).digest('hex'), dirty: execFileSync('git', ['status', '--short', '--', 'src'], { cwd: root, encoding: 'utf8' }).trim() }, machine: { platform: platform(), release: release(), cpu: cpus()[0]?.model, cores: cpus().length, totalMemoryBytes: totalmem(), bun: process.versions.bun, browser: browser.product, viewport: [1280, 900], timezone: 'UTC' }, methodology: { samples, iterations, warmupSamples: 2, synchronousBurst: true, timers: 'Real main 1000ms callbacks run in explicit timer scenario; automatic periodic callbacks suspended.', instrumentation: 'Work counters collected in a separate instrumented pass; timed samples restore original methods and disconnect MutationObserver.', heap: 'JSHeapUsedSize before/after replay only with GC before and after; live heap is not peak allocation or native canvas memory.', cpu: 'CDP TaskDuration brackets replay only; setup and outcome pixel hashing run outside CPU/heap metrics. Renderer CPU seconds, not whole-app CPU percent.', timingGate: false }, workload: await cdp.evaluate('window.clientRenderingBenchmark.workload'), scenarios: [], probes: null };
-  for (const kind of ['steady', 'vitals', 'movement', 'logs', 'timer', 'reconnect']) {
+  /** @type {readonly import('./tooling-domain-values.mjs').RenderingScenarioName[]} */
+  const scenarios = ['steady', 'vitals', 'movement', 'logs', 'timer', 'reconnect'];
+  for (const kind of scenarios) {
     const count = kind === 'reconnect' ? Math.min(iterations, 10) : iterations;
     await cdp.evaluate(`window.clientRenderingBenchmark.prepare(${JSON.stringify(kind)}, ${count})`);
     await cdp.evaluate('window.clientRenderingBenchmark.begin(true)');
@@ -122,18 +126,20 @@ try {
       const outcome = await cdp.evaluate('window.clientRenderingBenchmark.outcome()');
       rows.push({ ...result, outcome, rendererTaskMs: (after.TaskDuration - before.TaskDuration) * 1000, heapBeforeBytes: before.JSHeapUsedSize, heapAfterBytes: after.JSHeapUsedSize, heapAfterGcBytes: settled.JSHeapUsedSize, heapGrowthBytes: after.JSHeapUsedSize - before.JSHeapUsedSize, retainedHeapDeltaBytes: settled.JSHeapUsedSize - before.JSHeapUsedSize });
     }
+    /** @type {import("./tooling-domain-values.mjs").RenderingScenario} */
     const row = { name: kind, iterations: count, workCounters: work.counters, medianElapsedMs: median(map(rows, row => row.elapsedMs)), medianRendererTaskMs: median(map(rows, row => row.rendererTaskMs)), medianHeapGrowthBytes: median(map(rows, row => row.heapGrowthBytes)), medianRetainedHeapDeltaBytes: median(map(rows, row => row.retainedHeapDeltaBytes)), samples: rows };
     report.scenarios.push(row);
     console.log(`${kind}: ${row.medianElapsedMs.toFixed(2)}ms/${count}; renderer ${row.medianRendererTaskMs.toFixed(2)}ms; reads ${work.counters['FeatureUi.read'] ?? 0}; refresh ${work.counters['SettingsForm.refresh'] ?? 0}; created ${work.counters.elementsCreated ?? 0}; draws ${work.counters['canvas.drawImage'] ?? 0}`);
   }
   report.probes = await cdp.evaluate('window.clientRenderingBenchmark.probes()');
   if (cdp.errors.length) throw new Error(cdp.errors.join('\n'));
-  if (options.has('--compare')) {
-    const baseline = JSON.parse(await readFile(resolve(options.get('--compare')), 'utf8'));
+  const comparePath = options.get('--compare');
+  if (comparePath !== undefined) {
+    const baseline = JSON.parse(await readFile(resolve(comparePath), 'utf8'));
     report.comparison = compareRenderingReports(report, baseline);
   }
   const output = await writeBenchmarkReport(report, options.get('--output'));
-  console.log(`Saved ${output}; ${report.probes.passed.length} behavior probes passed.`);
+  console.log(`Saved ${output}; ${report.probes?.passed.length} behavior probes passed.`);
 } finally {
   cdp?.socket.close();
   if (chrome && chrome.exitCode === null) { chrome.kill('SIGTERM'); await Promise.race([new Promise(resolve => chrome.once('exit', resolve)), pause(5000)]); if (chrome.exitCode === null) chrome.kill('SIGKILL'); }

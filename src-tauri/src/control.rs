@@ -1,3 +1,4 @@
+use crate::domain_values::{ActorId, BagId, ItemCount, ItemId};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -103,14 +104,35 @@ fn barter(action: &Object) -> Validation {
     integer(action, "count", 1, 99)?;
     let mut ids = HashSet::new();
     for id in array(field(action, "bagIds")?, 10)? {
-        if !ids.insert(number(id, 1, MAX_ID)?) {
+        let id = BagId::try_from(id.as_i64().ok_or_else(invalid)?).map_err(|_| invalid())?;
+        if !ids.insert(id) {
             return Err(invalid());
         }
     }
     Ok(())
 }
 
-fn rows(value: &Value, max: usize, priced: bool) -> Validation {
+#[derive(Clone, Copy)]
+enum RowKind {
+    Item,
+    Bag,
+}
+#[derive(PartialEq, Eq, Hash)]
+enum RowId {
+    Item(ItemId),
+    Bag(BagId),
+}
+impl RowKind {
+    fn admit(self, value: i64) -> Result<RowId, String> {
+        match self {
+            Self::Item => ItemId::try_from(value).map(RowId::Item),
+            Self::Bag => BagId::try_from(value).map(RowId::Bag),
+        }
+        .map_err(|_| invalid())
+    }
+}
+
+fn rows(value: &Value, max: usize, priced: bool, kind: RowKind) -> Validation {
     let mut ids = HashSet::new();
     for row in array(value, max)? {
         let row = object(
@@ -121,10 +143,11 @@ fn rows(value: &Value, max: usize, priced: bool) -> Validation {
                 &["id", "count"]
             },
         )?;
-        if !ids.insert(integer(row, "id", 1, MAX_ID)?) {
+        if !ids.insert(kind.admit(field(row, "id")?.as_i64().ok_or_else(invalid)?)?) {
             return Err(invalid());
         }
-        integer(row, "count", 1, 32767)?;
+        ItemCount::try_from(field(row, "count")?.as_i64().ok_or_else(invalid)?)
+            .map_err(|_| invalid())?;
         if priced {
             integer(row, "price", 0, 9_999_999)?;
         }
@@ -152,11 +175,12 @@ pub(crate) fn validate_action(value: &Value) -> Validation {
         }
         "useItem" => {
             let action = object(value, &["type", "itemId", "target"])?;
-            integer(action, "itemId", 1, MAX_ID)?;
+            ItemId::try_from(field(action, "itemId")?.as_i64().ok_or_else(invalid)?)
+                .map_err(|_| invalid())?;
             if let Some(target) = action.get("target") {
-                let target = number(target, -1, MAX_ID)?;
-                if target != -1 && target < 0 {
-                    return Err(invalid());
+                let target = target.as_i64().ok_or_else(invalid)?;
+                if target != -1 {
+                    ActorId::try_from(target).map_err(|_| invalid())?;
                 }
             }
         }
@@ -223,12 +247,12 @@ pub(crate) fn validate_action(value: &Value) -> Validation {
         }
         "shop" => {
             let action = object(value, &["type", "mode", "rows"])?;
-            let max = match string(action, "mode")? {
-                "buy" => 20,
-                "sell" => 200,
+            let (max, kind) = match string(action, "mode")? {
+                "buy" => (20, RowKind::Item),
+                "sell" => (200, RowKind::Bag),
                 _ => return Err(invalid()),
             };
-            rows(field(action, "rows")?, max, false)?;
+            rows(field(action, "rows")?, max, false, kind)?;
         }
         "storage" => {
             let action = value.as_object().ok_or_else(invalid)?;
@@ -280,11 +304,11 @@ pub(crate) fn validate_action(value: &Value) -> Validation {
             if array(entries, 32)?.is_empty() {
                 return Err(invalid());
             }
-            rows(entries, 32, true)?;
+            rows(entries, 32, true, RowKind::Bag)?;
         }
         "vendingPurchase" => {
             let action = object(value, &["type", "rows"])?;
-            rows(field(action, "rows")?, 32, false)?;
+            rows(field(action, "rows")?, 32, false, RowKind::Bag)?;
         }
         _ => return Err("Unknown automation action.".into()),
     }
@@ -392,16 +416,16 @@ fn validate_workflow(value: &Value) -> Validation {
             }
             "buy" | "sell" => {
                 let step = object(value, &["type", "rows"])?;
-                let max = if string(step, "type")? == "buy" {
-                    20
+                let (max, kind) = if string(step, "type")? == "buy" {
+                    (20, RowKind::Item)
                 } else {
-                    200
+                    (200, RowKind::Bag)
                 };
                 let entries = field(step, "rows")?;
                 if array(entries, max)?.is_empty() {
                     return Err(invalid());
                 }
-                rows(entries, max, false)?;
+                rows(entries, max, false, kind)?;
             }
             "deposit" | "withdraw" => {
                 let step = object(value, &["type", "bagId", "count"])?;
@@ -1243,13 +1267,155 @@ pub(crate) fn validate_request(action: &str, request: &Value) -> Validation {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RequestKind {
+    Command,
+    Workflow,
+    Routine,
+    Macro,
+    Service,
+    Social,
+    Memo,
+    SocketPreview,
+    Socket,
+    RefinePreview,
+    Refine,
+    RefineAdvance,
+    Warp,
+    WarpPreview,
+    WarpCancel,
+}
+#[derive(Debug)]
+struct UnknownBotAction;
+impl TryFrom<&str> for RequestKind {
+    type Error = UnknownBotAction;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Ok(match value {
+            "command" => Self::Command,
+            "workflow" => Self::Workflow,
+            "routine" => Self::Routine,
+            "macro" => Self::Macro,
+            "service" => Self::Service,
+            "social" => Self::Social,
+            "memo" => Self::Memo,
+            "socketPreview" => Self::SocketPreview,
+            "socket" => Self::Socket,
+            "refinePreview" => Self::RefinePreview,
+            "refine" => Self::Refine,
+            "refineAdvance" => Self::RefineAdvance,
+            "warp" => Self::Warp,
+            "warpPreview" => Self::WarpPreview,
+            "warpCancel" => Self::WarpCancel,
+            _ => return Err(UnknownBotAction),
+        })
+    }
+}
+impl RequestKind {
+    fn wire_name(self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::Workflow => "workflow",
+            Self::Routine => "routine",
+            Self::Macro => "macro",
+            Self::Service => "service",
+            Self::Social => "social",
+            Self::Memo => "memo",
+            Self::SocketPreview => "socketPreview",
+            Self::Socket => "socket",
+            Self::RefinePreview => "refinePreview",
+            Self::Refine => "refine",
+            Self::RefineAdvance => "refineAdvance",
+            Self::Warp => "warp",
+            Self::WarpPreview => "warpPreview",
+            Self::WarpCancel => "warpCancel",
+        }
+    }
+}
+
+// The immutable borrow keeps the validated payload unchanged until encoding.
+// This aggregate's kind-specific schema is relational, so no Generic/serde derive.
+struct AdmittedRequest<'a> {
+    kind: RequestKind,
+    payload: &'a Value,
+}
+impl<'a> AdmittedRequest<'a> {
+    fn admit(action: &str, payload: &'a Value) -> Result<Self, String> {
+        // Byte limits and existing family-specific checks retain their precedence.
+        validate_request(action, payload)?;
+        let kind = RequestKind::try_from(action).map_err(|_| "Unknown bot action.")?;
+        Ok(Self { kind, payload })
+    }
+    fn script(&self) -> Result<String, String> {
+        let action_json = serde_json::to_string(self.kind.wire_name()).map_err(|_| invalid())?;
+        let request_json = serde_json::to_string(self.payload).map_err(|_| invalid())?;
+        Ok(format!(
+            "window.__RAYRAG__?.perform({action_json},{request_json})"
+        ))
+    }
+}
+
 pub(crate) fn request_script(action: &str, request: &Value) -> Result<String, String> {
-    validate_request(action, request)?;
-    let action_json = serde_json::to_string(action).map_err(|_| invalid())?;
-    let request_json = serde_json::to_string(request).map_err(|_| invalid())?;
-    Ok(format!(
-        "window.__RAYRAG__?.perform({action_json},{request_json})"
-    ))
+    AdmittedRequest::admit(action, request)?.script()
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    #[test]
+    fn admitted_family_names_preserve_every_dispatch_name() {
+        for name in [
+            "command",
+            "workflow",
+            "routine",
+            "macro",
+            "service",
+            "social",
+            "memo",
+            "socketPreview",
+            "socket",
+            "refinePreview",
+            "refine",
+            "refineAdvance",
+            "warp",
+            "warpPreview",
+            "warpCancel",
+        ] {
+            assert_eq!(RequestKind::try_from(name).unwrap().wire_name(), name);
+        }
+        assert!(RequestKind::try_from("unknown").is_err());
+    }
+    #[test]
+    fn admitted_requests_preserve_data_and_size_error_precedence() {
+        let value = serde_json::json!({"type":"useItem", "itemId":501, "target":0});
+        let before = value.clone();
+        let request = AdmittedRequest::admit("command", &value).unwrap();
+        assert_eq!(
+            request.script().unwrap(),
+            format!(
+                "window.__RAYRAG__?.perform(\"command\",{})",
+                serde_json::to_string(&value).unwrap()
+            )
+        );
+        assert_eq!(value, before);
+        for target in [-1, 0, i64::from(i32::MAX)] {
+            assert!(AdmittedRequest::admit(
+                "command",
+                &serde_json::json!({"type":"useItem","itemId":501,"target":target})
+            )
+            .is_ok());
+        }
+        let oversized = serde_json::json!({"unknown":"x".repeat(MAX_REQUEST_BYTES)});
+        assert_eq!(
+            AdmittedRequest::admit("unknown", &oversized).err().unwrap(),
+            "Automation request exceeds its limit."
+        );
+        assert_eq!(
+            AdmittedRequest::admit("unknown", &serde_json::json!({}))
+                .err()
+                .unwrap(),
+            "Unknown bot action."
+        );
+    }
 }
 
 #[cfg(test)]

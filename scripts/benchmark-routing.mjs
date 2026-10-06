@@ -26,6 +26,7 @@ async function bundle(name,ref){
   return import(pathToFileURL(output).href);
 }
 function counters(api){
+  /** @type {import("./tooling-domain-values.mjs").RoutingWorkCounters} */
   const stats={planRequests:0,searchedPlans:0,stepChecks:0};
   const plan=api.GridNavigator.prototype.plan,step=api.GridNavigator.prototype.step;
   api.GridNavigator.prototype.step=function(...args){stats.stepChecks++;return step.apply(this,args);};
@@ -77,6 +78,7 @@ function scenarios(api){
     {name:'unique short routes (100 cache misses)',make:()=>{const nav=new api.GridNavigator(open);return {run:()=>{for(let i=0;i<100;i++)nav.plan({x:100+i,y:100},{x:106+i,y:102},{range:1,maxDistance:20});},outcome:()=>100};}},
   ];
 }
+/** @returns {readonly import("./tooling-domain-values.mjs").RoutingSample[]} */
 function measure(api){
   const stats=counters(api),results=[];
   for(const scenario of scenarios(api)){

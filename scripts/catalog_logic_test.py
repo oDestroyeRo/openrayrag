@@ -3,6 +3,7 @@
 import base64
 import copy
 import csv
+from dataclasses import FrozenInstanceError
 import hashlib
 import importlib.util
 import io
@@ -11,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tarfile
+import tempfile
 import types
 import unittest
 from unittest import mock
@@ -19,6 +21,9 @@ import zipfile
 import catalog_logic
 import navigation_logic
 import release_policy
+from catalog_logic import RecoveryResources, RefineRule
+from navigation_logic import GridDimensions, MapPosition, PortalArea, SceneMapCode, validate_grid
+from release_policy import ArchiveDigest, PublicAsset, public_asset_index
 
 SCRIPTS = Path(__file__).parent
 
@@ -381,6 +386,230 @@ class ReleasePolicy(unittest.TestCase):
             release_policy.validate_bundle_metadata(info, '1.2.4')
         with self.assertRaisesRegex(ValueError, 'different application'):
             release_policy.compare_app_manifests([('binary', 'left')], [('binary', 'right')])
+
+
+class NavigationValues(unittest.TestCase):
+    def test_scene_key_confines_url_and_filename_without_changing_grammar(self):
+        code = SceneMapCode('prt_fild08')
+        self.assertEqual(code.bundle_filename, 'rayrag-prt_fild08-scene.bundle')
+        self.assertEqual(code.source_url, 'https://websea01.rayrag.com/StreamingAssets/aa/WebGL/scenes_scenes_assets_scenes_maps_prt_fild08.unity.bundle')
+        for value in ['', 'A', '../town', 'town/other', 'a' * 65, None]:
+            with self.subTest(code=value), self.assertRaisesRegex(ValueError, 'Invalid map code'):
+                SceneMapCode(value)
+        with self.assertRaises(FrozenInstanceError):
+            code.value = 'town'
+        self.assertFalse(hasattr(code, '__dict__'))
+
+    def test_dimensions_and_positions_enforce_integer_cell_bounds(self):
+        dimensions = GridDimensions(4, 3)
+        self.assertEqual((dimensions.cell_count, dimensions.bitset_bytes), (12, 2))
+        position = MapPosition(dimensions, 2, 1)
+        self.assertEqual(position.index, 6)
+        self.assertEqual(position.to_json(), {'x': 2, 'y': 1})
+        for width, height in [(0, 1), (1, 0), (513, 1), (1, 513), (True, 1), (1.0, 1), ('1', 1)]:
+            with self.subTest(dimensions=(width, height)), self.assertRaises(ValueError):
+                GridDimensions(width, height)
+        for x, y in [(-1, 0), (0, -1), (4, 0), (0, 3), (True, 0), (0, 1.0)]:
+            with self.subTest(position=(x, y)), self.assertRaises(ValueError):
+                MapPosition(dimensions, x, y)
+        with self.assertRaises(ValueError):
+            MapPosition({'width': 4, 'height': 3}, 0, 0)
+
+    def test_portal_geometry_is_immutable_and_projects_detached_json(self):
+        dimensions = GridDimensions(2, 2)
+        position = MapPosition(dimensions, 0, 0)
+        area = PortalArea(position, 1, 1)
+        self.assertEqual(list(area.cells()), [(x, y) for y in [-1, 0, 1] for x in [-1, 0, 1]])
+        self.assertEqual(json.dumps(area.to_json(), separators=(',', ':')),
+                         '{"x":0,"y":0,"halfWidth":1,"halfHeight":1}')
+        document = area.to_json()
+        document['x'] = 1
+        self.assertEqual(area.center.x, 0)
+        for record, field, value in [(dimensions, 'width', 3), (position, 'x', 1), (area, 'half_width', 2)]:
+            with self.subTest(record=type(record).__name__), self.assertRaises(FrozenInstanceError):
+                setattr(record, field, value)
+            self.assertFalse(hasattr(record, '__dict__'))
+        for center, width, height in [(position, -1, 0), (position, 3, 0), (position, 0, 3),
+                                      (position, True, 0), (position, 1.0, 0), (None, 1, 1)]:
+            with self.subTest(extents=(width, height)), self.assertRaises(ValueError):
+                PortalArea(center, width, height)
+
+    def inputs(self):
+        grid = {'map': 'town', 'width': 2, 'height': 2,
+                'walkableBitsBase64': base64.b64encode(b'\x09').decode(),
+                'snipableOnlyBitsBase64': base64.b64encode(b'\x04').decode(),
+                'sourceUrl': 'url', 'sourceSha256': 'a' * 64}
+        source = {'map': 'town', 'width': 2, 'height': 2, 'walkableCount': 2, 'blockedCount': 2}
+        portal = {'review': 'retained extension', 'halfHeight': 1, 'x': 0, 'halfWidth': 1, 'y': 0}
+        return source, grid, [portal]
+
+    def test_reviewed_grid_preserves_wire_values_order_and_extensions(self):
+        source, grid, portals = self.inputs()
+        before = copy.deepcopy((source, grid, portals))
+        result = validate_grid(source, grid, portals)
+        expected = {**grid, 'walkableCount': 2, 'blockedCount': 2, 'portals': portals}
+        self.assertEqual(json.dumps(result, separators=(',', ':')), json.dumps(expected, separators=(',', ':')))
+        self.assertEqual((source, grid, portals), before)
+        result['portals'][0]['x'] = 1
+        self.assertEqual(portals[0]['x'], 0)
+
+    def test_existing_grid_and_portal_error_precedence_is_retained(self):
+        source, grid, portals = self.inputs()
+        invalid_bits = {**grid, 'walkableBitsBase64': '!invalid'}
+        for broken, message in [({**invalid_bits, 'width': 0}, 'town: unsupported dimensions'),
+                                ({**invalid_bits, 'width': 3}, 'town: dimensions differ')]:
+            with self.subTest(error=message), self.assertRaisesRegex(ValueError, message):
+                validate_grid(source, broken, portals)
+        invalid_portals = [({**portals[0], 'x': 3, 'halfWidth': 'bad'}, 'Invalid portal values'),
+                           ({**portals[0], 'x': 3, 'halfWidth': 3}, 'town: portal center outside map'),
+                           ({**portals[0], 'halfWidth': 3}, 'town: invalid portal extent')]
+        for portal, message in invalid_portals:
+            with self.subTest(error=message), self.assertRaisesRegex(ValueError, message):
+                validate_grid(source, grid, [portal])
+
+    def test_travel_uses_bounded_positions_and_preserves_edge_json(self):
+        travel = load_script('build-travel-catalog')
+        report, grids, blobs = CatalogLogic().travel_inputs(travel)
+        report_raw = json.dumps(report).encode()
+        catalog = travel.build_catalog(report_raw, grids, blobs)
+        expected = {'id': 'start:0,0,0,0:end:1,1', 'fromMap': 'start', 'toMap': 'end',
+                    'area': {'x': 0, 'y': 0, 'halfWidth': 0, 'halfHeight': 0}, 'arrival': {'x': 1, 'y': 1},
+                    'source': {'kind': 'Warp', 'commit': travel.PIN, 'path': next(iter(blobs)), 'line': 1}}
+        self.assertEqual(json.dumps(catalog['edges'][0], separators=(',', ':')), json.dumps(expected, separators=(',', ':')))
+        dimensions = GridDimensions.from_export(grids['end'], 'end')
+        self.assertTrue(travel.walkable(dimensions, b'\x0f', 1, 1))
+        self.assertFalse(travel.walkable(dimensions, b'\x0f', -1, 0))
+        self.assertFalse(travel.walkable(dimensions, b'\x0f', 2, 0))
+
+    def test_travel_admits_dimensions_once_per_used_map_after_bounds_skips(self):
+        travel = load_script('build-travel-catalog')
+        report, grids, blobs = CatalogLogic().travel_inputs(travel)
+        # An unused invalid map and an outside-cell arrival must keep their
+        # existing skip behavior instead of triggering eager validation.
+        grids['unused'] = {'width': 0, 'height': 0, 'walkableBitsBase64': '', 'portals': []}
+        grids['outside'] = {'width': 513, 'height': 1, 'walkableBitsBase64': '', 'portals': []}
+        evidence = copy.deepcopy(report['perMapEvidence']['start'][0]['sources'][0])
+        evidence['line'] = 2
+        evidence['destinations'] = [['outside', 600, 0]]
+        report['perMapEvidence']['start'][0]['sources'].extend([evidence, copy.deepcopy(evidence)])
+        path, = blobs
+        blobs[path] += b'\nWarp("start", "gate", 0, 0, 0, 0, "outside", 600, 0);'
+        with mock.patch.object(GridDimensions, 'from_export', wraps=GridDimensions.from_export) as admit:
+            result = travel.build_catalog(json.dumps(report).encode(), grids, blobs)
+        self.assertEqual([call.args[1] for call in admit.call_args_list], ['end', 'start'])
+        self.assertEqual(result['excluded'], {'blockedArrival': 2})
+        self.assertEqual(len(result['edges']), 1)
+
+
+class CatalogValues(unittest.TestCase):
+    def test_recovery_resource_roles_are_named_validated_and_immutable(self):
+        hp = RecoveryResources(hp=True, sp=False)
+        sp = RecoveryResources(hp=False, sp=True)
+        both = RecoveryResources(hp=True, sp=True)
+        self.assertEqual((hp.hp, hp.sp, sp.hp, sp.sp, both.hp, both.sp), (True, False, False, True, True, True))
+        self.assertEqual(RecoveryResources(hp=False, sp=False).hp, False)
+        with self.assertRaises(TypeError):
+            RecoveryResources(True, False)
+        for hp_value, sp_value in [(1, False), (True, 0), ('yes', False), (False, None)]:
+            with self.subTest(resources=(hp_value, sp_value)), self.assertRaises(ValueError):
+                RecoveryResources(hp=hp_value, sp=sp_value)
+        with self.assertRaises(FrozenInstanceError):
+            hp.sp = True
+        self.assertFalse(hasattr(hp, '__dict__'))
+
+    def test_refine_rule_binds_rank_to_sequential_thresholds_and_canonical_costs(self):
+        rows = [[i, i + 10, i + 20, i + 30, i + 40] for i in range(20)]
+        costs = {0: (985, 2000), 1: (1010, 200), 2: (1011, 1000), 3: (984, 5000), 4: (984, 10000)}
+        for rank in range(5):
+            rule = RefineRule.from_sequential_rows(rank, rows)
+            column = rank - 1 if rank else 4
+            ore, cost = costs[rank]
+            expected = {'rank': rank, 'oreItemId': ore, 'zenyCost': cost,
+                        'thresholds': [row[column] for row in rows[:10]]}
+            self.assertEqual(json.dumps(rule.to_json(), separators=(',', ':')), json.dumps(expected, separators=(',', ':')))
+            self.assertEqual(rule.materials, costs[rank])
+        armor = RefineRule.from_sequential_rows(0, rows)
+        rows[0][4] = 0
+        self.assertEqual(armor.thresholds[0], 40)
+        armor.to_json()['thresholds'][0] = 0
+        self.assertEqual(armor.thresholds[0], 40)
+        with self.assertRaises(FrozenInstanceError):
+            armor.rank = 1
+        with self.assertRaises(TypeError):
+            armor.thresholds[0] = 0
+        self.assertFalse(hasattr(armor, '__dict__'))
+
+    def test_refine_rule_rejects_invalid_rank_count_probability_and_mutable_storage(self):
+        for rank in [-1, 5, True, 1.0, None]:
+            with self.subTest(rank=rank), self.assertRaisesRegex(ValueError, 'Invalid refine rank'):
+                RefineRule(rank=rank, thresholds=(50,) * 10)
+        for thresholds in [(50,) * 9, (50,) * 11, (-1,) * 10, (101,) * 10, (True,) * 10, [50] * 10]:
+            with self.subTest(thresholds=thresholds), self.assertRaisesRegex(ValueError, 'Invalid sequential refine thresholds'):
+                RefineRule(rank=1, thresholds=thresholds)
+        with self.assertRaisesRegex(ValueError, 'Invalid sequential refine thresholds'):
+            RefineRule.from_sequential_rows(1, [[50] * 5] * 9)
+
+
+class ReleaseValues(unittest.TestCase):
+    def test_public_asset_requires_valid_flat_identity_size_and_digest(self):
+        valid = PublicAsset('app.tar.gz', 5, 'a' * 64)
+        for name in ['', '.', '..', '../app', '/app', 'folder/app', 'space app', None]:
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                PublicAsset(name, valid.size, valid.sha256)
+        for size in [0, -1, 256 * 1024 * 1024 + 1, True, 1.0, None]:
+            with self.subTest(size=size), self.assertRaises(ValueError):
+                PublicAsset(valid.name, size, valid.sha256)
+        for digest in ['a' * 63, 'a' * 65, 'A' * 64, 'sha256:' + 'a' * 64, None]:
+            with self.subTest(digest=digest), self.assertRaises(ValueError):
+                PublicAsset(valid.name, valid.size, digest)
+        self.assertEqual(PublicAsset('max.tar.gz', 256 * 1024 * 1024, 'b' * 64).size, 256 * 1024 * 1024)
+
+    def test_asset_index_owns_immutable_records_and_preserves_wire_projection(self):
+        wire = {'name': 'app.tar.gz', 'size': 5, 'sha256': 'a' * 64}
+        index, total = public_asset_index([wire], 'sha256:' + 'b' * 64)
+        asset = index[wire['name']]
+        self.assertIsInstance(asset, PublicAsset)
+        self.assertEqual(total, 5)
+        self.assertEqual(json.dumps(asset.to_json(), separators=(',', ':')), json.dumps(wire, separators=(',', ':')))
+        wire['size'] = 6
+        self.assertEqual(asset.size, 5)
+        asset.to_json()['size'] = 7
+        self.assertEqual(asset.size, 5)
+        for field, value in [('name', 'other.zip'), ('size', 7), ('sha256', 'c' * 64)]:
+            with self.subTest(field=field), self.assertRaises(FrozenInstanceError):
+                setattr(asset, field, value)
+        self.assertFalse(hasattr(asset, '__dict__'))
+
+    def test_archive_digest_is_algorithm_specific_and_immutable(self):
+        digest = ArchiveDigest('sha256:' + 'a' * 64)
+        self.assertEqual(digest, ArchiveDigest(digest.value))
+        for value in ['a' * 64, 'sha1:' + 'a' * 64, 'sha256:' + 'A' * 64, None]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                ArchiveDigest(value)
+        with self.assertRaises(FrozenInstanceError):
+            digest.value = 'sha256:' + 'b' * 64
+
+    def test_asset_validation_retains_first_error_before_effects(self):
+        asset = {'name': 'app.tar.gz', 'size': 5, 'sha256': 'a' * 64}
+        with self.assertRaisesRegex(ValueError, 'Invalid ZIP digest'):
+            public_asset_index([], 'invalid')
+        with self.assertRaisesRegex(ValueError, 'Invalid or duplicate public asset name'):
+            public_asset_index([asset, {**asset, 'size': 0, 'sha256': 'invalid'}], 'sha256:' + 'b' * 64)
+        with self.assertRaisesRegex(ValueError, 'Invalid asset fields'):
+            public_asset_index([{**asset, 'extra': True}], 'sha256:' + 'b' * 64)
+
+    def test_stream_consumer_preserves_verification_result_json(self):
+        public_zip = load_script('release-public-zip')
+        with tempfile.TemporaryDirectory() as folder:
+            archive = Path(folder) / 'artifact.zip'
+            with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as target:
+                target.writestr('asset.bin', b'proof')
+            digest = 'sha256:' + hashlib.sha256(archive.read_bytes()).hexdigest()
+            assets = [{'name': 'asset.bin', 'size': 5, 'sha256': hashlib.sha256(b'proof').hexdigest()}]
+            result = public_zip.verify_archive(archive, assets, digest)
+            expected = {'zipBytes': archive.stat().st_size, 'zipDigest': digest, 'publicAssetCount': 1,
+                        'proof': 'Original Actions ZIP digest and every entry hash/size equal anonymous public assets'}
+            self.assertEqual(json.dumps(result, separators=(',', ':')), json.dumps(expected, separators=(',', ':')))
 
 
 if __name__ == '__main__':

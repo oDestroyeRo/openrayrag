@@ -1,4 +1,5 @@
 import { filter, map, pipe } from 'remeda';
+import { sourceCommitSha, stableReleaseVersion } from './tooling-domain-values.mjs';
 // Secret-free native packages for PRs, and same-source manual installers for releases.
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
@@ -15,6 +16,7 @@ import { platforms, assertArchitecture, packageBuildArgs } from './ci-platform-p
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export { platforms, assertArchitecture, packageConfig } from './ci-platform-policy.mjs';
+/** @param {unknown} ok @param {string} message @returns {asserts ok} */
 function requireValue(ok, message) { if (!ok) throw new Error(message); }
 const run = (file,args,options={}) => execFileSync(file,args,{cwd:root,stdio:['ignore','pipe','pipe'],...options});
 async function walk(folder, skipLinks=false) {
@@ -107,6 +109,7 @@ async function inspect(platform,bundle,binary,version,identifier,smoke) {
     return payload;
   } finally { await rm(temporary,{recursive:true,force:true}); }
 }
+/** @param {import("./tooling-domain-values.mjs").PackagePlatform} platform @param {string} mode */
 export async function build(platform, mode) {
   const spec=platforms[platform];
   requireValue(spec && process.platform===spec.os && process.arch===spec.arch,'Wrong native package runner/architecture.');
@@ -134,7 +137,7 @@ export async function build(platform, mode) {
   const payload=await inspect(platform,join(release,'bundle'),join(release,`rayrag-companion${platform==='windows'?'.exe':''}`),version,smoke?'com.rayrag.companion.ci':'com.rayrag.companion',smoke);
   const folder=join(root,'platform-bundles',platform);
   await mkdir(folder,{recursive:true});requireValue((await readdir(folder)).length===0,'Refusing to mix package artifacts.');
-  const identity={sourceSha,version}, workflow={runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT};
+  const identity={sourceSha:sourceCommitSha(sourceSha),version:stableReleaseVersion(version)}, workflow={runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT};
   if(platform!=='macos') {
     const receipt=platformReceipt(payload,identity,workflow,spec.target);
     payload.set('platform-build.json',Buffer.from(JSON.stringify(receipt,null,2)+'\n'));
@@ -146,5 +149,6 @@ export async function build(platform, mode) {
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
   const [command,platform,mode]=process.argv.slice(2);
   requireValue(command==='build','Unknown package command.');
+  requireValue(platform==='macos'||platform==='windows'||platform==='linux','Wrong native package runner/architecture.');
   await build(platform,mode);
 }

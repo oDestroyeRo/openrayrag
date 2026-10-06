@@ -11,6 +11,34 @@ use std::{
 
 pub(crate) const MAX_ARCHIVE: usize = 128 * 1024 * 1024;
 
+/// Owned verification capability: version and bytes must authenticate against
+/// the key supplied by orchestration (the sole production caller uses the
+/// embedded release key). Immutable sharing cannot replace the verified payload.
+#[derive(Clone)]
+pub(crate) struct VerifiedArchive {
+    bytes: std::sync::Arc<Vec<u8>>,
+    version: crate::updater_logic::StableUpdateVersion,
+}
+impl VerifiedArchive {
+    pub(crate) fn new(
+        bytes: Vec<u8>,
+        asset: crate::updater_logic::CandidateAsset,
+        key: &str,
+    ) -> Result<Self, String> {
+        verify(&bytes, asset.signature(), key, asset.version().as_str())?;
+        Ok(Self {
+            bytes: std::sync::Arc::new(bytes),
+            version: asset.into_version(),
+        })
+    }
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    pub(crate) fn version(&self) -> &str {
+        self.version.as_str()
+    }
+}
+
 pub(crate) fn verify(
     bytes: &[u8],
     signature: &str,
@@ -72,10 +100,38 @@ pub(crate) fn version_is_newer(candidate: &str, installed: &str) -> Option<bool>
 #[cfg(any(target_os = "macos", test))]
 #[derive(frunk::Generic)]
 struct BundleMetadata<'a> {
-    identifier: &'a str,
+    identifier: BundleIdentifier<'a>,
     short_version: &'a str,
     build_version: &'a str,
-    executable: &'a str,
+    executable: BundleExecutable<'a>,
+}
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug)]
+enum BundleIdentityError {
+    Identifier,
+    Executable,
+}
+#[cfg(any(target_os = "macos", test))]
+struct BundleIdentifier<'a>(&'a str);
+#[cfg(any(target_os = "macos", test))]
+impl<'a> TryFrom<&'a str> for BundleIdentifier<'a> {
+    type Error = BundleIdentityError;
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        (value == "com.rayrag.companion")
+            .then_some(Self(value))
+            .ok_or(BundleIdentityError::Identifier)
+    }
+}
+#[cfg(any(target_os = "macos", test))]
+struct BundleExecutable<'a>(&'a str);
+#[cfg(any(target_os = "macos", test))]
+impl<'a> TryFrom<&'a str> for BundleExecutable<'a> {
+    type Error = BundleIdentityError;
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        (value == "rayrag-companion")
+            .then_some(Self(value))
+            .ok_or(BundleIdentityError::Executable)
+    }
 }
 #[cfg(any(target_os = "macos", test))]
 impl<'a> BundleMetadata<'a> {
@@ -87,19 +143,25 @@ impl<'a> BundleMetadata<'a> {
                 .and_then(plist::Value::as_string)
                 .ok_or(key)
         };
-        (text("CFBundleIdentifier").into_validated()
+        // This product validates independent identity fields. Version strings
+        // remain untrusted until `matches`; Generic cannot bypass that relation.
+        (text("CFBundleIdentifier")
+            .and_then(|value| BundleIdentifier::try_from(value).map_err(|_| "CFBundleIdentifier"))
+            .into_validated()
             + text("CFBundleShortVersionString")
             + text("CFBundleVersion")
-            + text("CFBundleExecutable"))
+            + text("CFBundleExecutable").and_then(|value| {
+                BundleExecutable::try_from(value).map_err(|_| "CFBundleExecutable")
+            }))
         .into_result()
         .ok()
         .map(frunk::from_generic)
     }
     fn matches(&self, version: &str) -> bool {
-        self.identifier == "com.rayrag.companion"
+        self.identifier.0 == "com.rayrag.companion"
             && self.short_version == version
             && self.build_version == version
-            && self.executable == "rayrag-companion"
+            && self.executable.0 == "rayrag-companion"
     }
 }
 #[cfg(any(target_os = "macos", test))]
@@ -125,6 +187,33 @@ mod tests {
         let mut altered = b;
         altered[0] ^= 1;
         assert!(verify(&altered, sig, key, "0.2.27").is_err());
+    }
+
+    #[test]
+    fn verified_archive_retains_authenticated_bytes_and_exact_version_without_mutable_access() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("update-signature-test.json")).unwrap();
+        let bytes = STANDARD
+            .decode(fixture["payloadBase64"].as_str().unwrap())
+            .unwrap();
+        let asset = |version: &str| {
+            let metadata = serde_json::json!({"version":version,"platforms":{"darwin-aarch64":{
+                "url":format!("https://github.com/oDestroyeRo/openrayrag/releases/download/v{version}/Rayrag_Companion_{version}_aarch64.app.tar.gz"),
+                "signature":fixture["signature"]}}});
+            crate::updater_logic::parse_feed(&serde_json::to_vec(&metadata).unwrap(), "0.1.0")
+                .unwrap()
+                .unwrap()
+        };
+        let key = fixture["publicKey"].as_str().unwrap();
+        let archive = VerifiedArchive::new(bytes.clone(), asset("0.2.27"), key).unwrap();
+        let retained = archive.clone();
+        assert_eq!(archive.bytes(), bytes);
+        assert_eq!(archive.version(), "0.2.27");
+        assert_eq!(archive.bytes().as_ptr(), retained.bytes().as_ptr());
+        assert!(VerifiedArchive::new(bytes.clone(), asset("0.2.28"), key).is_err());
+        let mut altered = bytes;
+        altered[0] ^= 1;
+        assert!(VerifiedArchive::new(altered, asset("0.2.27"), key).is_err());
     }
 
     fn metadata(version: &str) -> plist::Value {

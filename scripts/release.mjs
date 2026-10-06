@@ -1,3 +1,5 @@
+import { fileBytes } from './release-policy.mjs';
+import { sourceCommitSha, gitTagObjectSha, releaseId, artifactDigest } from './tooling-domain-values.mjs';
 import { filter, map, sort } from "remeda";
 // CI-only entry point. Importing this module never reads signing keys or contacts GitHub.
 import { execFileSync } from "node:child_process";
@@ -90,12 +92,13 @@ async function writeFiles(folder, files) {
   );
   for (const [name, bytes] of files) await writeFile(join(folder, name), bytes);
 }
+/** @param {Map<string, Buffer>} files @param {import('./tooling-domain-values.mjs').ReleaseIdentity} id */
 async function verifyNative(files, id) {
   const folder = await mkdtemp(join(tmpdir(), "rayrag-release-verify-"));
   try {
     const names = assetNames(id.version);
     for (const name of [names.archive, names.dmg])
-      await writeFile(join(folder, name), files.get(name));
+      await writeFile(join(folder, name), fileBytes(files, name));
     execFileSync(
       "python3",
       [
@@ -153,16 +156,19 @@ function trustedContext() {
     "--reverse",
     "refs/remotes/origin/main",
   ]).split("\n");
+  /** @param {import('./tooling-domain-values.mjs').SourceCommitSha} commit */
   const dateFor = async (commit) =>
     new Date(exec("git", ["show", "-s", "--format=%cI", commit])).toISOString();
+  /** @param {import('./tooling-domain-values.mjs').GitTagObjectSha} objectSha */
+  const readTagObject = objectSha => readLocalTagObject(repositoryRoot, objectSha);
   return {
     history,
-    sha,
+    sha: sourceCommitSha(sha),
     dateFor,
-    readTagObject: (objectSha) => readLocalTagObject(repositoryRoot, objectSha),
+    readTagObject,
   };
 }
-/** @param {string} root @param {string} sha */
+/** @param {string} root @param {import('./tooling-domain-values.mjs').GitTagObjectSha} sha */
 export function readLocalTagObject(root, sha) {
   requireValue(/^[a-f0-9]{40}$/.test(sha), "Invalid annotated tag SHA.");
   const output = execFileSync("git", ["cat-file", "--batch"], {
@@ -188,7 +194,7 @@ export function readLocalTagObject(root, sha) {
 export class GitHubReleaseApi {
   /**
    * @param {string | undefined} token
-   * @param {((sha: string) => ReturnType<typeof readLocalTagObject>) | null} readTagObject
+   * @param {((sha: import('./tooling-domain-values.mjs').GitTagObjectSha) => ReturnType<typeof readLocalTagObject>) | null} readTagObject
    */
   constructor(token, readTagObject = null) {
     requireValue(
@@ -271,7 +277,7 @@ export class GitHubReleaseApi {
           (await boundedBytes(response, 8 * 1024 * 1024)).toString("utf8"),
         );
   }
-  /** @param {string} tag */
+  /** @param {import('./tooling-domain-values.mjs').ReleaseTag} tag @returns {Promise<import('./tooling-domain-values.mjs').ReleaseDto | null>} */
   async release(tag) {
     // The tag endpoint promises published releases only. Authenticated release
     // listing is required to recover drafts, including drafts on later pages.
@@ -293,10 +299,11 @@ export class GitHubReleaseApi {
       "Release listing exceeds the bounded reconciliation limit.",
     );
   }
+  /** @returns {Promise<import('./tooling-domain-values.mjs').ReleaseDto | null>} */
   latest() {
     return this.request("GET", "releases/latest");
   }
-  /** @param {string} tag */
+  /** @param {import('./tooling-domain-values.mjs').ReleaseTag} tag @returns {Promise<import('./tooling-domain-values.mjs').SourceCommitSha | null>} */
   async tagSha(tag) {
     const ref = await this.request(
       "GET",
@@ -310,8 +317,9 @@ export class GitHubReleaseApi {
       obj?.type === "commit" && /^[a-f0-9]{40}$/.test(obj.sha),
       "Tag cannot be resolved to a commit.",
     );
-    return obj.sha;
+    return sourceCommitSha(obj.sha);
   }
+  /** @returns {Promise<readonly import('./tooling-domain-values.mjs').ReservationRefDto[]>} */
   async planRefs() {
     const refs = await this.request(
       "GET",
@@ -323,7 +331,7 @@ export class GitHubReleaseApi {
     );
     return refs;
   }
-  /** @param {string} ref */
+  /** @param {string} ref @returns {Promise<import('./tooling-domain-values.mjs').ReservationRefDto | null>} */
   planRef(ref) {
     requireValue(
       ref.startsWith(PLAN_REF_PREFIX),
@@ -331,7 +339,7 @@ export class GitHubReleaseApi {
     );
     return this.request("GET", `git/ref/${ref.slice("refs/".length)}`);
   }
-  /** @param {string} sha */
+  /** @param {import('./tooling-domain-values.mjs').GitTagObjectSha} sha @returns {Promise<import('./tooling-domain-values.mjs').TagObjectDto | null>} */
   async tagObject(sha) {
     requireValue(/^[a-f0-9]{40}$/.test(sha), "Invalid annotated tag SHA.");
     // Git objects are immutable by SHA. Refs are always read afresh.
@@ -346,8 +354,9 @@ export class GitHubReleaseApi {
   /**
    * @param {string} tag
    * @param {string} message
-   * @param {string} sourceSha
+   * @param {import('./tooling-domain-values.mjs').SourceCommitSha} sourceSha
    * @param {string} pubDate
+   * @returns {Promise<import('./tooling-domain-values.mjs').TagObjectDto | null>}
    */
   createPlanTag(tag, message, sourceSha, pubDate) {
     requireValue(
@@ -371,7 +380,7 @@ export class GitHubReleaseApi {
       },
     });
   }
-  /** @param {string} ref @param {string} sha */
+  /** @param {string} ref @param {import('./tooling-domain-values.mjs').GitTagObjectSha} sha */
   createPlanRef(ref, sha) {
     requireValue(
       ref.startsWith(PLAN_REF_PREFIX),
@@ -379,11 +388,11 @@ export class GitHubReleaseApi {
     );
     return this.request("POST", "git/refs", { ref, sha });
   }
-  /** @param {string} tag @param {string} sha */
+  /** @param {import('./tooling-domain-values.mjs').ReleaseTag} tag @param {import('./tooling-domain-values.mjs').SourceCommitSha} sha */
   createTag(tag, sha) {
     return this.request("POST", "git/refs", { ref: `refs/tags/${tag}`, sha });
   }
-  /** @param {{tag: string, version: string}} id @param {string} body */
+  /** @param {import('./tooling-domain-values.mjs').ReleaseIdentity} id @param {string} body */
   createDraft(id, body) {
     return this.request("POST", "releases", {
       tag_name: id.tag,
@@ -398,7 +407,7 @@ export class GitHubReleaseApi {
       make_latest: "false",
     });
   }
-  /** @param {number} id */
+  /** @param {import('./tooling-domain-values.mjs').ReleaseId} id @returns {Promise<readonly import('./tooling-domain-values.mjs').ReleaseAssetDto[]>} */
   async assets(id) {
     const assets = await this.request(
       "GET",
@@ -410,6 +419,7 @@ export class GitHubReleaseApi {
     );
     return assets;
   }
+  /** @param {import('./tooling-domain-values.mjs').ReleaseAssetDto} asset @returns {Promise<Buffer | null>} */
   downloadAsset(asset) {
     requireValue(
       Number.isSafeInteger(asset.id) &&
@@ -425,8 +435,9 @@ export class GitHubReleaseApi {
       accept: "application/octet-stream",
     });
   }
+  /** @param {import('./tooling-domain-values.mjs').ReleaseDto} release @param {readonly string[]} names @returns {Promise<Map<string, Buffer>>} */
   async downloadRelease(release, names) {
-    const assets = await this.assets(release.id);
+    const assets = await this.assets(releaseId(release.id));
     requireValue(
       assets.length === names.length &&
         new Set(map(assets, (a) => a.name)).size === names.length &&
@@ -446,7 +457,7 @@ export class GitHubReleaseApi {
       ),
     );
   }
-  /** @param {number} id @param {string} name @param {Buffer} bytes */
+  /** @param {import('./tooling-domain-values.mjs').ReleaseId} id @param {string} name @param {Buffer} bytes */
   upload(id, name, bytes) {
     return this.request(
       "POST",
@@ -454,7 +465,7 @@ export class GitHubReleaseApi {
       bytes,
     );
   }
-  /** @param {number} id @param {Record<string, unknown>} body */
+  /** @param {import('./tooling-domain-values.mjs').ReleaseId} id @param {Record<string, unknown>} body */
   publish(id, body) {
     // Also normalize older drafts' metadata; tag/provenance remain authoritative.
     return this.request("PATCH", `releases/${id}`, {
@@ -462,6 +473,7 @@ export class GitHubReleaseApi {
       target_commitish: "main",
     });
   }
+  /** @param {import('./tooling-domain-values.mjs').ArtifactIdentity} artifact @param {import('./tooling-domain-values.mjs').ReleaseIdentity} id @param {string} folder */
   async restoreArtifact(artifact, id, folder) {
     validateArtifact(artifact);
     const meta = await this.request("GET", `actions/artifacts/${artifact.id}`);
@@ -482,7 +494,7 @@ export class GitHubReleaseApi {
       { bytes: true },
     );
     requireValue(
-      bytes && `sha256:${sha256(bytes)}` === artifact.digest,
+      bytes && artifactDigest(`sha256:${sha256(bytes)}`) === artifact.digest,
       "Workflow artifact ZIP checksum differs.",
     );
     const temporary = await mkdtemp(join(tmpdir(), "rayrag-release-artifact-"));
@@ -552,6 +564,7 @@ async function main() {
     source = trustedContext(),
     config = await readConfig(),
     publicKey = config.plugins.updater.pubkey;
+  /** @type {import('./tooling-domain-values.mjs').PlanningContext} */
   const context = {
     ...source,
     publicKey,
@@ -656,10 +669,12 @@ async function main() {
       artifactName = `release-${id.sourceSha}-${runId}-${runAttempt}`;
     const build = { runId, runAttempt, artifactName, schemaVersion: 3 },
       platforms = [];
-    for (const [platform, target] of [
+    /** @type {readonly [string, import('./tooling-domain-values.mjs').PackageTarget][]} */
+    const platformTargets = [
       ["windows", WINDOWS_TARGET],
       ["linux", LINUX_TARGET],
-    ]) {
+    ];
+    for (const [platform, target] of platformTargets) {
       const directory = join(repositoryRoot, "platform-bundles", platform);
       const platformFiles = new Map(
         await Promise.all(

@@ -37,7 +37,7 @@ pub(crate) fn save(app_data: PathBuf, d: &FormDocument) -> Result<(), String> {
         .map_err(|_| ERROR)?
         .ok_or(ERROR)?;
     if let Some(old) = read(&dir)? {
-        validate_revision(d, &old, &bytes)?;
+        validate_revision(d.checked_revision()?, &old, &bytes)?;
     }
     file::private_file(&dir, "current.json").map_err(|_| ERROR)?;
     file::remove_private_file(&dir, ".current.tmp").map_err(|_| ERROR)?;

@@ -1,4 +1,5 @@
 import { sameSupplyItem, type SupplyReceipt } from './supply-receipt-logic';
+import { inventoryItemDraft } from './character-state-logic';
 import type { SupplyContext } from './supply-trip-logic';
 import type { WorldEvent } from './world-protocol';
 export { createSupplyReceipt, confirmSupplyReceipt, type SupplyReceipt } from './supply-receipt-logic';
@@ -39,7 +40,7 @@ export function observeSupplyReceipt(
       continue;
     receipt.acknowledged = true;
     // Retain receipt rows separately: WorldState may be discarded on close.
-    const rows = structuredClone(receipt.containerBefore ?? []);
+    const rows = (receipt.containerBefore ?? []).map(inventoryItemDraft);
     if (a.kind === "store" || a.kind === "cart") {
       const index = rows.findIndex((row) => row.bagId === event.item.bagId);
       if (index >= 0) rows[index] = structuredClone(event.item);

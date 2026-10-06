@@ -1,44 +1,50 @@
+import { gitTagObjectSha, reservationTagValues } from './tooling-domain-values.mjs';
 import { find } from "remeda";
 // Durable, create-only release orchestration. GitHub effects use the injected API.
-import { serializePlan, validatePlan } from "./semantic-release-policy.mjs";
+import { serializePlan, validatePlan, parsePlan } from "./semantic-release-policy.mjs";
 import {
   MAX_RESERVATIONS, planRefName, serializeReservation,
   validateContext, validateLedger, validateRef, parseReservation,
 } from "./release-reservation-policy.mjs";
 export { PLAN_REF_PREFIX, MAX_RESERVATIONS, MAX_RESERVATION_BYTES, planRefName, serializeReservation } from "./release-reservation-policy.mjs";
+/** @param {unknown} condition @param {string} message @returns {asserts condition} */
 function requireValue(condition, message) { if (!condition) throw new Error(message); }
 const validSha = value => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
 
+/** @param {Pick<import('./tooling-domain-values.mjs').ReleaseApi, "tagObject">} api @param {import('./tooling-domain-values.mjs').ReservationRefDto} ref @param {string} [expectedName] */
 async function readRef(api, ref, expectedName) {
-  validateRef(ref, expectedName);
-  const tag = await api.tagObject(ref.object.sha);
+  const checkedRef = structuredClone(validateRef(ref, expectedName));
+  const tag = await api.tagObject(checkedRef.object.sha);
   requireValue(
-    tag?.sha === ref.object.sha,
+    tag?.sha === checkedRef.object.sha,
     "Release tag object SHA differs from its ref.",
   );
   requireValue(
-    tag.tag === ref.ref.slice("refs/tags/".length),
+    tag.tag === checkedRef.ref.slice("refs/tags/".length),
     "Annotated release tag name differs from its ref.",
   );
   requireValue(
     tag.object?.type === "commit" && validSha(tag.object.sha),
     "Annotated release tag must target a commit directly.",
   );
-  const plan = parseReservation(tag.message);
+  const checkedTag = reservationTagValues(tag);
+  const plan = parseReservation(checkedTag.message);
   requireValue(
-    planRefName(plan) === ref.ref,
+    planRefName(plan) === checkedRef.ref,
     "Release plan version differs from its ref.",
   );
   requireValue(
-    plan.sourceSha === tag.object.sha,
+    plan.sourceSha === checkedTag.object.sha,
     "Release plan source differs from its tag target.",
   );
   return plan;
 }
 
+/** @param {import('./tooling-domain-values.mjs').ReservationReadContext} ctx */
 export async function readReservations(ctx) {
   validateContext(ctx);
-  const refs = await ctx.api.planRefs();
+  ctx = { ...ctx, history: [...ctx.history], bridge: { ...ctx.bridge } };
+  const refs = structuredClone(await ctx.api.planRefs());
   requireValue(
     Array.isArray(refs) && refs.length <= MAX_RESERVATIONS,
     "Invalid or oversized release reservation ref list.",
@@ -54,6 +60,7 @@ export async function readReservations(ctx) {
   return validateLedger(ctx, plans);
 }
 
+/** @param {import('./tooling-domain-values.mjs').ReservationContext} ctx @param {import('./tooling-domain-values.mjs').ReleasePlan} plan @param {string} message */
 async function confirmReservation(ctx, plan, message) {
   // A complete ledger read catches a competing reservation or rewritten history;
   // direct readback also confirms that the exact ref still targets these bytes.
@@ -76,11 +83,14 @@ async function confirmReservation(ctx, plan, message) {
   return confirmed;
 }
 
+/** @param {import('./tooling-domain-values.mjs').ReservationContext} ctx @param {import('./tooling-domain-values.mjs').ReleasePlan} plan */
 export async function reservePlan(ctx, plan) {
   // Snapshot before the first effect: neither retries nor caller mutation can
   // change the version, policy, notes or predecessor of this attempt.
-  const frozen = JSON.parse(serializePlan(plan)),
+  const frozen = parsePlan(JSON.parse(serializePlan(plan))),
     message = serializeReservation(frozen);
+  validateContext(ctx);
+  ctx = { ...ctx, history: [...ctx.history], bridge: { ...ctx.bridge } };
   const ledger = await readReservations(ctx);
   const existing = find(ledger,
     (entry) =>
@@ -108,16 +118,17 @@ export async function reservePlan(ctx, plan) {
     return confirmReservation(ctx, frozen, message);
   }
   if (!validSha(created?.sha)) return confirmReservation(ctx, frozen, message);
+  const createdSha = gitTagObjectSha(created.sha);
   const objectPlan = await readRef(ctx.api, {
     ref: name,
-    object: { type: "tag", sha: created.sha },
+    object: { type: "tag", sha: createdSha },
   });
   requireValue(
     serializeReservation(objectPlan) === message,
     "Created release tag differs from the frozen plan.",
   );
   try {
-    await ctx.api.createPlanRef(name, created.sha);
+    await ctx.api.createPlanRef(name, createdSha);
   } catch {
     // Ref creation is a compare-and-set: reconcile an existing exact winner.
   }
@@ -126,9 +137,10 @@ export async function reservePlan(ctx, plan) {
 
 // Downstream stages verify the one frozen plan transported by the trusted
 // planner. Only queued planning scans/validates the full predecessor ledger.
+/** @param {import('./tooling-domain-values.mjs').ReservationContext} ctx @param {import('./tooling-domain-values.mjs').ReleasePlan} plan */
 export async function verifyReservedPlan(ctx, plan) {
   validateContext(ctx);
-  validatePlan(plan);
+  plan = parsePlan(plan);
   requireValue(
     ctx.history[plan.firstParentCount - 1] === plan.sourceSha &&
       plan.firstParentCount > ctx.bridge.firstParentCount,

@@ -1,4 +1,5 @@
 //! A persistent game webview shares the companion window, never its authority.
+use crate::domain_values::{ClippedViewExtent, RequestedViewExtent, ViewOrigin};
 use frunk::{hlist_pat, prelude::IntoValidated};
 use serde::Deserialize;
 use tauri::{webview::WebviewBuilder, Manager, Webview};
@@ -23,13 +24,32 @@ pub(crate) fn create_main(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, frunk::Generic)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GameViewBounds {
     x: f64,
     y: f64,
     width: f64,
     height: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ClippedViewBounds {
+    x: ViewOrigin,
+    y: ViewOrigin,
+    width: ClippedViewExtent,
+    height: ClippedViewExtent,
+}
+#[cfg(test)]
+impl ClippedViewBounds {
+    fn raw(self) -> GameViewBounds {
+        GameViewBounds {
+            x: self.x.get(),
+            y: self.y.get(),
+            width: self.width.get(),
+            height: self.height.get(),
+        }
+    }
 }
 
 fn parked_x(width: f64) -> Result<f64, String> {
@@ -41,30 +61,28 @@ fn parked_x(width: f64) -> Result<f64, String> {
 }
 
 impl GameViewBounds {
-    fn clipped(self, width: f64, height: f64) -> Result<Self, String> {
+    fn clipped(self, width: f64, height: f64) -> Result<ClippedViewBounds, String> {
         if ![self.x, self.y, self.width, self.height, width, height]
             .iter()
             .all(|value| value.is_finite())
         {
             return Err("Invalid game view bounds.".into());
         }
-        ((self.x >= 0.0 && self.x < width)
-            .then_some(self.x)
-            .ok_or(())
-            .into_validated()
-            + (self.y >= 0.0 && self.y < height)
-                .then_some(self.y)
-                .ok_or(())
-            + (self.width >= 1.0).then_some(self.width).ok_or(())
-            + (self.height >= 1.0).then_some(self.height).ok_or(()))
+        (ViewOrigin::try_from((self.x, width)).into_validated()
+            + ViewOrigin::try_from((self.y, height))
+            + RequestedViewExtent::try_from(self.width)
+            + RequestedViewExtent::try_from(self.height))
         .into_result()
-        .map(|hlist_pat!(x, y, requested_width, requested_height)| {
-            frunk::from_generic(frunk::hlist![
+        .map_err(|_| "Invalid game view bounds.")
+        .and_then(|hlist_pat!(x, y, requested_width, requested_height)| {
+            Ok(ClippedViewBounds {
                 x,
                 y,
-                requested_width.min(width - x),
-                requested_height.min(height - y)
-            ])
+                width: ClippedViewExtent::clip(requested_width, width - x.get())
+                    .map_err(|_| "Invalid game view bounds.")?,
+                height: ClippedViewExtent::clip(requested_height, height - y.get())
+                    .map_err(|_| "Invalid game view bounds.")?,
+            })
         })
         .map_err(|_| "Invalid game view bounds.".into())
     }
@@ -119,8 +137,8 @@ pub(crate) fn set_game_view(
         );
     let bounds = bounds.clipped(size.width, size.height)?;
     game.set_bounds(tauri::Rect {
-        position: tauri::LogicalPosition::new(bounds.x, bounds.y).into(),
-        size: tauri::LogicalSize::new(bounds.width, bounds.height).into(),
+        position: tauri::LogicalPosition::new(bounds.x.get(), bounds.y.get()).into(),
+        size: tauri::LogicalSize::new(bounds.width.get(), bounds.height.get()).into(),
     })
     .and_then(|()| game.show())
     .map_err(|_| "Could not show Game.".into())
@@ -179,7 +197,7 @@ mod tests {
             height: 720.0,
         };
         assert_eq!(
-            bounds.clipped(1100.0, 880.0).unwrap(),
+            bounds.clipped(1100.0, 880.0).unwrap().raw(),
             GameViewBounds {
                 x: 24.0,
                 y: 180.0,
@@ -203,8 +221,8 @@ mod tests {
             width: 0.25,
             height: 0.5,
         };
-        assert_eq!(bounds.clipped(100.0, 50.0).unwrap(), expected);
-        assert_eq!(bounds.clipped(100.0, 50.0).unwrap(), expected);
+        assert_eq!(bounds.clipped(100.0, 50.0).unwrap().raw(), expected);
+        assert_eq!(bounds.clipped(100.0, 50.0).unwrap().raw(), expected);
         assert_eq!(bounds.width, 10.0);
         for (width, height) in [
             (f64::NAN, 50.0),

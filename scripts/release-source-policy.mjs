@@ -10,8 +10,9 @@ export const VERSION_PATHS = Object.freeze([
   "src-tauri/tauri.conf.json",
 ]);
 
+/** @param {readonly string[]} values @param {unknown} version @returns {readonly [string, string, string, string]} */
 export function versionContents(values, version) {
-  stableVersion(version);
+  version = stableVersion(version);
   const pkg = JSON.parse(values[0]), config = JSON.parse(values[3]);
   const old = pkg.version;
   requireValue(
@@ -79,7 +80,7 @@ export function validateUpdaterConfig(c) {
   return c;
 }
 
-/** @param {string} sha @param {Buffer} output */
+/** @param {import('./tooling-domain-values.mjs').GitTagObjectSha} sha @param {Buffer} output */
 export function tagResponseBytes(sha, output) {
   const end = output.indexOf(10);
   requireValue(end >= 0, "Malformed Git object response.");
@@ -101,7 +102,7 @@ export function tagResponseBytes(sha, output) {
   return output.subarray(end + 1, end + 1 + size);
 }
 
-/** @param {string} sha @param {Buffer} bytes */
+/** @param {import('./tooling-domain-values.mjs').GitTagObjectSha} sha @param {Buffer} bytes @returns {import('./tooling-domain-values.mjs').TagObjectDto} */
 export function annotatedTag(sha, bytes) {
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes),
     split = text.indexOf("\n\n");
@@ -119,10 +120,12 @@ export function annotatedTag(sha, bytes) {
     sort([...headers.keys()], (a, b) => a < b ? -1 : a > b ? 1 : 0).join("|") === "object|tag|tagger|type",
     "Unexpected annotated Git object headers.",
   );
+  const tag = headers.get("tag"), type = headers.get("type"), objectSha = headers.get("object");
+  requireValue(tag !== undefined && type !== undefined && objectSha !== undefined, "Unexpected annotated Git object headers.");
   return {
     sha,
-    tag: headers.get("tag"),
+    tag,
     message: text.slice(split + 2),
-    object: { type: headers.get("type"), sha: headers.get("object") },
+    object: { type, sha: objectSha },
   };
 }

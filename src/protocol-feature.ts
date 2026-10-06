@@ -17,6 +17,8 @@ export interface InventoryItem {
   bagId: number; itemId: number; count: number; type: 1 | 2;
   flags?: number; refine?: number; guid?: string; slots?: number[];
 }
+/** Readers accept detached wire DTOs or readonly admitted inventory. */
+export type InventoryItemInput = Readonly<Omit<InventoryItem, 'slots'>> & { readonly slots?: readonly number[] };
 export interface PlayerStats {
   level: number; hp: number; maxHp: number;
   jobLevel?: number; zeny?: number; attributes?: Attributes;

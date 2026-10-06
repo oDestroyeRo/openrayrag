@@ -1,26 +1,27 @@
+import { partyMemberId, type PartyMemberId } from './domain-values';
 import { filter } from 'remeda';
 import type { ActorObservations } from './actor-observations';
 import { RESOURCE_STALE_MS } from './actor-resources';
 import type { PartyMember, WorldEvent } from './world-protocol';
 
-import { onlinePartyMembers, distinctPartyActors, type PartyActorBinding, type Party, type Association } from './party-actors-logic';
+import { onlinePartyMembers, distinctPartyActors, partyActorBinding, type PartyActorBinding, type Party, type Association } from './party-actors-logic';
 
 export { type PartyActorBinding } from './party-actors-logic';
 
 /** A full roster row authorizes one visible lifetime only. Partial rows cannot rebind it. */
 export class PartyActorBindings {
   private observations?:ActorObservations;
-  private readonly associations = new Map<number,Association>();
+  private readonly associations = new Map<PartyMemberId,Association>();
   private invalidate(memberId:number, observations:ActorObservations):void {
-    const previous=this.associations.get(memberId);
+    const id=partyMemberId(memberId),previous=this.associations.get(id);
     if(previous?.binding)observations.clearPartyResources(previous.binding.entityId,previous.binding);
-    this.associations.delete(memberId);
+    this.associations.delete(id);
   }
   clear(observations=this.observations):void {
     if(observations)for(const id of this.associations.keys())this.invalidate(id,observations);
     this.associations.clear();
   }
-  get(memberId:number):PartyActorBinding|null {
+  get(memberId:PartyMemberId):PartyActorBinding|null {
     const binding=this.associations.get(memberId)?.binding;return binding?{...binding}:null;
   }
   /** A verified trip may carry one unrevoked member association into a new world.
@@ -35,14 +36,14 @@ export class PartyActorBindings {
       ||!actor||actor.world===captured.world||actor.kind!==0||actor.name!==member.name||actor.partyId!==party.id||actor.partyName!==party.name||!observations.livingPlayer(member.entityId))return null;
     const at=observations.context().at,visibleAt=observations.visibleAt(member.entityId);
     if(visibleAt===null||at<visibleAt||at-visibleAt>RESOURCE_STALE_MS)return null;
-    return {partyId:party.id,memberId:member.memberId,entityId:member.entityId,map,world:actor.world,incarnation:actor.incarnation,affiliationRevision:actor.affiliationRevision};
+    return partyActorBinding({partyId:party.id,memberId:member.memberId,entityId:member.entityId,map,world:actor.world,incarnation:actor.incarnation,affiliationRevision:actor.affiliationRevision});
   }
   observe(event:WorldEvent, party:Party, map:string, observations:ActorObservations, selfId:number|null):void {
     if(event.type==='partyJoined'||event.type==='partyLeft'||!party)this.clear(observations);
     const remember=(member:PartyMember)=>{
       this.invalidate(member.memberId,observations);
       if(!party||member.entityId<=0||member.map!==map||this.associations.size>=32)return;
-      this.associations.set(member.memberId,{member:{...member},context:observations.context(member.entityId),
+      this.associations.set(partyMemberId(member.memberId),{member:{...member},context:observations.context(member.entityId),
         actor:observations.partyActor(member.entityId),binding:null,resourcesApplied:false});
     };
     if(event.type==='partyJoined')for(const member of event.members)remember(member);
@@ -52,7 +53,7 @@ export class PartyActorBindings {
     } else if(event.type==='partyRemove'||event.type==='partyMap')this.invalidate(event.memberId,observations);
     this.sync(party,map,observations,selfId);
     if(event.type==='partyHealth') {
-      const binding=this.get(event.memberId);
+      const binding=this.get(partyMemberId(event.memberId));
       if(binding&&binding.entityId!==selfId)observations.partyResources(binding.entityId,event,observations.context(binding.entityId));
     }
   }
@@ -79,8 +80,8 @@ export class PartyActorBindings {
       }
       if(!association.binding) {
         if(now.at-association.context.at>RESOURCE_STALE_MS){this.invalidate(id,observations);continue;}
-        association.binding={partyId:party.id,memberId:id,entityId:member.entityId,map,world:current.world,
-          incarnation:current.incarnation,affiliationRevision:current.affiliationRevision};
+        association.binding=partyActorBinding({partyId:party.id,memberId:id,entityId:member.entityId,map,world:current.world,
+          incarnation:current.incarnation,affiliationRevision:current.affiliationRevision});
       }
       if(!association.resourcesApplied) {
         association.resourcesApplied=true;

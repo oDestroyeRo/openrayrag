@@ -1,7 +1,8 @@
 //! Fixed TLS transport for the bundled controller. Authentication remains native.
 use crate::{
     direct_wire,
-    login::{ConnectionMode, LoginProfile, SharedLogin},
+    login::{ConnectionMode, SharedLogin},
+    login_logic::DirectCredentials,
     maintenance::{GameIdentity, GameRetirement, Gate, SharedGate},
 };
 use futures_util::{SinkExt, StreamExt};
@@ -520,7 +521,7 @@ struct TransportHooks<E, F, P, H, C> {
 }
 async fn drive<S, E, F, P, H, C>(
     mut socket: WebSocketStream<S>,
-    profile: LoginProfile,
+    profile: DirectCredentials,
     mut outgoing: mpsc::Receiver<Outgoing>,
     mut hooks: TransportHooks<E, F, P, H, C>,
     ping_period: Duration,
@@ -536,13 +537,13 @@ where
     (hooks.handshake)()?;
     let auth = socket
         .send(Message::Binary(
-            direct_wire::authentication(&profile.username, &profile.password).into(),
+            direct_wire::authentication(&profile).into(),
         ))
         .await;
     (hooks.finished)();
     auth.map_err(|_| "Sign-in write failed.")?;
     (hooks.event)(Some(Event::Opened))?;
-    let slot = profile.character_slot;
+    let slot = profile.character_slot();
     drop(profile);
     let mut pings =
         tokio::time::interval_at(tokio::time::Instant::now() + ping_period, ping_period);
@@ -592,7 +593,7 @@ where
 async fn run(
     app: tauri::AppHandle,
     epoch: u64,
-    profile: LoginProfile,
+    profile: DirectCredentials,
     outgoing: mpsc::Receiver<Outgoing>,
 ) {
     let result: Result<(), String> = async {
@@ -698,7 +699,7 @@ pub(crate) async fn direct_connect(
         if profile.mode != ConnectionMode::BotOnly {
             return Err("Queued login uses another connection mode.".into());
         }
-        profile.validate()?;
+        let profile = DirectCredentials::try_from(profile)?;
         let (sender, receiver) = mpsc::channel(16);
         state.connecting = None;
         state.current = Some(Connection {
@@ -845,7 +846,7 @@ mod tests {
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     };
-    fn profile() -> LoginProfile {
+    fn profile() -> crate::login::LoginProfile {
         serde_json::from_value(serde_json::json!({"username":"synthetic-user","password":"synthetic-only","characterSlot":0,"mode":"botOnly"})).unwrap()
     }
     fn approval() -> Vec<u8> {
@@ -1320,7 +1321,7 @@ mod tests {
         let writes = completed.clone();
         let task = tokio::spawn(drive(
             client,
-            profile(),
+            profile().try_into().unwrap(),
             receiver,
             TransportHooks {
                 event: move |e| {
@@ -1340,7 +1341,7 @@ mod tests {
         ));
         assert_eq!(
             next(&mut server).await,
-            direct_wire::authentication("synthetic-user", "synthetic-only")
+            direct_wire::authentication(&profile().try_into().unwrap())
         );
         assert!(matches!(observed.recv().await.unwrap(), Event::Opened));
         server
@@ -1414,7 +1415,7 @@ mod tests {
         let permission = allow_ping.clone();
         let task = tokio::spawn(drive(
             client,
-            profile(),
+            profile().try_into().unwrap(),
             receiver,
             TransportHooks {
                 event: move |event: Option<Event>| {
@@ -1632,7 +1633,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel(16);
         let task = tokio::spawn(drive(
             client,
-            profile(),
+            profile().try_into().unwrap(),
             receiver,
             TransportHooks {
                 event: |_| Ok(()),
@@ -1667,7 +1668,7 @@ mod tests {
         let (opened, mut opens) = mpsc::unbounded_channel();
         let task = tokio::spawn(drive(
             client,
-            profile(),
+            profile().try_into().unwrap(),
             receiver,
             TransportHooks {
                 event: move |e| {

@@ -1,6 +1,7 @@
 import { map, sort } from "remeda";
 // Pure semantic release contracts. No plugin loading, filesystem or network effects.
 import { createHash } from "node:crypto";
+import { sourceCommitSha, stableReleaseVersion, releaseBaseValues, releaseSourceValues, releasePlanValues, releaseTagFor, planDigest } from './tooling-domain-values.mjs';
 import policyHistory from "../release-policy-history.json" with { type: "json" };
 import {
   canonicalJson, RELEASE_POLICY, RELEASE_POLICY_VERSION, RELEASE_POLICY_SHA256,
@@ -15,7 +16,6 @@ const MAX_COMMIT_BYTES = 16 * 1024;
 const MAX_SUBJECT_BYTES = 1024;
 const MAX_LINE_BYTES = 4096;
 const MAX_RANGE_BYTES = 8 * 1024 * 1024;
-const MAX_STABLE_VERSION_LENGTH = 3 * String(Number.MAX_SAFE_INTEGER).length + 2;
 const baseKeys = ["sourceSha", "version", "tag"];
 const planKeys = [
   "schemaVersion",
@@ -34,6 +34,7 @@ const planKeys = [
   "notes",
 ];
 
+/** @param {unknown} condition @param {string} message @returns {asserts condition} */
 function requireValue(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -48,23 +49,11 @@ function exactKeys(value, keys, label) {
     `Invalid ${label} fields.`,
   );
 }
-function validSha(value) {
-  requireValue(
-    typeof value === "string" && /^[a-f0-9]{40}$/.test(value),
-    "Invalid source SHA.",
-  );
-}
+const validSha = sourceCommitSha;
 // Release contracts accept only canonical stable triples. Keep arithmetic within
 // the same safe-integer boundary as the pinned semver engine used by plugins.
-export function stableVersion(value) {
-  requireValue(
-    typeof value === "string" && value.length <= MAX_STABLE_VERSION_LENGTH &&
-      /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value) &&
-      value.split(".").every(part => Number.isSafeInteger(Number(part)) && String(Number(part)) === part),
-    "Invalid stable release version.",
-  );
-  return value;
-}
+export const stableVersion = stableReleaseVersion;
+/** @param {import('./tooling-domain-values.mjs').StableReleaseVersion} a @param {import('./tooling-domain-values.mjs').StableReleaseVersion} b */
 export function compareVersions(a, b) {
   const left = map(stableVersion(a).split("."), Number),
     right = map(stableVersion(b).split("."), Number);
@@ -73,6 +62,7 @@ export function compareVersions(a, b) {
   }
   return 0;
 }
+/** @param {import('./tooling-domain-values.mjs').StableReleaseVersion} version @param {import('./tooling-domain-values.mjs').ReleaseType} releaseType */
 export function bumpVersion(version, releaseType) {
   const parts = map(stableVersion(version).split("."), Number);
   requireValue(["major", "minor", "patch"].includes(releaseType), "Invalid release type.");
@@ -91,6 +81,7 @@ function validText(value, maxBytes, label) {
     `Invalid ${label}.`,
   );
 }
+/** @param {import('./tooling-domain-values.mjs').ReleaseSourceDto} source */
 function validSource(source) {
   validSha(source.sourceSha);
   requireValue(
@@ -105,18 +96,22 @@ function validSource(source) {
       new Date(source.pubDate).toISOString() === source.pubDate,
     "Invalid source date.",
   );
+  return releaseSourceValues(source);
 }
+/** @param {import('./tooling-domain-values.mjs').ReleaseBaseDto} base @param {string} label */
 function validBase(base, label) {
   exactKeys(base, baseKeys, label);
   validSha(base.sourceSha);
   stableVersion(base.version);
   requireValue(base.tag === `v${base.version}`, `Invalid ${label} tag.`);
+  return releaseBaseValues(base);
 }
+/** @param {import('./tooling-domain-values.mjs').ReleaseBaseDto} analysisBase @param {import('./tooling-domain-values.mjs').ReleaseBaseDto} notesBase */
 function validBases(analysisBase, notesBase) {
-  validBase(analysisBase, "analysis base");
-  validBase(notesBase, "notes base");
+  const analysis = validBase(analysisBase, "analysis base");
+  const notes = validBase(notesBase, "notes base");
   requireValue(
-    compareVersions(analysisBase.version, notesBase.version) >= 0,
+    compareVersions(analysis.version, notes.version) >= 0,
     "Analysis base precedes the published notes base.",
   );
   requireValue(
@@ -126,8 +121,10 @@ function validBases(analysisBase, notesBase) {
   );
 }
 
+/** @param {import('./tooling-domain-values.mjs').ReleasePlanDto | undefined} plan @returns {import('./tooling-domain-values.mjs').ReleasePlan} */
 export function validatePlan(plan) {
   exactKeys(plan, planKeys, "release plan");
+  requireValue(plan, "Invalid release plan fields.");
   requireValue(
     plan.schemaVersion === 1 && plan.repository === RELEASE_POLICY.repository,
     "Unsupported release plan identity.",
@@ -138,7 +135,7 @@ export function validatePlan(plan) {
   validBases(plan.analysisBase, plan.notesBase);
   requireValue(
     ["major", "minor", "patch"].includes(plan.releaseType) &&
-      bumpVersion(plan.analysisBase.version, plan.releaseType) ===
+      bumpVersion(stableVersion(plan.analysisBase.version), plan.releaseType) ===
         plan.version &&
       plan.sourceSha !== plan.analysisBase.sourceSha,
     "Release version does not match its analysis base and release type.",
@@ -172,16 +169,27 @@ export function validatePlan(plan) {
     Buffer.byteLength(canonicalJson(plan) + "\n") <= MAX_PLAN_BYTES,
     "Release plan exceeds its size bound.",
   );
-  return plan;
+  return releasePlanValues(plan);
 }
 
+/** Compatibility validation retains input identity; admission owns a detached plan.
+ * @param {import('./tooling-domain-values.mjs').ReleasePlanDto} plan
+ * @returns {import('./tooling-domain-values.mjs').ReleasePlan}
+ */
+export function parsePlan(plan) {
+  return releasePlanValues(structuredClone(validatePlan(plan)));
+}
+
+/** @param {import('./tooling-domain-values.mjs').ReleasePlan} plan */
 export function serializePlan(plan) {
   validatePlan(plan);
   return canonicalJson(plan) + "\n";
 }
+/** @param {import('./tooling-domain-values.mjs').ReleasePlan} plan @returns {import('./tooling-domain-values.mjs').PlanDigest} */
 export function planSha256(plan) {
-  return createHash("sha256").update(serializePlan(plan)).digest("hex");
+  return planDigest(createHash("sha256").update(serializePlan(plan)).digest("hex"));
 }
+/** @param {readonly import('./tooling-domain-values.mjs').CommitDto[]} commits @param {string} label */
 function validCommits(commits, label) {
   requireValue(
     Array.isArray(commits) && commits.length <= MAX_COMMITS,
@@ -205,8 +213,10 @@ function validCommits(commits, label) {
   }
   requireValue(bytes <= MAX_RANGE_BYTES, `${label} exceeds its size bound.`);
 }
-const baseOf = ({ sourceSha, version, tag }) => ({ sourceSha, version, tag });
+/** @param {import('./tooling-domain-values.mjs').ReleaseBaseDto} value */
+const baseOf = ({ sourceSha, version, tag }) => releaseBaseValues({ sourceSha, version, tag });
 
+/** @param {import('./tooling-domain-values.mjs').PlanningInputDto} input @param {string} cwd */
 export function validatePlanningInput(input, cwd) {
   exactKeys(
     input,
@@ -249,13 +259,16 @@ export function validatePlanningInput(input, cwd) {
   return { analysisBase, notesBase };
 }
 
+/** @param {import('./tooling-domain-values.mjs').ReleaseBase} analysisBase @param {import('./tooling-domain-values.mjs').ReleaseType} releaseType */
 export function analyzerVersion(analysisBase, releaseType) {
   requireValue(["major", "minor", "patch"].includes(releaseType), "Invalid analyzer release type.");
   return bumpVersion(analysisBase.version, releaseType);
 }
 
+/** @param {import('./tooling-domain-values.mjs').PlanningInput} input @param {{analysisBase: import('./tooling-domain-values.mjs').ReleaseBase, notesBase: import('./tooling-domain-values.mjs').ReleaseBase, releaseType: import('./tooling-domain-values.mjs').ReleaseType, version: import('./tooling-domain-values.mjs').StableReleaseVersion}} decision @param {string} notes */
 export function finalizePlan(input, { analysisBase, notesBase, releaseType, version }, notes) {
-  const tag = `v${version}`;
+  const tag = releaseTagFor(version);
+  /** @type {import('./tooling-domain-values.mjs').ReleasePlanDto} */
   const plan = {
     schemaVersion: 1,
     repository: RELEASE_POLICY.repository,
@@ -271,8 +284,7 @@ export function finalizePlan(input, { analysisBase, notesBase, releaseType, vers
       input.reservation === null ? null : planSha256(input.reservation),
     notes,
   };
-  validatePlan(plan);
-  return plan;
+  return validatePlan(plan);
 }
 
 // Preserve reviewed policy snapshots when engine versions change. Old durable

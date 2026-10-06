@@ -1,14 +1,15 @@
+import { itemId, milliseconds, quantity } from './domain-values';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from './settings';
-import { checkedProfile, importedProfiles, parseProfileDocument, savedProfiles } from './profiles-logic';
+import { checkedProfile, profileName, importedProfiles, parseProfileDocument, savedProfiles } from './profiles-logic';
 import { BUILTIN_SERVICES } from './npc-services';
 import { importedServices, parseServiceDocument, savedServices } from './npc-service-store-logic';
 import { NpcServiceStore } from './npc-service-store';
-import { formDocument, nextFormSave } from './current-form-logic';
+import { formDocument, formRevision, nextFormSave } from './current-form-logic';
 import { CurrentForm } from './current-form';
 import { addMacroExample, encodeMacroSource, macroExample, restoreMacroSource } from './macro-ui-logic';
 import { formatBotScript, parseBotScript } from './bot-script';
-import { loginPacketStatus, selectionReadiness } from './login-logic';
+import { characterSlot, loginPacketStatus, selectionReadiness } from './login-logic';
 import { actorSnapshotAt, bindObservedActor, observedActorChoices } from './actor-predicate-ui-logic';
 import type { ActorObservationSnapshot } from './actor-observations';
 import { featureObservation, featureServiceBlocked, featureActive, featureServiceChoices, featureServiceEvidence, featureAttackStrategiesText, featureRuleConditionsText, featureNpcChoices, featureInventoryText, featureSkillsText } from './feature-ui-logic';
@@ -36,10 +37,10 @@ describe('detached local document proposals', () => {
     const original = profile(), before = structuredClone(original);
     const imported = importedProfiles([], [original], [{ id: 'fresh', savedAt: 500 }]);
     expect(imported[0]).toMatchObject({ id: 'fresh', savedAt: 500 });
-    imported[0]!.settings.targets.push(4012);
+    Reflect.set(imported[0]!.settings.targets, '0', 4012);
     expect(original).toEqual(before);
-    const next = savedProfiles([original], { ...profile(), name: 'Updated' });
-    next[0]!.settings.targets.length = 0;
+    const next = savedProfiles([original], { ...profile(), name: profileName('Updated') });
+    Reflect.set(next[0]!.settings.targets, 'length', 0);
     expect(original).toEqual(before);
     expect(() => importedProfiles([original], [original], [{ id: 'original', savedAt: 500 }])).toThrow('unique');
     expect(() => importedProfiles([], [original], [])).toThrow('unique');
@@ -48,9 +49,9 @@ describe('detached local document proposals', () => {
   it('rejects colliding service identities and detaches workflow definitions', () => {
     const original = structuredClone(BUILTIN_SERVICES[0]!), before = structuredClone(original);
     const imported = importedServices([], [original], ['fresh']);
-    imported[0]!.approach.x++;
+    Reflect.set(imported[0]!.approach, 'x', imported[0]!.approach.x + 1);
     const proposal = savedServices([original], original, original.id, original.id);
-    proposal.services[0]!.identity.name = 'Changed';
+    Reflect.set(proposal.services[0]!.identity, 'name', 'Changed');
     expect(original).toEqual(before);
     expect(() => importedServices([original], [original], [original.id])).toThrow('unique');
     expect(() => importedServices([], [original], [])).toThrow('unique');
@@ -76,10 +77,10 @@ describe('detached local document proposals', () => {
   });
   it('plans content revisions independently and retries an unconfirmed save through the coordinator', async () => {
     const document = formDocument({ version: 1, revision: 12, selectedProfileId: null, settings: settings() });
-    const next = nextFormSave(document, 12, null);
+    const next = nextFormSave(document, document.revision, null);
     expect(next.revision).toBe(13);
-    expect(nextFormSave(document, 13, next.content).revision).toBe(13);
-    next.document.settings.targets.length = 0;
+    expect(nextFormSave(document, formRevision(13), next.content).revision).toBe(13);
+    Reflect.set(next.document.settings.targets, 'length', 0);
     expect(document.settings.targets).toEqual([4000]);
     let confirm = false;
     const save = vi.fn(async (value) => confirm ? value.revision : value.revision - 1);
@@ -250,25 +251,26 @@ describe('pure editor and telemetry projections', () => {
     expect(featureSkillsText([{ skillId: 2, level: 1 }])).toBe('First Aid · Lv 1');
   });
   it('makes terminal login states inert and resets selection settlement after readiness loss', () => {
-    expect(loginPacketStatus({ phase: 'cancelled', message: '' }, Uint8Array.of(0), 0)).toBeNull();
-    expect(loginPacketStatus({ phase: 'signingIn', message: '' }, Uint8Array.of(0), 0)?.phase).toBe('failed');
-    expect(selectionReadiness(true, null, 100)).toEqual({ since: 100, settled: false });
-    expect(selectionReadiness(true, 100, 299).settled).toBe(false);
-    expect(selectionReadiness(true, 100, 300).settled).toBe(true);
-    expect(selectionReadiness(false, 100, 400)).toEqual({ since: null, settled: false });
+    expect(loginPacketStatus({ phase: 'cancelled', message: '' }, Uint8Array.of(0), characterSlot(0))).toBeNull();
+    expect(loginPacketStatus({ phase: 'signingIn', message: '' }, Uint8Array.of(0), characterSlot(0))?.phase).toBe('failed');
+    expect(selectionReadiness(true, null, milliseconds(100))).toEqual({ since: 100, settled: false });
+    expect(selectionReadiness(true, milliseconds(100), milliseconds(299)).settled).toBe(false);
+    expect(selectionReadiness(true, milliseconds(100), milliseconds(300)).settled).toBe(true);
+    expect(selectionReadiness(false, milliseconds(100), milliseconds(400))).toEqual({ since: null, settled: false });
   });
 });
 
 describe('recovery item observation and preference projections', () => {
   it('keeps saved preference order across zero stock and returns detached display arrays', () => {
-    const stock = new Map([[501, 2], [502, 3], [503, 0]]), ids = [502, 501, 503], itemIds = [503, 501];
+    const stock = new Map([[itemId(501), quantity(2)], [itemId(502), quantity(3)], [itemId(503), quantity(0)]]),
+      ids = [itemId(502), itemId(501), itemId(503)], itemIds = [itemId(503), itemId(501)];
     const projected = recoveryChoices({ selected: true, ids, itemIds, stock });
     expect(projected).toEqual({ order: [503, 501, 502], visibleOrder: [501, 502] });
     expect(recoveryStockSummary({ ids, itemIds, stock })).toEqual({ carried: true, missing: 1 });
-    expect(carriedRecoveryItem(stock)(503)).toBe(false);
+    expect(carriedRecoveryItem(stock)(itemId(503))).toBe(false);
     projected.order.reverse(); projected.visibleOrder.length = 0;
     expect(itemIds).toEqual([503, 501]); expect(ids).toEqual([502, 501, 503]);
-    stock.set(503, 1);
+    stock.set(itemId(503), quantity(1));
     expect(recoveryChoices({ selected: true, ids, itemIds, stock }).visibleOrder).toEqual([503, 501, 502]);
     expect(recoveryChoices({ selected: false, ids, itemIds, stock }).order).toEqual(ids);
   });
@@ -276,7 +278,7 @@ describe('recovery item observation and preference projections', () => {
     const inventory = [{ itemId: 502, count: 3 }, { itemId: 501, count: 0 }, { itemId: 501, count: 5 }];
     const before = structuredClone(inventory), stock = recoveryInventory({ inventoryKnown: true, inventory })!;
     expect([...stock]).toEqual([[502, 3], [501, 5]]);
-    stock.set(501, 99); expect(inventory).toEqual(before);
+    Reflect.apply(Map.prototype.set, stock, [501, 99]); expect(inventory).toEqual(before);
     const untouched = { get itemId() { throw new Error('Later row evaluated'); } };
     expect(recoveryInventory({ inventoryKnown: true, inventory: [inventory[0], { itemId: 0, count: 1 }, untouched] })).toBeNull();
     expect(recoveryInventory({ inventoryKnown: false, inventory })).toBeNull();

@@ -1,3 +1,4 @@
+import { skillId as domainSkillId } from './domain-values';
 import {describe,it,expect} from 'vitest';
 import requestCases from './data/actor-zero-request-cases.json';
 import {actorId} from './actor-identity';
@@ -155,8 +156,8 @@ describe('ready own identity and action lifetime fences',()=>{
   s.packet(new BitWriter().u8(OP.enter).i32(0).string(settings.map));
   const stats=new BitWriter().u8(FEATURE_OP.stats);for(const value of [7,1,50,1,1,1,1,1,1,0,0,0])stats.i32(value);for(const value of [100,100,100,200,...Array(17).fill(0)])stats.i32(value);stats.f32(1).i32(0).i32(0).bool(false).bool(false);s.packet(stats);learned(s);
   expect(s.c.engine.character.stats).toMatchObject({sp:100,maxSp:200,zeny:50});
-  expect(s.c.engine.character.inventoryKnown).toBe(true);expect(s.c.engine.character.skillLevel(11)).toBe(1);expect(s.c.engine.player).toBeUndefined();expect(()=>s.c.engine.manualAction({type:'sit',sitting:false})).toThrow();
-  s.packet(spawn(own));expect(s.c.engine.character.skillLevel(11)).toBe(1);s.c.perform('command',{type:'sit',sitting:false});s.packet(Uint8Array.of(14,0,0,0,0,0));expect(s.c.engine.actionResult.status).toBe('confirmed');
+  expect(s.c.engine.character.inventoryKnown).toBe(true);expect(s.c.engine.character.skillLevel(domainSkillId(11))).toBe(1);expect(s.c.engine.player).toBeUndefined();expect(()=>s.c.engine.manualAction({type:'sit',sitting:false})).toThrow();
+  s.packet(spawn(own));expect(s.c.engine.character.skillLevel(domainSkillId(11))).toBe(1);s.c.perform('command',{type:'sit',sitting:false});s.packet(Uint8Array.of(14,0,0,0,0,0));expect(s.c.engine.actionResult.status).toBe('confirmed');
  });
  it.each([0,1])('can attack with own ID %s and target zero without inferring ChangeTarget0',id=>{
   const s=setup(id);s.packet(spawn({...enemy,id:id===0?2:0}));s.c.start(settings);s.step();expect(s.sent).toContainEqual({type:'attack',id:id===0?2:0});

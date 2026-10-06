@@ -1,4 +1,5 @@
 import { filter, find } from "remeda";
+import { sourceCommitSha, gitTagObjectSha, firstParentCount as sourceCount } from "./tooling-domain-values.mjs";
 // Reconstruct a published plan from anonymous Git and the selected source's
 // own locked validators. A later main or reservation does not invalidate it.
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
@@ -14,6 +15,7 @@ const SOURCE_FILES = [
   "tools/release/package.json",
 ];
 
+/** @param {import("./tooling-domain-values.mjs").SourceCommitSha} sourceSha @param {import("./tooling-domain-values.mjs").AnonymousGit} git */
 export function sourceDependencyFiles(sourceSha, git) {
   const files = git(["ls-tree", "--name-only", sourceSha, "--",
     "tools/release/bun.lock", "tools/release/bunfig.toml",
@@ -35,7 +37,9 @@ const SPLIT_SOURCE_FILES = [
   "scripts/release-source-policy.mjs", "scripts/release-reservation-policy.mjs",
   "scripts/release_policy.py",
   "scripts/semantic-release-policy.mjs",
+  "scripts/tooling-domain-values.mjs",
 ];
+/** @param {import("./tooling-domain-values.mjs").SourceCommitSha} sourceSha @param {import("./tooling-domain-values.mjs").AnonymousGit} git */
 export function sourceModuleFiles(sourceSha, git) {
   const files = git(["ls-tree", "--name-only", sourceSha, "--", ...SPLIT_SOURCE_FILES])
     .toString("utf8").trim().split("\n").filter(Boolean);
@@ -44,6 +48,7 @@ export function sourceModuleFiles(sourceSha, git) {
   return files;
 }
 
+/** @param {import("./tooling-domain-values.mjs").PublicMetadataApi} api @param {import("./tooling-domain-values.mjs").ReleaseTag} tag @param {boolean} [fresh] @returns {Promise<import("./tooling-domain-values.mjs").SourceCommitSha>} */
 export async function peelTag(api, tag, fresh = false) {
   let object = (await api(`/git/ref/tags/${tag}`, { fresh })).object;
   const seen = new Set();
@@ -53,18 +58,20 @@ export async function peelTag(api, tag, fresh = false) {
     object = (await api(`/git/tags/${object.sha}`, { fresh })).object;
   }
   requireValue(object?.type === "commit" && /^[a-f0-9]{40}$/.test(object.sha), "Release tag does not peel to a commit.");
-  return object.sha;
+  return sourceCommitSha(object.sha);
 }
 
+/** @param {import("./tooling-domain-values.mjs").AnonymousGit} git @param {import("./tooling-domain-values.mjs").SourceCommitSha} base @param {import("./tooling-domain-values.mjs").SourceCommitSha} source @returns {readonly import("./tooling-domain-values.mjs").CommitDto[]} */
 export function commitsBetween(git, base, source) {
   const output = git(["log", "--format=%H%x00%B%x00", `${base}..${source}`]).toString("utf8");
   const fields = output.split("\0");
-  requireValue(fields.at(-1).trim() === "" && fields.length % 2 === 1, "Unexpected anonymous Git commit range.");
+  requireValue(fields.at(-1)?.trim() === "" && fields.length % 2 === 1, "Unexpected anonymous Git commit range.");
   return Array.from({ length: (fields.length - 1) / 2 }, (_, i) => ({
     hash: fields[2 * i].trim(), message: fields[2 * i + 1].trimEnd(),
   }));
 }
 
+/** @param {string} folder @param {import("./tooling-domain-values.mjs").SourceCommitSha} sourceSha @param {import("./tooling-domain-values.mjs").AnonymousGit} git @returns {Promise<import("./tooling-domain-values.mjs").SourceValidators>} */
 export async function loadSourceValidators(folder, sourceSha, git) {
   const dependencyFiles = sourceDependencyFiles(sourceSha, git);
   for (const name of [...SOURCE_FILES, ...sourceModuleFiles(sourceSha, git), ...dependencyFiles]) {
@@ -102,12 +109,14 @@ export async function loadSourceValidators(folder, sourceSha, git) {
   return { core, planner, reservations, tags };
 }
 
+/** @param {import("./tooling-domain-values.mjs").PublicOptions} options @param {import("./tooling-domain-values.mjs").SourceVerificationIo} io */
 export async function verifySource(options, io) {
   const { api, folder, write } = io;
   const sourceFolder = join(folder, "source");
   await mkdir(sourceFolder, { mode: 0o700 });
   const environment = privateEnvironment(folder);
   const git = io.git ?? ((args) => runReadOnly("git", ["-c", "credential.helper=", "-C", sourceFolder, ...args], { env: environment }));
+  /** @param {readonly string[]} args */
   const text = args => git(args).toString("utf8").trim();
   const main = await api("/git/ref/heads/main");
   requireValue(main.object?.type === "commit" && /^[a-f0-9]{40}$/.test(main.object.sha), "Invalid main source identity.");
@@ -131,24 +140,28 @@ export async function verifySource(options, io) {
   const refs = await api("/git/matching-refs/tags/rayrag-release-plan/");
   requireValue(Array.isArray(refs) && refs.length <= reservations.MAX_RESERVATIONS, "Invalid or oversized reservation ref list.");
   git(["fetch", "--quiet", "--no-tags", `https://github.com/${REPOSITORY}.git`, "refs/tags/rayrag-release-plan/*:refs/tags/rayrag-release-plan/*"]);
-  const prefix = [], objects = new Map(), names = new Set();
+  /** @type {import("./tooling-domain-values.mjs").ReservationRefDto[]} */
+  const prefix = [];
+  /** @type {Map<import("./tooling-domain-values.mjs").GitTagObjectSha, import("./tooling-domain-values.mjs").TagObjectDto>} */
+  const objects = new Map();
+  const names = new Set();
   for (const ref of refs) {
     requireValue(typeof ref.ref === "string" && ref.ref.startsWith(reservations.PLAN_REF_PREFIX) &&
       !names.has(ref.ref) && ref.object?.type === "tag" && /^[a-f0-9]{40}$/.test(ref.object.sha), "Malformed or duplicate reservation ref.");
     names.add(ref.ref);
-    const tag = tags.readLocalTagObject(sourceFolder, ref.object.sha);
-    requireValue(tag?.sha === ref.object.sha && tag.tag === ref.ref.slice("refs/tags/".length) && tag.object?.type === "commit", "Anonymous reservation object differs from metadata.");
+    const tag = tags.readLocalTagObject(sourceFolder, gitTagObjectSha(ref.object.sha));
+    requireValue(tag !== null && tag.sha === ref.object.sha && tag.tag === ref.ref.slice("refs/tags/".length) && tag.object?.type === "commit", "Anonymous reservation object differs from metadata.");
     const index = allHistory.indexOf(tag.object.sha);
     requireValue(index >= 0, "Reservation source is outside main first-parent history.");
     // Newer plans can use a newer policy. Only the selected historical prefix
     // is claimed to be validated by this source's policy and tools.
     if (index < firstParentCount) {
       prefix.push(structuredClone(ref));
-      objects.set(ref.object.sha, tag);
+      objects.set(gitTagObjectSha(ref.object.sha), tag);
     }
   }
   const ledger = await reservations.readReservations({ history, bridge: core.migrationBridge, api: {
-    planRefs: async () => prefix, tagObject: async sha => objects.get(sha),
+    planRefs: async () => prefix, tagObject: async sha => objects.get(sha) ?? null,
   } });
   const selected = ledger.findIndex(plan => plan.tag === options.tag);
   requireValue(selected === ledger.length - 1 && selected >= 0, "Selected release reservation is missing or outside its historical prefix.");
@@ -176,14 +189,17 @@ export async function verifySource(options, io) {
   });
   requireValue(recomputed.state === "release" && planner.serializePlan(recomputed.plan) === planner.serializePlan(plan), "Reserved plan differs from regenerated exact Git ranges.");
   const selectedRef = find(prefix, ref => ref.ref === reservations.planRefName(plan));
+  requireValue(selectedRef, "Selected release reservation is missing or outside its historical prefix.");
+  const selectedObject = objects.get(gitTagObjectSha(selectedRef.object.sha));
+  requireValue(selectedObject, "Anonymous reservation object differs from metadata.");
   await write("release-plan.json", planner.serializePlan(plan));
   await write("reservation-ledger.json", JSON.stringify(ledger, null, 2) + "\n");
   await write("reservation-refs.json", JSON.stringify(prefix, null, 2) + "\n");
-  await write("release-reservation.json", objects.get(selectedRef.object.sha).message);
+  await write("release-reservation.json", selectedObject.message);
   await write("reservation-tag-object.txt", git(["cat-file", "tag", selectedRef.object.sha]));
   return {
     ...modules, config, sourceFolder, plan,
-    identity: { version: plan.version, tag: plan.tag, sourceSha: options.sourceSha, pubDate, firstParentCount, releasePlan: plan },
+    identity: { version: plan.version, tag: plan.tag, sourceSha: options.sourceSha, pubDate, firstParentCount: sourceCount(firstParentCount), releasePlan: plan },
     proof: {
       mainShaAtFetch: mainSha, sourceIsMainAncestor: true, firstParentCount,
       historicalReservationCount: ledger.length, newerReservationsNotPolicyValidated: refs.length - prefix.length,

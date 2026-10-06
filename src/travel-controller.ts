@@ -1,5 +1,5 @@
 import { map } from 'remeda';
-import { DEFAULT_MAP_POLICY, insideLockArea, mapAllowed, policyIdentity, type MapPolicy } from './map-policy-logic';
+import { DEFAULT_MAP_POLICY, insideLockArea, mapAllowed, policyIdentity, type MapPolicyInput as MapPolicy } from './map-policy-logic';
 import type { Entity, GameEvent, Position, Walk } from './protocol';
 import type { Action } from './engine';
 import { distance, routeSegment, type WalkGrid } from './navigation-logic';

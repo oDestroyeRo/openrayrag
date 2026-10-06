@@ -1,3 +1,5 @@
+import { partyMemberId } from './domain-values';
+import { itemId as domainItemId } from './domain-values';
 import { manualTargetPolicy } from './manual-target';
 import { DEFAULT_MAP_POLICY } from './map-policy';
 import { describe, expect, it, vi } from 'vitest';
@@ -237,7 +239,7 @@ describe('retreat ownership with stationary availability',()=>{
   });
   it.each([0,1])('keeps needy party Heal behind own%s unsent and sent retreat ownership',id=>{
     const f=fixture(id),p=party(f);f.engage();p.health(40);f.step();
-    expect(f.c.world.partyActors.get(7)).not.toBeNull();expect(f.c.engine.stationaryForPartySupport()).toBe(false);
+    expect(f.c.world.partyActors.get(partyMemberId(7))).not.toBeNull();expect(f.c.engine.stationaryForPartySupport()).toBe(false);
     expect(f.c.engine.partyHealReadiness(3,1,10)).toContain('movement');expect(p.heals()).toEqual([]);
     f.clear();f.step();expect(f.sent.filter(action=>action.type==='walk')).toHaveLength(1);
     f.look();f.stopCast();f.advance(300);expect(f.c.engine.retreatOwned).toBe(true);
@@ -1483,7 +1485,7 @@ describe('macro controller supervision',()=>{
     f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(2).i32(30).bool(false));f.step();f.step();
     expect(f.sent).toContainEqual({type:'storage',operation:'close'});expect(f.controller.macro.snapshot().actionsCompleted).toBe(0);
     f.packet(new BitWriter().u8(WORLD_OP.npc).u8(3));expect(f.controller.macro.snapshot()).toMatchObject({state:'completed',actionsCompleted:1});
-    expect(f.controller.engine.character.count(501)).toBe(3);
+    expect(f.controller.engine.character.count(domainItemId(501))).toBe(3);
   });
   it('retains a stopped buy receipt; late result plus contradictory balance cannot release ownership or advance',()=>{
     const f=serviceFixture('buy');f.start();f.open();f.controller.stop();const count=f.sent.length;

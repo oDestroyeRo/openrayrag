@@ -1,6 +1,6 @@
 import { filter, map, pipe, sort } from 'remeda';
 import { completePlanning, runPlanning, type PlanningOptions, type PlanningWork } from './route-planning';
-import { DEFAULT_MAP_POLICY, mapAllowed, PORTAL_COST, type MapPolicy } from './map-policy-logic';
+import { DEFAULT_MAP_POLICY, mapAllowed, PORTAL_COST, type MapPolicyInput as MapPolicy } from './map-policy-logic';
 import { GridNavigator, searchGrid } from './navigation';
 import { MAX_MAP_DIMENSION, type PortalArea, type WalkGrid } from './navigation-logic';
 import type { Position } from './protocol';

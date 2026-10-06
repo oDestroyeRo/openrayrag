@@ -1,5 +1,6 @@
 // Pure source and build inputs for the offline responsive-routing fixture.
 import { join } from 'node:path';
+/** @param {string} root @param {string} output @returns {import('esbuild').BuildOptions} */
 export function responsiveFixtureBuildOptions(root, output) {
   return {stdin:{resolveDir:root,contents:`
 import {TravelController} from './src/travel-controller';

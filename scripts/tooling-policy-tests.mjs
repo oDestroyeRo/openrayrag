@@ -16,7 +16,7 @@ import { stampVersions } from './release.mjs';
 import { ENDPOINT, IDENTIFIER, isNewer } from './release-policy.mjs';
 import { packageBuildArgs } from './ci-platform-policy.mjs';
 import { createRunSnapshot } from './hosted-status-policy.mjs';
-import { median, rendererOptions, compareRenderingReports, packetReport, validatePacketReport } from './benchmark-policy.mjs';
+import { median, rendererOptions, compareRenderingReports, packetReport, validatePacketReport, isBenchmarkCancellation } from './benchmark-policy.mjs';
 import { sourceModuleFiles } from './release-public-source.mjs';
 import { responsiveFixtureBuildOptions } from './responsive-fixture-policy.mjs';
 import { privateEnvironment } from './release-public-io.mjs';
@@ -235,4 +235,14 @@ test('importing tooling entrypoints launches no commands, prints no output and n
     assert.equal(result.stdout, '');
     assert.equal(result.stderr, '');
   } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
+
+test('benchmark cancellation accepts injected-realm AbortErrors without swallowing other failures', () => {
+  const cancelled = runInNewContext("Object.assign(new Error('Route planning cancelled.'), {name: 'AbortError'})");
+  assert.equal(cancelled instanceof Error, false);
+  assert.equal(isBenchmarkCancellation(cancelled), true);
+  assert.equal(isBenchmarkCancellation(new Error('other failure')), false);
+  assert.equal(isBenchmarkCancellation(runInNewContext("new Error('other failure')")), false);
+  assert.equal(isBenchmarkCancellation(null), false);
 });

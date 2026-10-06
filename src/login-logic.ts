@@ -1,11 +1,21 @@
+import { DomainValueError, type Milliseconds } from './domain-values';
+
+declare const characterSlotValue: unique symbol;
+export type CharacterSlot = number & { readonly [characterSlotValue]: 'CharacterSlot' };
+export function characterSlot(value: unknown): CharacterSlot {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 2) throw new DomainValueError('CharacterSlot', 'range', 'login settings.');
+  return value as CharacterSlot;
+}
+export interface LoginSelection { readonly username: string; readonly characterSlot: CharacterSlot }
+/** Credentials stay in the mutable caller-owned draft and are cleared after dispatch. */
 export interface LoginProfile {
   username: string;
   password: string;
   characterSlot: number;
 }
 export interface LoginStatus {
-  phase: 'idle' | 'signingIn' | 'selecting' | 'entering' | 'complete' | 'failed' | 'cancelled';
-  message: string;
+  readonly phase: 'idle' | 'signingIn' | 'selecting' | 'entering' | 'complete' | 'failed' | 'cancelled';
+  readonly message: string;
 }
 export interface UnityClient {
   SendMessage(object: string, method: string, value?: string | number): void;
@@ -15,7 +25,7 @@ export interface LoginDriver {
   submit(): void;
   selectionReady(): boolean;
   // false means the enter request has not been dispatched yet.
-  select(slot: number): boolean | void;
+  select(slot: CharacterSlot): boolean | void;
 }
 
 // ConnectionApproved starts with a single bit, so its remaining fields are unaligned.
@@ -45,7 +55,7 @@ class LoginReader {
   }
 }
 
-export function characterSlots(data: Uint8Array): number[] {
+export function characterSlots(data: Uint8Array): readonly CharacterSlot[] {
   if (data[0] !== 0 || data.length > 16_384) throw new Error('Unknown character list');
   const reader = new LoginReader(data);
   if (reader.number(1)) {
@@ -55,17 +65,17 @@ export function characterSlots(data: Uint8Array): number[] {
   }
   const count = reader.number(32);
   if (count > 3) throw new Error('Unknown character count');
-  const slots: number[] = [];
+  const slots: CharacterSlot[] = [];
   for (let i = 0; i < count; i++) {
     const name = reader.string();
     const slot = reader.number(32);
     reader.string(); // Map is unnecessary for character selection.
     const size = reader.number(32);
-    if (!name || slot > 2 || slots.includes(slot) || size > 256 || size % 4 !== 0) {
+    if (!name || slot > 2 || slots.some(saved => saved === slot) || size > 256 || size % 4 !== 0) {
       throw new Error('Unknown character layout');
     }
     reader.skip(size);
-    slots.push(slot);
+    slots.push(characterSlot(slot));
   }
   return slots;
 }
@@ -73,11 +83,12 @@ export function characterSlots(data: Uint8Array): number[] {
 export function loginActive(status: LoginStatus): boolean {
   return ['signingIn', 'selecting', 'entering'].includes(status.phase);
 }
-export function validateLoginProfile(profile: LoginProfile): void {
+export function validateLoginProfile(profile: LoginProfile): LoginSelection {
   if (!profile.username.trim() || !profile.password || !Number.isInteger(profile.characterSlot)
     || profile.characterSlot < 0 || profile.characterSlot > 2) throw new Error('Invalid login settings.');
+  return { username: profile.username, characterSlot: characterSlot(profile.characterSlot) };
 }
-export function loginPacketStatus(status: LoginStatus, data: Uint8Array, slot: number): LoginStatus | null {
+export function loginPacketStatus(status: LoginStatus, data: Uint8Array, slot: CharacterSlot): LoginStatus | null {
   if (!loginActive(status)) return null;
   if (data[0] === 1 || data[0] === 32) return { phase: 'failed', message: 'Sign-in was rejected. Check the game window and try again explicitly.' };
   if (data[0] !== 0 || status.phase !== 'signingIn') return null;
@@ -87,7 +98,7 @@ export function loginPacketStatus(status: LoginStatus, data: Uint8Array, slot: n
       : { phase: 'failed', message: `Character slot ${slot + 1} is empty. Choose an existing character.` };
   } catch { return { phase: 'failed', message: 'The character list format changed. Select your character manually.' }; }
 }
-export function selectionReadiness(ready: boolean, since: number | null, now: number): { since: number | null; settled: boolean } {
+export function selectionReadiness(ready: boolean, since: Milliseconds | null, now: Milliseconds): { since: Milliseconds | null; settled: boolean } {
   const started = ready ? since ?? now : null;
   return { since: started, settled: started !== null && now - started >= 200 };
 }

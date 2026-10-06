@@ -487,6 +487,35 @@ test("new publish creates exact tag, finishes uploads, verifies and promotes", a
   assert.equal(api.events.filter((e) => e[0] === "upload").length, 9);
   assert.deepEqual(api.events.at(-1), ["publish", "v0.2.2", "true"]);
 });
+test('preflight owns release state before asynchronous tag verification', async () => {
+  const api = new FakeApi(), ctx = context(api);
+  await publishRelease(ctx);
+  const read = api.release.bind(api), readTag = api.tagSha.bind(api);
+  let borrowed;
+  api.release = async tag => {
+    borrowed = await read(tag);
+    return borrowed;
+  };
+  api.tagSha = async tag => {
+    if (borrowed) { borrowed.draft = true; borrowed.id = -1; borrowed.body = 'changed after API read'; }
+    return readTag(tag);
+  };
+  assert.equal((await preflight(ctx)).state, 'published');
+});
+test('publisher owns created draft and staged release identities across verification effects', async () => {
+  const api = new FakeApi(), ctx = context(api);
+  const create = api.createDraft.bind(api), read = api.release.bind(api), readTag = api.tagSha.bind(api);
+  const borrowed = [];
+  api.createDraft = async (...args) => { const value = await create(...args); borrowed.push(value); return value; };
+  api.release = async tag => { const value = await read(tag); if (value) borrowed.push(value); return value; };
+  api.tagSha = async tag => {
+    for (const value of borrowed) { value.id = -1; value.body = 'changed API alias'; value.draft = false; }
+    borrowed.length = 0;
+    return readTag(tag);
+  };
+  assert.equal(await publishRelease(ctx), 'published-latest');
+  assert.equal(api.events.filter(event => event[0] === 'upload').length, 9);
+});
 test("published rerun is verified no-op even if a competing rebuild differs", async () => {
   const api = new FakeApi(),
     ctx = context(api);

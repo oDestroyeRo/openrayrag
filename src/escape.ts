@@ -1,6 +1,7 @@
+import { itemId as domainItemId, skillId as domainSkillId } from './domain-values';
 import { sameActionIdentity, type ActionIdentity } from './actor-identity';
 import type { GameEvent } from './protocol';
-import { escapeSettings, type EscapeSettings, type Settings } from './settings';
+import { escapeSettings, type EscapeSettings, type SettingsInput as Settings } from './settings';
 import { skillCost } from './game-catalog';
 
 import { type EscapeAction, escapeAction, type EscapeContext, type EscapeSnapshot, type EscapeRecovery, type EscapeResumeGuard, CONSERVATIVE_ESCAPE_RECOVERY, escapeRecovery, validateEscapeResumeGuard, type Request } from './escape-logic';
@@ -38,9 +39,9 @@ export class EmergencyEscape {
   private resourceBlocker(action: EscapeAction, policy: EscapeSettings, context: EscapeContext): string {
     const character = context.character;
     if (action.type === 'useItem') return !character.inventoryKnown ? 'Waiting for a verified escape-item inventory.'
-      : character.count(action.itemId) <= policy.minStock ? `Escape item ${action.itemId} is unavailable above the stock reserve.` : '';
+      : character.count(domainItemId(action.itemId)) <= policy.minStock ? `Escape item ${action.itemId} is unavailable above the stock reserve.` : '';
     const cost = skillCost(action.skillId, 1);
-    return !character.skillsKnown || character.skillLevel(action.skillId) < 1 ? `Waiting for verified escape skill ${action.skillId}.`
+    return !character.skillsKnown || character.skillLevel(domainSkillId(action.skillId)) < 1 ? `Waiting for verified escape skill ${action.skillId}.`
       : cost === null || character.stats?.sp === undefined || character.stats.sp < cost ? 'Waiting for enough verified escape SP.'
       : character.stats.weight !== undefined && character.stats.maxWeight !== undefined && character.stats.weight > character.stats.maxWeight
         ? 'Escape skills cannot be used above the maximum weight.' : '';
@@ -104,7 +105,7 @@ export class EmergencyEscape {
     const action = escapeAction(policy);
     this.state = 'preparing'; this.reason = `${this.trigger}: preparing emergency escape; letting the previous input settle.`;
     this.request = { action, policy, identity: { ...context.identity! }, recovery: escapeRecovery(settings), name: p.name, id: p.id, map: context.map, connection: context.connection,
-      readyAt: this.now() + 250, sentAt: null, deadline: 0, count: action.type === 'useItem' ? context.character.count(action.itemId) : 0,
+      readyAt: this.now() + 250, sentAt: null, deadline: 0, count: action.type === 'useItem' ? context.character.count(domainItemId(action.itemId)) : 0,
       sp: context.character.stats?.sp ?? 0, refresh: null, arrivalMap: '', consumed: false,
       reconnect: false, entered: false, spawned: false, resources: false, died: false };
   }
@@ -199,7 +200,7 @@ export class EmergencyEscape {
     }
     for (const event of events) {
       if (r.action.type === 'useItem' && event.type === 'inventoryDelta' && !event.add && context.character.inventoryKnown
-        && context.character.count(r.action.itemId) < r.count) r.consumed = true;
+        && context.character.count(domainItemId(r.action.itemId)) < r.count) r.consumed = true;
       if (r.action.type === 'skill' && event.type === 'sp' && event.sp <= r.sp - (skillCost(r.action.skillId, 1) ?? Infinity)) r.consumed = true;
       if (event.type === 'featureError' || event.type === 'skillFailure' || event.type === 'requestFailure') {
         this.reason = 'message' in event ? `Escape rejected: ${event.message.slice(0,120)}` : `Escape rejected by the server (code ${event.reason}).`;

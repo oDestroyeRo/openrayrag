@@ -1,9 +1,9 @@
 import { SOCKET_URL } from './protocol';
-import type { UnityClient, LoginDriver } from './login-logic';
+import type { UnityClient, LoginDriver, CharacterSlot } from './login-logic';
 import { LOGIN, USERNAME, PASSWORD, SERVER, CHARACTERS, SELECTION_PANE, SELECTION_OK, objectReady, unityMessage, SelectionDispatchError } from './login-effects';
 
 export function loginDriver(client: UnityClient): LoginDriver {
-  let selectedSlot: number | null = null;
+  let selectedSlot: CharacterSlot | null = null;
   let enterAttempted = false;
   const selectionReady = () => objectReady(client, CHARACTERS)
     && objectReady(client, SELECTION_PANE) && objectReady(client, SELECTION_OK);

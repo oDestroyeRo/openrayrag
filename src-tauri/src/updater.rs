@@ -1,4 +1,5 @@
-use crate::updater_logic::{parse_feed, Platform, MAX_METADATA};
+use crate::update_install_logic::VerifiedArchive as Candidate;
+use crate::updater_logic::{parse_feed, CandidateAsset, MAX_METADATA};
 use crate::{
     current_form::{self, FormDocument},
     current_form_logic::same_form,
@@ -7,7 +8,7 @@ use crate::{
 };
 use serde::Serialize;
 use std::{
-    sync::{Arc, Mutex},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 use tauri::{Manager, Webview};
@@ -28,11 +29,6 @@ pub(crate) struct Status {
     pub message: String,
     pub bytes: u64,
     pub release_url: &'static str,
-}
-#[derive(Clone)]
-struct Candidate {
-    version: String,
-    bytes: Arc<Vec<u8>>,
 }
 pub(crate) struct UpdateState {
     status: Status,
@@ -140,7 +136,7 @@ async fn find_update(
     primary: &str,
     legacy: &str,
     current: &str,
-) -> Result<Option<(String, Platform)>, String> {
+) -> Result<Option<CandidateAsset>, String> {
     let metadata = match bounded(client, primary, MAX_METADATA, |_| {}).await {
         Ok(metadata) => metadata,
         // A missing feed permits the legacy bridge. Any other failure must
@@ -180,7 +176,7 @@ async fn check(app: tauri::AppHandle) {
     }
     let result = async {
         let client = download_client(true)?;
-        let Some((v, p)) =
+        let Some(asset) =
             find_update(&client, FEED, LEGACY_FEED, env!("CARGO_PKG_VERSION")).await?
         else {
             return Ok(None);
@@ -189,20 +185,16 @@ async fn check(app: tauri::AppHandle) {
             let shared = app.state::<SharedUpdate>();
             let mut u = shared.lock().map_err(|_| "Update state unavailable.")?;
             u.status.phase = "downloading".into();
-            u.status.available_version = Some(v.clone());
+            u.status.available_version = Some(asset.version().as_str().to_owned());
             u.status.message = "Downloading a signed client update in the background.".into();
         }
-        let bytes = bounded(&client, &p.url, update_install::MAX_ARCHIVE, |n| {
+        let bytes = bounded(&client, asset.url(), update_install::MAX_ARCHIVE, |n| {
             if let Ok(mut u) = app.state::<SharedUpdate>().lock() {
                 u.status.bytes = n as u64;
             }
         })
         .await?;
-        update_install::verify(&bytes, &p.signature, &key(), &v)?;
-        Ok::<_, String>(Some(Candidate {
-            version: v,
-            bytes: Arc::new(bytes),
-        }))
+        Ok::<_, String>(Some(Candidate::new(bytes, asset, &key())?))
     }
     .await;
     if let Ok(mut u) = app.state::<SharedUpdate>().lock() {
@@ -502,7 +494,7 @@ pub(crate) async fn update_install(
         g.commit(&nonce)?;
         c
     };
-    let target_version = candidate.version.clone();
+    let target_version = candidate.version().to_owned();
     // A committed lease continues blocking commands while window destruction finishes.
     let mut retirement_owner = None;
     let result = async {
@@ -582,7 +574,7 @@ pub(crate) async fn update_install(
                 {
                     return Err("Game settlement changed before replacement.".into());
                 }
-                update_install::install(&candidate.bytes, &candidate.version)
+                update_install::install(&candidate)
             })
             .await
             .map_err(|_| "Update install task failed.")?
@@ -627,7 +619,7 @@ mod tests {
         net::TcpListener,
         sync::mpsc,
     };
-    type FeedResult = Result<Option<(String, Platform)>, String>;
+    type FeedResult = Result<Option<CandidateAsset>, String>;
 
     fn feed(version: &str) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
@@ -777,7 +769,7 @@ mod tests {
             assert_eq!(paths, ["/latest-semver.json"]);
             let found = result.unwrap();
             if current == "0.2.63" {
-                assert_eq!(found.unwrap().0, "1.0.0");
+                assert_eq!(found.unwrap().version().as_str(), "1.0.0");
             } else {
                 assert!(found.is_none());
             }
@@ -792,7 +784,7 @@ mod tests {
             ],
             "0.2.63",
         );
-        assert_eq!(result.unwrap().unwrap().0, "0.2.64");
+        assert_eq!(result.unwrap().unwrap().version().as_str(), "0.2.64");
         assert_eq!(paths, ["/latest-semver.json", "/latest.json"]);
         let (result, paths) = find_from_server(
             vec![
@@ -915,8 +907,8 @@ pub(crate) fn update_final_ack(
         .candidate
         .as_ref()
         .ok_or("No update is ready.")?
-        .version
-        .clone();
+        .version()
+        .to_owned();
     if let Err(error) =
         crate::update_continuation::capture(&app, &gate, &nonce, checkpoint, &target)
     {

@@ -1,6 +1,6 @@
 import type { Entity, GameEvent } from './protocol';
 import { SUPPORTED_STATUS_IDS } from './actor-status-catalog';
-import { absoluteResource, damageResource, unavailableResource, type ResourceObservation } from './actor-resources';
+import { absoluteResource, copyResourceObservation, damageResource, unavailableResource, type ResourceObservation } from './actor-resources';
 
 import { ACTOR_OBSERVATION_LIMITS, PERMANENT_STATUS_SECONDS, type ActorPredicate, type StatusObservation, type ActorObservation, type ActorObservationSnapshot, type ObservationContext, type PartyActorEvidence, type RecordState, clock, unknownCast } from './actor-observations-logic';
 
@@ -34,7 +34,7 @@ export class ActorObservations {
     const placeholder=entity.sp===undefined&&entity.maxSp===undefined||entity.sp===0&&entity.maxSp===0;
     // The owner receives the nearby-player 0/0 SP placeholder after initial
     // stats. Bind that one announced arrival without refreshing receipt time.
-    const sp=own&&entryType===1&&placeholder&&initialization?.sp?{...initialization.sp}
+    const sp=own&&entryType===1&&placeholder&&initialization?.sp?copyResourceObservation(initialization.sp)
       :own&&entity.sp!==undefined?absoluteResource(entity.sp,entity.maxSp,at,'spawn'):undefined;
     this.actors.set(entity.id,{id:entity.id,incarnation:++this.nextIncarnation,kind:entity.kind,name:entity.name.slice(0,64),observedAt:at,
       statusesKnown:entity.statuses!==undefined,statuses,cast:unknownCast(),startedAt:at,visibleAt:at,hpSequence:++this.sequence,spSequence:this.sequence,hpUsesParty:false,
@@ -69,10 +69,10 @@ export class ActorObservations {
     // Absolute packets replace the baseline in captured packet order. Equal
     // numbers never suppress a subsequent HitTarget. HP/SP have separate fences.
     if(sequence>actor.hpSequence&&context.at>=(actor.hp?.at??actor.startedAt)) {
-      actor.hpSequence=sequence;actor.hp={...actor.partyHp};actor.hpUsesParty=true;
+      actor.hpSequence=sequence;actor.hp=copyResourceObservation(actor.partyHp);actor.hpUsesParty=true;
     }
     if((sequence>actor.spSequence||!actor.sp)&&context.at>=(actor.sp?.at??0)) {
-      actor.spSequence=sequence;actor.sp={...actor.partySp};
+      actor.spSequence=sequence;actor.sp=copyResourceObservation(actor.partySp);
     }
   }
   private status(id: number, seconds: number, at: number): StatusObservation {
@@ -136,14 +136,14 @@ export class ActorObservations {
     // Resource and affiliation packets do not supply a newer visibility clock.
     actor.visibleAt=Math.max(actor.visibleAt,actor.observedAt);
   }
-  snapshot(selfId: number | null, targetId: number | null, connected: boolean, requested: ActorPredicate[]=[], includeRest=true,candidateId:number|null=null): ActorObservationSnapshot {
+  snapshot(selfId: number | null, targetId: number | null, connected: boolean, requested: readonly ActorPredicate[]=[], includeRest=true,candidateId:number|null=null): ActorObservationSnapshot {
     const ids=new Set<number>([...(selfId!==null?[selfId]:[]),...(targetId!==null?[targetId]:[]),...(candidateId!==null?[candidateId]:[]),...requested.flatMap(p=>p.actor.scope==='actor'?[p.actor.id]:[]),...(includeRest?this.actors.keys():[])]);
     let remaining:number=includeRest?ACTOR_OBSERVATION_LIMITS.publishedStatuses:ACTOR_OBSERVATION_LIMITS.evaluatedStatuses;let truncated=false;
     const actors:ActorObservation[]=[];
     for(const id of ids) {
       const actor=this.actors.get(id);if(!actor)continue;
       const allStatuses=[...actor.statuses.values()];const complete=allStatuses.length<=remaining;const statuses=complete?allStatuses.map(s=>({...s})):[];
-      truncated||=!complete;remaining-=statuses.length;actors.push({id:actor.id,incarnation:actor.incarnation,kind:actor.kind,name:actor.name,observedAt:actor.observedAt,statusesKnown:complete&&actor.statusesKnown,statuses,cast:{...actor.cast},...(actor.hp?{hp:{...actor.hp}}:{}),...(actor.sp?{sp:{...actor.sp}}:{})});
+      truncated||=!complete;remaining-=statuses.length;actors.push({id:actor.id,incarnation:actor.incarnation,kind:actor.kind,name:actor.name,observedAt:actor.observedAt,statusesKnown:complete&&actor.statusesKnown,statuses,cast:{...actor.cast},...(actor.hp?{hp:copyResourceObservation(actor.hp)}:{}),...(actor.sp?{sp:copyResourceObservation(actor.sp)}:{})});
       if(actors.length>=ACTOR_OBSERVATION_LIMITS.publishedActors){truncated||=ids.size>actors.length;break;}
     }
     return {world:this.world,at:this.now(),lastFrameAt:this.lastFrameAt,connected,selfId,targetId,...(candidateId!==null?{candidateId}:{}),...(truncated?{truncated:true}:{}),actors};

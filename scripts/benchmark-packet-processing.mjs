@@ -89,6 +89,7 @@ for(const mode of ['gameClient','botOnly']){
 process.stdout.write(JSON.stringify(output));
 `;
 
+/** @param {string | null} ref @param {boolean} instrumented @returns {Promise<import("./tooling-domain-values.mjs").PacketReplay>} */
 async function measure(ref, instrumented) {
   const outputFile = join(temporary, `${ref ? 'baseline' : 'current'}-${instrumented ? 'counts' : 'time'}.mjs`);
   await build({

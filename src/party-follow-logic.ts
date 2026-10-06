@@ -2,9 +2,9 @@ import type { ActionIdentity } from './actor-identity';
 import type { ActorObservations } from './actor-observations';
 import type { PartyActorBinding } from './party-actors-logic';
 import type { PartyActorBindings } from './party-actors';
-import type { MapPolicy } from './map-policy-logic';
+import type { MapPolicyInput as MapPolicy } from './map-policy-logic';
 import type { Entity } from './protocol';
-import type { Settings } from './settings';
+import type { SettingsInput as Settings } from './settings';
 import type { PartyMember } from './world-protocol';
 export interface PartyFollowSnapshot {
   state: 'disabled' | 'selecting' | 'following' | 'waiting' | 'preparing' | 'travelling' | 'awaitingLeader' | 'failed' | 'cancelled' | 'expired';

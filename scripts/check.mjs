@@ -19,6 +19,7 @@ export function invocation(step, env = process.env, platform = process.platform)
   return createInvocation(step, platform, process.execPath);
 }
 
+/** @param {readonly import('./tooling-domain-values.mjs').VerificationStep[]} steps @param {typeof runLoggedProcess} [run] @param {string} [directory] @param {NodeJS.ProcessEnv} [env] */
 export async function executePlan(steps, run = runLoggedProcess, directory = root, env = process.env) {
   for (const step of steps) {
     console.log(`Checking ${step.report.replace(/\.log$/, '')}…`);

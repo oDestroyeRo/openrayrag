@@ -1,3 +1,5 @@
+import { quantity, revisionFor, partyMemberId, type ItemId, type Quantity } from './domain-values';
+import { skillId as domainSkillId, itemId as domainItemId, bagId as domainBagId } from './domain-values';
 import { filter, map } from 'remeda';
 import { fieldIdentityWaitReason, fieldResumeDecision } from './controller-field-policy';
 import { PartyFollowRuntime, type PartyFollowContext, type PartyFollowSnapshot } from './party-follow';
@@ -23,7 +25,7 @@ import { canMemoMap } from './memo-map-catalog';
 import { BotEngine, OWN_CAST_WAIT_REASON, type Action, type Snapshot } from './engine';
 import { decode, type GameEvent } from './protocol';
 import { validateExpandedAction, type ExpandedAction } from './protocol-feature';
-import { validateSettings, automationSettings, type Settings, type AutomationSettings } from './settings';
+import { validateSettings, automationSettings, settingsDraft, automationDraft, type RunSettings, type SettingsInput as Settings, type AutomationSettingsInput as AutomationSettings } from './settings';
 import { decodeWorld, validateWorldAction, type WorldAction, type WorldEvent } from './world-protocol';
 import { WorldState, type WorldSnapshot } from './world-state';
 import { NpcWorkflow, validateWorkflowSpec, worldActionBlockers, type WorkflowContext, type WorkflowSnapshot, type WorkflowStep, createVendingReceipt, confirmVendingReceipt, type VendingReceipt } from './workflows';
@@ -35,7 +37,7 @@ import { TravelController, type TravelSnapshot, type DatabaseTravelTransport } f
 import { DATABASE_TELEPORT_COOLDOWN_MS, databaseTeleportWait } from './database-travel-protocol';
 import { inSchedule, actionConfirmationTimeout } from './automation';
 import { searchGrid, type WalkGrid } from './navigation';
-import type { InventoryItem } from './protocol-feature';
+import type { InventoryItemInput as InventoryItem } from './protocol-feature';
 import { NpcServiceRuntime, observeServiceReceipt, confirmServiceReceipt, type ServiceContext, type ServiceReceipt, type ServiceSnapshot } from './npc-services';
 import { validateServiceExecution } from './npc-services-logic';
 import { ITEM_CATALOG } from './game-catalog';
@@ -45,7 +47,7 @@ import { observeSupplyReceipt } from './supply-receipt';
 import { createSupplyReceipt, confirmSupplyReceipt, type SupplyReceipt } from './supply-receipt-logic';
 import { dispositionStockFloors, publishedDispositionMetadata } from './disposition-ui-logic';
 import { BUILTIN_SERVICES, serviceByContractId,resolveServiceNpc, type NpcServiceDefinition } from './npc-services';
-import { confirmWorkflowReceipt, type WorkflowReceipt } from './workflows';
+import { confirmWorkflowReceipt, stock, type WorkflowReceipt } from './workflows';
 import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type EscapeSnapshot, type EscapeResumeGuard } from './escape';
 
 
@@ -134,7 +136,7 @@ export class CompanionController {
   private supplyCloseSent=false; private supplyReturnApproach=false;private supplyServiceStarted=false;private supplyServiceContract:string|null=null;private supplyStorageFull:SupplyPhaseEvidence['storageFull']=null;private sendingSupply=false;
   private readonly dispositionMetadata=publishedDispositionMetadata();
   readonly socket: ManualSocket;
-  private socketFloors:ReadonlyMap<number,number>|null=null;
+  private socketFloors:ReadonlyMap<ItemId,Quantity>|null=null;
   private socketInitialization:{key:string;identity:string|null}|null=null;
   readonly social: ManualSocial;
   readonly memo: ManualMemo;
@@ -156,7 +158,7 @@ export class CompanionController {
   private travelSettings: Settings | null = null;
   private returnSettings: Settings | null = null;
   private returning = false;
-  private requestedSettings: Settings | null = null;
+  private requestedSettings: RunSettings | null = null;
   private retryAt = 0;
   private retries = 0;
   private yieldUntil = 0;
@@ -199,7 +201,7 @@ export class CompanionController {
     this.engine = new BotEngine(action=>this.send(action), now, gridFor, entityId => {
       if (!this.world.party) return null;
       const members = [...this.world.party.members.values()].filter(member=>member.entityId===entityId);
-      return members.length===1 ? this.world.partyActors.get(members[0]!.memberId) : null;
+      return members.length===1 ? this.world.partyActors.get(partyMemberId(members[0]!.memberId)) : null;
     });
     this.partyFollow=new PartyFollowRuntime(now);
     this.engine.partyFollowBinding=()=>this.partyFollow.visibleLeader(this.partyFollowContext());
@@ -262,7 +264,7 @@ export class CompanionController {
     const e=this.engine,p=e.player;
     if(!policy||!p||!this.runRequested||!this.heartbeatHealthy||!this.movementSettled()||this.refineBlocksAutomation||this.warp.blocked||this.partyFollow.ownsTravel||this.returning||this.deathCycle||this.pending||this.featureReceipt||this.unresolvedWorld||this.workflowOutstanding||this.travel.active||this.service.active||this.workflow.snapshot().running||['running','waiting'].includes(this.routine.snapshot().state)||this.supply.ownsField||this.supply.uncertain||this.escape.busy||this.memo.blocked||this.socket.busy||this.social.busy||this.now()<this.fencedUntil||this.now()<this.yieldUntil||this.world.npc.id!==null||this.world.npc.mode!=='idle'||this.world.vending){this.partyHeal.wait('Waiting for higher-priority owners or physical movement.');return false;}
     this.world.refreshPartyActors(e.observations,p.id);
-    const bindings=[...(this.world.party?.members.keys()??[])].flatMap(id=>{const binding=this.world.partyActors.get(id);return binding?[binding]:[];});
+    const bindings=[...(this.world.party?.members.keys()??[])].flatMap(id=>{const binding=this.world.partyActors.get(partyMemberId(id));return binding?[binding]:[];});
     const observations=e.actorObservation(bindings.map(binding=>partyHpCondition(binding,policy.hpBelowPercent)));
     if(!this.partyHeal.resourcesReadBack(observations)){this.partyHeal.wait('Waiting for fresh own SP readback after Heal.');return false;}
     const candidates=partyHealCandidates(bindings,e.actors,p.id,observations,policy.hpBelowPercent);
@@ -421,7 +423,7 @@ export class CompanionController {
   private initializationResourceRevision(strong:boolean):string|null {
     if(!this.engine.observedOwnCastSettled()||this.engine.retreatOwned||this.partyFollow.ownsTravel||this.partyHeal.busy||this.partyHeal.awaitingSpReadback||!this.movementSettled())return null;
     const c=this.refineContext();
-    const revisions=[c.connection,c.inventoryRevision,c.equipmentRevision,c.currencyRevision];
+    const revisions:number[]=[c.connection,c.inventoryRevision,c.equipmentRevision,c.currencyRevision];
     if(strong)revisions.push(this.engine.character.spRevision,this.engine.character.skillsRevision);
     return c.inventory&&c.equipment&&c.zeny!==null?JSON.stringify(revisions):null;
   }
@@ -534,7 +536,7 @@ export class CompanionController {
       if(recoveryGuard){this.deathCycle=deathCycle(recoveryGuard,this.now());this.returning=true;}
       if(escapeGuard)this.escape.restoreOnReconnect(settings,escapeGuard,this.escapeContext());
       this.engine.castAvailability.allowRun();
-      const followSettings=structuredClone(settings),policy=structuredClone(automationSettings(followSettings));
+      const followSettings=settingsDraft(settings),policy=automationDraft(automationSettings(followSettings));
       if(policy.follow.mode==='partyLeader')policy.follow.rendezvous=false;
       followSettings.automation=policy;this.partyFollow.start(followSettings,this.partyFollowContext());
     }
@@ -581,7 +583,7 @@ export class CompanionController {
     this.tick();
   }
   /** Explicit run initialization happens once; stage projections only resume it. */
-  private beginRun(settings: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard): void {
+  private beginRun(settings: RunSettings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard): void {
     const context=this.supplyContext();
     this.partyHeal.newRun();
     this.supply.configure(settings,context,supplyGuard);
@@ -610,14 +612,14 @@ export class CompanionController {
       world: this.world, itemCatalog: ITEM_CATALOG, visibleNpcIds: map(filter([...engine.actors.values()], e => e.kind === 2 || e.kind === 4), e => e.id),
       actorIdentity:id=>engine.actorActionIdentity(id)??(id===0?null:engine.actorActionIdentity()),
       visiblePlayerIds:map(filter([...engine.actors.values()], e=>e.kind===0&&!e.dead), e=>e.id),
-      basicSkillLevel: character.skillsKnown ? character.skillLevel(1) : 0,
-      pushCartLevel: character.skillsKnown ? character.skillLevel(73) : 0,
-      vendingLevel: character.skillsKnown ? character.skillLevel(70) : 0 };
+      basicSkillLevel: character.skillsKnown ? character.skillLevel(domainSkillId(1)) : 0,
+      pushCartLevel: character.skillsKnown ? character.skillLevel(domainSkillId(73)) : 0,
+      vendingLevel: character.skillsKnown ? character.skillLevel(domainSkillId(70)) : 0 };
   }
   private serviceContext(): ServiceContext {
     return { ...this.context(), player:this.engine.player, actors:[...this.engine.actors.values()], connection:this.connectionEpoch, inventoryKnown:this.engine.character.inventoryKnown };
   }
-  private socketContext(floors:ReadonlyMap<number,number>=this.socketFloors??socketStockFloors(automationSettings(this.engine.settings))): SocketContext {
+  private socketContext(floors:ReadonlyMap<ItemId,Quantity>=this.socketFloors??socketStockFloors(automationSettings(this.engine.settings))): SocketContext {
     const e=this.engine,c=e.character,p=e.player,actor=e.actorActionIdentity();
     const stationary=this.movementSettled();
     const identity=actor?JSON.stringify([actor.world,actor.selfId,actor.selfIncarnation]):'';
@@ -628,7 +630,7 @@ export class CompanionController {
         &&!this.social.busy&&!this.escape.busy&&!this.supply.ownsField&&!this.supply.uncertain&&!this.service.active&&!this.travel.active
         &&!this.workflow.snapshot().running&&!['running','waiting'].includes(this.routine.snapshot().state)&&e.featureActionsSettled&&e.idleForActions()
         &&this.now()>=this.fencedUntil&&this.now()>=this.yieldUntil&&this.heartbeatHealthy&&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending,
-      character:p?.name??'',identity,readbackKey,connection:this.connectionEpoch,map:e.map,inventoryKnown:c.inventoryKnown,
+      character:p?.name??'',identity,readbackKey,connection:revisionFor('connection',this.connectionEpoch),map:e.map,inventoryKnown:c.inventoryKnown,
       equipmentKnown:c.inventoryKnown&&c.equipmentRevision>0,inventoryRevision:c.inventoryRevision,equipmentRevision:c.equipmentRevision,
       inventory:c.inventory,equipment:c.equipment,ammoId:c.ammoId,floors};
   }
@@ -665,15 +667,15 @@ export class CompanionController {
     const init=this.refineInitialization;if(init&&identity&&init.identity===null)init.identity=identity;
     const readbackKey=identity?(init?.identity===identity?init.key:identity):init?.identity===null?init.key:null;
     return {ready:!!p&&!p.dead&&!!identity&&e.connected&&e.compatible&&this.heartbeatHealthy&&this.now()-this.lastFrame<=15000,
-      settled:!this.warp.blocked&&this.refineRuntimeSettled(),identity,character:p?.name??null,readbackKey,connection:this.connectionEpoch,map:e.map,
+      settled:!this.warp.blocked&&this.refineRuntimeSettled(),identity,character:p?.name??null,readbackKey,connection:revisionFor('connection',this.connectionEpoch),map:e.map,
       npcId,npcIdentity,npcGeneration:this.refineNpcGeneration,npcMode:this.world.npc.mode,promptToken:npcIdentity?this.refinePromptToken:null,
       inventory:c.inventoryKnown?[...c.inventory.values()]:null,equipment:c.inventoryKnown?[...c.equipment,c.ammoId]:null,
-      zeny:c.stats?.zeny??null,inventoryRevision:c.inventoryRevision,equipmentRevision:c.equipmentRevision,currencyRevision:this.supplyCurrencyRevision,activityRevision:this.refineActivityRevision};
+      zeny:c.stats?.zeny??null,inventoryRevision:c.inventoryRevision,equipmentRevision:c.equipmentRevision,currencyRevision:revisionFor('currency',this.supplyCurrencyRevision),activityRevision:revisionFor('activity',this.refineActivityRevision)};
   }
   private socialContext(): SocialContext {
     const p = this.engine.player, c = this.engine.character;
     return { ready: !!p && this.engine.connected && this.engine.compatible && !!this.engine.map && this.now() - this.lastFrame <= 15_000,
-      actorId: p?.id ?? null, name: p?.name ?? '', job: p?.classId ?? null, learnedBasic: c.skillsKnown ? c.learned.get(1) ?? 0 : null,
+      actorId: p?.id ?? null, name: p?.name ?? '', job: p?.classId ?? null, learnedBasic: c.skillsKnown ? c.learned.get(domainSkillId(1)) ?? 0 : null,
       inParty: this.world.party !== null, silenced: c.statuses.has(6) };
   }
   private manualWorldBlocker():string|null {return this.world.npc.mode!=='idle'||this.world.npc.id!==null||!!this.world.vending?'Finish the NPC or vending interaction before a manual command.':null;}
@@ -693,7 +695,7 @@ export class CompanionController {
     return {ready:!!p&&!p.dead&&!!actor&&this.now()-this.lastFrame<=15_000,
       idle,world:actor?.world??'',actorId:actor?.selfId??null,incarnation:actor?.selfIncarnation??null,connectionEpoch:this.connectionEpoch,
       map:this.engine.map,x,y,walkable:grid?x>=0&&y>=0&&x<grid.width&&y<grid.height&&grid.walkable({x,y}):null,
-      canMemo:canMemoMap(this.engine.map),learnedWarp:this.engine.character.skillsKnown?this.engine.character.learned.get(55)??0:null};
+      canMemo:canMemoMap(this.engine.map),learnedWarp:this.engine.character.skillsKnown?this.engine.character.learned.get(domainSkillId(55))??0:null};
   }
   /** Captures ordered initialization/Ready evidence; ordinary input takeover has its own hook. */
   observeOfficialPacket(data:Uint8Array):void { const event=warpInitializationPacket(data);if(event){this.warp.initialization(event);if(event.type==='playerReady')this.travel.observeReady();}else if(officialWarpSkill(data))this.warp.externalWarp(); }
@@ -701,11 +703,11 @@ export class CompanionController {
     const base=this.memoContext(),c=this.engine.character,memo=this.memo.snapshot(base);
     const readiness=warpCastReadiness(c,this.engine.actorObservation([...CAST_PREREQUISITES,BLIND_CONDITION]));
     const castSettled=this.engine.observedOwnCastSettled();
-    const p=this.engine.player,level=c.skillsKnown?c.learned.get(55)??0:0;
+    const p=this.engine.player,level=c.skillsKnown?c.learned.get(domainSkillId(55))??0:0;
     const binding=base.actorId!==null&&base.incarnation!==null?{world:base.world,actorId:base.actorId,incarnation:base.incarnation,connectionEpoch:base.connectionEpoch,revision:memo.revision,map:base.map,x:base.x,y:base.y,generation:this.warp.revision,level,inventoryRevision:c.inventoryRevision,equipmentRevision:c.equipmentRevision,spRevision:c.spRevision,skillsRevision:c.skillsRevision}:null;
     return {ready:base.ready,idle:base.idle&&!this.partyFollow.ownsTravel&&!this.partyHeal.busy&&!this.partyHeal.awaitingSpReadback&&!this.deathCycle?.guard.uncertain&&!this.deathCycle?.posture&&!this.memo.blocked,character:p?.name??'',connection:this.connectionEpoch,binding,slots:memo.slots,
-      unavailable:!castSettled?OWN_CAST_WAIT_REASON:readiness.state==='ready'?null:readiness.reason,sp:c.stats?.sp??null,gems:c.inventoryKnown?c.count(717):null,
-      reserve:Math.max(0,...dispositionStockFloors(policy).filter(row=>row.itemId===717).map(row=>row.count),...(policy.disposition?.rules??[]).filter(row=>row.itemId===717).map(row=>row.keep)),
+      unavailable:!castSettled?OWN_CAST_WAIT_REASON:readiness.state==='ready'?null:readiness.reason,sp:c.stats?.sp??null,gems:c.inventoryKnown?c.count(domainItemId(717)):null,
+      reserve:quantity(Math.max(0,...dispositionStockFloors(policy).filter(row=>row.itemId===717).map(row=>row.count),...(policy.disposition?.rules??[]).filter(row=>row.itemId===717).map(row=>row.keep))),
       cost:readiness.state==='ready'?readiness.profile.spCost:null,resourcesReady:c.inventoryKnown&&c.equipment.length===10&&c.spRevision>0,
       groundAllowed:target=>castSettled&&readiness.state==='ready'&&this.engine.manualWarpGroundAllowed(target,readiness.profile.range,policy)};
   }
@@ -839,8 +841,8 @@ export class CompanionController {
     } else {
       const receipt = action.type === 'vendingPurchase' ? createVendingReceipt(action, context) : undefined;
       const source = action.type === 'cart' ? (action.direction === 1
-        ? this.engine.character.inventory.get(action.bagId) : this.world.cart.get(action.bagId)) : undefined;
-      const cart = source ? { source: { ...source }, inventory: this.engine.character.count(source.itemId),
+        ? this.engine.character.inventory.get(domainBagId(action.bagId)) : this.world.cart.get(action.bagId)) : undefined;
+      const cart = source ? { source: { ...source }, inventory: this.engine.character.count(domainItemId(source.itemId)),
         cart: this.cartCount(source), acknowledged: false } : undefined;
       this.send(action); this.pending = { actorIdentity,action, since: this.now(), routineId, ...binding,
         ...(receipt ? { receipt } : {}), ...(cart ? { cart } : {}) };
@@ -952,7 +954,8 @@ export class CompanionController {
     }
     for(const event of events){
       const movementOwner=movementReceipts.get(event);
-      const ownedMovementReceipt=!!movementOwner&&!!memoActor&&movementOwner.world===memoActor.world
+      const movementWorld:string|undefined=movementOwner?.world;
+      const ownedMovementReceipt=!!movementOwner&&!!memoActor&&movementWorld===memoActor.world
         &&movementOwner.id===memoActor.selfId&&movementOwner.incarnation===memoActor.selfIncarnation;
       if(event.type==='walk'&&event.id===memoPlayer?.id){
         this.memoMovementUnknown=true;const end=event.walk.cells.at(-1);
@@ -1043,7 +1046,7 @@ export class CompanionController {
       } else if(owner.macro&&owner.workflowReceipt) {
         owner.workflowAcknowledged ||= this.worldOwnerCurrent(owner)&&worldEvents.some(event=>owner.action.type==='storage'&&owner.action.operation!=='close'
           ? event.type==='storageMoved'&&event.deposit===(owner.action.operation==='deposit')&&event.change===owner.action.count
-            &&owner.workflowReceipt!.itemChanges.has(event.item.itemId)
+            &&owner.workflowReceipt!.itemChanges.has(domainItemId(event.item.itemId))
           : event.type==='npcEnd'||['npcDialog','npcOptions','shopOpened','storageOpened','barterOpened'].includes(event.type)&&this.world.npc.id===owner.npcId);
         if(owner.workflowAcknowledged&&owner.map===this.engine.map&&owner.worldGeneration===this.world.generation&&this.worldOwnerCurrent(owner)
           &&confirmWorkflowReceipt(owner.workflowReceipt,this.context()))this.unresolvedWorld=null;
@@ -1060,7 +1063,7 @@ export class CompanionController {
     if(this.partyHeal.awaitingSpReadback&&events.some(event=>event.type==='sp'||event.type==='stats'&&event.sp!==undefined))
       this.partyHeal.resourcesReadBack(this.engine.actorObservation([]));
     if(this.partyHeal.busy){
-      const state=this.partyHeal.snapshot(),binding=state.targetMemberId===null?null:this.world.partyActors.get(state.targetMemberId);
+      const state=this.partyHeal.snapshot(),binding=state.targetMemberId===null?null:this.world.partyActors.get(partyMemberId(state.targetMemberId));
       if(!binding||events.some(event=>event.type==='map'||event.type==='clear'||event.type==='death'||event.type==='remove'||event.type==='partyAffiliation')||worldEvents.some(event=>['partyJoined','partyLeft','partyMember','partyRemove','partyMap'].includes(event.type)))this.partyHeal.cancel('Party or actor lifetime evidence changed.');
     }
     this.reconcileFeature(events);
@@ -1101,8 +1104,8 @@ export class CompanionController {
     const { source, inventory, cart } = pending.cart; const action = pending.action;
     const direction = action.direction === 1 ? 1 : -1;
     const sourceItems = action.direction === 1 ? this.engine.character.inventory : this.world.cart;
-    return (sourceItems.get(action.bagId)?.count ?? 0) === source.count - action.count
-      && this.engine.character.count(source.itemId) === inventory - direction * action.count
+    return (sourceItems.get(domainBagId(action.bagId))?.count ?? 0) === source.count - action.count
+      && this.engine.character.count(domainItemId(source.itemId)) === inventory - direction * action.count
       && this.cartCount(source) === cart + direction * action.count;
   }
   private worldConfirmed(action: ControllerAction, events: WorldEvent[], owner: Pending | null = this.pending): boolean {
@@ -1133,7 +1136,7 @@ export class CompanionController {
     const settled=this.engine.idleForActions()&&noOwner;
     return {character:p?.name??this.characterName??'',epoch:String(this.connectionEpoch),map:this.engine.map,position:p?{x:Math.floor(p.x),y:Math.floor(p.y)}:null,
       connected:this.engine.connected&&this.engine.compatible,alive:!!p&&!p.dead,loading:this.travel.active&&this.travel.snapshot().state==='transition',fresh:this.now()-this.lastFrame<=15000&&this.supplyInventoryFresh&&this.supplyCurrencyFresh,
-      settled,canPrepare:noOwner&&this.engine.featureActionsSettled,fieldRequested:this.runRequested,inventoryRevision:this.supplyInventoryRevision,currencyRevision:this.supplyCurrencyRevision,
+      settled,canPrepare:noOwner&&this.engine.featureActionsSettled,fieldRequested:this.runRequested,inventoryRevision:revisionFor('inventory',this.supplyInventoryRevision),currencyRevision:revisionFor('currency',this.supplyCurrencyRevision),
       economicUncertain:!!this.unresolvedWorld||!!this.featureReceipt,
       disposition:{revision:`${this.connectionEpoch}:${this.world.generation}:${this.world.revision}:${c.inventoryRevision}:${c.statsRevision}:${c.equipmentRevision}`,
         containers:{inventory:{items:c.inventoryKnown?[...c.inventory.values()]:null,slots:200,weight:c.stats?.weight??null,maxWeight:c.stats?.maxWeight??null},
@@ -1195,14 +1198,14 @@ export class CompanionController {
         if(this.supply.uncertain)return true;
         const action=intent.action.command;
         // Recompute immediately before creating a workflow or transport receipt.
-        const next=nextSupplyAction(context,this.supply.snapshot().goals,{...this.requestedSettings!.automation!.disposition!,maxSpend:Math.min(this.requestedSettings!.automation!.disposition!.maxSpend,Math.max(0,this.requestedSettings!.automation!.supply!.maxSpend-this.supply.snapshot().reserved+intent.action.reservedSpend)),
+        const next=nextSupplyAction(context,this.supply.snapshot().goals,{...this.requestedSettings!.automation!.disposition!,maxSpend:quantity(Math.min(this.requestedSettings!.automation!.disposition!.maxSpend,Math.max(0,this.requestedSettings!.automation!.supply!.maxSpend-this.supply.snapshot().reserved+intent.action.reservedSpend))),
           rules:this.requestedSettings!.automation!.disposition!.rules.map(rule=>{const goal=this.supply.snapshot().goals.find(goal=>goal.itemId===rule.itemId);return goal?{...rule,minimum:goal.desired,desired:goal.desired}:rule;})},this.requestedSettings!.automation!.supply!,{storageFull:this.supplyStorageFull});
         if(next.type!=='action'||JSON.stringify(next.action)!==JSON.stringify(intent.action))throw new Error('Supply stock, price or prerequisites changed before dispatch.');
         let economic:WorkflowReceipt;
         if(action.type==='cart'){
-          const source=(action.direction===1?this.engine.character.inventory:this.world.cart).get(action.bagId);if(!source)throw new Error('Supply source bag changed.');
-          const w=this.context();const items=new Map<number,number>();for(const row of w.inventory)items.set(row.itemId,(items.get(row.itemId)??0)+row.count);
-          economic={zeny:w.zeny,cost:0,credit:0,items,bags:new Map(w.inventory.map(item=>[item.bagId,item.count])),itemChanges:new Map([[source.itemId,(action.direction===1?-1:1)*action.count]]),bagChanges:new Map(action.direction===1?[[action.bagId,-action.count]]:[]),strictStock:false};
+          const source=(action.direction===1?this.engine.character.inventory:this.world.cart).get(domainBagId(action.bagId));if(!source)throw new Error('Supply source bag changed.');
+          const w=this.context();const items=stock(w.inventory);
+          economic={zeny:w.zeny,cost:0,credit:0,items,bags:new Map(w.inventory.map(item=>[domainBagId(item.bagId),quantity(item.count)])),itemChanges:new Map([[domainItemId(source.itemId),(action.direction===1?-1:1)*action.count]]),bagChanges:new Map(action.direction===1?[[domainBagId(action.bagId),-action.count]]:[]),strictStock:false};
         }else{
           const definition=this.supplyServiceContract?serviceByContractId(this.supplyServiceContract):null;
           const resolved=definition?resolveServiceNpc(definition,context.map,[...this.engine.actors.values()]):null;
@@ -1250,9 +1253,9 @@ export class CompanionController {
     const p = this.engine.player; const c = this.engine.character;
     const inventory: Record<number, number> = {};
     if (c.inventoryKnown) {
-      for(const itemId of this.macro.inventoryItemIds())inventory[itemId]=c.count(itemId);
+      for(const itemId of this.macro.inventoryItemIds())inventory[itemId]=c.count(domainItemId(itemId));
       for (const rule of this.routineSpec?.rules ?? []) for (const condition of rule.conditions)
-        if (condition.field === 'inventory') inventory[condition.itemId] = c.count(condition.itemId);
+        if (condition.field === 'inventory') inventory[condition.itemId] = c.count(domainItemId(condition.itemId));
     }
     const predicates=routineActorPredicates(this.routineSpec?.rules??[]);
     return { actors:this.engine.actorObservation([...predicates,...this.macroPredicates]), map: this.engine.map, ...(p?.maxHp ? { hpPercent: p.hp / p.maxHp * 100 } : {}),
@@ -1465,10 +1468,10 @@ export class CompanionController {
     this.waitingReason=this.engine.reason=this.partyFollow.snapshot().reason;
     return true;
   }
-  private macroFieldSettings(step: Extract<MacroStep,{type:'farm'}>, base=this.macroBase!): Settings {
+  private macroFieldSettings(step: Extract<MacroStep,{type:'farm'}>, base=this.macroBase!): RunSettings {
     const policy=mapPolicy(base);
     if(!mapAllowed(policy,step.map)||policy.lockArea&&policy.lockArea.map!==step.map)throw new Error('Macro field conflicts with the configured map policy or lock area.');
-    const projected=structuredClone(base),automation=structuredClone(automationSettings(base));
+    const projected=settingsDraft(base),automation=automationDraft(automationSettings(base));
     projected.map=step.map;projected.targets=[...step.targets];
     automation.travel={...automation.travel,destinationMap:step.map,waypoints:[],loop:false};
     projected.automation=automation;return validateSettings(projected);
@@ -1517,7 +1520,7 @@ export class CompanionController {
     let steps:WorkflowStep[];
     if(step.type==='buy')steps=[{type:'buy',rows:[{id:step.itemId,count:step.quantity}]}];
     else {
-      const count=this.engine.character.count(step.itemId),keep=Math.max(step.keep,count-step.quantity,...floors.filter(row=>row.itemId===step.itemId).map(row=>row.count),
+      const count=this.engine.character.count(domainItemId(step.itemId)),keep=Math.max(step.keep,count-step.quantity,...floors.filter(row=>row.itemId===step.itemId).map(row=>row.count),
         ...(automationSettings(this.macroBase!).disposition?.rules??[]).filter(row=>row.itemId===step.itemId).map(row=>row.keep));
       if(keep>32767)throw new Error('Macro storage keep quantity exceeds the supported stock contract.');
       const disposition=this.supplyContext().disposition;
@@ -1567,7 +1570,7 @@ export class CompanionController {
           owner.service=definition;owner.serviceFee=fee;owner.phase='service';
           this.service.start({...definition,workflow:{...definition.workflow,maxSpend:Math.min(definition.workflow.maxSpend,step.maxSpend)}},this.serviceContext(),mapPolicy(this.macroBase!));
         } else {
-          if(step.type==='useItem'&&this.engine.character.count(step.itemId)<=this.macroStockFloor(step.itemId))
+          if(step.type==='useItem'&&this.engine.character.count(domainItemId(step.itemId))<=this.macroStockFloor(step.itemId))
             throw new Error(`Macro item ${step.itemId} is unavailable above the configured stock reserve.`);
           owner.phase='action';
           const action:ExpandedAction=step.type==='useItem'?{type:'useItem',itemId:step.itemId}:step.mode==='self'?{type:'skill',mode:'self',skillId:step.skillId,level:step.level}:

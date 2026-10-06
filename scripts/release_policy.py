@@ -1,4 +1,5 @@
 """Pure release metadata and archive-entry policies; performs no file access."""
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 import re
 import stat
@@ -10,6 +11,38 @@ def checked(condition, message):
         raise ValueError(message)
 
 
+def valid_asset_name(name):
+    return (isinstance(name, str) and re.fullmatch(r'[A-Za-z0-9_.-]+', name)
+            and name not in {'.', '..'} and PurePosixPath(name).name == name)
+
+
+@dataclass(frozen=True, slots=True)
+class PublicAsset:
+    """One flat public artifact identity with a bounded byte count and digest."""
+    name: str
+    size: int
+    sha256: str
+
+    def __post_init__(self):
+        checked(valid_asset_name(self.name), 'Invalid or duplicate public asset name.')
+        checked(type(self.size) is int and 0 < self.size <= 256 * 1024 * 1024
+                and isinstance(self.sha256, str) and re.fullmatch(r'[a-f0-9]{64}', self.sha256),
+                'Invalid public asset size/hash.')
+
+    def to_json(self):
+        return {'name': self.name, 'size': self.size, 'sha256': self.sha256}
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveDigest:
+    """An Actions ZIP SHA-256 marker, including its algorithm prefix."""
+    value: str
+
+    def __post_init__(self):
+        checked(isinstance(self.value, str) and re.fullmatch(r'sha256:[a-f0-9]{64}', self.value),
+                'Invalid ZIP digest.')
+
+
 def public_asset_index(assets, expected_digest):
     checked(re.fullmatch(r'sha256:[a-f0-9]{64}', expected_digest), 'Invalid ZIP digest.')
     checked(isinstance(assets, list) and 0 < len(assets) <= 100, 'Invalid public asset list.')
@@ -17,13 +50,11 @@ def public_asset_index(assets, expected_digest):
     for item in assets:
         checked(isinstance(item, dict) and set(item) == {'name', 'size', 'sha256'}, 'Invalid asset fields.')
         name = item['name']
-        checked(isinstance(name, str) and re.fullmatch(r'[A-Za-z0-9_.-]+', name)
-                and name not in {'.', '..'} and PurePosixPath(name).name == name
-                and name not in expected, 'Invalid or duplicate public asset name.')
+        checked(valid_asset_name(name) and name not in expected, 'Invalid or duplicate public asset name.')
         checked(type(item['size']) is int and 0 < item['size'] <= 256 * 1024 * 1024
                 and re.fullmatch(r'[a-f0-9]{64}', item['sha256']), 'Invalid public asset size/hash.')
-        expected[name] = item
-    total = sum(item['size'] for item in assets)
+        expected[name] = PublicAsset(name, item['size'], item['sha256'])
+    total = sum(item.size for item in expected.values())
     checked(total <= 512 * 1024 * 1024, 'Public asset total exceeds its bound.')
     return expected, total
 

@@ -80,7 +80,7 @@ it('projects disposition telemetry without leaking input or catalog state', () =
   const before = structuredClone(status), expected = dispositionContextFromStatus(status);
   const altered = dispositionContextFromStatus(status);
   altered.workflow.world.storage.get(501)!.count = 0;
-  altered.containers.inventory.items![0]!.count = 0;
+  Object.assign(altered.containers.inventory.items![0]!,{count:0});
   const item = Object.values(altered.metadata)[0]!;
   item.weight = 999;
   expect(status).toEqual(before);

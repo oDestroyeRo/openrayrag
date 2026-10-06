@@ -1,4 +1,5 @@
 import { allPass, map } from 'remeda';
+import { DomainValueError } from './domain-values';
 import type { Snapshot } from './engine';
 import type { EscapeSnapshot } from './escape-logic';
 import type { LoginStatus } from './login-logic';
@@ -7,6 +8,17 @@ import { validNavigationStatus } from './navigation-status';
 import { validFeatureStatus } from './feature-ui-logic';
 
 export type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; connectionMode?: 'botOnly' | 'gameClient'; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean; escape?: EscapeSnapshot; macro?:import('./macros').MacroSnapshot; supplyGuard?:import('./supply-trip').SupplyResumeGuard; deathRecoveryGuard?:import('./death-recovery').DeathRecoveryGuard };
+declare const gameSessionValue: unique symbol;
+export type GameSessionId = string & { readonly [gameSessionValue]: 'GameSessionId' };
+/** Client session IDs retain the existing permissive nonempty, bounded string policy. */
+export function gameSessionId(value: unknown): GameSessionId {
+  if (typeof value !== 'string' || !value || value.length > 64) throw new DomainValueError('GameSessionId', 'range', 'game session ID');
+  return value as GameSessionId;
+}
+export type ValidatedGameStatus = GameStatus & { readonly sessionId: GameSessionId };
+function validGameSessionId(value: unknown): value is GameSessionId {
+  try { gameSessionId(value); return true; } catch { return false; }
+}
 
 const finite = (value: unknown): boolean => typeof value === 'number' && Number.isFinite(value);
 const fieldsMatch = (fields: readonly string[], valid: (value: unknown) => boolean) =>
@@ -17,12 +29,12 @@ const statusText = fieldsMatch(['reason','map','target'], value => typeof value 
 const statusCounts = fieldsMatch(['attacks','kills','looted'], finite);
 const dropNumbers = fieldsMatch(['id','x','y'], finite);
 
-export function validStatus(value: unknown): value is GameStatus {
+export function validStatus(value: unknown): value is ValidatedGameStatus {
   if (!value || typeof value !== 'object') return false;
   const s = value as Record<string, unknown>;
   if (typeof s.reconnectAvailable !== 'boolean') return false;
   if (s.connectionMode !== undefined && s.connectionMode !== 'botOnly' && s.connectionMode !== 'gameClient') return false;
-  if (typeof s.sessionId !== 'string' || !s.sessionId || s.sessionId.length > 64) return false;
+  if (!validGameSessionId(s.sessionId)) return false;
   const login = s.login as Partial<LoginStatus> | undefined;
   if (!login || typeof login.message !== 'string' || login.message.length > 1024
     || !['idle','signingIn','selecting','entering','complete','failed','cancelled'].includes(login.phase ?? '')) return false;

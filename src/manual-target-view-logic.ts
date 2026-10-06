@@ -1,9 +1,10 @@
 import { filter, find, map, pipe } from 'remeda';
 import { validActorSnapshot } from './actor-observations-logic';
+import { checkedEngagementIdentity } from './attack-strategy-logic';
 import type { CharacterSnapshot } from './character-state-logic';
 import { manualTargetPolicy, validateManualTargetRequest, type ManualPreviewContext, type ManualTargetRequest } from './manual-target-logic';
 import type { Entity, Position } from './protocol';
-import type { Settings } from './settings';
+import type { SettingsInput } from './settings';
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' ? value as Record<string, unknown> : {};
 
 export const actorKey = (world: string, id: number, incarnation: number): string => `${world}:${id}:${incarnation}`;
@@ -21,7 +22,7 @@ export function manualMonsterChoices(status: Record<string, unknown>): { value: 
 }
 
 /** Shared UI admission; the controller still rebuilds the route and checks receipts. */
-export function manualTargetView(status: Record<string, unknown>, settings: Settings,
+export function manualTargetView(status: Record<string, unknown>, settings: SettingsInput,
   command: { type: 'walk'; destination: Position } | { type: 'attack'; key: string }, timeoutSeconds: number,
   now: number): { request: ManualTargetRequest; context: ManualPreviewContext } {
   const actors = status.actorObservations;
@@ -42,7 +43,7 @@ export function manualTargetView(status: Record<string, unknown>, settings: Sett
   const target = observed ? (status.monsters as Entity[] ?? []).find(actor => actor.id === observed.id) ?? null : null;
   const world = object(status.world), npc = object(world.npc);
   return { request, context: { map: status.map, player, owner: request.owner, target,
-    targetIdentity: observed ? { world: actors.world, id: observed.id, incarnation: observed.incarnation } : null,
+    targetIdentity: request.command.type==='attack' ? checkedEngagementIdentity(request.command.target) : null,
     character: status.character as CharacterSnapshot, observations: { ...actors, candidateId: target?.id ?? null },
     interactionBusy: world.vending != null || npc.id != null || typeof npc.mode === 'string' && npc.mode !== 'idle' } };
 }
