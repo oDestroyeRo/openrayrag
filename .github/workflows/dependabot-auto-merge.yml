@@ -54,4 +54,4 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
-        run: bun scripts/dependabot-auto-merge.mjs
+        run: bun scripts/quality/dependabot-auto-merge.mjs

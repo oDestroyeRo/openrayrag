@@ -6,15 +6,15 @@
   "scripts": {
     "dev": "bun run bridge && vite --host 127.0.0.1",
     "build": "bun run bridge && tsc --noEmit && vite build",
-    "bridge": "bun scripts/build-bridge.mjs",
+    "bridge": "bun scripts/quality/build-bridge.mjs",
     "test": "vitest run",
-    "check": "bun scripts/check.mjs",
+    "check": "bun scripts/quality/check.mjs",
     "tauri": "tauri",
     "app:dev": "tauri dev",
     "app:build": "tauri build",
     "typecheck:release": "tsc --project tsconfig.release.json",
-    "ci:status": "bun scripts/hosted-status.mjs",
-    "release:verify": "bun scripts/release-public.mjs"
+    "ci:status": "bun scripts/quality/hosted-status.mjs",
+    "release:verify": "bun scripts/release/release-public.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.1",

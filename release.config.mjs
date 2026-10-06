@@ -1,6 +1,6 @@
 import { flatMap, map, pipe, sort } from "remeda";
 import { createHash } from "node:crypto";
-import { policyDigest } from './scripts/tooling-domain-values.mjs';
+import { policyDigest } from './scripts/shared/tooling-domain-values.mjs';
 
 // Only these pure plugins run. Artifact signing and publication stay in release.mjs.
 export const RELEASE_POLICY_VERSION = 1;

@@ -32,7 +32,7 @@ verified compatible arrow alternatives.
 The catalog extends the weapon metadata at Rebuild pin
 `4099e2c000c3c550516760b9c1241595aac9aceb`: 493 weapons, 40 ammunition entries
 and 555 equipment requirement entries, identity-matched to the published item
-snapshot. `scripts/build-weapon-catalog.py` records input hashes and reproduces
+snapshot. `scripts/catalogs/build-weapon-catalog.py` records input hashes and reproduces
 the data. Only Bow class 12 to Arrow type 0 normal attacks are verified here;
 other ammo categories do not establish gun or skill consumption rules.
 

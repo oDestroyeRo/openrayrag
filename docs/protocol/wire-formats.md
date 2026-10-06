@@ -19,15 +19,15 @@ These tables describe the bytes the current Companion consumes or emits. A consu
 | `finish` | Reject any unread complete byte; ignore 0–7 final unused bits, including nonzero bits. |
 | `prefix` | Only the listed prefix is consumed; remaining outer bytes are not validated. |
 
-[binary.ts](../../src/binary.ts) implements the bit reader/writer. Reads are bounded to 1–1,000,000-byte packets, and writes to 8,000,000 bits. Writers validate ranges and finite float32 conversion. Final bits from the upstream pooled buffer can contain old data; they are not extra booleans or a checksum.
+[binary.ts](../../src/shared/binary.ts) implements the bit reader/writer. Reads are bounded to 1–1,000,000-byte packets, and writes to 8,000,000 bits. Writers validate ranges and finite float32 conversion. Final bits from the upstream pooled buffer can contain old data; they are not extra booleans or a checksum.
 
-The private `Reader` in [protocol.ts](../../src/protocol.ts) is byte-oriented, caps string bytes at 1,024, and has no automatic whole-packet finish. Core tables identify its exact/prefix cases. Boolean-at-end core layouts read the last byte and inspect bit zero. Do not use that pattern when another field follows the boolean.
+The private `Reader` in [protocol.ts](../../src/modules/protocol/protocol.ts) is byte-oriented, caps string bytes at 1,024, and has no automatic whole-packet finish. Core tables identify its exact/prefix cases. Boolean-at-end core layouts read the last byte and inspect bit zero. Do not use that pattern when another field follows the boolean.
 
 Map codes normally match `[a-zA-Z0-9_-]{1,64}`. Actor, class, item, bag, party-member and ground-drop IDs are separate domains. Bag/drop/member IDs are positive where required. Offline roster entity zero and selected-target zero retain their packet-specific sentinel ambiguity; [actor identity](../ACTOR_IDS.md) explains how these differ from valid visible actor zero.
 
 ## Core world and movement
 
-Owner: [protocol.ts](../../src/protocol.ts), `decode`, `spawn`, `readWalk`, `command`, `walkCommand`, `lookCommand`.
+Owner: [protocol.ts](../../src/modules/protocol/protocol.ts), `decode`, `spawn`, `readWalk`, `command`, `walkCommand`, `lookCommand`.
 
 | S→C ID | Consumed fields | Framing / meaning |
 | --- | --- | --- |
@@ -111,7 +111,7 @@ For moving state 1, kinds 0/1 append Walk after appearance/entity respectively. 
 
 ## Character, inventory and skills
 
-Owner: [protocol-feature.ts](../../src/protocol-feature.ts), `readItem`, `readInventory`, `readSkills`, `readStats`, `readSkillResult`, `decodeFeatures`, `featureCommand`. These owned layouts use `finish`.
+Owner: [protocol-feature.ts](../../src/modules/protocol/protocol-feature.ts), `readItem`, `readInventory`, `readSkills`, `readStats`, `readSkillResult`, `decodeFeatures`, `featureCommand`. These owned layouts use `finish`.
 
 ### Shared records
 
@@ -202,7 +202,7 @@ Schemas reject unknown object fields. Skill IDs are positive: self ≤32,767, ta
 
 ## NPC, economy and party
 
-Owner: [world-protocol.ts](../../src/world-protocol.ts), `decodeWorld`, `member`, `worldCommand`. Known variants use `finish`, with only the explicit party suffix exceptions below. Unknown opcodes and unsupported NPC/party subtypes return `null`.
+Owner: [world-protocol.ts](../../src/modules/protocol/world-protocol.ts), `decodeWorld`, `member`, `worldCommand`. Known variants use `finish`, with only the explicit party suffix exceptions below. Unknown opcodes and unsupported NPC/party subtypes return `null`.
 
 `Rows` = `i32 count, {i32 id, i32 count}[count]`. `PricedRows` adds `i32 price` to each row. Request IDs/counts are positive, counts ≤32,767, IDs unique; prices 0–9,999,999 where priced rows are validated.
 
@@ -287,25 +287,25 @@ Opcode 103 belongs to `protocol.ts`, establishing visible actor affiliation sepa
 | 107 | View vending | `actor id` |
 | 109 | Purchase vending | Rows (0–32); no corresponding receive success schema. |
 
-Barter choice 0–63, quantity 1–99, at most ten distinct positive bag IDs. Names must be nonblank, control-free and ≤32 JS characters, then use UTF-8 byte lengths on wire. Strict request schemas reject extra fields. [Workflows](../../src/workflows.ts) correlate inventory/balance/storage/cart observations; no request ID or generic success packet proves all these operations. Cancellation retains unresolved transactions without automatic resend.
+Barter choice 0–63, quantity 1–99, at most ten distinct positive bag IDs. Names must be nonblank, control-free and ≤32 JS characters, then use UTF-8 byte lengths on wire. Strict request schemas reject extra fields. [Workflows](../../src/modules/services/workflows.ts) correlate inventory/balance/storage/cart observations; no request ID or generic success packet proves all these operations. Cancellation retains unresolved transactions without automatic resend.
 
 ## Manual adapters and Database travel
 
 | Direction / ID | Fields | Owner |
 | --- | --- | --- |
-| C→S 44 | `str(420) text, u8 channel` | [social-protocol.ts](../../src/social-protocol.ts): channel 0 Say/map, 1 Shout/world, 2 Party; 1–140 UTF-16 units, nonblank paired Unicode, opaque untrimmed text. |
+| C→S 44 | `str(420) text, u8 channel` | [social-protocol.ts](../../src/modules/social/social-protocol.ts): channel 0 Say/map, 1 Shout/world, 2 Party; 1–140 UTF-16 units, nonblank paired Unicode, opaque untrimmed text. |
 | S→C 44 | `optionalActor id, str(65535) text, str(65535) name, u8 channel` | Same; receive channel 0–3 (3 Notice); actor −1 is server. |
 | C→S 54 | `i32 emoteId` | Same; generated 59-ID player whitelist, canonical dice 58. |
 | S→C 54 | `actor id, i32 emoteId` | Same; signed/unknown results retained inertly, dice results 200–205. |
-| C→S 94 | `u8 slot` 0–3 | [memo-protocol.ts](../../src/memo-protocol.ts); no map/coordinates transmitted. |
+| C→S 94 | `u8 slot` 0–3 | [memo-protocol.ts](../../src/modules/memo/memo-protocol.ts); no map/coordinates transmitted. |
 | S→C 94 | Four records: `u8 present`; if 1, `str(64) map, i16 x, i16 y` | Same; presence exactly 0/1, map grammar validated, coordinates nonnegative. Receive permits all positive i16 coordinates; preview caps at 511. |
 | S→C 91 / event 8 | `u8 event=8, i32 value, str text` | Same; intercepted before generic ServerEvent; memo proof requires slot 0–3 and exactly empty text. |
-| C→S 63 | `i32 targetBagId, i32 cardBagId` | [socket-protocol.ts](../../src/socket-protocol.ts); distinct positive IDs, no type byte. |
-| C→S 80 | `i32 targetBagId, i32 oreItemId, i32 catalystBagId=0` | [refine-protocol.ts](../../src/refine-protocol.ts); ore is an item ID, target/catalyst are bag IDs. Catalysts unsupported. |
-| C→S 29 / Warp ground | `u8 mode=4, i16 x, i16 y, u8 skillId=55, u8 learnedLevel` | [warp-protocol.ts](../../src/warp-protocol.ts); coordinates 0–511, learned level 1–4. |
+| C→S 63 | `i32 targetBagId, i32 cardBagId` | [socket-protocol.ts](../../src/modules/socket/socket-protocol.ts); distinct positive IDs, no type byte. |
+| C→S 80 | `i32 targetBagId, i32 oreItemId, i32 catalystBagId=0` | [refine-protocol.ts](../../src/modules/refine/refine-protocol.ts); ore is an item ID, target/catalyst are bag IDs. Catalysts unsupported. |
+| C→S 29 / Warp ground | `u8 mode=4, i16 x, i16 y, u8 skillId=55, u8 learnedLevel` | [warp-protocol.ts](../../src/modules/warp/warp-protocol.ts); coordinates 0–511, learned level 1–4. |
 | C→S 29 / Warp activate | `u8 mode=5, i16 skillId=55, u8 level=slot+1` | Same; slot 0–3. |
 | S→C 97 | `u8 state` 0 cleared / 1 waiting | Same; selection state does not prove portal creation. |
-| C→S 64 | `str(64) map, i16 x=-999, i16 y=-999, b force=false` | [database-travel-protocol.ts](../../src/database-travel-protocol.ts); only bundled collision-catalog maps, server-selected arrival. |
+| C→S 64 | `str(64) map, i16 x=-999, i16 y=-999, b force=false` | [database-travel-protocol.ts](../../src/modules/navigation/database-travel-protocol.ts); only bundled collision-catalog maps, server-selected arrival. |
 
 The Warp initialization observer also recognizes complete outgoing **3** (`b create=false, str(96) character`, 1–48 UTF-16 units) and exactly one-byte **2**. Its `officialWarpSkill` helper recognizes skill-55 prefixes in outgoing 29 modes 1/4/5 for interference detection; it is not a full validating decoder and does not establish send success.
 
@@ -316,6 +316,6 @@ The Warp initialization observer also recognizes complete outgoing **3** (`b cre
 | [Socket](../SOCKETING.md) | Exact card removal (50), expected unique-item mutation (63), and complete inventory/equipment/ammo preservation. Unequipped compatible target, first free slot and reserve gates. |
 | [Refine](../REFINING.md) | Fresh 77/subtype5 prompt; exact ore loss (50), zeny debit (40), and same-item refine result (63). One attempt, no catalyst. Costs alone do not prove result. |
 | Warp | Dedicated stationary ground/activation previews, own selection and exact cast/resource ordering. Creation remains unconfirmed; retain the persisted uncertainty guard until verified reset and reconciliation. See [Warp evidence](../PROTOCOL.md). |
-| Database travel | Captured own departure, requested map, ordered Ready and fresh living own spawn. 30-second cooldown; only exact server warning can extend it. Stop preserves a sent unresolved receipt. See [travel](../../src/travel-controller.ts) and [local proof](../LOCAL_FEATURE_VERIFICATION.md). |
+| Database travel | Captured own departure, requested map, ordered Ready and fresh living own spawn. 30-second cooldown; only exact server warning can extend it. Stop preserves a sent unresolved receipt. See [travel](../../src/modules/navigation/travel-controller.ts) and [local proof](../LOCAL_FEATURE_VERIFICATION.md). |
 
 Manual social/memo/socket/refine/Warp schemas remain separate from routine/workflow/imported action documents. Their policy details and proof limits stay in the linked feature owners. Source-backed requests and synthetic fixtures do not establish every deployed transaction.

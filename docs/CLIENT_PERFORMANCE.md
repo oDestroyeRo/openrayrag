@@ -7,11 +7,11 @@ Issue [#117](https://github.com/oDestroyeRo/openrayrag/issues/117) tracks lower 
 Install the locked dependencies with `bun install --frozen-lockfile` and use Bun 1.4.2, plus Chrome/Chromium. The default executable is `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`; override it with `--chrome /path/to/chrome` or `CHROME_PATH`. This is a manual benchmark, with no CI timing gate.
 
 ```sh
-bun scripts/benchmark-client-rendering.mjs --ref 3bf3f4daa0f9172340af22d05ee6562f986c74c0 --output /tmp/rayrag-client-rendering-baseline.json
-bun scripts/benchmark-client-rendering.mjs --compare /tmp/rayrag-client-rendering-baseline.json --output /tmp/rayrag-client-rendering-candidate.json
+bun scripts/benchmarks/benchmark-client-rendering.mjs --ref 3bf3f4daa0f9172340af22d05ee6562f986c74c0 --output /tmp/rayrag-client-rendering-baseline.json
+bun scripts/benchmarks/benchmark-client-rendering.mjs --compare /tmp/rayrag-client-rendering-baseline.json --output /tmp/rayrag-client-rendering-candidate.json
 ```
 
-The first command bundles `src/` from the baseline commit. The second bundles the working tree with the same harness. Both load actual `src/main.ts`, FeatureUi, SettingsForm and BotConsole in a fresh temporary browser profile. Tauri IPC is replaced only inside the benchmark bundle by strict synthetic commands and events; no app, game connection, account credentials or existing browser profile is accessed.
+The first command bundles `src/` from the baseline commit. The second bundles the working tree with the same harness. Both load actual `src/app/main.ts`, FeatureUi, SettingsForm and BotConsole in a fresh temporary browser profile. Tauri IPC is replaced only inside the benchmark bundle by strict synthetic commands and events; no app, game connection, account credentials or existing browser profile is accessed.
 
 Each scenario has two warmup passes and five samples, normally replaying 100 statuses. The 400 × 400 `prt_fild08` fixture contains 24 monsters, 12 drops and 50 log entries. Workloads include unchanged observations, HP/counters, moving actors/drops/routes, appended and edited logs, the real main-window 1000 ms callback, and ten disconnect/reconnect cycles. Automatic intervals are suspended inside the fixture so their phase cannot contaminate measurements; production scheduling is unchanged.
 
