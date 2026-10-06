@@ -1,3 +1,4 @@
+import { filter, find, map as mapArray } from 'remeda';
 // Independent eager score/hop frontier through the unchanged 64-hop bound.
 // Reuses only physical local search; it does not reuse weightedPotential or the
 // optimized world frontier. Both integer/half and large fractional penalties.
@@ -29,7 +30,7 @@ function eager(planner,edges,same,fromMap,from,toMap,walls,policy){
    for(const edge of edges){if(edge.fromMap!==node.map||!same&&edge.fromMap===edge.toMap||!allowed(policy,edge.toMap))continue;
     const target=planner.mapCells(edge.toMap);if(!target||!target.tiles[target.index(edge.arrival)])continue;
     const approach=planner.search(node.map,node.p,edge,walls);if(!approach)continue;
-    const score=node.score+approach.cost+200+(policy.penalties.find(p=>p.map===node.map)?.cost??0),key=stateKey(edge.toMap,edge.arrival);
+    const score=node.score+approach.cost+200+(find(policy.penalties,p=>p.map===node.map)?.cost??0),key=stateKey(edge.toMap,edge.arrival);
     if(!next.has(key)||score<next.get(key).score)next.set(key,{map:edge.toMap,p:edge.arrival,score});
    }
   }
@@ -45,13 +46,13 @@ for(let run=0;run<250;run++){
  const names=['a','b','c','d'],edges=[];
  for(let i=0;i<11;i++){const fromMap=names[Math.floor(random()*4)],toMap=names[Math.floor(random()*4)];edges.push({id:`${run}:${i}`,fromMap,toMap,area:{x:2+Math.floor(random()*6),y:2+Math.floor(random()*6),halfWidth:random()<.15?1:0,halfHeight:random()<.15?1:0},arrival:{x:1+Math.floor(random()*8),y:1+Math.floor(random()*8)},source:{kind:'Warp',commit:'test',path:'test',line:1}});}
  const blocked=new Set();for(const map of names)for(let i=0;i<7;i++)blocked.add(`${map}:${Math.floor(random()*10)}:${Math.floor(random()*10)}`);
- const grid=map=>({width:10,height:10,portals:edges.filter(e=>e.fromMap===map).map(e=>e.area),walkable:p=>p.x>=0&&p.y>=0&&p.x<10&&p.y<10&&!blocked.has(`${map}:${p.x}:${p.y}`)});
+ const grid=map=>({width:10,height:10,portals:mapArray(filter(edges,e=>e.fromMap===map),e=>e.area),walkable:p=>p.x>=0&&p.y>=0&&p.x<10&&p.y<10&&!blocked.has(`${map}:${p.x}:${p.y}`)});
  const policy={...DEFAULT_MAP_POLICY,mode:'weighted',allow:run%5===0?names.filter(()=>random()<.8):[],deny:run%3===0?names.filter(()=>random()<.25):[],penalties:names.map(map=>({map,cost:fractional?Math.floor(random()*1000000)+random():Math.floor(random()*300)+(run%2?.5:0)}))};
  const same=run%2===0,planner=new TravelPlanner({edges,grid,allowSameMap:same});
  for(const target of names)for(const walls of [false,true]){
   const from={x:1,y:1},expected=eager(planner,edges,same,'a',from,target,walls,policy),route=await planner.routeBetweenMapsAsync('a',from,target,walls,policy,{scheduler});
   assert.deepEqual(route,planner.routeBetweenMaps('a',from,target,walls,policy),'Synchronous exact route, cells, escape and ties');
-  let actual=null;if(route){let map='a',p=from,score=0;for(const step of route){assert(allowed(policy,step.portal.toMap));const path=planner.search(map,p,step.portal,walls);assert(path);score+=path.cost+200+(policy.penalties.find(r=>r.map===map)?.cost??0);map=step.portal.toMap;p=step.portal.arrival;}
+  let actual=null;if(route){let map='a',p=from,score=0;for(const step of route){assert(allowed(policy,step.portal.toMap));const path=planner.search(map,p,step.portal,walls);assert(path);score+=path.cost+200+(find(policy.penalties,r=>r.map===map)?.cost??0);map=step.portal.toMap;p=step.portal.arrival;}
     if(route.length)score+=planner.search(map,p,null,walls).cost;actual={score,hops:route.length};reachable++;
   }
   assert.deepEqual(actual,expected,JSON.stringify({run,target,walls,policy}));comparisons++;

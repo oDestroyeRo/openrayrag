@@ -1,7 +1,8 @@
+import { filter, find } from "remeda";
 // Reconstruct a published plan from anonymous Git and the selected source's
 // own locked validators. A later main or reservation does not invalidate it.
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { REPOSITORY, privateEnvironment, requireValue, runReadOnly, bunInstallCommand } from "./release-public-io.mjs";
 
@@ -74,6 +75,11 @@ export async function loadSourceValidators(folder, sourceSha, git) {
   const directory = join(folder, "tools/release");
   if (!dependencyFiles.includes("tools/release/bunfig.toml"))
     await writeFile(join(directory, "bunfig.toml"), "[install]\npeer = false\n", { flag: "wx", mode: 0o600 });
+  const manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8"));
+  const remedaVersion = manifest.devDependencies?.remeda;
+  if (remedaVersion !== undefined)
+    requireValue(typeof remedaVersion === "string" && /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(remedaVersion),
+      "Selected source must pin an exact Remeda version.");
   const options = { cwd: directory, env: privateEnvironment(dirname(folder)) };
   if (!dependencyFiles.includes("tools/release/bun.lock")) {
     const migration = bunInstallCommand(true);
@@ -81,6 +87,15 @@ export async function loadSourceValidators(folder, sourceSha, git) {
   }
   const install = bunInstallCommand();
   runReadOnly(install.file, install.args, options);
+  // New source policies import Remeda from the repository root. Provision only
+  // the selected source's isolated, frozen tools install; never install its app
+  // packages or execute lifecycle hooks. Historical sources need no root link.
+  if (remedaVersion !== undefined) {
+    const installed = JSON.parse(await readFile(join(directory, "node_modules/remeda/package.json"), "utf8"));
+    requireValue(installed.version === remedaVersion, "Installed source Remeda differs from its pin.");
+    await symlink(resolve(directory, "node_modules"), join(folder, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir");
+  }
   const [core, planner, reservations, tags] = await Promise.all([
     "release-core", "semantic-release-plan", "release-reservations", "release",
   ].map(name => import(pathToFileURL(join(folder, `scripts/${name}.mjs`)).href)));
@@ -149,7 +164,7 @@ export async function verifySource(options, io) {
     baseMarker.version === notesBase.version && baseCount > 0 && baseCount < firstParentCount &&
     (baseMarker.schemaVersion === 3 ? baseMarker.firstParentCount === baseCount : core.countOf(baseMarker.version) === baseCount), "Notes base differs from a published predecessor.");
   if (baseMarker.schemaVersion === 3) {
-    const basePlan = ledger.find(item => item.sourceSha === notesBase.sourceSha);
+    const basePlan = find(ledger, item => item.sourceSha === notesBase.sourceSha);
     requireValue(basePlan && planner.planSha256(basePlan) === baseMarker.planSha256, "Published notes base differs from its reservation.");
   }
   requireValue(await peelTag(api, notesBase.tag) === notesBase.sourceSha, "Published notes-base tag targets a different source.");
@@ -160,7 +175,7 @@ export async function verifySource(options, io) {
     notesCommits: commitsBetween(git, notesBase.sourceSha, options.sourceSha),
   });
   requireValue(recomputed.state === "release" && planner.serializePlan(recomputed.plan) === planner.serializePlan(plan), "Reserved plan differs from regenerated exact Git ranges.");
-  const selectedRef = prefix.find(ref => ref.ref === reservations.planRefName(plan));
+  const selectedRef = find(prefix, ref => ref.ref === reservations.planRefName(plan));
   await write("release-plan.json", planner.serializePlan(plan));
   await write("reservation-ledger.json", JSON.stringify(ledger, null, 2) + "\n");
   await write("reservation-refs.json", JSON.stringify(prefix, null, 2) + "\n");
@@ -181,7 +196,7 @@ export async function verifySource(options, io) {
       const current = await api("/git/matching-refs/tags/rayrag-release-plan/", { fresh: true });
       requireValue(Array.isArray(current), "Final reservation ref list is invalid.");
       for (const ref of prefix) {
-        const matches = current.filter(item => item.ref === ref.ref);
+        const matches = filter(current, item => item.ref === ref.ref);
         requireValue(matches.length === 1 && matches[0].object?.type === "tag" && matches[0].object.sha === ref.object.sha, "Historical reservation changed during verification.");
       }
     },

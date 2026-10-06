@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -12,7 +12,7 @@ import {
 } from "./release-public-io.mjs";
 import { parseOptions, releaseSnapshot, verifyPublishedRelease, publicationEvidence } from "./release-public.mjs";
 import { sourceWorkflowMatches, sameSourceWorkflow, validateArtifactProduction, hasSuccessfulPublisher } from "./release-public-policy.mjs";
-import { peelTag, commitsBetween, verifySource, sourceDependencyFiles } from "./release-public-source.mjs";
+import { peelTag, commitsBetween, verifySource, sourceDependencyFiles, loadSourceValidators } from "./release-public-source.mjs";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 
@@ -58,6 +58,105 @@ test("selected source extraction supports original npm locks and current Bun loc
   }
   for (const text of ["", "tools/release/package.json", "tools/release/bun.lock\ntools/release/bun.lock"])
     assert.throws(() => sourceDependencyFiles(sourceSha, () => Buffer.from(text)));
+});
+
+async function validatorSnapshot() {
+  const names = [
+    "scripts/release-core.mjs", "scripts/release-native.py", "scripts/semantic-release-plan.mjs",
+    "scripts/release-reservations.mjs", "scripts/release-planning.mjs", "scripts/release.mjs",
+    "release.config.mjs", "release-policy-history.json", "release-migration.json",
+    "tools/release/package.json", "tools/release/bun.lock", "tools/release/bunfig.toml",
+    "scripts/release-policy.mjs", "scripts/release-publication.mjs", "scripts/release-source-policy.mjs",
+    "scripts/release-reservation-policy.mjs", "scripts/release_policy.py", "scripts/semantic-release-policy.mjs",
+  ];
+  const files = new Map(await Promise.all(names.map(async name =>
+    [name, await readFile(new URL(`../${name}`, import.meta.url))])));
+  const git = args => {
+    if (args[0] === "ls-tree") return Buffer.from(args.slice(4).filter(name => files.has(name)).join("\n") + "\n");
+    assert.equal(args[0], "show");
+    assert.equal(args[1].slice(0, 40), sourceSha);
+    const bytes = files.get(args[1].slice(41));
+    assert.ok(bytes, `Snapshot has no ${args[1]}`);
+    return bytes;
+  };
+  return { files, git };
+}
+
+test("isolated source tools share the root exact Remeda pin", async () => {
+  const root = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const tools = JSON.parse(await readFile(new URL("../tools/release/package.json", import.meta.url), "utf8"));
+  assert.equal(tools.devDependencies.remeda, root.dependencies.remeda);
+  assert.match(tools.devDependencies.remeda, /^\d+\.\d+\.\d+$/);
+});
+
+test("reconstructed source computes a nonempty plan with locked Remeda and no app install or lifecycle hooks", async () => {
+  const parent = await createReportDirectory(), folder = join(parent, "source");
+  try {
+    const snapshot = await validatorSnapshot();
+    const manifest = JSON.parse(snapshot.files.get("tools/release/package.json"));
+    manifest.scripts = { postinstall: `${JSON.stringify(process.execPath)} -e "require('node:fs').writeFileSync('lifecycle-ran','unsafe')"` };
+    snapshot.files.set("tools/release/package.json", Buffer.from(JSON.stringify(manifest)));
+    const { core, planner, reservations } = await loadSourceValidators(folder, sourceSha, snapshot.git);
+    const bridge = core.migrationBridge;
+    const result = await planner.planRelease({
+      source: { sourceSha, firstParentCount: bridge.firstParentCount + 1, pubDate: "2026-10-06T00:00:00.000Z" },
+      published: { sourceSha: bridge.sourceSha, version: bridge.version, tag: bridge.tag }, reservation: null,
+      analysisCommits: [{ hash: sourceSha, message: "fix: reconstruct the locked source policy" }],
+      notesCommits: [{ hash: sourceSha, message: "fix: reconstruct the locked source policy" }],
+    });
+    assert.equal(result.state, "release");
+    assert.equal(result.plan.version, planner.bumpVersion(bridge.version, "patch"));
+    assert.match(result.plan.notes, /reconstruct the locked source policy/);
+    assert.equal(planner.validatePlan(result.plan), result.plan);
+    assert.equal(reservations.planRefName(result.plan), `refs/tags/rayrag-release-plan/${result.plan.tag}`);
+    assert.equal(await realpath(join(folder, "node_modules")), await realpath(join(folder, "tools/release/node_modules")));
+    assert.equal(JSON.parse(await readFile(join(folder, "node_modules/remeda/package.json"), "utf8")).version, manifest.devDependencies.remeda);
+    await assert.rejects(stat(join(folder, "tools/release/lifecycle-ran")), { code: "ENOENT" });
+    await assert.rejects(stat(join(folder, "node_modules/esbuild")), { code: "ENOENT" });
+    await assert.rejects(stat(join(folder, "package.json")), { code: "ENOENT" });
+    // The extracted native validator keeps its own pure module available too.
+    execFileSync(process.platform === "win32" ? "python" : "python3", ["-c", "import runpy; runpy.run_path('release-native.py')",], {
+      cwd: join(folder, "scripts"), env: privateEnvironment(parent), stdio: "pipe",
+    });
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
+
+test("source reconstruction rejects floating Remeda before installing and never replaces a root module path", async () => {
+  for (const floating of [true, false]) {
+    const parent = await createReportDirectory(), folder = join(parent, "source");
+    try {
+      const snapshot = await validatorSnapshot();
+      if (floating) {
+        const manifest = JSON.parse(snapshot.files.get("tools/release/package.json"));
+        manifest.devDependencies.remeda = "^2.51.0";
+        snapshot.files.set("tools/release/package.json", Buffer.from(JSON.stringify(manifest)));
+        await assert.rejects(loadSourceValidators(folder, sourceSha, snapshot.git), /exact Remeda version/);
+        await assert.rejects(stat(join(folder, "tools/release/node_modules")), { code: "ENOENT" });
+      } else {
+        await mkdir(join(folder, "node_modules"), { recursive: true });
+        await writeFile(join(folder, "node_modules/preserved"), "owned by the caller");
+        await assert.rejects(loadSourceValidators(folder, sourceSha, snapshot.git), { code: "EEXIST" });
+        assert.equal(await readFile(join(folder, "node_modules/preserved"), "utf8"), "owned by the caller");
+      }
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  }
+});
+
+test("historical validators without Remeda retain their isolated tool layout", async () => {
+  const parent = await createReportDirectory(), folder = join(parent, "source");
+  try {
+    const snapshot = await validatorSnapshot();
+    for (const name of snapshot.files.keys())
+      if (name.startsWith("scripts/") && name.endsWith(".mjs")) snapshot.files.set(name, Buffer.from("export const historical = true;\n"));
+    const manifest = JSON.parse(snapshot.files.get("tools/release/package.json"));
+    delete manifest.devDependencies.remeda;
+    snapshot.files.set("tools/release/package.json", Buffer.from(JSON.stringify(manifest)));
+    snapshot.files.set("tools/release/bun.lock", Buffer.from(snapshot.files.get("tools/release/bun.lock")
+      .toString("utf8").replace(/^\s*"remeda":.*\n/gm, "")));
+    const modules = await loadSourceValidators(folder, sourceSha, snapshot.git);
+    for (const module of Object.values(modules)) assert.equal(module.historical, true);
+    await assert.rejects(stat(join(folder, "node_modules")), { code: "ENOENT" });
+  } finally { await rm(parent, { recursive: true, force: true }); }
 });
 
 test("CLI accepts dynamic canonical source/tag/run inputs and makes latest opt-in", () => {

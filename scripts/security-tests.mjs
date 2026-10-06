@@ -143,10 +143,12 @@ test('the braces advisory exception cannot reach the desktop dependency graph or
   assert.equal(manifest.dependencies, undefined);
   assert.deepEqual(Object.keys(manifest.devDependencies).sort(), [
     '@semantic-release/commit-analyzer', '@semantic-release/release-notes-generator',
-    'conventional-changelog-conventionalcommits', 'semver',
+    'conventional-changelog-conventionalcommits', 'remeda', 'semver',
   ]);
   assert.equal(manifest.overrides['conventional-changelog-writer'], '9.2.1');
   const lock = Bun.JSONC.parse(await readFile(new URL('../tools/release/bun.lock', import.meta.url), 'utf8'));
+  assert.equal(manifest.devDependencies.remeda, root.workspaces[''].dependencies.remeda);
+  assert.deepEqual(lock.packages.remeda[2], {}, 'Remeda must add no runtime dependency to the isolated tools graph');
   for (const path of Object.keys(lock.packages)) {
     assert.doesNotMatch(path, /(?:^|\/)(?:semantic-release|@semantic-release\/(?:npm|github|git))(?:\/|$)/, path);
   }

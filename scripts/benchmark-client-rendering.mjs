@@ -1,3 +1,4 @@
+import { fromEntries, map, sort } from 'remeda';
 // Offline renderer benchmark: bun scripts/benchmark-client-rendering.mjs
 //   [--ref HEAD] [--output /tmp/baseline.json] [--compare /tmp/baseline.json]
 //   [--samples 5] [--iterations 100] [--chrome /path/to/chrome]
@@ -62,7 +63,7 @@ class DevTools {
     return result.result.value;
   }
 }
-const metrics = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(({ name, value }) => [name, value]));
+const metrics = async () => fromEntries(map((await cdp.send('Performance.getMetrics')).metrics, ({ name, value }) => [name, value]));
 try {
   await build({ entryPoints: [join(root, 'scripts/client-rendering-fixture.ts')], bundle: true, format: 'esm', platform: 'browser', target: 'chrome120', loader: { '.svg': 'text' }, outfile: join(temporary, 'bundle.js'), logLevel: 'silent',
     plugins: [{ name: 'offline-native-and-source', setup(builder) {
@@ -105,7 +106,7 @@ try {
   }
   if (!ready) throw new Error('Benchmark fixture did not initialize.');
   const browser = await cdp.send('Browser.getVersion');
-  const report = { schemaVersion: 2, harness, createdAt: new Date().toISOString(), source: { commit, mode: options.has('--ref') ? 'commit' : 'working-tree', loadedSourceHash: createHash('sha256').update(JSON.stringify([...sourceHashes].sort())).digest('hex'), dirty: execFileSync('git', ['status', '--short', '--', 'src'], { cwd: root, encoding: 'utf8' }).trim() }, machine: { platform: platform(), release: release(), cpu: cpus()[0]?.model, cores: cpus().length, totalMemoryBytes: totalmem(), bun: process.versions.bun, browser: browser.product, viewport: [1280, 900], timezone: 'UTC' }, methodology: { samples, iterations, warmupSamples: 2, synchronousBurst: true, timers: 'Real main 1000ms callbacks run in explicit timer scenario; automatic periodic callbacks suspended.', instrumentation: 'Work counters collected in a separate instrumented pass; timed samples restore original methods and disconnect MutationObserver.', heap: 'JSHeapUsedSize before/after replay only with GC before and after; live heap is not peak allocation or native canvas memory.', cpu: 'CDP TaskDuration brackets replay only; setup and outcome pixel hashing run outside CPU/heap metrics. Renderer CPU seconds, not whole-app CPU percent.', timingGate: false }, workload: await cdp.evaluate('window.clientRenderingBenchmark.workload'), scenarios: [], probes: null };
+  const report = { schemaVersion: 2, harness, createdAt: new Date().toISOString(), source: { commit, mode: options.has('--ref') ? 'commit' : 'working-tree', loadedSourceHash: createHash('sha256').update(JSON.stringify(sort([...sourceHashes], (a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0))).digest('hex'), dirty: execFileSync('git', ['status', '--short', '--', 'src'], { cwd: root, encoding: 'utf8' }).trim() }, machine: { platform: platform(), release: release(), cpu: cpus()[0]?.model, cores: cpus().length, totalMemoryBytes: totalmem(), bun: process.versions.bun, browser: browser.product, viewport: [1280, 900], timezone: 'UTC' }, methodology: { samples, iterations, warmupSamples: 2, synchronousBurst: true, timers: 'Real main 1000ms callbacks run in explicit timer scenario; automatic periodic callbacks suspended.', instrumentation: 'Work counters collected in a separate instrumented pass; timed samples restore original methods and disconnect MutationObserver.', heap: 'JSHeapUsedSize before/after replay only with GC before and after; live heap is not peak allocation or native canvas memory.', cpu: 'CDP TaskDuration brackets replay only; setup and outcome pixel hashing run outside CPU/heap metrics. Renderer CPU seconds, not whole-app CPU percent.', timingGate: false }, workload: await cdp.evaluate('window.clientRenderingBenchmark.workload'), scenarios: [], probes: null };
   for (const kind of ['steady', 'vitals', 'movement', 'logs', 'timer', 'reconnect']) {
     const count = kind === 'reconnect' ? Math.min(iterations, 10) : iterations;
     await cdp.evaluate(`window.clientRenderingBenchmark.prepare(${JSON.stringify(kind)}, ${count})`);
@@ -121,7 +122,7 @@ try {
       const outcome = await cdp.evaluate('window.clientRenderingBenchmark.outcome()');
       rows.push({ ...result, outcome, rendererTaskMs: (after.TaskDuration - before.TaskDuration) * 1000, heapBeforeBytes: before.JSHeapUsedSize, heapAfterBytes: after.JSHeapUsedSize, heapAfterGcBytes: settled.JSHeapUsedSize, heapGrowthBytes: after.JSHeapUsedSize - before.JSHeapUsedSize, retainedHeapDeltaBytes: settled.JSHeapUsedSize - before.JSHeapUsedSize });
     }
-    const row = { name: kind, iterations: count, workCounters: work.counters, medianElapsedMs: median(rows.map(row => row.elapsedMs)), medianRendererTaskMs: median(rows.map(row => row.rendererTaskMs)), medianHeapGrowthBytes: median(rows.map(row => row.heapGrowthBytes)), medianRetainedHeapDeltaBytes: median(rows.map(row => row.retainedHeapDeltaBytes)), samples: rows };
+    const row = { name: kind, iterations: count, workCounters: work.counters, medianElapsedMs: median(map(rows, row => row.elapsedMs)), medianRendererTaskMs: median(map(rows, row => row.rendererTaskMs)), medianHeapGrowthBytes: median(map(rows, row => row.heapGrowthBytes)), medianRetainedHeapDeltaBytes: median(map(rows, row => row.retainedHeapDeltaBytes)), samples: rows };
     report.scenarios.push(row);
     console.log(`${kind}: ${row.medianElapsedMs.toFixed(2)}ms/${count}; renderer ${row.medianRendererTaskMs.toFixed(2)}ms; reads ${work.counters['FeatureUi.read'] ?? 0}; refresh ${work.counters['SettingsForm.refresh'] ?? 0}; created ${work.counters.elementsCreated ?? 0}; draws ${work.counters['canvas.drawImage'] ?? 0}`);
   }

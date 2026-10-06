@@ -1,3 +1,4 @@
+import { find } from "remeda";
 // Trusted-source orchestration. The pure engines and reservation ledger own policy;
 // callers inject Git history, commit ranges, API access and native verification.
 import {
@@ -37,7 +38,7 @@ export async function reservationContext(ctx, bridge = migrationBridge) {
   const plans = await readReservations({ ...ctx, bridge });
   const verifyPlan = async (plan) => {
     validatePlan(plan);
-    const reserved = plans.find((p) => p.sourceSha === plan.sourceSha);
+    const reserved = find(plans, (p) => p.sourceSha === plan.sourceSha);
     requireValue(
       reserved && planSha256(reserved) === planSha256(plan),
       "Release does not match its durable reservation.",
@@ -76,7 +77,7 @@ export async function planProduction(
         published.id.sourceSha === context.bridge.sourceSha),
     "Published baseline is outside the semantic migration.",
   );
-  let plan = context.plans.find((p) => p.sourceSha === ctx.sha);
+  let plan = find(context.plans, (p) => p.sourceSha === ctx.sha);
   if (plan) {
     const release = await ctx.api.release(plan.tag);
     // Preserve an existing draft's original artifact even after a later release.

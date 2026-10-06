@@ -1,3 +1,4 @@
+import { filter, fromEntries } from 'remeda';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, rename, rm } from 'node:fs/promises';
@@ -15,7 +16,7 @@ export function smokePackagingEnvironment(environment) {
   if (Object.entries(environment).some(([key, value]) => SIGNING_CREDENTIAL.test(key) && value)) {
     throw new Error('Smoke packaging refuses signing credentials.');
   }
-  const safe = Object.fromEntries(Object.entries(environment).filter(([key]) => !CREDENTIAL_NAME.test(key)));
+  const safe = fromEntries(filter(Object.entries(environment), ([key]) => !CREDENTIAL_NAME.test(key)));
   return { ...safe, TAURI_CLI_VERBOSITY: '1' };
 }
 

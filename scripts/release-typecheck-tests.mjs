@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, symlink, writeFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -29,6 +29,11 @@ async function compileMutation(mutate) {
   const folder = await mkdtemp(join(tmpdir(), "rayrag-release-typecheck-"));
   try {
     await mkdir(join(folder, "scripts"));
+    // rootDirs resolves relative source overlays, while packages resolve from
+    // their own node_modules ancestry. Keep the pure library available here.
+    await mkdir(join(folder, "node_modules"));
+    await symlink(join(root, "node_modules/remeda"), join(folder, "node_modules/remeda"),
+      process.platform === "win32" ? "junction" : "dir");
     const source = await readFile(join(root, "scripts/release.mjs"), "utf8");
     const changed = mutate(source);
     assert.notEqual(changed, source, "The fixture must mutate production code.");

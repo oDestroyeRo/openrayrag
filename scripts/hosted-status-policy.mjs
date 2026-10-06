@@ -1,3 +1,5 @@
+import { map, sort } from 'remeda';
+
 // Pure hosted metadata validation, normalization and CLI parsing.
 export const repository = 'oDestroyeRo/openrayrag';
 export const statuses = new Set(['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested']);
@@ -7,11 +9,11 @@ export function id(value) { requireValue(/^[1-9]\d*$/.test(String(value)), 'Expe
 export function createPullRequestStatus(number, result, expectedSha) {
   requireValue(result.headRefOid === expectedSha, 'Pull request head differs from the workflow source.');
   requireValue(Array.isArray(result.statusCheckRollup) && typeof result.mergeStateStatus === 'string', 'Missing pull request check metadata.');
-  const checks = result.statusCheckRollup.map(check => ({
+  const checks = sort(map(result.statusCheckRollup, check => ({
     name: check.name ?? check.context,
     status: check.status?.toLowerCase() ?? (['PENDING', 'EXPECTED'].includes(check.state) ? 'pending' : 'completed'),
     conclusion: check.conclusion?.toLowerCase() ?? (check.state === 'SUCCESS' ? 'success' : check.state === 'FAILURE' || check.state === 'ERROR' ? 'failure' : null),
-  })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  })), (a, b) => String(a.name).localeCompare(String(b.name)));
   return { number: id(number), state: result.state, mergeState: result.mergeStateStatus, reviewDecision: result.reviewDecision ?? null, checks };
 }
 
@@ -22,8 +24,8 @@ export function validateRun(runId, run, expectedSha) {
 }
 
 export function createRunSnapshot(runId, run, jobs, count) {
-  requireValue(jobs.length === count && new Set(jobs.map(job => job.id)).size === count, 'Incomplete or duplicate job listing.');
-  const sorted = [...jobs].sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }));
+  requireValue(jobs.length === count && new Set(map(jobs, job => job.id)).size === count, 'Incomplete or duplicate job listing.');
+  const sorted = sort(jobs, (a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }));
   return { repository, runId, sourceSha: run.head_sha, attempt: run.run_attempt, status: run.status, conclusion: run.conclusion ?? null, url: `https://github.com/${repository}/actions/runs/${runId}`, jobs: sorted };
 }
 

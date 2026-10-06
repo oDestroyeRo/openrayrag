@@ -1,3 +1,4 @@
+import { find, map } from "remeda";
 // Publication orchestration. API, dates, reservations and native verification
 // are injected; release-policy owns all deterministic bundle/source contracts.
 import { compareVersions, planSha256 } from "./semantic-release-policy.mjs";
@@ -170,11 +171,11 @@ export async function publishRelease(ctx) {
     let assets = await ctx.api.assets(release.id);
     requireValue(
       assets.length <= releaseNames.length &&
-        new Set(assets.map((a) => a.name)).size === assets.length &&
+        new Set(map(assets, (a) => a.name)).size === assets.length &&
         assets.every((a) => releaseNames.includes(a.name)),
       "Unexpected or duplicate draft assets.",
     );
-    let asset = assets.find((a) => a.name === name);
+    let asset = find(assets, (a) => a.name === name);
     if (!asset) {
       try {
         await ctx.api.upload(release.id, name, ctx.files.get(name));
@@ -182,7 +183,7 @@ export async function publishRelease(ctx) {
         /* Reconcile a lost upload response without replacing any asset. */
       }
       assets = await ctx.api.assets(release.id);
-      asset = assets.find((a) => a.name === name);
+      asset = find(assets, (a) => a.name === name);
     }
     requireValue(
       asset && asset.state === "uploaded",

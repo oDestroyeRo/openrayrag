@@ -1,3 +1,4 @@
+import { find } from "remeda";
 // Durable, create-only release orchestration. GitHub effects use the injected API.
 import { serializePlan, validatePlan } from "./semantic-release-policy.mjs";
 import {
@@ -81,7 +82,7 @@ export async function reservePlan(ctx, plan) {
   const frozen = JSON.parse(serializePlan(plan)),
     message = serializeReservation(frozen);
   const ledger = await readReservations(ctx);
-  const existing = ledger.find(
+  const existing = find(ledger,
     (entry) =>
       entry.sourceSha === frozen.sourceSha || entry.version === frozen.version,
   );

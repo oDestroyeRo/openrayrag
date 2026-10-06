@@ -527,6 +527,11 @@ test("reviewed historical plans survive a future policy snapshot without trustin
       join(folder, "tools/release"),
       process.platform === "win32" ? "junction" : "dir",
     );
+    await symlink(
+      fileURLToPath(new URL("../tools/release/node_modules", import.meta.url)),
+      join(folder, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     await writeFile(
       join(folder, "scripts/semantic-release-plan.mjs"),
       await readFile(new URL("./semantic-release-plan.mjs", import.meta.url)),
@@ -605,6 +610,13 @@ test("pure release contracts and injected planning work without installing relea
   const folder = await mkdtemp(join(tmpdir(), "rayrag-pure-release-contracts-"));
   try {
     await mkdir(join(folder, "scripts"));
+    // Pure contracts need Remeda, but no semantic-release plugin installation.
+    await mkdir(join(folder, "node_modules"));
+    await symlink(
+      fileURLToPath(new URL("../node_modules/remeda", import.meta.url)),
+      join(folder, "node_modules/remeda"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     for (const name of ["semantic-release-policy", "semantic-release-plan", "release-policy", "release-reservation-policy", "release-source-policy"]) {
       await writeFile(join(folder, `scripts/${name}.mjs`), await readFile(new URL(`./${name}.mjs`, import.meta.url)));
     }

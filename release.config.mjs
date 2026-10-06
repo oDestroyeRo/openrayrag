@@ -1,3 +1,4 @@
+import { flatMap, map, pipe, sort } from "remeda";
 import { createHash } from "node:crypto";
 
 // Only these pure plugins run. Artifact signing and publication stay in release.mjs.
@@ -10,10 +11,10 @@ export const RELEASE_ENGINE_VERSIONS = Object.freeze({
   semver: "7.8.5",
 });
 
-const dependencyRules = ["chore", "build"].flatMap((type) =>
-  ["deps", "deps-dev"].map((scope) => ({ type, scope, release: "patch" })),
+const dependencyRules = flatMap(["chore", "build"], (type) =>
+  map(["deps", "deps-dev"], (scope) => ({ type, scope, release: "patch" })),
 );
-const dependencySections = dependencyRules.map(({ type, scope }) => ({
+const dependencySections = map(dependencyRules, ({ type, scope }) => ({
   type,
   scope,
   section: "Dependencies",
@@ -54,7 +55,7 @@ export const RELEASE_POLICY = freeze({
         { type: "perf", section: "Performance Improvements", effect: "bump" },
         { type: "revert", section: "Reverts", effect: "bump" },
         ...dependencySections,
-        ...["docs", "ci", "chore", "build", "style", "refactor", "test"].map(
+        ...map(["docs", "ci", "chore", "build", "style", "refactor", "test"],
           (type) => ({ type, effect: "hidden" }),
         ),
       ],
@@ -65,12 +66,12 @@ export const RELEASE_POLICY = freeze({
 // Sorting every object key makes policy and reservation hashes independent of
 // property insertion order. Inputs to the planner are validated before encoding.
 export function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (Array.isArray(value)) return `[${map(value, canonicalJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
-      .join(",")}}`;
+    return `{${pipe(Object.keys(value),
+      sort((a, b) => a < b ? -1 : a > b ? 1 : 0),
+      map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`),
+    ).join(",")}}`;
   }
   return JSON.stringify(value);
 }

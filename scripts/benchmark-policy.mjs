@@ -1,7 +1,9 @@
+import { find, fromEntries, map, sort } from 'remeda';
+
 // Pure benchmark inputs and report comparison. Measurements are effect-owned.
 import { isDeepStrictEqual } from 'node:util';
 
-export const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+export const median = values => sort(values, (a, b) => a - b)[Math.floor(values.length / 2)];
 
 export function rendererOptions(args) {
   const options = new Map();
@@ -18,27 +20,25 @@ export function compareRenderingReports(report, baseline) {
   const { samples: _samples, ...methodology } = report.methodology;
   const { samples: _oldSamples, ...oldMethodology } = baseline.methodology;
   if (report.schemaVersion !== baseline.schemaVersion || !isDeepStrictEqual(report.harness, baseline.harness) || !isDeepStrictEqual(report.machine, baseline.machine) || !isDeepStrictEqual(methodology, oldMethodology) || !isDeepStrictEqual(report.workload, baseline.workload)) throw new Error('Comparison requires the same harness, dependencies, machine/browser, methodology and workload.');
-  return report.scenarios.map(row => {
-    const old = baseline.scenarios.find(old => old.name === row.name);
+  return map(report.scenarios, row => {
+    const old = find(baseline.scenarios, old => old.name === row.name);
     if (!old || !isDeepStrictEqual(row.samples[0].outcome, old.samples[0].outcome)) throw new Error(`Visible outcome differs from baseline: ${row.name}`);
     return { name: row.name, elapsedRatio: row.medianElapsedMs / old.medianElapsedMs, rendererTaskRatio: row.medianRendererTaskMs / old.medianRendererTaskMs, sameVisibleOutcome: true };
   });
 }
 
 export function packetReport(baseline, beforeCounts, afterCounts, beforeTime, afterTime) {
-  const result = { baseline, frames: afterCounts.frames, modes: {} };
-  for (const mode of ['gameClient', 'botOnly']) {
-    result.modes[mode] = {
-      generalDecodes: { before: beforeCounts[mode].counts.general, after: afterCounts[mode].counts.general },
-      worldDecodes: { before: beforeCounts[mode].counts.world, after: afterCounts[mode].counts.world },
-      snapshotEqual: JSON.stringify(beforeCounts[mode].snapshot) === JSON.stringify(afterCounts[mode].snapshot),
-      outgoingEqual: JSON.stringify(beforeCounts[mode].writes) === JSON.stringify(afterCounts[mode].writes),
-      outgoing: afterCounts[mode].writes,
-      medianMs: { before: beforeTime[mode].medianMs, after: afterTime[mode].medianMs },
-      samplesMs: { before: beforeTime[mode].samplesMs, after: afterTime[mode].samplesMs },
-    };
-  }
-  return result;
+  const frames = afterCounts.frames;
+  const modes = fromEntries(map(['gameClient', 'botOnly'], mode => [mode, {
+    generalDecodes: { before: beforeCounts[mode].counts.general, after: afterCounts[mode].counts.general },
+    worldDecodes: { before: beforeCounts[mode].counts.world, after: afterCounts[mode].counts.world },
+    snapshotEqual: JSON.stringify(beforeCounts[mode].snapshot) === JSON.stringify(afterCounts[mode].snapshot),
+    outgoingEqual: JSON.stringify(beforeCounts[mode].writes) === JSON.stringify(afterCounts[mode].writes),
+    outgoing: afterCounts[mode].writes,
+    medianMs: { before: beforeTime[mode].medianMs, after: afterTime[mode].medianMs },
+    samplesMs: { before: beforeTime[mode].samplesMs, after: afterTime[mode].samplesMs },
+  }]));
+  return { baseline, frames, modes };
 }
 
 export function validatePacketReport(result) {

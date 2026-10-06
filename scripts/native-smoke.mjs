@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { map } from 'remeda';
 /** Launch only a CI-feature package with temporary data; never use a real account. */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -86,7 +87,7 @@ export async function nativeSmoke(binary, outputFile) {
         prefixArgs: launch.prefixArgs, env: launch.env,
       }));
     }
-    const [saved, reopened] = outcomes.map(outcome => outcome.document);
+    const [saved, reopened] = map(outcomes, outcome => outcome.document);
     verifyReopened(saved, reopened);
     await mkdir(dirname(resolve(outputFile)), { recursive: true });
     await writeFile(outputFile, JSON.stringify({ protocol: 1, platform: process.platform, passed: true, stages: outcomes }, null, 2) + '\n');

@@ -1,3 +1,4 @@
+import { map, sort } from "remeda";
 // Pure semantic release contracts. No plugin loading, filesystem or network effects.
 import { createHash } from "node:crypto";
 import policyHistory from "../release-policy-history.json" with { type: "json" };
@@ -36,13 +37,14 @@ const planKeys = [
 function requireValue(condition, message) {
   if (!condition) throw new Error(message);
 }
+const compareKeys = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 function exactKeys(value, keys, label) {
   requireValue(
     value !== null &&
       typeof value === "object" &&
       !Array.isArray(value) &&
       [Object.prototype, null].includes(Object.getPrototypeOf(value)) &&
-      Object.keys(value).sort().join("|") === [...keys].sort().join("|"),
+      sort(Object.keys(value), compareKeys).join("|") === sort(keys, compareKeys).join("|"),
     `Invalid ${label} fields.`,
   );
 }
@@ -64,15 +66,15 @@ export function stableVersion(value) {
   return value;
 }
 export function compareVersions(a, b) {
-  const left = stableVersion(a).split(".").map(Number),
-    right = stableVersion(b).split(".").map(Number);
+  const left = map(stableVersion(a).split("."), Number),
+    right = map(stableVersion(b).split("."), Number);
   for (let i = 0; i < left.length; i++) {
     if (left[i] !== right[i]) return left[i] > right[i] ? 1 : -1;
   }
   return 0;
 }
 export function bumpVersion(version, releaseType) {
-  const parts = stableVersion(version).split(".").map(Number);
+  const parts = map(stableVersion(version).split("."), Number);
   requireValue(["major", "minor", "patch"].includes(releaseType), "Invalid release type.");
   const index = ["major", "minor", "patch"].indexOf(releaseType);
   parts[index]++;
@@ -221,7 +223,7 @@ export function validatePlanningInput(input, cwd) {
   validCommits(input.analysisCommits, "analysis commits");
   validCommits(input.notesCommits, "notes commits");
   const notesMessages = new Map(
-    input.notesCommits.map(({ hash, message }) => [hash, message]),
+    map(input.notesCommits, ({ hash, message }) => [hash, message]),
   );
   requireValue(
     input.analysisCommits.every(

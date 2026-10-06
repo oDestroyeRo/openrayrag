@@ -1,3 +1,4 @@
+import { filter, fromEntries, map, pipe, sort } from "remeda";
 // Deterministic release contracts. Inputs are bytes, metadata and source history.
 import { createHash, createPublicKey, verify } from "node:crypto";
 import {
@@ -41,7 +42,7 @@ const plain = (value) =>
 export function exactKeys(value, keys, label) {
   requireValue(
     plain(value) &&
-      Object.keys(value).sort().join("|") === [...keys].sort().join("|"),
+      sort(Object.keys(value), compareNames).join("|") === sort(keys, compareNames).join("|"),
     `Invalid ${label} fields.`,
   );
 }
@@ -211,6 +212,7 @@ export function verifyUpdaterSignature(data, signature, publicKey, version) {
   );
 }
 const compareNames = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const fileRecordFor = files => name => fileRecord(name, files.get(name));
 const jsonBuffer = (value) =>
   Buffer.from(JSON.stringify(value, null, 2) + "\n");
 export function parseJson(bytes, label) {
@@ -234,11 +236,11 @@ function fileRecord(name, bytes) {
 }
 function checksums(files) {
   return Buffer.from(
-    [...files]
-      .filter(([name]) => name !== "SHA256SUMS")
-      .sort(([a], [b]) => compareNames(a, b))
-      .map(([name, bytes]) => `${sha256(bytes)}  ${name}\n`)
-      .join(""),
+    pipe([...files],
+      filter(([name]) => name !== "SHA256SUMS"),
+      sort(([a], [b]) => compareNames(a, b)),
+      map(([name, bytes]) => `${sha256(bytes)}  ${name}\n`),
+    ).join(""),
   );
 }
 const numericId = (value) =>
@@ -263,7 +265,7 @@ export function platformNames(version, target) {
     ? [n.archive, n.signature, n.dmg]
     : target === WINDOWS_TARGET
       ? [n.windows]
-      : [n.appimage, n.deb].sort();
+      : sort([n.appimage, n.deb], compareNames);
 }
 function validateBuildIdentity(receipt, id, build, target) {
   exactKeys(
@@ -304,9 +306,7 @@ export function platformReceipt(files, id, build, target) {
     target,
     runId: build.runId,
     runAttempt: build.runAttempt,
-    files: platformNames(id.version, target)
-      .sort()
-      .map((name) => fileRecord(name, files.get(name))),
+    files: pipe(platformNames(id.version, target), sort(compareNames), map(fileRecordFor(files))),
     checks: [...PLATFORM_CHECKS],
   };
 }
@@ -396,8 +396,8 @@ export function validatePlatformBuild(files, id, build, target) {
   );
   const names = platformNames(id.version, target);
   requireValue(
-    [...files.keys()].sort().join("|") ===
-      [...names, "platform-build.json"].sort().join("|"),
+    sort([...files.keys()], compareNames).join("|") ===
+      sort([...names, "platform-build.json"], compareNames).join("|"),
     "Platform bundle has missing or unexpected files.",
   );
   const receipt = parseJson(files.get("platform-build.json"), "platform build");
@@ -407,7 +407,7 @@ export function validatePlatformBuild(files, id, build, target) {
   requireValue(
     JSON.stringify(receipt.files) ===
       JSON.stringify(
-        names.sort().map((name) => fileRecord(name, files.get(name))),
+        pipe(names, sort(compareNames), map(fileRecordFor(files))),
       ),
     "Platform package hashes or sizes differ.",
   );
@@ -416,7 +416,7 @@ export function validatePlatformBuild(files, id, build, target) {
 export function createBundle(id, payload, build, publicKey) {
   const names = assetNames(id.version);
   const schemaVersion = build.schemaVersion ?? 2;
-  const payloadNames = expectedNames(id.version, schemaVersion).filter(
+  const payloadNames = filter(expectedNames(id.version, schemaVersion),
     (n) =>
       ![
         "provenance.json",
@@ -473,18 +473,17 @@ export function createBundle(id, payload, build, publicKey) {
       toolchain: { bun: BUN_VERSION, rust: RUST_VERSION },
       ...(schemaVersion >= 2
         ? {
-            platforms: [
+            platforms: sort([
               platformReceipt(payload, id, build, TARGET),
               ...(build.platforms ?? []),
-            ].sort((a, b) => compareNames(a.target, b.target)),
+            ], (a, b) => compareNames(a.target, b.target)),
           }
         : {}),
       ...(schemaVersion === 3
         ? { releasePlan: validatePlan(id.releasePlan) }
         : {}),
-      files: [...files]
-        .map(([name, bytes]) => fileRecord(name, bytes))
-        .sort((a, b) => compareNames(a.name, b.name)),
+      files: sort(map([...files], ([name, bytes]) => fileRecord(name, bytes)),
+        (a, b) => compareNames(a.name, b.name)),
     }),
   );
   files.set("SHA256SUMS", checksums(files));
@@ -496,8 +495,8 @@ export function validateBundle(files, id, publicKey) {
   requireValue(files instanceof Map, "Release asset set must be a map.");
   const p = parseJson(files.get("provenance.json"), "provenance");
   requireValue(
-    [...files.keys()].sort().join("|") ===
-      expectedNames(id.version, p.schemaVersion).sort().join("|"),
+    sort([...files.keys()], compareNames).join("|") ===
+      sort(expectedNames(id.version, p.schemaVersion), compareNames).join("|"),
     "Release asset set is incomplete or has unexpected files.",
   );
   for (const bytes of files.values())
@@ -612,10 +611,11 @@ export function validateBundle(files, id, publicKey) {
       p.toolchain.rust === RUST_VERSION,
     "Unexpected release toolchain.",
   );
-  const expected = expectedNames(id.version, p.schemaVersion)
-    .filter((name) => !["provenance.json", "SHA256SUMS"].includes(name))
-    .sort()
-    .map((name) => fileRecord(name, files.get(name)));
+  const expected = pipe(expectedNames(id.version, p.schemaVersion),
+    filter((name) => !["provenance.json", "SHA256SUMS"].includes(name)),
+    sort(compareNames),
+    map(fileRecordFor(files)),
+  );
   requireValue(
     JSON.stringify(p.files) === JSON.stringify(expected),
     "Provenance asset hashes or sizes differ.",
@@ -624,15 +624,13 @@ export function validateBundle(files, id, publicKey) {
     requireValue(
       Array.isArray(p.platforms) &&
         p.platforms.length === 3 &&
-        p.platforms.map((receipt) => receipt?.target).join("|") ===
-          [TARGET, WINDOWS_TARGET, LINUX_TARGET].sort().join("|"),
+        map(p.platforms, (receipt) => receipt?.target).join("|") ===
+          sort([TARGET, WINDOWS_TARGET, LINUX_TARGET], compareNames).join("|"),
       "Release platform receipt set is incomplete or duplicated.",
     );
     for (const receipt of p.platforms) {
       validateBuildIdentity(receipt, id, p, receipt.target);
-      const platformFiles = platformNames(id.version, receipt.target)
-        .sort()
-        .map((name) => fileRecord(name, files.get(name)));
+      const platformFiles = pipe(platformNames(id.version, receipt.target), sort(compareNames), map(fileRecordFor(files)));
       requireValue(
         JSON.stringify(receipt.files) === JSON.stringify(platformFiles),
         "Platform receipt asset hashes or sizes differ.",
@@ -738,8 +736,8 @@ export function isNewer(id, latest) {
   return order > 0;
 }
 export const migrationBridge = Object.freeze(
-  Object.fromEntries(
-    ["sourceSha", "firstParentCount", "version", "tag"].map((key) => [
+  fromEntries(
+    map(["sourceSha", "firstParentCount", "version", "tag"], (key) => [
       key,
       migration.bridge[key],
     ]),

@@ -1,3 +1,4 @@
+import { map, sort } from "remeda";
 // Pure transforms for source content. Reading and writing remain in release.mjs.
 import { stableVersion } from "./semantic-release-policy.mjs";
 import { requireValue, IDENTIFIER, ENDPOINT } from "./release-policy.mjs";
@@ -34,10 +35,9 @@ export function versionContents(values, version) {
   }
   requireValue(changed === 1, "Expected one Cargo package version.");
   let packages = 0;
-  const cargoLock = values[2]
+  const cargoLock = map(values[2]
     .replaceAll("\r\n", "\n")
-    .split("[[package]]")
-    .map((block) => {
+    .split("[[package]]"), (block) => {
       if (/^\nname = "rayrag-companion"\n/m.test(block)) {
         packages++;
         requireValue(
@@ -116,7 +116,7 @@ export function annotatedTag(sha, bytes) {
     headers.set(line.slice(0, space), line.slice(space + 1));
   }
   requireValue(
-    [...headers.keys()].sort().join("|") === "object|tag|tagger|type",
+    sort([...headers.keys()], (a, b) => a < b ? -1 : a > b ? 1 : 0).join("|") === "object|tag|tagger|type",
     "Unexpected annotated Git object headers.",
   );
   return {

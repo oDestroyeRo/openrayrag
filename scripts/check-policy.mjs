@@ -1,7 +1,12 @@
+import { filter, map, pipe, sort } from 'remeda';
+
 // Pure source-check planning. Discovery and process execution belong to check.mjs.
 export function createVerificationPlan(platform, scriptNames) {
   if (!['darwin', 'linux', 'win32'].includes(platform)) throw new Error('Unsupported desktop platform.');
-  const scripts = scriptNames.filter(name => name.endsWith('-tests.mjs')).sort().map(name => `scripts/${name}`);
+  const scripts = pipe(scriptNames,
+    filter(name => name.endsWith('-tests.mjs')),
+    sort((a, b) => a < b ? -1 : a > b ? 1 : 0),
+    map(name => `scripts/${name}`));
   if (!scripts.length) throw new Error('No script tests found.');
   const cargo = ['--locked', '--manifest-path', 'src-tauri/Cargo.toml'];
   const steps = [
@@ -9,7 +14,7 @@ export function createVerificationPlan(platform, scriptNames) {
     { tool: 'bun', args: ['run', 'typecheck:release'], report: 'release-types.log' },
     { tool: 'python', args: ['vendor/glib/verify.py', ...(platform === 'linux' ? ['--test'] : [])], report: 'glib.log' },
     // Process/packaging regressions can exceed Bun's five-second default on CI.
-    { tool: 'bun', args: ['test', '--timeout', '120000', ...scripts.map(name => `./${name}`)], report: 'scripts.log' },
+    { tool: 'bun', args: ['test', '--timeout', '120000', ...map(scripts, name => `./${name}`)], report: 'scripts.log' },
     { tool: 'python', args: ['-m', 'unittest', 'discover', '-s', 'scripts', '-p', 'catalog_logic_test.py'], report: 'catalogs.log' },
     { tool: 'python', args: ['scripts/release-public-zip-tests.py'], report: 'public-zip.log' },
     { tool: 'bun', args: ['run', 'build'], report: 'frontend-build.log' },

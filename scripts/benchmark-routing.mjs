@@ -1,3 +1,4 @@
+import { map, sort } from 'remeda';
 // Run: bun scripts/benchmark-routing.mjs [baseline-ref]
 // Setup/map analysis is excluded. Both revisions use the same deterministic inputs.
 // Only engine/navigation come from the ref; other dependencies use this working tree.
@@ -40,7 +41,7 @@ function field(api,grid,origin,targets,equipment=false){
   const engine=new api.BotEngine(action=>sent.push(action),()=>now,()=>grid);
   engine.connect(true);engine.receive([{type:'enter',id:1,map:'prt_fild08'},
     {type:'spawn',entity:{id:1,classId:0,name:'Player',kind:0,level:7,hp:70,maxHp:70,dead:false,...origin}},
-    ...targets.map((position,i)=>({type:'spawn',entity:{id:i+2,classId:4000,name:'Poring',kind:1,level:1,hp:51,maxHp:51,dead:false,...position}})),
+    ...map(targets,(position,i)=>({type:'spawn',entity:{id:i+2,classId:4000,name:'Poring',kind:1,level:1,hp:51,maxHp:51,dead:false,...position}})),
     {type:'inventory',items:[],equipment:[],ammoId:-1}]);
   const settings={...api.DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],radius:20};
   if(equipment){settings.automation=structuredClone(api.DEFAULT_AUTOMATION);
@@ -85,7 +86,7 @@ function measure(api){
       const start=performance.now();fixture.run();const elapsed=performance.now()-start;
       if(i>=2)samples.push(elapsed);counts={...stats};outcome=fixture.outcome();
     }
-    samples.sort((a,b)=>a-b);results.push({scenario:scenario.name,medianMs:Number(samples[2].toFixed(3)),...counts,outcome});
+    const ordered=sort(samples,(a,b)=>a-b);results.push({scenario:scenario.name,medianMs:Number(ordered[2].toFixed(3)),...counts,outcome});
   }
   return results;
 }
@@ -98,7 +99,7 @@ try{
   const before=await bundle('before',baseline),after=await bundle('after');
   const beforeResults=measure(before),afterResults=measure(after);
   for(let i=0;i<beforeResults.length;i++)deepStrictEqual(afterResults[i].outcome,beforeResults[i].outcome,beforeResults[i].scenario);
-  console.log(JSON.stringify({baseline,bun:process.versions.bun,before:beforeResults.map(compact),after:afterResults.map(compact)},null,2));
+  console.log(JSON.stringify({baseline,bun:process.versions.bun,before:map(beforeResults,compact),after:map(afterResults,compact)},null,2));
 }finally{await rm(folder,{recursive:true,force:true});}
 
 }
