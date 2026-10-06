@@ -265,6 +265,7 @@ fn install_at(bytes: &[u8], version: &str, current: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
     use super::*;
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     mod public_fixtures {
