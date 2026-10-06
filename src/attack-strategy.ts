@@ -1,4 +1,5 @@
 import { map } from 'remeda';
+import { foldConditions, unavailableFirstConditions } from './condition-logic';
 import type { AttackStrategyRule } from './settings';
 import type { ActorObservationSnapshot } from './actor-observations-logic';
 import { actorPredicateEvaluator } from './actor-observations-logic';
@@ -39,8 +40,9 @@ export class AttackStrategyPolicy {
         continue;
       }
       const traces=map(rule.conditions??[], evaluate);
-      if(traces.some(trace=>trace.state==='unavailable'))return {state:'wait',reason:`Strategy ${rule.id} actor conditions are unavailable.`};
-      if(traces.some(trace=>trace.state==='unmatched'))continue;
+      const conditionState=foldConditions(traces,unavailableFirstConditions);
+      if(conditionState==='unavailable')return {state:'wait',reason:`Strategy ${rule.id} actor conditions are unavailable.`};
+      if(conditionState==='unmatched')continue;
       const ready=castReadiness(rule.skillId,rule.level,state,observations);
       if(ready.state!=='ready')return {state:'wait',reason:`Strategy ${rule.id}: ${ready.reason}`};
       if(!ledger&&engagement.rules.size>=32)return {state:'wait',reason:'Attack strategy rule ledger is full for this actor; use a fresh actor lifetime.'};

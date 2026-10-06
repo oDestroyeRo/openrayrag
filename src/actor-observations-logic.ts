@@ -1,4 +1,5 @@
 import { map } from 'remeda';
+import type { ConditionState } from './condition-logic';
 import { SUPPORTED_STATUS_IDS } from './actor-status-catalog';
 import { resourceFresh, compareResource, validResourceObservation, RESOURCE_OPERATORS, type ResourceObservation, type ResourceOperator } from './actor-resources';
 export const ACTOR_OBSERVATION_LIMITS = { actors: 300, publishedActors: 64, publishedStatuses: 128, evaluatedStatuses:512, conditionReports:8, conditionsPerReport:4, conditions: 16, staleMs: 15_000 } as const;
@@ -13,7 +14,7 @@ export type ActorPredicate =
   | { field: 'actorHpPercent'; actor: ActorSelector; operator: ResourceOperator; value: number }
   | { field: 'actorSpPercent'; actor: ActorSelector; operator: ResourceOperator; value: number };
 
-export interface PredicateTrace { condition: ActorPredicate; state: 'matched' | 'unmatched' | 'unavailable'; reason: string }
+export interface PredicateTrace { condition: ActorPredicate; state: ConditionState; reason: string }
 
 export interface StatusObservation { id: number; known: boolean; present: boolean; observedAt: number; expiresAt: number | null }
 

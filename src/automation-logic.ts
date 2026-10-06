@@ -1,4 +1,5 @@
 import { map } from 'remeda';
+import { foldConditions, unavailableFirstConditions } from './condition-logic';
 import type { AutomationScheduler } from './automation';
 import type { ActionIdentity } from './actor-identity';
 import type { matchesSkillExecution } from './skill-execution';
@@ -16,8 +17,9 @@ export function acceptsMonster(a: AutomationSettings, e: Entity, player: Entity,
   let rule = monsterRule(a,e.classId);
   if(rule?.conditions?.length) {
     const traces=map(rule.conditions, actorPredicateEvaluator(observations));
-    if(traces.some(trace=>trace.state==='unavailable'))return false;
-    if(traces.some(trace=>trace.state==='unmatched')) {
+    const state=foldConditions(traces,unavailableFirstConditions);
+    if(state==='unavailable')return false;
+    if(state==='unmatched') {
       if(rule.action==='attack')return false;
       rule=undefined; // A known-false ignore condition leaves ordinary selection in control.
     }

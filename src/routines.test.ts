@@ -29,6 +29,37 @@ function acknowledge(runtime: RoutineRuntime<TestAction>, success = true) {
   return runtime.acknowledge(success, actionId!);
 }
 
+describe('routine condition fold precedence', () => {
+  it.each([false, true])('retains complete traces and prioritizes a known false condition with reversed=%s', reverse => {
+    const conditions: RoutineCondition[] = [hp, { field: 'map', operator: 'eq', value: 'prontera' }];
+    if (reverse) conditions.reverse();
+    const input = spec({ rules: [rule({ conditions })] });
+    const observation = { hpPercent: 60 };
+    const before = structuredClone({ input, observation });
+    const trace = traceRules({ spec: input, observation });
+    expect(trace.rules[0]!.state).toBe('unmatched');
+    expect(trace.rules[0]!.reason).toBe('A condition did not match.');
+    expect(trace.rules[0]!.conditions.map(condition => condition.state))
+      .toEqual(reverse ? ['unavailable', 'unmatched'] : ['unmatched', 'unavailable']);
+    expect(trace.action).toBeNull();
+    expect({ input, observation }).toEqual(before);
+  });
+
+  it('applies exhaustion before cooldown and keeps each ledger attached to declaration order before sorting', () => {
+    const conditions: RoutineCondition[] = [hp, { field: 'map', operator: 'eq', value: 'prontera' }];
+    const input = spec({ rules: [rule({ name: 'exhausted', priority: 0, conditions }),
+      rule({ name: 'cooling', priority: 20, conditions })] });
+    const trace = traceRules({ spec: input, observation: { hpPercent: 60 }, now: 2_000,
+      progress: [{ runs: 2, lastIssued: 1_000 }, { runs: 1, lastIssued: 1_000 }] });
+    expect(trace.rules.map(rule => [rule.name, rule.state, rule.reason])).toEqual([
+      ['cooling', 'cooldown', 'Rule cooldown is active.'],
+      ['exhausted', 'exhausted', 'Rule run budget reached.'],
+    ]);
+    for (const rule of trace.rules) expect(rule.conditions.map(condition => condition.state)).toEqual(['unmatched', 'unavailable']);
+    expect(trace.action).toBeNull();
+  });
+});
+
 describe('internal selector continuation ledger', () => {
   const options: RoutineOptions = { allowUnlimitedLimits: true, actionTimeoutSeconds: 0, maxSteps: 0 };
 

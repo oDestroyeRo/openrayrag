@@ -18,12 +18,13 @@ describe('per-incarnation attack strategy ledger',()=>{
 });
 
 describe('strategy condition precedence', () => {
-  it('waits on unavailable evidence even when another condition is known false', () => {
+  it.each([false, true])('waits on unavailable evidence with a known false condition and reversed=%s', reverse => {
     const { state, snapshot, ledger } = setup();
     const conditional: AttackStrategyRule = { ...strategy, conditions: [
       { field: 'actorStatus', actor: { scope: 'self' }, statusId: 1, operator: 'eq', value: true },
       { field: 'actorCasting', actor: { scope: 'self' }, operator: 'eq', value: false },
     ] };
+    if (reverse) conditional.conditions!.reverse();
     expect(ledger.choose([conditional, { ...strategy, id: 'fallback' }], a, 4000, state, snapshot, 1_000))
       .toEqual({ state: 'wait', reason: 'Strategy open actor conditions are unavailable.' });
   });

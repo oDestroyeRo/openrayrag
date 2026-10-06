@@ -1,4 +1,5 @@
 import { map } from 'remeda';
+import { foldConditions, unavailableFirstConditions } from './condition-logic';
 import { sameActionIdentity, type ActionIdentity } from './actor-identity';
 import { isRecoveryItem, recoveryItemIds } from './recovery-items';
 import { matchesSkillExecution } from './skill-execution';
@@ -21,7 +22,7 @@ export class AutomationScheduler {
     if(!conditions?.length)return 'matched';
     const traces=map(conditions, actorPredicateEvaluator(observations));
     if(this.ruleConditions.length<32)this.ruleConditions.push({rule,conditions:traces});
-    return traces.some(trace=>trace.state==='unavailable')?'unavailable':traces.some(trace=>trace.state==='unmatched')?'unmatched':'matched';
+    return foldConditions(traces,unavailableFirstConditions);
   }
   private matches(rule:string,conditions:ActorPredicate[]|undefined,observations:ActorObservationSnapshot|undefined):boolean {
     return this.conditionState(rule,conditions,observations)==='matched';

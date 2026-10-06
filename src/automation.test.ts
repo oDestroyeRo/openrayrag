@@ -4,6 +4,9 @@ import {CharacterState} from './character-state';
 import {AutomationScheduler,inSchedule,actionConfirmationTimeout} from './automation';
 import type {Entity,GameEvent,Walk} from './protocol';
 import type {FeatureEvent, SkillResult} from './protocol-feature';
+import { acceptsMonster } from './automation-logic';
+import type { ActorObservationSnapshot, ActorPredicate } from './actor-observations-logic';
+import { STATUS_CATALOG } from './actor-status-catalog';
 const player:Entity={id:1,classId:0,name:'Player',kind:0,level:7,hp:70,maxHp:100,x:100,y:100,dead:false,sp:15,maxSp:20,sitting:false};
 const monster:Entity={id:2,classId:4000,name:'Poring',kind:1,level:1,hp:51,maxHp:51,x:101,y:100,dead:false};
 function setup(){
@@ -42,6 +45,30 @@ describe('field automation policy and owner',()=>{
  it('keeps a canceled action fenced until its confirmation deadline so late responses cannot confirm a replacement',()=>{const {engine,inventory,step,receive}=setup();inventory();engine.manualAction({type:'useItem',itemId:501});engine.stop('Stopped by you.');expect(engine.idleForActions()).toBe(false);expect(()=>engine.manualAction({type:'useItem',itemId:501})).toThrow();receive({type:'inventoryDelta',add:false,bagId:501,change:1,weight:10});expect(engine.actionResult.status).toBe('failed');step(4000);step(2000);expect(engine.idleForActions()).toBe(true);});
  it('services timeout and server failure while stopped without retrying an action',()=>{const {engine,sent,step,inventory,receive}=setup();inventory();engine.manualAction({type:'useItem',itemId:501});step(4000);step(2000);expect(engine.actionResult.status).toBe('failed');expect(engine.reason).toContain('No server confirmation');expect(sent).toHaveLength(1);engine.manualAction({type:'sit',sitting:true});receive({type:'requestFailure',reason:3});expect(engine.actionResult.status).toBe('failed');expect(engine.reason).toContain('rejected');});
  it('does not issue a manual action while server movement is still settling after stop',()=>{const {engine,receive,step}=setup();const walk:Walk={origin:{x:100,y:100},cells:[{x:100,y:100},{x:101,y:100}],secondsPerCell:1,firstSeconds:1,locked:false};receive({type:'walk',id:1,walk});expect(engine.idleForActions()).toBe(false);expect(()=>engine.manualAction({type:'sit',sitting:true})).toThrow();step(1200);expect(engine.idleForActions()).toBe(true);});
+});
+describe('automation condition precedence',()=>{
+ it.each([false,true])('evaluates the complete trace and prioritizes unavailable evidence with reversed=%s',reverse=>{
+  const {settings}=setup();
+  const snapshot:ActorObservationSnapshot={world:'11111111-1111-1111-1111-111111111111',at:1000,lastFrameAt:1000,connected:true,
+   selfId:1,targetId:null,actors:[{id:1,incarnation:1,kind:0,name:'Player',observedAt:1000,statusesKnown:true,statuses:[],
+    cast:{state:'unknown',observedAt:null,deadline:null,skillId:null}}]};
+  const conditions:ActorPredicate[]=[
+   {field:'actorStatus',actor:{scope:'self'},statusId:STATUS_CATALOG[0]!.id,operator:'eq',value:true},
+   {field:'actorCasting',actor:{scope:'self'},operator:'eq',value:false},
+  ];
+  if(reverse)conditions.reverse();
+  const before=structuredClone({snapshot,conditions});
+  const scheduler=new AutomationScheduler(()=>{},()=>1000);
+  expect(scheduler.conditionState('Item 501',conditions,snapshot)).toBe('unavailable');
+  expect(scheduler.ruleConditions[0]!.conditions.map(trace=>trace.state))
+   .toEqual(reverse?['unavailable','unmatched']:['unmatched','unavailable']);
+  const automation=settings.automation!;
+  automation.combat.rules=[{classId:4000,action:'ignore',priority:0,conditions}];
+  // A known-false ignore rule would normally leave selection in control;
+  // missing evidence must still prevent admission regardless of its position.
+  expect(acceptsMonster(automation,monster,player,[4000],false,snapshot)).toBe(false);
+  expect({snapshot,conditions}).toEqual(before);
+ });
 });
 describe('character state and schedule boundaries',()=>{
  it('preserves inventory, skills and cart across map and clear until a new connection',()=>{const {engine,inventory,receive}=setup();inventory();receive({type:'inventory',items:[{bagId:501,itemId:501,count:4,type:1}],cart:[{bagId:502,itemId:502,count:2,type:1}],equipment:[],ammoId:-1});receive({type:'skills',learned:[{skillId:2,level:1}]});receive({type:'inventory',items:[{bagId:501,itemId:501,count:3,type:1}],equipment:[],ammoId:-1});expect(engine.character.cart?.[0]?.itemId).toBe(502);receive({type:'map',map:'prontera'});receive({type:'clear'});expect(engine.character.inventoryKnown).toBe(true);expect(engine.character.skillsKnown).toBe(true);expect(engine.character.cart?.[0]?.count).toBe(2);engine.disconnect();expect(engine.character.inventoryKnown).toBe(false);expect(engine.character.skillsKnown).toBe(false);});
