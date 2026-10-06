@@ -2657,6 +2657,7 @@ name = "rayrag-companion"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "dispatch2",
  "flate2",
  "frunk",
  "frunk_core",

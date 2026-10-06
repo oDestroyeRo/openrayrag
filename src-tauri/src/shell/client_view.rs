@@ -131,15 +131,64 @@ impl MainWindowEffects for NativeMainWindow<'_> {
 #[cfg(target_os = "macos")]
 pub(crate) fn recover_main(app: &tauri::AppHandle) {
     if recover_main_program(&mut NativeMainWindow { app, window: None }).is_err() {
-        report_main_failure();
+        report_main_failure(app);
     }
 }
 
 /// A recovery error must remain visible even when the HTML window is absent.
 #[cfg(target_os = "macos")]
-pub(crate) fn report_main_failure() {
+fn report_main_failure(app: &tauri::AppHandle) {
+    let app = app.clone();
+    queue_main_failure(
+        &MAIN_FAILURE_PENDING,
+        |work| {
+            // Tauri's main-thread dispatcher executes inline on the UI thread.
+            // A separate asynchronous main queue releases Tao's callback mutex
+            // before NSAlert enters its nested event loop.
+            dispatch2::DispatchQueue::main().exec_async(work);
+        },
+        move || show_main_failure(&app),
+    );
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn queue_main_failure(
+    pending: &'static std::sync::atomic::AtomicBool,
+    enqueue: impl FnOnce(Box<dyn FnOnce() + Send>),
+    display: impl FnOnce() + Send + 'static,
+) {
+    use std::sync::atomic::Ordering;
+
+    if pending.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    enqueue(Box::new(move || {
+        struct Reset(&'static std::sync::atomic::AtomicBool);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        // Reopen can arrive during the modal loop. Keep queued/active reports
+        // coalesced until the user dismisses this one.
+        let _reset = Reset(pending);
+        display();
+    }));
+}
+
+#[cfg(target_os = "macos")]
+static MAIN_FAILURE_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+pub(crate) fn main_failure_pending() -> bool {
+    MAIN_FAILURE_PENDING.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(target_os = "macos")]
+fn show_main_failure(app: &tauri::AppHandle) {
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSAlert, NSApplication};
+    use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSApplication};
     use objc2_foundation::NSString;
 
     eprintln!("{RECOVERY_ERROR}");
@@ -152,8 +201,13 @@ pub(crate) fn report_main_failure() {
     let alert = NSAlert::new(main_thread);
     alert.setMessageText(&NSString::from_str("Could not restore Companion"));
     alert.setInformativeText(&NSString::from_str(RECOVERY_ERROR));
-    alert.addButtonWithTitle(&NSString::from_str("OK"));
-    alert.runModal();
+    alert.addButtonWithTitle(&NSString::from_str("Quit"));
+    let choice = alert.runModal();
+    // A no-window startup must have a normal, actionable exit. This explicit
+    // choice uses the same saved-settings handshake as menu and Dock Quit.
+    if choice == NSAlertFirstButtonReturn {
+        app.exit(0);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -416,6 +470,72 @@ mod tests {
             assert_eq!(window.calls, ["state", "create", "state"]);
             assert!(!window.focused);
         }
+    }
+
+    #[test]
+    fn native_guidance_waits_for_callback_release_and_coalesces_nested_reopens() {
+        use std::sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc, Mutex,
+        };
+
+        let pending: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+        let callback_mutex = Arc::new(Mutex::new(()));
+        let displayed = Arc::new(AtomicUsize::new(0));
+        let mut queued: Vec<Box<dyn FnOnce() + Send>> = vec![];
+        let callback = callback_mutex.lock().unwrap();
+        let modal_mutex = Arc::clone(&callback_mutex);
+        let modal_displayed = Arc::clone(&displayed);
+
+        queue_main_failure(
+            pending,
+            |work| queued.push(work),
+            move || {
+                // A modal loop can deliver another Dock/Finder Reopen. Tao must be
+                // able to enter that callback, and it must not open a second alert.
+                let _nested_reopen = modal_mutex.try_lock().expect("Tao callback still held");
+                queue_main_failure(
+                    pending,
+                    |_| panic!("Duplicate modal enqueued"),
+                    || panic!("Duplicate modal displayed"),
+                );
+                modal_displayed.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+        queue_main_failure(
+            pending,
+            |_| panic!("Duplicate queued alert"),
+            || panic!("Duplicate queued alert displayed"),
+        );
+        assert!(pending.load(Ordering::Acquire));
+        assert_eq!(displayed.load(Ordering::Relaxed), 0);
+        assert_eq!(queued.len(), 1);
+
+        drop(callback);
+        queued.pop().unwrap()();
+        assert_eq!(displayed.load(Ordering::Relaxed), 1);
+        assert!(!pending.load(Ordering::Acquire));
+
+        // Dismissal permits guidance for a later, distinct recovery failure.
+        queue_main_failure(pending, |work| queued.push(work), || {});
+        assert!(pending.load(Ordering::Acquire));
+        queued.pop().unwrap()();
+        assert!(!pending.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn native_guidance_releases_its_guard_even_if_presentation_unwinds() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let pending: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+        let mut queued: Option<Box<dyn FnOnce() + Send>> = None;
+        queue_main_failure(
+            pending,
+            |work| queued = Some(work),
+            || panic!("Test failure"),
+        );
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(queued.unwrap())).is_err());
+        assert!(!pending.load(Ordering::Acquire));
     }
 
     #[test]

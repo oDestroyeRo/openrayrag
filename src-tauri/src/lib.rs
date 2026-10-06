@@ -460,9 +460,13 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             settings::settings_close::install_macos_quit(app.handle())?;
             if let Err(error) = shell::client_view::create_main(app.handle()) {
-                #[cfg(target_os = "macos")]
-                shell::client_view::report_main_failure();
+                #[cfg(not(target_os = "macos"))]
                 return Err(error.into());
+                // Ready retries safe reconstruction and queues native guidance
+                // on failure. Returning a setup error would terminate before
+                // an independently dispatched dialog could become visible.
+                #[cfg(target_os = "macos")]
+                let _ = error;
             }
             Ok(())
         })
@@ -555,6 +559,14 @@ pub fn run() {
                 shell::client_view::recover_main(app);
             }
             if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                #[cfg(target_os = "macos")]
+                if code.is_none() && shell::client_view::main_failure_pending() {
+                    // A failed controller may destroy its empty native window.
+                    // Keep the loop alive for queued guidance; explicit Quit
+                    // still follows the existing settings-save handshake.
+                    api.prevent_exit();
+                    return;
+                }
                 settings::settings_close::exit_requested(app, code, &api);
             }
         });
