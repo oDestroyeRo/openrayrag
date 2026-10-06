@@ -192,7 +192,7 @@ test('Git-source benchmark loaders bundle root Remeda into standalone node and b
       globalName: 'SnapshotBenchmark', logLevel: 'silent',
       // Like the real benchmark plugins, replace only source-file contents.
       plugins: [{ name: 'source-snapshot', setup(builder) {
-        builder.onLoad({ filter: /\/src\/engine\.ts$/ }, () => ({
+        builder.onLoad({ filter: /[\\/]src[\\/]engine\.ts$/ }, () => ({
           contents: "import { map, sort } from 'remeda'; export const projected = map(sort([3, 1, 2], (a, b) => a - b), n => n * 2);",
           loader: 'ts',
         }));
