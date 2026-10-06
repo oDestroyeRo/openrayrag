@@ -47,12 +47,13 @@ jobs:
           path: ${{ env.BUN_INSTALL_CACHE_DIR }}
           key: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-${{ hashFiles('bun.lock', 'tools/release/bun.lock') }}
           restore-keys: bun-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version') }}-
+      - name: Install Linux extraction dependencies
+        if: matrix.language == 'rust'
+        uses: ./.github/actions/linux-dependencies
       - name: Prepare Rust extraction and generated bridge
         if: matrix.language == 'rust'
         run: |
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev
           bun install --frozen-lockfile
           bun run bridge
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

@@ -28,6 +28,7 @@
   "scripts/catalogs/navigation_logic.py": "logic",
   "scripts/quality/appimage-policy.mjs": "logic",
   "scripts/quality/appimage-proof.mjs": "effects",
+  "scripts/quality/apt-cache.py": "orchestration",
   "scripts/quality/architecture-policy.mjs": "logic",
   "scripts/quality/architecture-python.py": "orchestration",
   "scripts/quality/architecture.mjs": "orchestration",
