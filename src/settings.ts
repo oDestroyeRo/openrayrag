@@ -135,9 +135,9 @@ const list = <T>(v: readonly T[], max: number, valid: (entry: T) => boolean, key
 function strictKeys(v: unknown, keys: string[]): void {
   if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).some(k=>!keys.includes(k))) throw new Error('Unknown settings field.');
 }
-export function automationSettings(settings: ValidatedFormSettings): ValidatedAutomationSettings;
+export function automationSettings(settings: Pick<ValidatedFormSettings, 'automation'>): ValidatedAutomationSettings;
 export function automationSettings(settings: SettingsInput): AutomationSettingsInput;
-export function automationSettings(settings: SettingsInput): AutomationSettingsInput { return settings.automation ?? VALIDATED_DEFAULT_AUTOMATION; }
+export function automationSettings(settings: SettingsInput | Pick<ValidatedFormSettings, 'automation'>): AutomationSettingsInput { return settings.automation ?? VALIDATED_DEFAULT_AUTOMATION; }
 export function escapeSettings(settings: SettingsInput): ReadonlyData<EscapeSettings> { return { ...DEFAULT_ESCAPE, ...automationSettings(settings).escape }; }
 export function retreatSettings(settings:SettingsInput):ReadonlyData<RetreatSettings> {return automationSettings(settings).retreat??DEFAULT_RETREAT;}
 export function validateRetreat(value:RetreatSettings):RetreatSettings {

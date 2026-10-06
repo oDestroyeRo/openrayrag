@@ -1,4 +1,4 @@
-import { bagId as domainBagId } from './domain-values';
+import { bagId as domainBagId, speciesId, type SpeciesId } from './domain-values';
 import type { EngagementIdentity } from './attack-strategy-logic';
 import type { ActorObservationSnapshot } from './actor-observations-logic';
 import type { CharacterSnapshot } from './character-state-logic';
@@ -7,7 +7,7 @@ import { AMMO_CATALOG, WEAPON_CATALOG } from './loadout-logic';
 import { validateMapPolicy, type MapPolicyInput as MapPolicy } from './map-policy-logic';
 import { mapDimensions } from './navigation-logic';
 import type { Entity, Position } from './protocol';
-import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateAutomation, type MonsterRule, type ReadonlyData, type SettingsInput as Settings } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateAutomation, validateFormSettings, type ValidatedFormSettings, type MonsterRule, type ReadonlyData, type SettingsInput as Settings } from './settings';
 /** Command-only policy. No automatic action, saved run, or selected-species list. */
 export interface ManualTargetPolicy {
   minHpPercent:number; routeStep:number; avoidWalls:boolean; walkSeconds:number;
@@ -81,6 +81,16 @@ export function validateManualTargetRequest(value:unknown):ManualTargetRequest {
 export function manualTargetSettings(request:ManualTargetRequest):Settings {
   const p=request.policy;
   return {...DEFAULT_SETTINGS,map:request.map,targets:[],loot:false,route_step:p.routeStep,route_avoidWalls:p.avoidWalls,route_randomWalk_maxRouteTime:p.walkSeconds,attackMaxRouteTime:p.approachSeconds,attackRouteMaxPathDistance:p.maxPathDistance,minHpPercent:p.minHpPercent,automation:{...structuredClone(DEFAULT_AUTOMATION),combat:{mode:'selected',levelDifference:p.levelDifference,rules:structuredClone(p.monsterRules)},loadout:{...DEFAULT_AUTOMATION.loadout,enabled:true,autoAmmo:false,minAmmoStock:p.minAmmoStock},...(p.mapPolicy?{mapPolicy:structuredClone(p.mapPolicy)}:{})}};
+}
+
+/** Observed monsters may have protocol class zero, outside configured species IDs. */
+export type ManualEngineSettings = Omit<ValidatedFormSettings,'targets'> & {
+  readonly targets:readonly (SpeciesId|0)[];
+};
+export function manualEngineSettings(request:ManualTargetRequest,observedClass:number|null):ManualEngineSettings {
+  const base=validateFormSettings(manualTargetSettings(request));
+  const targets=observedClass===null?[]:[observedClass===0?0 as const:speciesId(observedClass)];
+  return {...base,targets};
 }
 
 export function manualAmmoGuard(policy:Pick<ManualTargetPolicy,'minAmmoStock'>,player:Entity,state:CharacterState|CharacterSnapshot):string|null {

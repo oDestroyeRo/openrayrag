@@ -29,7 +29,7 @@ import { attackDistance, normalAttackProfile } from './combat';
 import {RetreatLedger,planRetreat,IDLE_RETREAT,type RetreatTask,type RetreatSnapshot} from './retreat';
 import {retreatSettings} from './settings';
 import { LoadoutPolicy, type LoadoutSnapshot } from './loadout';
-import { IDLE_MANUAL_TARGET, manualAmmoGuard, manualTargetSettings, manualStateBlocker, previewManualTarget, sameActionIdentity as sameManualIdentity, validateManualTargetRequest, type ManualTargetRequest, type ManualTargetSnapshot } from './manual-target';
+import { IDLE_MANUAL_TARGET, manualAmmoGuard, manualEngineSettings, type ManualEngineSettings, manualStateBlocker, previewManualTarget, sameActionIdentity as sameManualIdentity, validateManualTargetRequest, type ManualTargetRequest, type ManualTargetSnapshot } from './manual-target';
 export { MAX_TARGETS, DEFAULT_SETTINGS, DEFAULT_AUTOMATION, validateSettings, validateAutomation } from './settings';
 export type { Settings, AutomationSettings } from './settings';
 
@@ -85,7 +85,7 @@ export class BotEngine {
   readonly drops = new Map<number, Drop>();
   readonly log: LogEntry[] = [];
   attacks = 0; kills = 0; looted = 0;
-  settings: ValidatedFormSettings = validateFormSettings(DEFAULT_SETTINGS);
+  settings: ValidatedFormSettings | ManualEngineSettings = validateFormSettings(DEFAULT_SETTINGS);
   private motions = new Map<number, { walk: Walk; at: number }>();
   private navigator: GridNavigator | null = null;
   private navigationMap = '';
@@ -1514,8 +1514,7 @@ export class BotEngine {
   }
   startManual(input:unknown):void {
     const request=validateManualTargetRequest(input),cells=this.previewManual(request),since=this.now();
-    const manualSettings=manualTargetSettings(request);
-    this.settings=validateFormSettings({...manualSettings,...(request.command.type==='attack'?{targets:[this.entities.get(request.command.target.id)!.classId]}:{})});
+    this.settings=manualEngineSettings(request,request.command.type==='attack'?this.entities.get(request.command.target.id)!.classId:null);
     this.navigation();this.routeStep=request.policy.routeStep;
     this.runIntent=false;this.lastTick=since;this.lastAction=0;this.routeFailures=0;
     this.manualTask={request,since,attackSent:false,attackObserved:false,acceptedAttack:false,acceptedWalk:false};

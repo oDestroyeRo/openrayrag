@@ -26,6 +26,14 @@ function setup(grid:WalkGrid={width:200,height:200,walkable:()=>true}) {
   return {engine,sent,request,step,ack,receive:(events:GameEvent[])=>engine.receive(events),time:()=>now};
 }
 describe('bounded manual target owner',()=>{
+  it('admits observed monster class zero without making it a configured species selection',()=>{
+    const f=setup();f.receive([{type:'spawn',entity:{...enemy,classId:0}}]);
+    const request=f.request();expect(f.engine.previewManual(request).length).toBeGreaterThan(1);
+    expect(()=>f.engine.startManual(request)).not.toThrow();expect(f.engine.settings.targets).toEqual([0]);
+    f.step();expect(f.sent).toEqual([{type:'attack',id:2}]);
+    expect(()=>validateFormSettings({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[0]})).toThrow('Invalid settings');
+    expect(settings.targets).toEqual([]);
+  });
   it('accepts default selected combat with no species selected without changing saved settings',()=>{
     const f=setup(),request=f.request('walk');expect(settings.targets).toEqual([]);f.engine.startManual(request);f.step();
     expect(f.sent[0]?.type).toBe('walk');expect(f.engine.running).toBe(false);expect(f.engine.runIntent).toBe(false);expect(settings.targets).toEqual([]);
