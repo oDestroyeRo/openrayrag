@@ -2657,6 +2657,7 @@ name = "rayrag-companion"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "dispatch2",
  "flate2",
  "frunk",
  "frunk_core",
@@ -2665,6 +2666,7 @@ dependencies = [
  "minisign-verify 0.3.0",
  "objc2",
  "objc2-app-kit",
+ "objc2-foundation",
  "plist",
  "reqwest",
  "rustls",

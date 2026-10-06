@@ -1,4 +1,5 @@
 import { minutes, minutesToMilliseconds } from '../../shared/domain-values';
+import { reachedRunLimit, runLimitReason, type RunLimitCause } from './run-limit-logic';
 import { addExperience, experienceDifference, validRunExperience, type ExperienceGains, type RunExperience } from './run-experience-logic';
 import { deathLimitGuidance, farmingDestination, validateDeathRecoveryGuard, type DeathRecoveryGuard } from '../recovery/death-recovery';
 import { validateSettings, settingsDraft, type SettingsInput as Settings, type RunSettings } from '../settings/settings';
@@ -274,14 +275,15 @@ export class PersistentFieldRun {
     for (const [name, guard] of this.escapeGuards) if (!guard.latched && guard.cooldownUntil <= this.now()
       && (!this.desired || name !== this.character)) this.escapeGuards.delete(name);
   }
-  get limitReason(): string {
+  get limitCause():RunLimitCause|null {
     const a = this.desired?.automation;
-    if (!a) return '';
-    if (a.limits.minutes && this.now() - this.startedAt >= minutesToMilliseconds(minutes(a.limits.minutes))) return 'Waiting: session time limit reached. Press Stop to change settings.';
-    if (a.limits.kills && this.totals.kills >= a.limits.kills) return 'Waiting: monster limit reached. Press Stop to change settings.';
-    if (a.limits.pickups && this.totals.looted >= a.limits.pickups) return 'Waiting: pickup limit reached. Press Stop to change settings.';
-    if (a.respawn.enabled && this.totals.deaths > a.respawn.maxDeaths) return `Waiting: death limit reached. ${deathLimitGuidance(this.totals.deaths, a.respawn.maxDeaths)}`;
-    return '';
+    return a?reachedRunLimit({limits:a.limits,elapsedMilliseconds:this.now()-this.startedAt,kills:this.totals.kills,pickups:this.totals.looted,
+      respawn:a.respawn,deaths:this.totals.deaths}):null;
+  }
+  get limitReason(): string {
+    const cause=this.limitCause;
+    if(!cause)return '';
+    return cause==='deaths'?`Run limit reached: death limit. ${deathLimitGuidance(this.totals.deaths,this.desired!.automation!.respawn.maxDeaths)}`:runLimitReason(cause);
   }
   guardForStart(settings: Settings, character: string, sessionId: string): EscapeResumeGuard | undefined {
     this.pruneEscapeGuards();

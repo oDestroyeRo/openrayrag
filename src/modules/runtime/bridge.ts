@@ -1,4 +1,5 @@
 import { initializationCertificate, initializationResetCandidate, initializationResetAllowed, initializationIdentityCurrent } from './runtime-initialization-policy';
+import { controlStopReason, type RunLimitCause } from '../session/run-limit-logic';
 import type { DeathRecoveryGuard } from '../recovery/death-recovery';
 import { MaintenanceLease } from './maintenance';
 import { couldOwnOfficialGameplay, isOfficialGameplayCommand, isOfficialLookCommand, isOfficialMovementCommand, isOfficialRefineCommand } from './official-input';
@@ -10,7 +11,8 @@ import type { ControllerUpdateCheckpoint, ControllerUpdateRestore } from '../upd
 import { wireController } from './controller-wire';
 import type { LiveSettingsGuard } from '../settings/live-settings-logic';
 import { LoginController, loginDriver, loginReady, type LoginProfile, type LoginStatus, type UnityClient } from '../session/login';
-import { currentMapInfo, loadMapCatalog, type MapCatalog } from '../navigation/map-data';
+import { currentMapInfo } from '../navigation/map-data-logic';
+import { loadMapCatalog, MapCatalogLoader } from '../navigation/map-data';
 import type { SupplyResumeGuard } from '../services/supply-trip';
 import type { EscapeResumeGuard } from '../recovery/escape';
 
@@ -19,7 +21,7 @@ interface BridgeWindow extends Window {
   createUnityInstance?: (...args: unknown[]) => Promise<UnityClient>;
   __TAURI_INTERNALS__?: { invoke: (name: string, args: unknown) => Promise<unknown> };
   __RAYRAG__?: {
-    control: (action: 'start' | 'stop' | 'heartbeat' | 'apply', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard, applyId?:string,liveSettingsGuard?:LiveSettingsGuard) => void;
+    control: (action: 'start' | 'stop' | 'heartbeat' | 'apply', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard, applyId?:string,liveSettingsGuard?:LiveSettingsGuard,runLimit?:RunLimitCause|null) => void;
     perform: (action: 'command' | 'workflow' | 'routine' | 'macro' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance' | 'warp' | 'warpPreview' | 'warpCancel', request: unknown) => void;
     maintenance:(nonce:string,reserve:boolean|'commit')=>void;
     prepareUpdate:(requestId:string)=>void;
@@ -60,8 +62,6 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   let capturedUnity = false;
   let claimStarted = false;
   let unityClient: UnityClient | undefined;
-  let catalog: MapCatalog | null = null;
-  let catalogLoading = true;
   const guardHeldAtStart=localStorage.getItem('rayrag.warp.uncertain.v1')!==null;
   let guardResetAllowed=false;
   let guardNonce:string|null=null;
@@ -85,7 +85,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   });
   const engine = controller.engine;
   const runtimeStatus=(status=controller.snapshot())=>({...status,sessionId,connectionId,maintenanceWaiting:officialUncertain,
-    login:login?.status??loginStatus,mapInfo:currentMapInfo(engine.map,engine.entities.values(),catalog,catalogLoading),
+    login:login?.status??loginStatus,mapInfo:currentMapInfo(engine.map,engine.entities.values(),catalogue.catalog,catalogue.loading),
     reconnectAvailable:false,build:page.buildUrl??'',connectionMode:'gameClient'});
   const checkpoint=():ControllerUpdateCheckpoint|null=>{const value=controller.updateCheckpoint();return value?{...value,status:runtimeStatus(value.status)}:null;};
   const confirmPrepared=()=>{
@@ -109,8 +109,9 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   };
   // Fixed, public, same-origin assets. Failures fall back to live observations;
   // no credentials are sent and the official game connection is unaffected.
-  void loadMapCatalog().then(value => { catalog = value; }).catch(() => {})
-    .finally(() => { catalogLoading = false; publish(); });
+  const catalogue = new MapCatalogLoader(signal => loadMapCatalog(fetch, signal), () => { void publish(); });
+  page.addEventListener('pagehide', () => catalogue.dispose(), { once: true });
+  void catalogue.start();
   const stop = (reason: string) => {
     try { controller.stop(reason); } catch { controller.disconnect(); }
     publish();
@@ -318,10 +319,11 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   };
 
   page.__RAYRAG__ = {
-    control(action, settings, escapeGuard, supplyGuard, recoveryGuard, applyId, liveSettingsGuard) {
+    control(action, settings, escapeGuard, supplyGuard, recoveryGuard, applyId, liveSettingsGuard,runLimit) {
+      const stopReason=controlStopReason(action,runLimit);
       maintenance.assertDispatch();mutation();
       if (action === 'heartbeat') { heartbeat = Date.now(); controller.heartbeat(true);retryInitialization();return; }
-      if (action === 'stop') { updateRequest=null;cancelLogin(); stop('Stopped by you.'); return; }
+      if (action === 'stop') { updateRequest=null;cancelLogin(); stop(stopReason); return; }
       try {
         if (page.buildUrl !== VERIFIED_BUILD) throw new Error('This game build is not verified.');
         if (!settings) throw new Error('Choose combat settings first.');

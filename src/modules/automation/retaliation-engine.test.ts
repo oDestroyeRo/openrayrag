@@ -179,7 +179,7 @@ describe('own-character monster defense', () => {
   it('preserves the original run kill budget while an attacker is waiting', () => {
     const f = setup(); f.settings.automation!.limits.kills = 1; f.engine.start(f.settings); f.step(); f.observeAttack();
     f.receive({ type: 'remove', id: selected.id, dead: true }); f.step();
-    expect(f.engine.running).toBe(false); expect(f.engine.reason).toBe('Configured session limit reached.');
+    expect(f.engine.running).toBe(false); expect(f.engine.reason).toContain('monster limit');
     expect(f.sent).toEqual([{ type: 'attack', id: selected.id }, { type: 'stop' }]);
   });
 

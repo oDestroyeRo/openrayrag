@@ -9,8 +9,47 @@ const MAX_ID: i64 = i32::MAX as i64;
 type Validation = Result<(), String>;
 type Object = Map<String, Value>;
 
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum RunLimitCause {
+    Minutes,
+    Kills,
+    Pickups,
+    Deaths,
+}
+
+pub(crate) fn validate_run_limit(action: &str, cause: Option<RunLimitCause>) -> Validation {
+    if cause.is_some() && action != "stop" {
+        return Err("A run limit cause is only accepted by Stop.".into());
+    }
+    Ok(())
+}
+
 fn invalid() -> String {
     "Invalid automation request.".into()
+}
+
+#[cfg(test)]
+mod run_limit_tests {
+    use super::{validate_run_limit, RunLimitCause};
+
+    #[test]
+    fn admits_only_known_causes_on_stop_and_preserves_ordinary_controls() {
+        for name in ["minutes", "kills", "pickups", "deaths"] {
+            let encoded = serde_json::to_string(name).unwrap();
+            let cause: RunLimitCause = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(serde_json::to_string(&cause).unwrap(), encoded);
+            assert!(validate_run_limit("stop", Some(cause)).is_ok());
+            for action in ["start", "apply", "heartbeat", "macro", "service"] {
+                assert!(validate_run_limit(action, Some(cause)).is_err());
+                assert!(validate_run_limit(action, None).is_ok());
+            }
+        }
+        for invalid in [r#""manual""#, r#""weight""#, "123", "{}"] {
+            assert!(serde_json::from_str::<RunLimitCause>(invalid).is_err());
+        }
+        assert!(validate_run_limit("stop", None).is_ok());
+    }
 }
 
 fn object<'a>(value: &'a Value, keys: &[&str]) -> Result<&'a Object, String> {

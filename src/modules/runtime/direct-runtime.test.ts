@@ -33,6 +33,17 @@ function fixture(held=false){
 async function flush(){for(let i=0;i<20;i++)await Promise.resolve();}
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return{promise,resolve};}
 describe('clientless shared-controller runtime',()=>{
+ it('attributes an automatic Stop to its limit and rejects invalid action/cause pairs before controller effects',async()=>{
+  const f=fixture();await f.ready();const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],route_randomWalk:0 as const};
+  f.runtime.control('start',settings);
+  const before=f.runtime.snapshot(),writes=f.writes().length;
+  expect(()=>f.runtime.control('start',settings,undefined,undefined,undefined,undefined,undefined,'minutes')).toThrow();
+  expect(f.runtime.snapshot()).toEqual(before);expect(f.writes()).toHaveLength(writes);
+  f.runtime.control('stop',settings,undefined,undefined,undefined,undefined,undefined,'minutes');
+  expect(f.runtime.snapshot().reason).toContain('session time limit');
+  expect(f.runtime.snapshot().log[0]?.text).not.toContain('Stopped by you');
+  f.runtime.control('stop',settings);expect(f.runtime.snapshot().log[0]?.text).toBe('Stopped by you.');
+ });
  it('keeps processing frames after a deployed party member update',async()=>{
   const f=fixture();await f.ready();
   await f.frame(new BitWriter().u8(101).u8(1).i32(3).string('Party').u8(0).i32(1)

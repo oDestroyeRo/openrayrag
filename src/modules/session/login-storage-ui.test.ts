@@ -10,7 +10,7 @@ import type { GameStatus } from '../client/game-status';
 import { searchGrid } from '../navigation/navigation';
 import { liveSettingsGuard } from '../settings/live-settings-logic';
 
-const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, scriptStorageFails: false, useEditor: false, editor: null as MacroUi | null, setupScript: null as BotScriptDocument['script'], setupSettings: null as SettingsInput | null, syncSetup: vi.fn(), clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
+const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, scriptStorageFails: false, useEditor: false, limitMinutes:0, editor: null as MacroUi | null, setupScript: null as BotScriptDocument['script'], setupSettings: null as SettingsInput | null, syncSetup: vi.fn(), clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, isTauri: () => true }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: ipc.listen }));
 vi.mock('../client/feature-ui', async () => {
@@ -44,7 +44,7 @@ vi.mock('../client/feature-ui', async () => {
     clearMacro():void{ipc.clearMacro();}
     clearSocial():void{}
     clearMemo():void{}
-    read() { return structuredClone(DEFAULT_AUTOMATION); }
+    read() { const value=structuredClone(DEFAULT_AUTOMATION);value.limits.minutes=ipc.limitMinutes;return value; }
     lock(): void {}
   }, validFeatureStatus: () => true };
 });
@@ -101,6 +101,7 @@ class Element {
   addEventListener(type: string, callback: (event: { preventDefault(): void;stopPropagation():void;target?:Element }) => unknown): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), callback]);
   }
+  click():void{void this.emit('click');}
   closest(selector:string):Element|null{return selector.includes('.settings')?this:null;}
   async emit(type: string,target?:Element): Promise<void> {
     for (const callback of this.listeners.get(type) ?? []) callback({ preventDefault() {},stopPropagation(){},target });
@@ -117,7 +118,7 @@ async function fixture(saved: SavedProfile | null | Promise<SavedProfile|null> =
     getElementById: (id: string) => elements.get(id), createElement: (tag:string) => new Element(elements,tag),
   });
   vi.stubGlobal('innerWidth',1100);vi.stubGlobal('innerHeight',880);
-  ipc.featureSettled=true;ipc.macroDirty=false;ipc.useEditor=useEditor;ipc.scriptStorageFails=false;ipc.editor=null;ipc.setupScript=null;ipc.setupSettings=null;ipc.syncSetup.mockClear();ipc.clearMacro.mockClear();ipc.invoke.mockReset(); ipc.listen.mockClear();
+  ipc.featureSettled=true;ipc.macroDirty=false;ipc.useEditor=useEditor;ipc.limitMinutes=0;ipc.scriptStorageFails=false;ipc.editor=null;ipc.setupScript=null;ipc.setupSettings=null;ipc.syncSetup.mockClear();ipc.clearMacro.mockClear();ipc.invoke.mockReset(); ipc.listen.mockClear();
   ipc.invoke.mockImplementation(async (command: string,args?:{document?:{revision:number}}) => {
     if(command==='current_form')return savedForm;
     if(command==='save_current_form')return args?.document?.revision;
@@ -655,7 +656,7 @@ it('renders the fresh held owner before toolbar status and binds observed sessio
  await f.get('client-tab-settings').emit('click');expect(f.get('notice').textContent).toBe(status.refine.reason);
  expect(f.calls('save_current_form')).toHaveLength(saves);expect(f.calls('control_bot')).toEqual([]);
  publish({payload:{...status,character:{...base.character,stats:null},refine:{...status.refine,state:'idle',blocked:false}}});
- expect(f.get('status').textContent).toBe('READY');expect(f.get('sp-text').textContent).toBe('— / —');expect(f.get('sp-bar').style.width).toBe('0%');
+ expect(f.get('status').textContent).toBe('SETUP');expect(f.get('sp-text').textContent).toBe('— / —');expect(f.get('sp-bar').style.width).toBe('0%');
 });
 
 it('Connect account opens the retained account form without creating or showing a game window',async()=>{
@@ -664,18 +665,33 @@ it('Connect account opens the retained account form without creating or showing 
  expect(f.calls('open_game')).toEqual([]);expect(f.calls('login_game')).toEqual([]);expect(f.calls('control_bot')).toEqual([]);
 });
 
-it('requires settled, fresh stopped state for explicit Disconnect and clears telemetry for a new login',async()=>{
+it('shows automatic time-limit completion and retains the run until explicit Stop',async()=>{
+  const f=await fixture();ipc.limitMinutes=1;
+  await publishStatus(readyStatus('limited-run'));await f.get('select-targets').emit('click');await f.get('start').emit('click');
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(f.calls('control_bot').filter(call=>call[1]?.action==='stop').map(call=>call[1])).toEqual([{action:'stop',runLimit:'minutes'}]);
+  expect(f.get('status').textContent).toBe('LIMIT');expect(f.get('client-run-title').textContent).toBe('Run limit reached');
+  expect(f.get('notice').textContent).toContain('Press Stop to end this run');
+  expect(f.get('start').disabled).toBe(true);expect(f.get('stop').disabled).toBe(false);
+  await publishStatus({...readyStatus('limited-run'),reason:'Configured session limit reached.'});
+  expect(f.get('status').textContent).toBe('LIMIT');expect(f.get('start').disabled).toBe(true);
+  await f.get('stop').emit('click');
+  expect(f.calls('control_bot').at(-1)?.[1]).toEqual({action:'stop'});
+  expect(f.get('status').textContent).toBe('READY');expect(f.get('start').disabled).toBe(false);
+});
+
+it.each(['disconnect','account-disconnect'])('requires settled, fresh stopped state for %s and clears telemetry for a new login',async disconnectId=>{
  const f=await fixture(),publish=ipc.listen.mock.calls.find(call=>call[0]==='game-status')![1];
  const base=new BotEngine(()=>{}).snapshot();
  const status={...base,sessionId:'synthetic-session',login:{phase:'idle',message:''},reconnectAvailable:false,connected:true,compatible:true,
   player:{id:0,classId:4,kind:0,name:'Synthetic',level:30,hp:100,maxHp:100,x:1,y:1,dead:false,statuses:[]},
   character:{...base.character,stats:{sp:75,maxSp:200}},mapInfo:{code:'',name:'',source:'observed',monsters:[]}};
- publish({payload:{...status,runRequested:true}});expect(f.get('connection-mode').disabled).toBe(true);expect(f.get('disconnect').disabled).toBe(true);await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([]);
- publish({payload:{...status,refine:{blocked:true,reason:'Pending receipt'}}});expect(f.get('disconnect').disabled).toBe(true);await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([]);
- publish({payload:status});ipc.featureSettled=false;await vi.advanceTimersByTimeAsync(1000);expect(f.get('disconnect').disabled).toBe(true);
- ipc.featureSettled=true;publish({payload:status});expect(f.get('disconnect').disabled).toBe(false);
+ publish({payload:{...status,runRequested:true}});expect(f.get('connection-mode').disabled).toBe(true);expect(f.get(disconnectId).disabled).toBe(true);await f.get(disconnectId).emit('click');expect(f.calls('close_game')).toEqual([]);
+ publish({payload:{...status,refine:{blocked:true,reason:'Pending receipt'}}});expect(f.get(disconnectId).disabled).toBe(true);await f.get(disconnectId).emit('click');expect(f.calls('close_game')).toEqual([]);
+ publish({payload:status});ipc.featureSettled=false;await vi.advanceTimersByTimeAsync(1000);expect(f.get(disconnectId).disabled).toBe(true);
+ ipc.featureSettled=true;publish({payload:status});expect(f.get(disconnectId).disabled).toBe(false);
  let finish!:()=>void;ipc.invoke.mockImplementation((command:string)=>command==='close_game'?new Promise<void>(resolve=>{finish=resolve;}):Promise.resolve(undefined));
- await f.get('disconnect').emit('click');expect(f.calls('close_game')).toEqual([['close_game']]);expect(f.get('disconnect').disabled).toBe(true);expect(f.get('console-walk').disabled).toBe(true);finish();
+ await f.get(disconnectId).emit('click');expect(f.calls('close_game')).toEqual([['close_game']]);for(const id of ['disconnect','account-disconnect'])expect(f.get(id).disabled).toBe(true);expect(f.get('console-walk').disabled).toBe(true);finish();
  const closed=ipc.listen.mock.calls.find(call=>call[0]==='game-closed')![1];closed({payload:undefined});
  expect(ipc.clearMacro).toHaveBeenCalledOnce();
  for(let i=0;i<20;i++)await Promise.resolve();
@@ -728,6 +744,32 @@ it('keeps a settings-only setup on the existing projected field Start path', asy
   const request = f.calls('control_bot').find(call => call[1]?.action === 'start')?.[1];
   expect(request?.settings).toMatchObject({map:'prt_fild08',targets:[4000],radius:17});
   expect(f.calls('control_bot').some(call => call[1]?.action === 'macro')).toBe(false);
+});
+
+it('aligns readiness with current-field targets while preserving the retained field choices until an explicit edit',async()=>{
+  const saved={version:1,revision:2,selectedProfileId:null,settings:{...structuredClone(DEFAULT_SETTINGS),map:'prt_fild07',targets:[4005,4006]}};
+  const before=structuredClone(saved),f=await fixture(null,false,saved);
+  await publishStatus(readyStatus('different-field'));
+  expect(f.get('status').textContent).toBe('SETUP');
+  expect(f.get('client-run-title').textContent).toBe('Setup needs attention');
+  expect(f.get('start').disabled).toBe(true);
+  expect(f.get('config-help').textContent).toContain('Choose selected monsters');
+  expect(f.get('console-setup-summary').textContent).toContain('No targets selected');
+  expect(f.get('console-saved-draft-summary').hidden).toBe(false);
+  expect(f.get('console-saved-draft-summary').textContent).toContain('Retained choices for prt_fild07: 2 selected targets');
+  expect(f.get('console-edit-setup').textContent).toBe('Choose current-field targets');
+  const saves=f.calls('save_current_form').length;
+  await f.get('client-bot-tab-recovery').emit('click');
+  await f.get('client-tab-session').emit('click');await f.get('console-edit-setup').emit('click');
+  expect(f.get('client-page-bot').hidden).toBe(false);expect(f.get('client-bot-combat').hidden).toBe(false);
+  expect(f.calls('save_current_form')).toHaveLength(saves);expect(saved).toEqual(before);
+  expect(f.calls('control_bot')).toEqual([]);
+  await f.get('select-targets').emit('click');
+  expect(f.get('status').textContent).toBe('READY');expect(f.get('start').disabled).toBe(false);
+  expect(f.get('console-setup-summary').textContent).toContain('Synthetic monster');
+  expect(f.get('console-saved-draft-summary').hidden).toBe(true);
+  await f.get('start').emit('click');
+  expect(f.calls('control_bot').find(call=>call[1]?.action==='start')?.[1]?.settings).toMatchObject({map:'prt_fild08',targets:[4000]});
 });
 
 it('never sends a Start request while a Script draft is unapplied', async () => {

@@ -41,6 +41,13 @@ liveSettingsHelp.textContent='Form edits save as a separate draft. Live Apply su
 liveSettingsPanel.append(applySettingsButton,liveSettingsStatus,liveSettingsHelp);
 element('client-page-bot').prepend(liveSettingsPanel);
 const savedDraftSummary=element('console-saved-draft-summary');
+const editSetupButton=element<HTMLButtonElement>('console-edit-setup');
+let currentTargetsNeedAttention=false;
+editSetupButton.addEventListener('click',()=>{
+  if(!currentTargetsNeedAttention)return;
+  element<HTMLButtonElement>('setup-tab-form').click();
+  shell.showBotSection('combat');
+});
 const activityLog = new ActivityLog(element('log'));
 const native = isTauri();
 let closeRegistered=!native;
@@ -267,12 +274,30 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   try { dashboardSettings = projection.snapshot().settings; } catch (error) { formError = error; /* Keep invalid drafts editable on Setup. */ }
   if (dashboardSettings) features.syncSetup(dashboardSettings);
   const fresh = Date.now() - receivedAt < 7000;
+  const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
+  let fieldSettings:SettingsInput|null=null, checked:RunSettings|null=null;
+  let scripted=false, setupReason='';
+  try {
+    if (!dashboardSettings) throw formError ?? new Error('Finish valid Form settings before Start.');
+    const document=features.setupDocument();scripted=document.script!==null;
+    fieldSettings=projection.runSettings();
+    checked=document.script ? macroBaseSettings(document.settings,document.script) : validateSettings(fieldSettings);
+  }catch(error){setupReason=error instanceof Error?error.message:'Finish valid Form settings before Start.';}
+  configHelp.textContent=(ready || !dashboardSettings) ? setupReason : '';
   const activeSettings=runActive()?(latest?.activeSettings??fieldRun.activeSettings):null;
-  const dashboard = clientDashboard(latest, { fieldRequested: fieldRun.requested, held: features.active(), limitReason: fieldRun.limitReason, loginBusy, fresh }, activeSettings??dashboardSettings, latest?.mapInfo);
+  const dashboard = clientDashboard(latest, { fieldRequested: fieldRun.requested, held: features.active(), limitReason: fieldRun.limitReason, loginBusy, fresh,
+    setupReason:ready&&!runActive()?setupReason:'' }, activeSettings??(scripted?dashboardSettings:fieldSettings??dashboardSettings), latest?.mapInfo);
+  element('status').textContent=dashboard.state;
+  element('status').classList.toggle('active',dashboard.state==='RUNNING');
+  element('status').dataset.state=dashboard.state;
   element('client-run-title').textContent = dashboard.headline;
+  if(dashboard.state==='LIMIT')message(dashboard.reason);
   element('console-setup-summary').textContent = `${activeSettings?'Active run: ':''}${dashboard.setup}`;
-  savedDraftSummary.hidden=!activeSettings;
-  savedDraftSummary.textContent=`Saved draft: ${clientDashboard(latest,{fieldRequested:false,held:false,limitReason:'',loginBusy:false},dashboardSettings,latest?.mapInfo).setup}`;
+  const retainedDiffers=!!dashboardSettings&&!!fieldSettings&&(dashboardSettings.map!==fieldSettings.map||dashboardSettings.targets.join(',')!==fieldSettings.targets.join(','));
+  savedDraftSummary.hidden=!activeSettings&&!retainedDiffers;
+  savedDraftSummary.textContent=`${activeSettings?'Saved draft':`Retained choices for ${dashboardSettings?.map||'the configured field'}`}: ${clientDashboard(latest,{fieldRequested:false,held:false,limitReason:'',loginBusy:false},dashboardSettings,latest?.mapInfo).setup}`;
+  currentTargetsNeedAttention=!!ready&&!runActive()&&!scripted&&!checked&&!!fieldSettings&&!fieldSettings.targets.length&&['selected','both'].includes(fieldSettings.automation?.combat.mode??'');
+  editSetupButton.textContent=currentTargetsNeedAttention?'Choose current-field targets':'Edit setup';
   const receipt=latest?.settingsApply;
   const lines:string[]=[];
   const lostApply=fieldRun.settingsApplyWaitReason(latest?.sessionId??'');if(lostApply)lines.push(lostApply);
@@ -297,15 +322,6 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   element('death-cap').textContent = dashboardSettings ? clientDeathCap(dashboardSettings.automation?.respawn) : '—';
   if(!closeRegistered||closeBusy||updateBusy){botConsole.lock(true,closeBusy?'Saving current settings before closing.':!closeRegistered?'Preparing saved settings.':'Client update in progress. Manual actions are locked.');for(const input of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement|HTMLTextAreaElement>('input,select,button,textarea'))if(!navigation.has(input as HTMLButtonElement))input.disabled=true;features.withSettings(projection.runSettings,()=>features.lock(true,true,true));if(updateBusy&&!closeBusy)stopButton.disabled=dispatches.stopping||updateContinuation.stopped;return;}
   if (features.setupDraftDirty()) for (const id of ['radius', 'min-hp', 'loot', 'random-walk', 'route-step', 'route-time', 'attack-distance', 'attack-time', 'avoid-walls']) element<HTMLInputElement>(id).disabled = true;
-  const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
-  let checked:RunSettings|null = null;
-  let scripted = false;
-  try {
-    if (!dashboardSettings) throw formError ?? new Error('Finish valid Form settings before Start.');
-    const document = features.setupDocument(); scripted = document.script !== null;
-    checked=document.script ? macroBaseSettings(document.settings, document.script) : validateSettings(projection.runSettings()); configHelp.textContent='';
-  }
-  catch(error) { configHelp.textContent=(ready || !dashboardSettings) && error instanceof Error ? error.message : ''; }
   // Rules keep the existing macro admission gate; ordinary field runs still
   // require verified physical ground and projected eligible targets.
   startButton.disabled = scripted
@@ -314,7 +330,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
       map:latest?.map??'',player:latest?.player??null,settings:checked});
   stopButton.disabled = dispatches.stopping || !gameOpen && !fieldRun.requested && !loginBusy && !updateContinuation.pending;
   openButton.disabled = false;
-  element<HTMLButtonElement>('disconnect').disabled = !disconnectReady();
+  for (const id of ['disconnect', 'account-disconnect']) element<HTMLButtonElement>(id).disabled = !disconnectReady();
   const controls=panelControls({native,ready:!!ready,accountReady,connectedCharacter:!!(latest?.connected&&latest.player),
     busy,stopping:dispatches.stopping,loginBusy,gameOpen,rememberLogin:element<HTMLInputElement>('remember-login').checked,
     sessionLoginAvailable,runActive:runActive(),featuresSettled:features.settledForMaintenance()});
@@ -394,7 +410,7 @@ async function perform(action: () => Promise<unknown>): Promise<void> {
   try { await action(); } catch (error) { message(typeof error === 'string' ? error : 'Unable to contact the game.', true); }
   finally { busy = false; updateButtons(); }
 }
-element('disconnect').addEventListener('click', () => {
+for (const id of ['disconnect', 'account-disconnect']) element(id).addEventListener('click', () => {
   if (!disconnectReady()) return;
   void perform(async () => { await invoke('close_game'); });
 });

@@ -40,8 +40,10 @@ frunk_core = "=0.5.0"
 windows-sys = { version = "=0.61.2", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading", "Win32_System_SystemServices", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 objc2 = "=0.6.4"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSAlert", "NSButton", "NSView", "NSWindow", "NSScrollView", "NSLayoutConstraint"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString"] }
 
 # Backport RUSTSEC-2024-0429 while Tauri's Linux GTK stack requires GLib 0.18.
 # See vendor/glib/PATCHES.md for source integrity and the removal condition.

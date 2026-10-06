@@ -161,8 +161,10 @@ fn control_bot(
     death_recovery_guard: Option<settings::automation::DeathRecoveryGuard>,
     apply_id: Option<String>,
     live_settings_guard: Option<settings::automation::LiveSettingsGuard>,
+    run_limit: Option<game::control::RunLimitCause>,
 ) -> Result<(), String> {
     require_view(&window, "main")?;
+    game::control::validate_run_limit(&action, run_limit)?;
     if let Some(guard) = &live_settings_guard {
         if action != "start" {
             return Err("Live settings protection is only accepted by start.".into());
@@ -329,8 +331,10 @@ fn control_bot(
             serde_json::to_string(&apply_id).map_err(|_| "Invalid settings Apply identity.")?;
         let live_guard_json = serde_json::to_string(&live_settings_guard)
             .map_err(|_| "Invalid live settings protection.")?;
+        let run_limit_json =
+            serde_json::to_string(&run_limit).map_err(|_| "Invalid run limit cause.")?;
         format!(
-            "window.__RAYRAG__?.control({action_json},{settings_json},{escape_json},{supply_json},{recovery_json},{apply_json},{live_guard_json})"
+            "window.__RAYRAG__?.control({action_json},{settings_json},{escape_json},{supply_json},{recovery_json},{apply_json},{live_guard_json},{run_limit_json})"
         )
     };
     if action == "warp" {
@@ -455,7 +459,15 @@ pub fn run() {
             update::update_continuation::initialize(app.handle())?;
             #[cfg(target_os = "macos")]
             settings::settings_close::install_macos_quit(app.handle())?;
-            shell::client_view::create_main(app.handle())?;
+            if let Err(error) = shell::client_view::create_main(app.handle()) {
+                #[cfg(not(target_os = "macos"))]
+                return Err(error.into());
+                // Ready retries safe reconstruction and queues native guidance
+                // on failure. Returning a setup error would terminate before
+                // an independently dispatched dialog could become visible.
+                #[cfg(target_os = "macos")]
+                let _ = error;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -488,6 +500,7 @@ pub fn run() {
             shell::client_view::set_game_view,
             control_bot,
             bridge_status,
+            game::map_data::map_database,
             session::direct::direct_connect,
             session::direct::direct_poll,
             session::direct::direct_observed,
@@ -539,12 +552,21 @@ pub fn run() {
         .expect("Could not launch Rayrag Companion")
         .run(|app, event| {
             #[cfg(target_os = "macos")]
-            if matches!(event, tauri::RunEvent::Reopen { .. })
-                && shell::client_view::recover_main(app).is_err()
-            {
-                eprintln!("Could not restore the Companion window. Quit and reopen the app.");
+            if matches!(
+                event,
+                tauri::RunEvent::Ready | tauri::RunEvent::Reopen { .. }
+            ) {
+                shell::client_view::recover_main(app);
             }
             if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                #[cfg(target_os = "macos")]
+                if code.is_none() && shell::client_view::main_failure_pending() {
+                    // A failed controller may destroy its empty native window.
+                    // Keep the loop alive for queued guidance; explicit Quit
+                    // still follows the existing settings-save handshake.
+                    api.prevent_exit();
+                    return;
+                }
                 settings::settings_close::exit_requested(app, code, &api);
             }
         });

@@ -10,6 +10,11 @@ const settings = { ...DEFAULT_SETTINGS, automation: {
 const recoveryOff = 'Sitting off · HP items off · SP items off · Respawn off';
 
 describe('Run dashboard presentation', () => {
+  it('describes failed current-field admission without claiming readiness or retained target eligibility',()=>{
+    const current={...settings,map:'prt_fild08',targets:[]};
+    expect(clientDashboard({player:{},compatible:true}, {...context,setupReason:'Choose selected monsters or disable selected combat.'},current))
+      .toMatchObject({state:'SETUP',headline:'Setup needs attention',setup:`No targets selected · Own drops · ${recoveryOff}`});
+  });
   it.each([
     ['retaliate', [], 'Defend against attackers'],
     ['both', [1002], '1 selected targets + defense'],
@@ -42,7 +47,7 @@ describe('Run dashboard presentation', () => {
   });
   it('retains a configured death-limit reason independently of an old active task', () => {
     expect(clientDashboard({ running: true, task: { label: 'Attacking Poring' } }, { ...context, fieldRequested: true, limitReason: 'Death limit reached: 1 / 1.' }, settings))
-      .toMatchObject({ state: 'WAITING', headline: 'Waiting to continue', reason: 'Death limit reached: 1 / 1.' });
+      .toMatchObject({ state: 'LIMIT', headline: 'Run limit reached', reason: 'Death limit reached: 1 / 1.' });
   });
   it('waits for fresh connected status without replacing owner or run-limit reasons', () => {
     const connected = { connected: true, compatible: true, player: {}, reason: 'Last observed field status.' };
@@ -53,7 +58,7 @@ describe('Run dashboard presentation', () => {
     expect(clientDashboard({ ...connected, refine: { blocked: true, reason: 'Waiting for an exact refine receipt.' } }, { ...stale, held: true }, settings))
       .toMatchObject({ state: 'WAITING', headline: 'Waiting to continue', reason: 'Waiting for an exact refine receipt.' });
     expect(clientDashboard(connected, { ...stale, limitReason: 'Death limit reached.', fieldRequested: true }, settings))
-      .toMatchObject({ state: 'WAITING', headline: 'Waiting to continue', reason: 'Death limit reached.' });
+      .toMatchObject({ state: 'LIMIT', headline: 'Run limit reached', reason: 'Death limit reached.' });
   });
   it('summarizes current setup without altering it or borrowing names from another field', () => {
     const configured = { ...settings, map: 'prt_fild08', targets: [1002], automation: structuredClone(settings.automation) };

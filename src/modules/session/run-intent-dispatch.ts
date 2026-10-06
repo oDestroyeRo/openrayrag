@@ -2,6 +2,7 @@ import { incrementRevision, revisionFor } from '../../shared/domain-values';
 import type { PersistentFieldRun, ReconnectPolicy } from './reconnect';
 import type { RunSession } from './reconnect-logic';
 import type { SettingsInput } from '../settings/settings';
+import type { RunLimitCause } from './run-limit-logic';
 
 import { type DispatchOutcome, type DispatchReceipt, retiredOutcome, type PendingKind, type NativeDispatch } from './run-intent-dispatch-logic';
 
@@ -167,7 +168,7 @@ export class RunIntentDispatch {
     const owner = this.runOwner;
     const pending = [...this.work.resume, ...this.work.login];
     return this.track('limit', async () => {
-      const result = await this.stopFence(pending, () => owner === this.runOwner && !!this.field.limitReason);
+      const result = await this.stopFence(pending, () => owner === this.runOwner && !!this.field.limitReason, this.field.limitCause!);
       if (result.status === 'accepted' && owner === this.runOwner && this.field.limitReason) this.held = true;
       return result;
     }, () => owner === this.runOwner && !!this.field.limitReason);
@@ -186,15 +187,16 @@ export class RunIntentDispatch {
     this.held = false;
   }
 
-  private async stopFence(pending: Promise<unknown>[], current: () => boolean): Promise<DispatchOutcome> {
+  private async stopFence(pending: Promise<unknown>[], current: () => boolean, runLimit?:RunLimitCause): Promise<DispatchOutcome> {
     let result: DispatchOutcome;
-    try { result = { status: 'accepted', value: await this.dispatch('control_bot', { action: 'stop' }) }; }
+    const request=runLimit?{action:'stop',runLimit}:{action:'stop'};
+    try { result = { status: 'accepted', value: await this.dispatch('control_bot', request) }; }
     catch (error) { result = { status: 'failed', error }; }
     // Even a failed immediate Stop cannot release controls while activation is pending.
     if (pending.length) {
       await Promise.allSettled(pending);
       if (!current()) return { status: 'retired' };
-      try { result = { status: 'accepted', value: await this.dispatch('control_bot', { action: 'stop' }) }; }
+      try { result = { status: 'accepted', value: await this.dispatch('control_bot', request) }; }
       catch (error) { result = { status: 'failed', error }; }
     }
     return current() ? result : { status: 'retired' };

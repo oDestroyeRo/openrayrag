@@ -104,3 +104,12 @@ export function parseMapDataText(data: string): unknown {
   if (data.length > 2_000_000) throw new Error('Map database exceeds its limit');
   return JSON.parse(data) as unknown;
 }
+
+/** Native IPC is untrusted until both documents pass their existing admission. */
+export function parseMapCatalogAssets(value: unknown): MapCatalog {
+  const assets = record(value);
+  if (Object.keys(assets).length !== 2 || typeof assets.maps !== 'string' || typeof assets.monsters !== 'string') {
+    throw new Error('Invalid map database assets');
+  }
+  return parseMapCatalog(parseMapDataText(assets.maps), parseMapDataText(assets.monsters));
+}

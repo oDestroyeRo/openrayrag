@@ -11,6 +11,7 @@
     "allow-direct-observed",
     "allow-direct-send",
     "allow-bridge-status",
+    "allow-map-database",
     "allow-update-ack",
     "allow-update-lease-alive",
     "allow-update-invalidate",
