@@ -75,6 +75,28 @@ test('ambient references, aliases, computed clocks and dynamic imports reject be
   assert.deepEqual(scriptEffectViolations('logic.ts', 'import { createHash } from "node:crypto"; export const hash = value => createHash("sha256").update(value).digest("hex");'), []);
 });
 
+test('logic permits named pure Remeda composition and rejects effectful or unrestricted imports', async () => {
+  const roles = { 'logic.ts': 'logic', 'effects.ts': 'effects' };
+  for (const source of [
+    'import { pipe, map, filter } from "remeda"; export const doublePositive = xs => pipe(xs, filter(x => x > 0), map(x => x * 2));',
+    'import { map as transform } from "remeda"; export const copy = xs => transform(xs, x => x);',
+    'export { map as transform, filter } from "remeda";',
+  ]) assert.deepEqual(await scriptViolations('logic.ts', source, roles), [], source);
+  for (const source of [
+    'import * as R from "remeda"; export const random = R.randomString;',
+    'import R from "remeda"; export const random = R.randomString;',
+    'import "remeda";',
+    'import { randomString as text } from "remeda"; export const id = () => text(10);',
+    'import { shuffle, sample, randomInteger, debounce, once, tap } from "remeda"; export { shuffle, sample, randomInteger, debounce, once, tap };',
+    'export { randomString as text } from "remeda";',
+    'export * from "remeda";',
+    'export * as utilities from "remeda";',
+    'import { map } from "remeda/dist/map.js"; export { map };',
+    'import { map } from "remeda"; export const stamps = xs => map(xs, () => Date.now());',
+  ]) assert.ok((await scriptViolations('logic.ts', source, roles)).length, source);
+  assert.deepEqual(await scriptViolations('effects.ts', 'import { randomString } from "remeda"; export const id = () => randomString(10);', roles), []);
+});
+
 test('Rust checks production effects while allowing I/O in separate test modules', () => {
   assert.deepEqual(rustEffectViolations('logic.rs', '#[cfg(test)] mod tests { fn t() { println!("test"); } } fn valid() -> bool { true }'), []);
   for (const code of ['use std::fs;', 'std::fs::read(path);', 'use std::{io::Read, fs::File};', 'Instant::now();', 'Uuid::new_v4();', 'println!("output");']) {

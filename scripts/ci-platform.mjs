@@ -1,3 +1,4 @@
+import { filter, map, pipe } from 'remeda';
 // Secret-free native packages for PRs, and same-source manual installers for releases.
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
@@ -27,13 +28,13 @@ async function walk(folder, skipLinks=false) {
   return items;
 }
 async function only(files,extension) {
-  const found=files.filter(p=>p.endsWith(extension));
+  const found=filter(files,p=>p.endsWith(extension));
   requireValue(found.length===1,`Expected one ${extension} installer.`);
   return found[0];
 }
 async function matchingApplication(folder, binary) {
   const expected=sha256(await readFile(binary));
-  const candidates=(await walk(folder,true)).filter(p=>basename(p)===basename(binary));
+  const candidates=filter(await walk(folder,true),p=>basename(p)===basename(binary));
   const matches=[];
   for(const path of candidates)if(sha256(await readFile(path))===expected)matches.push(path);
   requireValue(matches.length===1,'Installer does not contain the exact built application.');
@@ -41,8 +42,8 @@ async function matchingApplication(folder, binary) {
 }
 export async function installerFiles(platform,bundle) {
   const installerDirectory=join(bundle,platform==='windows'?'nsis':platform==='linux'?'deb':'dmg');
-  const files=(await readdir(installerDirectory,{withFileTypes:true})).filter(entry=>entry.isFile()).map(entry=>join(installerDirectory,entry.name));
-  if(platform==='linux')files.push(...(await readdir(join(bundle,'appimage'),{withFileTypes:true})).filter(entry=>entry.isFile()).map(entry=>join(bundle,'appimage',entry.name)));
+  const files=pipe(await readdir(installerDirectory,{withFileTypes:true}),filter(entry=>entry.isFile()),map(entry=>join(installerDirectory,entry.name)));
+  if(platform==='linux')files.push(...pipe(await readdir(join(bundle,'appimage'),{withFileTypes:true}),filter(entry=>entry.isFile()),map(entry=>join(bundle,'appimage',entry.name))));
   // Inspect installer files directly; AppDir staging trees contain library links.
   return files;
 }
@@ -50,7 +51,7 @@ export async function packageSmokes(packages, check = nativeSmoke) {
   // Each smoke owns a private data/WebKit/DBus context. Await both cleanups even
   // if one fails, and retain its sequential save/reopen assertions.
   const outcomes = await Promise.allSettled(packages.map(({ binary, report }) => check(binary, report)));
-  const errors = outcomes.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
+  const errors = map(filter(outcomes, outcome => outcome.status === 'rejected'), outcome => outcome.reason);
   if (errors.length) throw new AggregateError(errors, 'Packaged native smoke failed.');
 }
 async function inspect(platform,bundle,binary,version,identifier,smoke) {

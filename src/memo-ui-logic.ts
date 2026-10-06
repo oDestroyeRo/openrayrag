@@ -1,9 +1,14 @@
+import { map } from 'remeda';
 import type { MemoSnapshot } from './memo';
 import { validateMemoRequest, type MemoLocation } from './memo-protocol';
 const object=(v:unknown):Record<string,unknown>=>v&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 const integer=(v:unknown,min=0,max=2147483647):boolean=>Number.isInteger(v)&&Number(v)>=min&&Number(v)<=max;
 const exact=(v:Record<string,unknown>,keys:string[]):boolean=>Object.keys(v).length===keys.length&&Object.keys(v).every(key=>keys.includes(key));
 const location=(v:unknown):v is MemoLocation=>{const p=object(v);return exact(p,['map','x','y'])&&typeof p.map==='string'&&/^[a-zA-Z0-9_-]{1,64}$/.test(p.map)&&integer(p.x,0,32767)&&integer(p.y,0,32767);};
+export const memoLocationText=(location:MemoLocation|null):string=>location?`${location.map} (${location.x}, ${location.y})`:'Empty';
+export function memoSlotsText(slots:MemoSnapshot['slots']|undefined):string {
+  return map([0,1,2,3], slot=>`Slot ${slot}: ${slots?memoLocationText(slots[slot]!):'Unknown · full readback not observed'}`).join('\n');
+}
 export function validMemoSnapshot(input:unknown):input is MemoSnapshot {
   const v=object(input);
   if(!exact(v,['generation','revision','slots','pending','blocked','state','reason','ready','learnedWarp','unavailable'])||!integer(v.generation)||!integer(v.revision)

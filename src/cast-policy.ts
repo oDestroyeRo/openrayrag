@@ -1,3 +1,4 @@
+import { map } from 'remeda';
 import data from './data/cast-policy.json';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost } from './game-catalog';
 import type { CharacterState } from './character-state';
@@ -51,7 +52,7 @@ export function effectiveSpCost(state:CharacterState, skillId:number, level:numb
 }
 const selfStatus=(statusId:number,value:boolean):ActorPredicate=>({field:'actorStatus',actor:{scope:'self'},statusId,operator:'eq',value});
 // BodyStateFlags.NoSkillAttack plus hidden. Pacification is Petrifying at pin.
-export const CAST_PREREQUISITES:ActorPredicate[]=[2,3,4,6,9,10,26].map(id=>selfStatus(id,false));
+export const CAST_PREREQUISITES:ActorPredicate[]=map([2,3,4,6,9,10,26], id=>selfStatus(id,false));
 export const BLIND_CONDITION= selfStatus(5,true);
 export function castReadiness(skillId:number,level:number,state:CharacterState,observations:ActorObservationSnapshot|undefined,ownCastSettled?:boolean):CastReadiness {
   if (![...AUTOMATIC_ATTACK_SKILLS,MANUAL_GROUND_SKILL,PARTY_HEAL_SKILL].includes(skillId)) return {state:'unavailable',reason:'This skill has no verified cast policy.'};

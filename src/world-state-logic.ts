@@ -1,3 +1,4 @@
+import { map } from 'remeda';
 import type { InventoryItem } from './protocol-feature';
 import type { BarterOffer, PartyMember, PricedRow, ShopEntry, VendingEntry } from './world-protocol';
 export type NpcMode = 'idle' | 'dialog' | 'options' | 'shop' | 'storage' | 'barter' | 'refine' | 'vending';
@@ -16,4 +17,4 @@ export interface WorldSnapshot {
 
 export function cloneItem(item: InventoryItem): InventoryItem { return { ...item, ...(item.slots ? { slots: [...item.slots] } : {}) }; }
 
-export function cloneOffer(offer: BarterOffer): BarterOffer { return { ...offer, item: cloneItem(offer.item), required: offer.required.map(item => ({ ...item })) }; }
+export function cloneOffer(offer: BarterOffer): BarterOffer { return { ...offer, item: cloneItem(offer.item), required: map(offer.required, item => ({ ...item })) }; }

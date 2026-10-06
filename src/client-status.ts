@@ -1,3 +1,4 @@
+import { find } from 'remeda';
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const text = (value: unknown): string => typeof value === 'string' ? value : '';
 
@@ -34,7 +35,8 @@ function heldReason(status: Record<string, unknown>): string {
     [status.routine, ['running', 'waiting'].includes(text(record(status.routine).state))],
     [status.actionResult, record(status.actionResult).status === 'pending'],
   ];
-  for (const [value, held] of owners) if (held && text(record(value).reason)) return text(record(value).reason);
+  const owner = find(owners, ([value, held]) => held && !!text(record(value).reason));
+  if (owner) return text(record(owner[0]).reason);
   const task = record(status.task);
   return task.pending === true ? text(task.label) : '';
 }

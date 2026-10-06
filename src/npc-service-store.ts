@@ -1,4 +1,5 @@
-import { validateServiceDefinition, type NpcServiceDefinition } from './npc-services';
+import { filter, map } from 'remeda';
+import { validateServiceDefinition, type NpcServiceDefinition } from './npc-services-logic';
 import { parseServiceDocument, encodeServiceDocument, serviceSaveAllowed, savedServices, serviceImportAllowed, importedServices, exportService } from './npc-service-store-logic';
 import { readStoredText, writeStoredText, type TextStorage } from './storage-effects';
 export { MAX_SERVICES } from './npc-service-store-logic';
@@ -13,7 +14,7 @@ export class NpcServiceStore {
       if (saved) this.services = parseServiceDocument(saved);
     } catch { /* Incompatible saved data cannot become executable. */ }
   }
-  list(): NpcServiceDefinition[] { return this.services.map(validateServiceDefinition); }
+  list(): NpcServiceDefinition[] { return map(this.services, validateServiceDefinition); }
   private persist(services: NpcServiceDefinition[]): void {
     writeStoredText(this.storage, SERVICE_STORAGE_KEY, encodeServiceDocument(services));
     this.services = services;
@@ -25,13 +26,13 @@ export class NpcServiceStore {
     this.persist(proposal.services);
     return validateServiceDefinition(proposal.saved);
   }
-  remove(id: string): void { this.persist(this.services.filter(service => service.id !== id)); }
+  remove(id: string): void { this.persist(filter(this.services, service => service.id !== id)); }
   export(id: string): string { return exportService(this.services, id); }
   import(text: string): NpcServiceDefinition[] {
     const imported = parseServiceDocument(text);
     serviceImportAllowed(this.services, imported);
     const copies = importedServices(this.services, imported, imported.map(() => this.id()));
     this.persist([...this.services, ...copies]);
-    return copies.map(validateServiceDefinition);
+    return map(copies, validateServiceDefinition);
   }
 }

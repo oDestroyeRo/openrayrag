@@ -1,3 +1,4 @@
+import { filter, map, sort } from "remeda";
 import { BotEngine } from '../src/engine';
 import { BotConsole } from '../src/bot-console';
 import { FeatureUi } from '../src/feature-ui';
@@ -84,7 +85,7 @@ const player = { id: 0, kind: 0, classId: 4, name: 'Offline benchmark', level: 2
 const monsters = Array.from({ length: 24 }, (_, i) => ({ ...player, id: i + 1, kind: 1, classId: 4000, name: 'Poring', level: 1, x: origin.x + i % 6, y: origin.y + Math.floor(i / 6) }));
 engine.receive([
   { type: 'enter', id: 0, map: 'prt_fild08' }, { type: 'spawn', entity: player },
-  ...monsters.map(entity => ({ type: 'spawn' as const, entity })),
+  ...map(monsters, entity => ({ type: 'spawn' as const, entity })),
   { type: 'inventory', items: [{ itemId: 501, bagId: 501, count: 3, type: 1 }, { itemId: 610, bagId: 610, count: 2, type: 1 }], equipment: Array(10).fill(0), ammoId: -1 },
 ]);
 const base = {
@@ -162,7 +163,7 @@ const benchmark = {
     const started = performance.now();
     for (let i = 0; i < iterations; i++) {
       if (kind === 'reconnect') emit('game-closed');
-      if (kind === 'timer') for (const timer of intervals.filter(timer => timer.delay === 1000)) timer.callback();
+      if (kind === 'timer') for (const timer of filter(intervals, timer => timer.delay === 1000)) timer.callback();
       else deliver(rows[i]!);
       if (measuring) mutations();
     }
@@ -209,7 +210,7 @@ const benchmark = {
     emit('game-closed'); assert(document.getElementById('status')!.textContent === 'OFFLINE' && item.value === '', 'Disconnect retained active state or selection.');
     deliver(statusAt('reconnect', 1)); assert(document.getElementById('status')!.textContent === 'READY' && pixelHash() === mapBefore, 'Reconnect failed to restore map.');
     passed.push('unsupported map clears collision; disconnect/reconnect restores map and clears old selection');
-    return { passed, outcome: signature(), nativeCalls: [...new Set(calls)].sort() };
+    return { passed, outcome: signature(), nativeCalls: sort([...new Set(calls)], (a, b) => a < b ? -1 : a > b ? 1 : 0) };
   },
 };
 (window as any).clientRenderingBenchmark = benchmark;

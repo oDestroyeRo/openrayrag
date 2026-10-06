@@ -1,3 +1,4 @@
+import { inventoryItemCount } from './character-state-logic';
 import { ITEM_CATALOG, SKILL_CATALOG, skillPrerequisites } from './game-catalog';
 import { AMMO_CATALOG } from './loadout-logic';
 import type { ExpandedAction, InventoryItem, PlayerStats } from './protocol-feature';
@@ -18,7 +19,7 @@ export function manualActionBlocker(action: ExpandedAction, state: ManualActionS
   if (action.type === 'sit' && action.sitting && player.classId === 0 && (!state.skillsKnown || (state.learned.get(1) ?? 0) < 2))
     return 'A novice needs verified Basic Mastery level 2 to sit.';
   if (action.type === 'useItem') {
-    const count = [...state.inventory.values()].reduce((sum, item) => sum + (item.itemId === action.itemId ? item.count : 0), 0);
+    const count = inventoryItemCount(action.itemId)([...state.inventory.values()]);
     if (!state.inventoryKnown || count < 1) return 'Item is not present in a verified inventory.';
     const item = ITEM_CATALOG[action.itemId];
     if (!item || item.useType < 1) return 'This item is not usable.';

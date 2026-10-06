@@ -2,7 +2,7 @@ import { dryRunMacro, macroInventoryItemIds, type MacroScript } from './macros';
 import type { RoutineObservation } from './routines';
 import { DEFAULT_SETTINGS, type Settings } from './settings';
 import { formatBotScript, parseBotScript, updateBotScriptSettings, type BotScriptDocument } from './bot-script';
-import { macroSource, restoreMacroSource, encodeMacroSource, addMacroExample, macroStatusText, type Example } from './macro-ui-logic';
+import { macroSource, restoreMacroSource, encodeMacroSource, addMacroExample, macroStatusText, macroPreviewText, type Example } from './macro-ui-logic';
 import { readStoredText, writeStoredText, browserTextStorage } from './storage-effects';
 export { macroActive, macroBaseSettings, macroExample, validMacroSnapshot } from './macro-ui-logic';
 
@@ -169,8 +169,7 @@ export class MacroUi {
       } else {
         if (observed.inventory) for (const id of macroInventoryItemIds(document.script)) observed.inventory = { ...observed.inventory, [id]: observed.inventory[id] ?? 0 };
         const trace = dryRunMacro(document.script, observed);
-        this.result.textContent = `${trace.rule ? `Next sequence: ${trace.rule}` : 'No rule currently matches.'}\nPreview sends no commands.\n` + trace.rules.map(rule =>
-          `${rule.name}: ${rule.state}\n${rule.conditions.map(condition => `  ${condition.condition.field}: ${condition.state} · ${condition.reason}`).join('\n')}\n  Steps: ${rule.steps.map(step => step.type).join(' → ')}`).join('\n\n');
+        this.result.textContent = macroPreviewText(trace);
       }
       this.hooks.notify('Valid Setup. Preview does not confirm routes, prices, storage capacity or learned skills.');
     } catch (error) { this.error(error); }

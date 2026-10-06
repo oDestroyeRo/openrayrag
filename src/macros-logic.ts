@@ -1,3 +1,4 @@
+import { flatMap, map, pipe, sort, unique } from 'remeda';
 import serviceCatalog from './data/npc-services.json';
 import { dryRunRoutine, validRoutineCondition, validateRoutineSelectorCheckpoint, type RoutineCondition, type RoutineObservation, type RoutineSelectorCheckpoint, type RoutineSpec, type RuleTrace } from './routines-logic';
 export type MacroStep =
@@ -138,7 +139,7 @@ export const validSelection = (v: unknown): v is Selection => record(v) && keys(
 
 export function selectionSpec(script: MacroScript): RoutineSpec<Selection> {
   return { name: script.name, durationSeconds: script.durationSeconds, maxActions: script.maxActions,
-    rules: script.rules.map((rule, ruleIndex) => ({ name: rule.name, priority: rule.priority,
+    rules: map(script.rules, (rule, ruleIndex) => ({ name: rule.name, priority: rule.priority,
       cooldownSeconds: rule.cooldownSeconds, maxRuns: rule.maxRuns, conditions: rule.conditions, action: { ruleIndex } })) };
 }
 
@@ -214,7 +215,7 @@ export function validateMacroCheckpoint(input: unknown): MacroCheckpoint {
 export function dryRunMacro(input: unknown, observation: RoutineObservation): MacroTrace {
   const script = validateMacroScript(input);
   const trace = dryRunRoutine(selectionSpec(script), observation, validSelection, selectorOptions);
-  return { rules: trace.rules.map(({ action, ...rule }) => ({ ...rule, ruleIndex: action.ruleIndex,
+  return { rules: map(trace.rules, ({ action, ...rule }) => ({ ...rule, ruleIndex: action.ruleIndex,
     steps: structuredClone(script.rules[action.ruleIndex]!.steps) })), rule: trace.rule,
     ruleIndex: trace.action?.ruleIndex ?? null,
     steps: trace.action ? structuredClone(script.rules[trace.action.ruleIndex]!.steps) : [] };
@@ -222,6 +223,7 @@ export function dryRunMacro(input: unknown, observation: RoutineObservation): Ma
 
 /** Publish known-zero inventory observations only for explicitly requested item conditions. */
 export function macroInventoryItemIds(script: MacroScript): number[] {
-  return [...new Set(script.rules.flatMap(rule => rule.conditions.flatMap(condition =>
-    condition.field === 'inventory' ? [condition.itemId] : [])))].sort((a, b) => a - b);
+  const ids = flatMap(script.rules, rule => flatMap(rule.conditions, condition =>
+    condition.field === 'inventory' ? [condition.itemId] : []));
+  return pipe(ids, unique(), sort((a, b) => a - b));
 }

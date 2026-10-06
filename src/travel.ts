@@ -1,3 +1,4 @@
+import { filter, map, pipe, sort } from 'remeda';
 import { completePlanning, runPlanning, type PlanningOptions, type PlanningWork } from './route-planning';
 import { DEFAULT_MAP_POLICY, mapAllowed, PORTAL_COST, type MapPolicy } from './map-policy-logic';
 import { GridNavigator, searchGrid } from './navigation';
@@ -285,7 +286,7 @@ export class TravelPlanner {
     }
     // Every base-safe cell is always available. Only the explicitly allowed
     // portal cells affect this navigator, so route suffixes can reuse it.
-    const portalCells = [...allowed].filter(cell => source.tiles[cell] === 1).sort((a,b) => a - b);
+    const portalCells = pipe([...allowed], filter(cell => source.tiles[cell] === 1), sort((a,b) => a - b));
     const key = `${map}:${portalCells.join(',')}`;
     const cached = this.navigators.get(key);
     if (cached) { this.navigators.delete(key); this.navigators.set(key,cached); return cached.navigator; }
@@ -408,7 +409,7 @@ export class TravelPlanner {
     const heap=new Heap<Label>((a,b)=>a.estimate<b.estimate||(a.estimate===b.estimate&&(a.score<b.score||a.score===b.score&&(a.hops<b.hops||a.hops===b.hops&&a.sequence<b.sequence))));
     const first:Label={key:key(fromMap,from),map:fromMap,position:{...from},score:0,estimate:initialEstimate,hops:0,sequence:sequence++,parent:null,step:null};
     labels.set(first.key,[first]);heap.push(first);
-    const penalties=new Map(policy.penalties.map(p=>[p.map,p.cost]));
+    const penalties=new Map(map(policy.penalties, p=>[p.map,p.cost] as const));
     const distances=yield* this.distancesTo(toMap,policy,fromMap);
     let current:Label|undefined;
     while((current=heap.pop())){
@@ -473,7 +474,7 @@ export class TravelPlanner {
    */
   private *weightedPotential(toMap:string,policy:MapPolicy):PlanningWork<(map:string,p:Position)=>number> {
     const key=(map:string,p:Position)=>`${map}:${p.x}:${p.y}`;
-    const penalties=new Map(policy.penalties.map(p=>[p.map,Math.floor(p.cost)]));
+    const penalties=new Map(map(policy.penalties, p=>[p.map,Math.floor(p.cost)] as const));
     const departures=(map:string)=>(this.byMap.get(map)??[]).filter(e=>(this.allowSameMap||e.fromMap!==e.toMap)&&mapAllowed(policy,e.toMap));
     const cost=(map:string,p:Position,e:PortalEdge)=>{
       const dx=Math.max(0,Math.abs(p.x-e.area.x)-e.area.halfWidth),dy=Math.max(0,Math.abs(p.y-e.area.y)-e.area.halfHeight);

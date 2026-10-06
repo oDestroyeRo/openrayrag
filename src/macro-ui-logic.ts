@@ -1,4 +1,5 @@
-import { validateMacroScript, type MacroScript } from './macros-logic';
+import { filter, find, flatMap, map, pipe } from 'remeda';
+import { validateMacroScript, type dryRunMacro, type MacroScript } from './macros-logic';
 import { automationSettings, validateSettings, type Settings } from './settings';
 import { formatBotScript, parseBotScript, type BotScriptDocument } from './bot-script';
 export type Example = 'leveling' | 'continuous' | 'buy' | 'store' | 'item' | 'skill';
@@ -9,7 +10,7 @@ export function macroBaseSettings(value: Settings, script: MacroScript): Setting
   const settings=structuredClone(value);
   const policy=structuredClone(automationSettings(settings));
   if(!settings.targets.length&&['selected','both'].includes(policy.combat.mode)) {
-    const field=script.rules.flatMap(rule=>rule.steps).find(step=>step.type==='farm');
+    const field=find(flatMap(script.rules, rule=>rule.steps), step=>step.type==='farm');
     if(field?.type==='farm')settings.targets=[...field.targets];
     else {policy.combat={...policy.combat,mode:'off'};settings.automation=policy;}
   }
@@ -78,10 +79,14 @@ export function macroStatusText(value: unknown): string {
   const state = record(value);
   return typeof state.reason === 'string' ? `${state.name || 'Rules'} · ${state.state} · ${state.reason}\n${state.actionsCompleted ?? 0}/${state.actionsIssued ?? 0} steps confirmed · ${state.spendReserved ?? 0} spending allowance reserved${state.currentRule ? ` · ${state.currentRule}` : ''}` : 'No rules running.';
 }
+export function macroPreviewText(trace: ReturnType<typeof dryRunMacro>): string {
+  return `${trace.rule ? `Next sequence: ${trace.rule}` : 'No rule currently matches.'}\nPreview sends no commands.\n` + map(trace.rules, rule =>
+    `${rule.name}: ${rule.state}\n${map(rule.conditions, condition => `  ${condition.condition.field}: ${condition.state} · ${condition.reason}`).join('\n')}\n  Steps: ${map(rule.steps, step => step.type).join(' → ')}`).join('\n\n');
+}
 export function addMacroExample(sourceText: string, document: BotScriptDocument, kind: Example): { text: string; insertion: number } {
   const source = macroSource(sourceText, document);
   const example = macroExample(kind, document.settings);
-  const names = new Set(document.script?.rules.map(rule => rule.name));
+  const names = new Set(map(document.script?.rules ?? [], rule => rule.name));
   for (const rule of example.rules) {
     const base = rule.name; let suffix = 2;
     while (names.has(rule.name)) rule.name = `${base.slice(0, 74)} ${suffix++}`;
@@ -90,6 +95,8 @@ export function addMacroExample(sourceText: string, document: BotScriptDocument,
   validateMacroScript({ ...example, ...(document.script ?? {}), rules: [...document.script?.rules ?? [], ...example.rules] });
   const lines = formatBotScript({ settings: document.settings, script: example }).split('\n');
   const start = lines.findIndex(line => line.trimStart().startsWith('rule '));
-  const limits = lines.slice(0, start).filter(line => /^(duration|actions|spend)\s/.test(line) && !source.split(/\r?\n/).some(existing => new RegExp(`^\\s*${line.split(' ')[0]}\\s`).test(existing)));
+  const existingLines = source.split(/\r?\n/);
+  const limits = pipe(lines.slice(0, start), filter(line => /^(duration|actions|spend)\s/.test(line)
+    && find(existingLines, existing => new RegExp(`^\\s*${line.split(' ')[0]}\\s`).test(existing)) === undefined));
   return { text: `${source.trimEnd()}\n\n${[...limits, ...lines.slice(start)].join('\n')}\n`, insertion: source.trimEnd().length + 2 };
 }

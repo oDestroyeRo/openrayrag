@@ -1,3 +1,4 @@
+import { flatMap, map } from 'remeda';
 import { manualActionBlocker } from './engine-action-policy';
 import { ObservedThreats, type ThreatSnapshot } from './observed-threats';
 import { CastAvailability, type ObservedCast } from './cast-availability';
@@ -781,7 +782,7 @@ export class BotEngine {
     if(this.route?.type==='skill'){const target=this.entities.get(this.route.id!);if(!target||!this.eligible(target,now,false)){this.cancelRoute();this.reason='Attack skill target is no longer eligible.';return;}}
     if (this.automation.wantsRecovery(a,p,this.character)) {
       if(this.retreatTask){this.cancelRetreat('Stopping retreat before recovery.');return;}
-      const recoveryItem=this.automation.nextRecoveryItem(a,p,this.character,this.actorObservation(a.items.flatMap(r=>r.conditions??[])));
+      const recoveryItem=this.automation.nextRecoveryItem(a,p,this.character,this.actorObservation(flatMap(a.items, r=>r.conditions??[])));
       if(recoveryItem.failure){this.stop(recoveryItem.failure);return;}
       if (this.pending || this.route || this.leg) { this.pending=null;const stoppingLeg=!!this.leg;this.cancelRoute();if(!stoppingLeg)this.send({type:'stop'});this.lastAction=now;this.reason='Stopping combat before recovery.';return; }
       if(!!this.ownMotion()||now-this.lastAction<ACTION_DELAY)return;
@@ -817,7 +818,7 @@ export class BotEngine {
     const needsEnemy = !!a.attackStrategies?.length || a.loadout.enabled || a.skills.some(rule => rule.target === 'enemy') || a.equipment.some(rule => rule.monsterClassId > 0);
     const candidateEnemy=this.retreatTask?this.entities.get(this.retreatTask.identity.targetId!)??null:this.pending?.type==='attack'?this.entities.get(this.pending.id)??null:(this.route?.type==='attack'||this.route?.type==='skill')?this.entities.get(this.route.id!)??null:needsEnemy?chooseMonster()?.target??null:null;
     const enemy=candidateEnemy&&!candidateEnemy.dead&&candidateEnemy.hp>0&&this.observations.context(candidateEnemy.id).incarnation?candidateEnemy:null;
-    const conditions=[...a.items,...a.skills,...a.equipment].flatMap(rule=>rule.conditions??[]);
+    const conditions=flatMap([...a.items,...a.skills,...a.equipment], rule=>rule.conditions??[]);
     const observations=conditions.length?this.actorObservation(conditions):undefined;
     const featureSettings=enemy&&a.attackStrategies?.some(rule=>rule.speciesIds.includes(enemy.classId))?{...a,skills:a.skills.filter(rule=>rule.target!=='enemy')}:a;
     const next=this.automation.next(a.loadout.enabled?{...featureSettings,equipment:[]}:featureSettings,p,this.character,enemy,observations);
@@ -1068,7 +1069,7 @@ export class BotEngine {
   private eligible(e: Entity, now: number, acquiring = true): boolean {
     const automation=automationSettings(this.settings);const conditions=monsterRule(automation,e.classId)?.conditions;
     const observations=conditions?.length?this.actorObservation(conditions,this.currentTargetId,e.id):undefined;
-    if(conditions?.length&&(this.combatConditions.has(e.id)||this.combatConditions.size<32))this.combatConditions.set(e.id,{rule:`Monster ${e.classId} · actor ${e.id}`,conditions:conditions.map(actorPredicateEvaluator(observations))});
+    if(conditions?.length&&(this.combatConditions.has(e.id)||this.combatConditions.size<32))this.combatConditions.set(e.id,{rule:`Monster ${e.classId} · actor ${e.id}`,conditions:map(conditions, actorPredicateEvaluator(observations))});
     return this.fieldContains(e) && e.kind === 1 && !e.dead && e.hp > 0 && !!this.observations.context(e.id).incarnation && acceptsMonster(automation,e,this.player!,this.settings.targets,this.isAggressor(e.id),observations)
       && (!acquiring || distance(this.player!, e) <= this.settings.radius) && this.engagementAllowed(e.id)
       && (this.excluded.get(e.id) ?? 0) <= now;
@@ -1101,7 +1102,7 @@ export class BotEngine {
   private sameEngagement(a:EngagementIdentity|null|undefined,b:EngagementIdentity):boolean {return !!a&&a.world===b.world&&a.id===b.id&&a.incarnation===b.incarnation;}
   private strategyChoice(target:Entity):StrategyChoice {
     const a=automationSettings(this.settings);
-    const conditions=[...(a.attackStrategies??[]).flatMap(rule=>rule.conditions??[]),...CAST_PREREQUISITES,BLIND_CONDITION];
+    const conditions=[...flatMap(a.attackStrategies??[], rule=>rule.conditions??[]),...CAST_PREREQUISITES,BLIND_CONDITION];
     return this.strategies.choose(a.attackStrategies??[],engagementIdentity(target.id,this.observations.context(target.id)),target.classId,this.character,this.actorObservation(conditions),this.now());
   }
   private bestStrategyRoute(from:Entity,candidates:Entity[]):{target:Entity;cells:Position[];strategy:StrategyChoice}|null {
@@ -1501,7 +1502,7 @@ export class BotEngine {
     const targetId=request.command.type==='attack'?request.command.target.id:null;
     return {map:this.map,player:this.player??null,owner:this.player?this.manualActorIdentity(this.player.id):null,
       target:targetId===null?null:this.entities.get(targetId)??null,targetIdentity:targetId===null?null:this.manualActorIdentity(targetId),
-      character:this.character,observedOwnCastSettled:this.observedOwnCastSettled(),observations:this.actorObservation(request.policy.monsterRules.flatMap(rule=>rule.conditions??[]),null,targetId),foreignTarget:targetId!==null&&this.foreignTargets.has(targetId)};
+      character:this.character,observedOwnCastSettled:this.observedOwnCastSettled(),observations:this.actorObservation(flatMap(request.policy.monsterRules, rule=>rule.conditions??[]),null,targetId),foreignTarget:targetId!==null&&this.foreignTargets.has(targetId)};
   }
   previewManual(input:unknown):Position[] {
     const request=validateManualTargetRequest(input);

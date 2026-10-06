@@ -1,3 +1,4 @@
+import { filter, sort, sumBy } from 'remeda';
 import type { InventoryItem } from './protocol-feature';
 import type { DispositionAction } from './disposition';
 import type { SupplyContext } from './supply-trip-logic';
@@ -22,9 +23,7 @@ export const sameSupplyItem = (a: InventoryItem, b: InventoryItem) =>
   a.type === b.type &&
   (a.type !== 2 || (!!a.guid && a.guid === b.guid));
 const stock = (items: InventoryItem[], source: InventoryItem) =>
-  items
-    .filter((item) => sameSupplyItem(item, source))
-    .reduce((sum, item) => sum + item.count, 0);
+  sumBy(filter(items, item => sameSupplyItem(item, source)), item => item.count);
 export function createSupplyReceipt(
   action: DispositionAction,
   economic: WorkflowReceipt,
@@ -136,8 +135,6 @@ export function confirmSupplyReceipt(
   )
     return false;
   const unrelated = (rows: InventoryItem[]) =>
-    rows
-      .filter((item) => !sameSupplyItem(item, source))
-      .sort((a, b) => a.bagId - b.bagId);
+    sort(filter(rows, item => !sameSupplyItem(item, source)), (a, b) => a.bagId - b.bagId);
   return JSON.stringify(unrelated(before)) === JSON.stringify(unrelated(after));
 }

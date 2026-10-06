@@ -1,4 +1,9 @@
+import { map } from 'remeda';
+import { SOCKET_METADATA } from './socket-logic';
 import type { SocketSnapshot } from './socket';
+export function socketSlotsText(slots:readonly number[]):string {
+  return map(slots,id=>id?SOCKET_METADATA[id]?.name??`Item #${id}`:'empty').join(', ');
+}
 /** Bound purpose-specific telemetry; raw GUIDs and arbitrary inventory fields are absent. */
 export function validSocketSnapshot(value:unknown):value is SocketSnapshot{
   if(!value||typeof value!=='object'||Array.isArray(value))return false;

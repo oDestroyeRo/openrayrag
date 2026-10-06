@@ -1,5 +1,6 @@
 //! Settings document schema and persistence policy, without storage effects.
 use crate::automation::Settings;
+use frunk::{prelude::IntoValidated, HList, Validated};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const MAX_BYTES: u64 = 256_000;
@@ -17,20 +18,38 @@ pub(crate) struct FormDocument {
 fn required_profile_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     Option::<String>::deserialize(d)
 }
+#[derive(Debug, PartialEq)]
+enum MetadataField {
+    Version,
+    Revision,
+    SelectedProfile,
+}
+type MetadataValidation<'a> = Validated<HList!(u8, u64, Option<&'a str>), MetadataField>;
+
 impl FormDocument {
-    pub fn validate(&self) -> Result<(), String> {
-        if self.version != 1
-            || self.revision > 9_007_199_254_740_991
-            || self.selected_profile_id.as_ref().is_some_and(|id| {
+    fn validated_metadata(&self) -> MetadataValidation<'_> {
+        let selected = self.selected_profile_id.as_deref();
+        (self.version == 1)
+            .then_some(self.version)
+            .ok_or(MetadataField::Version)
+            .into_validated()
+            + (self.revision <= 9_007_199_254_740_991)
+                .then_some(self.revision)
+                .ok_or(MetadataField::Revision)
+            + (!selected.is_some_and(|id| {
                 id.is_empty()
                     || id.len() > 64
                     || !id
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-            })
-        {
-            return Err(ERROR.into());
-        }
+            }))
+            .then_some(selected)
+            .ok_or(MetadataField::SelectedProfile)
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        // Settings validation remains behind metadata admission, so malformed
+        // documents cannot expand the nested validation work.
+        self.validated_metadata().into_result().map_err(|_| ERROR)?;
         self.settings.validate_form().map_err(|_| ERROR.into())
     }
 }
@@ -88,6 +107,29 @@ mod tests {
     use super::*;
     fn document(revision: u64) -> FormDocument {
         parse(format!(r#"{{"version":1,"revision":{revision},"selectedProfileId":null,"settings":{{"map":"","targets":[],"radius":12,"minHpPercent":45,"loot":true,"route_randomWalk":0,"route_step":10,"route_avoidWalls":true,"route_randomWalk_maxRouteTime":75,"attackRouteMaxPathDistance":20,"attackMaxRouteTime":4}}}}"#).as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn metadata_failures_accumulate_with_the_existing_external_error() {
+        let mut malformed = document(0);
+        malformed.version = 2;
+        malformed.revision = 9_007_199_254_740_992;
+        malformed.selected_profile_id = Some("../profile".into());
+        assert_eq!(
+            malformed.validated_metadata().into_result().unwrap_err(),
+            [
+                MetadataField::Version,
+                MetadataField::Revision,
+                MetadataField::SelectedProfile
+            ]
+        );
+        assert_eq!(malformed.validate().unwrap_err(), ERROR);
+        assert_eq!(encode(&malformed).unwrap_err(), ERROR);
+        let mut upper = document(9_007_199_254_740_991);
+        upper.selected_profile_id = Some("x".repeat(64));
+        assert!(upper.validate().is_ok());
+        upper.selected_profile_id.as_mut().unwrap().push('x');
+        assert_eq!(upper.validate().unwrap_err(), ERROR);
     }
     #[test]
     fn document_excludes_credentials_and_intent() {

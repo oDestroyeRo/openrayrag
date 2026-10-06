@@ -1,3 +1,5 @@
+import { filter, find, map, sort } from "remeda";
+
 // Pure ELF and loader comparison. File and tool effects stay in appimage-proof.
 import { createHash } from 'node:crypto';
 
@@ -202,8 +204,8 @@ function dynamicPointer(elf, tag, value) {
 function compareLinkerMetadata(original, deployed) {
   const before = dynamicEntries(original), after = dynamicEntries(deployed);
   const isPath = entry => entry.tag === 15n || entry.tag === 29n;
-  const oldPaths = before.filter(isPath), newPaths = after.filter(isPath);
-  requireValue(oldPaths.length <= 2 && new Set(oldPaths.map(entry => entry.tag)).size === oldPaths.length
+  const oldPaths = filter(before, isPath), newPaths = filter(after, isPath);
+  requireValue(oldPaths.length <= 2 && new Set(map(oldPaths, entry => entry.tag)).size === oldPaths.length
     && newPaths.length === Math.max(1, oldPaths.length), 'ELF RPATH entry inventory differs.');
   if (oldPaths.length === 0) requireValue(after[0].tag === 29n, 'ELF must prepend the Linuxdeploy RUNPATH entry.');
   else for (let index = 0; index < before.length; index++) if (isPath(before[index])) {
@@ -214,7 +216,7 @@ function compareLinkerMetadata(original, deployed) {
   const expectedString = Buffer.from(APPIMAGE_RPATH);
   for (const entry of newPaths) requireValue(dynamicString(deployed, entry.value).bytes.equals(expectedString),
     'ELF RPATH differs from the pinned Linuxdeploy path.');
-  const left = before.filter(entry => !isPath(entry)), right = after.filter(entry => !isPath(entry));
+  const left = filter(before, entry => !isPath(entry)), right = filter(after, entry => !isPath(entry));
   requireValue(left.length === right.length, 'ELF dynamic entry inventory differs.');
   for (let index = 0; index < left.length; index++) {
     const a = left[index], b = right[index];
@@ -230,8 +232,8 @@ function compareLinkerMetadata(original, deployed) {
   const a = original.byName.get('.dynstr').contents, b = deployed.byName.get('.dynstr').contents;
   requireValue(b.length === a.length || b.length === a.length + expectedString.length + 1,
     'ELF dynamic string inventory differs.');
-  const oldRanges = oldPaths.map(entry => dynamicString(original, entry.value));
-  const newRanges = newPaths.map(entry => dynamicString(deployed, entry.value));
+  const oldRanges = map(oldPaths, entry => dynamicString(original, entry.value));
+  const newRanges = map(newPaths, entry => dynamicString(deployed, entry.value));
   requireValue(newRanges.every(span => b.length > a.length ? span.at === a.length
     : oldRanges.some(old => old.at === span.at && span.end <= old.end)), 'ELF RPATH string placement differs.');
   for (let index = 0; index < b.length; index++) {
@@ -256,24 +258,23 @@ function sectionLoads(elf, section) {
   // Thread-local NOBITS storage is instantiated by PT_TLS, not in the process
   // LOAD image. The TLS header itself must remain identical below.
   const segmentType = section.type === NOBITS && (section.flags & 1024n) ? 7 : 1;
-  const mapped = elf.programs.filter(program => program.type === segmentType && mappedBy(section, program));
+  const mapped = filter(elf.programs, program => program.type === segmentType && mappedBy(section, program));
   requireValue(mapped.length > 0, `ELF ${section.name} is not mapped by a LOAD segment.`);
   return mapped;
 }
 function validateMetadataLoad(elf, program, moved) {
   requireValue(program.flags === 6 && program.fileSize === program.memorySize && program.physical === program.address,
     'ELF relocated metadata LOAD permissions or mapping differ.');
-  const sections = moved.filter(section => mappedBy(section, program)).sort((a, b) => a.offset - b.offset);
+  const sections = sort(filter(moved, section => mappedBy(section, program)), (a, b) => a.offset - b.offset);
   requireValue(sections.length > 0, 'ELF new LOAD contains no relocated metadata.');
-  const spans = sections.map(section => ({ offset: section.offset, size: section.size }));
+  const spans = map(sections, section => ({ offset: section.offset, size: section.size }));
   // Bundled Patchelf may place the actual section/program header table before
   // the relocated sections. These are the already parsed linker tables, not
   // an arbitrary unallocated payload.
   for (const [offset, size] of [[elf.table, elf.sections.length * 64], [elf.phOffset, elf.phSize]])
     if (offset >= program.offset && offset + size <= program.offset + program.fileSize) spans.push({ offset, size });
-  spans.sort((a, b) => a.offset - b.offset);
   let cursor = program.offset;
-  for (const span of spans) {
+  for (const span of sort(spans, (a, b) => a.offset - b.offset)) {
     requireValue(span.offset === cursor, 'ELF new LOAD contains unexpected mapped data.');
     cursor += Number(roundUp(BigInt(span.size), 8n));
     requireValue(elf.bytes.subarray(span.offset + span.size, cursor).every(byte => byte === 0),
@@ -290,12 +291,12 @@ function mappedHeader(elf, program, name) {
 }
 function canonicalHeaders(elf, original = elf) {
   const result = [];
-  for (const program of elf.programs.filter(program => program.type !== 1)) {
+  for (const program of filter(elf.programs, program => program.type !== 1)) {
     if (program.type === 2 || program.type === 3) result.push(mappedHeader(elf, program, program.type === 2 ? '.dynamic' : '.interp'));
     else if (program.type === 6) {
       requireValue(program.offset === elf.phOffset && program.fileSize === elf.phSize && program.memorySize === elf.phSize,
         'ELF PHDR table mapping differs.');
-      const load = elf.programs.find(load => load.type === 1 && program.offset >= load.offset
+      const load = find(elf.programs, load => load.type === 1 && program.offset >= load.offset
         && program.offset + program.fileSize <= load.offset + load.fileSize
         && program.address - load.address === BigInt(program.offset - load.offset)
         && program.physical - load.physical === BigInt(program.offset - load.offset));
@@ -310,14 +311,14 @@ function canonicalHeaders(elf, original = elf) {
         // the property section; its former bytes may overlap the enlarged PHDR
         // table. Preserve the original raw header, not a claimed current mapping.
         // Patchelf 0.18 also updates PT_GNU_PROPERTY in writeReplacedSections.
-        const prior = original.programs.find(header => header.type === program.type
+        const prior = find(original.programs, header => header.type === program.type
           && sameFields(header, program, Object.keys(program)));
         requireValue(prior, 'ELF retained GNU_PROPERTY header differs.');
         result.push(mappedHeader(original, prior, '.note.gnu.property'));
       }
     } else if (program.type === 4) {
-      const notes = [...elf.byName.values()].filter(section => section.type === 7 && section.offset >= program.offset
-        && section.offset + section.size <= program.offset + program.fileSize).sort((a, b) => a.offset - b.offset);
+      const notes = sort(filter([...elf.byName.values()], section => section.type === 7 && section.offset >= program.offset
+        && section.offset + section.size <= program.offset + program.fileSize), (a, b) => a.offset - b.offset);
       requireValue(notes.length > 0 && program.fileSize === program.memorySize, 'ELF NOTE mapping is invalid.');
       let cursor = program.offset;
       for (const section of notes) {
@@ -328,31 +329,31 @@ function canonicalHeaders(elf, original = elf) {
         cursor = section.offset + section.size;
       }
       requireValue(cursor === program.offset + program.fileSize, 'ELF NOTE extent differs.');
-    } else result.push(Object.values(program).map(String).join(':'));
+    } else result.push(map(Object.values(program), String).join(':'));
   }
-  return result.sort();
+  return sort(result, (a, b) => a < b ? -1 : a > b ? 1 : 0);
 }
 function compareProgramMappings(original, deployed) {
-  const before = original.programs.filter(program => program.type === 1);
-  const after = deployed.programs.filter(program => program.type === 1);
+  const before = filter(original.programs, program => program.type === 1);
+  const after = filter(deployed.programs, program => program.type === 1);
   for (const loads of [before, after]) requireValue(loads.every((program, index) => index === 0 || program.address > loads[index - 1].address),
     'ELF LOAD ordering differs.');
-  requireValue(new Set(before.map(program => program.address)).size === before.length
-    && new Set(after.map(program => program.address)).size === after.length, 'ELF LOAD addresses are duplicated.');
+  requireValue(new Set(map(before, program => program.address)).size === before.length
+    && new Set(map(after, program => program.address)).size === after.length, 'ELF LOAD addresses are duplicated.');
   const moved = [];
-  for (const section of [...deployed.byName.values()].filter(section => section.flags & ALLOC)) {
+  for (const section of filter([...deployed.byName.values()], section => Boolean(section.flags & ALLOC))) {
     const old = original.byName.get(section.name);
     const leftLoads = sectionLoads(original, old), rightLoads = sectionLoads(deployed, section);
     if (section.address !== old.address) {
       requireValue(relocatable(section), `ELF ${section.name} executable/data address differs.`);
       moved.push(section);
-    } else requireValue(leftLoads.map(program => program.flags).sort().join(',')
-      === rightLoads.map(program => program.flags).sort().join(','), `ELF ${section.name} LOAD permissions differ.`);
+    } else requireValue(sort(map(leftLoads, program => program.flags), (a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0).join(',')
+      === sort(map(rightLoads, program => program.flags), (a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0).join(','), `ELF ${section.name} LOAD permissions differ.`);
   }
-  const extra = after.filter(program => !before.some(old => old.address === program.address));
+  const extra = filter(after, program => !before.some(old => old.address === program.address));
   requireValue(extra.length <= 1, 'ELF new LOAD inventory differs.');
   for (const left of before) {
-    const right = after.find(program => program.address === left.address);
+    const right = find(after, program => program.address === left.address);
     requireValue(right && sameFields(left, right, ['flags', 'offset', 'address', 'physical', 'alignment']),
       'ELF existing LOAD permissions or mapping differ.');
     if (sameFields(left, right, ['fileSize', 'memorySize'])) continue;
@@ -393,7 +394,7 @@ export function compareElfIdentity(originalBytes, deployedBytes) {
   const original = parseElf(originalBytes), deployed = parseElf(deployedBytes);
   requireValue(original.bytes.subarray(0, 32).equals(deployed.bytes.subarray(0, 32))
     && original.bytes.readUInt32LE(48) === deployed.bytes.readUInt32LE(48), 'ELF executable identity/entry point differs.');
-  const allocated = elf => [...elf.byName.values()].filter(section => section.flags & ALLOC);
+  const allocated = elf => filter([...elf.byName.values()], section => Boolean(section.flags & ALLOC));
   const before = allocated(original), after = allocated(deployed);
   requireValue(before.length === after.length, 'ELF allocated section inventory differs.');
   for (const left of before) {
@@ -412,7 +413,7 @@ export function compareElfIdentity(originalBytes, deployedBytes) {
   }
   compareLinkerMetadata(original, deployed);
   compareProgramMappings(original, deployed);
-  return before.map(section => section.name).sort();
+  return sort(map(before, section => section.name), (a, b) => a < b ? -1 : a > b ? 1 : 0);
 }
 
 export function compareDynamicIdentity(original, deployed) {

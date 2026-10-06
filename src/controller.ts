@@ -1,3 +1,4 @@
+import { filter, map } from 'remeda';
 import { fieldIdentityWaitReason, fieldResumeDecision } from './controller-field-policy';
 import { PartyFollowRuntime, type PartyFollowContext, type PartyFollowSnapshot } from './party-follow';
 import { PartyHealPolicy, partyHealCandidates, partyHpCondition, type PartyHealSnapshot } from './party-heal';
@@ -13,6 +14,7 @@ import { socketStockFloors, validateSocketEnvelope, type SocketAction } from './
 import { validateManualTargetRequest } from './manual-target';
 import { insideLockArea, lockEntry, mapAllowed, mapPolicy } from './map-policy';
 import type { ActorPredicate } from './actor-observations';
+import { routineActorPredicates } from './routines-logic';
 import { ManualSocial, type SocialContext, type SocialSnapshot } from './social';
 import type { ManualSocialAction } from './social-protocol';
 import { ManualMemo, type MemoContext, type MemoSnapshot } from './memo';
@@ -539,7 +541,7 @@ export class CompanionController {
     this.partyHeal.restore(checkpoint.partyHeal);
     if(checkpoint.macro){
       this.macroBase=structuredClone(settings!);
-      this.macroPredicates=checkpoint.macro.script.rules.flatMap(rule=>rule.conditions.filter((condition):condition is ActorPredicate=>condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent'));
+      this.macroPredicates=routineActorPredicates(checkpoint.macro.script.rules);
       const field=this.macro.fieldIntent;if(field)this.requestedSettings=this.macroFieldSettings(field);
     }
     this.lastTick=this.now();this.retryAt=0;this.waitingReason='Update continuation accepted; waiting for fresh verified field decisions.';
@@ -605,9 +607,9 @@ export class CompanionController {
     return { map: engine.map, playerId: engine.player?.id??null, alive: !!engine.player && !engine.player.dead,
       idle: engine.idleForActions(), inventory: character.inventoryKnown ? [...character.inventory.values()] : [],
       equipped: [...character.equipment, character.ammoId], zeny: character.stats?.zeny ?? -1,
-      world: this.world, itemCatalog: ITEM_CATALOG, visibleNpcIds: [...engine.actors.values()].filter(e => e.kind === 2 || e.kind === 4).map(e => e.id),
+      world: this.world, itemCatalog: ITEM_CATALOG, visibleNpcIds: map(filter([...engine.actors.values()], e => e.kind === 2 || e.kind === 4), e => e.id),
       actorIdentity:id=>engine.actorActionIdentity(id)??(id===0?null:engine.actorActionIdentity()),
-      visiblePlayerIds:[...engine.actors.values()].filter(e=>e.kind===0&&!e.dead).map(e=>e.id),
+      visiblePlayerIds:map(filter([...engine.actors.values()], e=>e.kind===0&&!e.dead), e=>e.id),
       basicSkillLevel: character.skillsKnown ? character.skillLevel(1) : 0,
       pushCartLevel: character.skillsKnown ? character.skillLevel(73) : 0,
       vendingLevel: character.skillsKnown ? character.skillLevel(70) : 0 };
@@ -721,7 +723,7 @@ export class CompanionController {
       if(automationSettings(settings).follow.mode==='partyLeader')throw new Error('Party leader follow cannot own a macro map.');
       for(const rule of script.rules)for(const step of rule.steps)if(step.type==='farm')this.macroFieldSettings(step,settings);
       this.beginRun(settings);this.macroBase=structuredClone(settings);
-      this.macroPredicates=script.rules.flatMap(rule=>rule.conditions.filter((condition):condition is ActorPredicate=>condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent'));
+      this.macroPredicates=routineActorPredicates(script.rules);
       this.macro.start(script);this.tick();return;
     }
     if(mode==='refinePreview'||mode==='refine') { const context=this.refineContext();this.refine.tick(context);this.requireIdle();
@@ -1252,7 +1254,7 @@ export class CompanionController {
       for (const rule of this.routineSpec?.rules ?? []) for (const condition of rule.conditions)
         if (condition.field === 'inventory') inventory[condition.itemId] = c.count(condition.itemId);
     }
-    const predicates=(this.routineSpec?.rules??[]).flatMap(rule=>rule.conditions.filter((condition):condition is ActorPredicate=>condition.field==='actorStatus'||condition.field==='actorCasting'||condition.field==='actorHpPercent'||condition.field==='actorSpPercent'));
+    const predicates=routineActorPredicates(this.routineSpec?.rules??[]);
     return { actors:this.engine.actorObservation([...predicates,...this.macroPredicates]), map: this.engine.map, ...(p?.maxHp ? { hpPercent: p.hp / p.maxHp * 100 } : {}),
       ...(p?{level:p.level}:c.stats?.level!==undefined?{level:c.stats.level}:{}),
       ...(c.stats?.jobLevel!==undefined?{jobLevel:c.stats.jobLevel}:{}),

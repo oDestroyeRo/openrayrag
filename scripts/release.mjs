@@ -1,3 +1,4 @@
+import { filter, map, sort } from "remeda";
 // CI-only entry point. Importing this module never reads signing keys or contacts GitHub.
 import { execFileSync } from "node:child_process";
 import {
@@ -35,6 +36,7 @@ import { stableVersion, serializePlan } from "./semantic-release-policy.mjs";
 import { planProduction, loadProductionPlan } from "./release-planning.mjs";
 import { PLAN_REF_PREFIX, MAX_RESERVATIONS } from "./release-reservations.mjs";
 import { VERSION_PATHS, versionContents, validateUpdaterConfig, tagResponseBytes, annotatedTag } from "./release-source-policy.mjs";
+const compareNames = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const exec = (file, args, cwd = repositoryRoot) =>
   execFileSync(file, args, {
@@ -64,14 +66,15 @@ async function filesAt(folder, version) {
   const schemaVersion = JSON.parse(
     await readFile(join(folder, "provenance.json"), "utf8"),
   ).schemaVersion;
+  const orderedNames = sort(names, compareNames);
   requireValue(
-    names.sort().join("|") ===
-      expectedNames(version, schemaVersion).sort().join("|"),
+    orderedNames.join("|") ===
+      sort(expectedNames(version, schemaVersion), compareNames).join("|"),
     "Unexpected files in release bundle directory.",
   );
   return new Map(
     await Promise.all(
-      names.map(async (name) =>
+      orderedNames.map(async (name) =>
         /** @type {[string, Buffer]} */ (
           [name, await readFile(join(folder, name))]
         ),
@@ -279,7 +282,7 @@ export class GitHubReleaseApi {
         `releases?per_page=100&page=${page}`,
       );
       requireValue(Array.isArray(releases), "Invalid release listing.");
-      matches.push(...releases.filter((release) => release.tag_name === tag));
+      matches.push(...filter(releases, (release) => release.tag_name === tag));
       requireValue(
         matches.length <= 1,
         "Multiple releases claim the same version tag.",
@@ -426,7 +429,7 @@ export class GitHubReleaseApi {
     const assets = await this.assets(release.id);
     requireValue(
       assets.length === names.length &&
-        new Set(assets.map((a) => a.name)).size === names.length &&
+        new Set(map(assets, (a) => a.name)).size === names.length &&
         assets.every((a) => names.includes(a.name)),
       "Published release asset set is incomplete.",
     );
@@ -631,7 +634,7 @@ async function main() {
         "release/bundle",
       ),
       mac = join(folder, "macos"),
-      dmgFiles = (await readdir(join(folder, "dmg"))).filter((name) =>
+      dmgFiles = filter(await readdir(join(folder, "dmg")), (name) =>
         name.endsWith(".dmg"),
       );
     requireValue(dmgFiles.length === 1, "Expected exactly one bootstrap DMG.");

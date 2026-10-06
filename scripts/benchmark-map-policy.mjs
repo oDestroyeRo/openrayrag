@@ -1,3 +1,4 @@
+import { filter, map as mapArray } from 'remeda';
 // bun scripts/benchmark-map-policy.mjs [baseline-ref] [--incremental]
 // Exact default-policy TravelStep oracle; timings are local planning, not network latency.
 import { deepStrictEqual } from 'node:assert';
@@ -35,7 +36,7 @@ try{
   for(let run=0;run<300;run++){
     const names=['a','b','c','d','e'],edges=[];for(let i=0;i<15;i++){const fromMap=names[Math.floor(random()*names.length)],toMap=names[Math.floor(random()*names.length)],area={x:2+Math.floor(random()*8),y:2+Math.floor(random()*8),halfWidth:0,halfHeight:0};edges.push({id:`${run}:${i}`,fromMap,toMap,area,arrival:{x:1+Math.floor(random()*9),y:1+Math.floor(random()*9)},source:{kind:'Warp',commit:'fixture',path:'fixture',line:1}});}
     const blocked=new Set();for(const map of names)for(let i=0;i<12;i++)blocked.add(`${map}:${Math.floor(random()*12)}:${Math.floor(random()*12)}`);
-    const grid=map=>({width:12,height:12,portals:edges.filter(e=>e.fromMap===map).map(e=>e.area),walkable:p=>p.x>=0&&p.y>=0&&p.x<12&&p.y<12&&!blocked.has(`${map}:${p.x}:${p.y}`)});
+    const grid=map=>({width:12,height:12,portals:mapArray(filter(edges,e=>e.fromMap===map),e=>e.area),walkable:p=>p.x>=0&&p.y>=0&&p.x<12&&p.y<12&&!blocked.has(`${map}:${p.x}:${p.y}`)});
     const a=new before.TravelPlanner({edges,grid}),b=new after.TravelPlanner({edges,grid});for(const target of names)for(const avoidWalls of [false,true]){deepStrictEqual(incremental?await b.routeBetweenMapsAsync('a',{x:1,y:1},target,avoidWalls,undefined,{scheduler}):b.routeBetweenMaps('a',{x:1,y:1},target,avoidWalls),a.routeBetweenMaps('a',{x:1,y:1},target,avoidWalls));comparisons++;}
   }
   console.log(JSON.stringify({baseline:ref,incremental,exactComparisons:comparisons,fixtures:summaries},null,2));

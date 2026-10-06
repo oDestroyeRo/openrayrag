@@ -1,3 +1,4 @@
+import { map } from 'remeda';
 import { sameActionIdentity, type ActionIdentity } from './actor-identity';
 import { isRecoveryItem, recoveryItemIds } from './recovery-items';
 import { matchesSkillExecution } from './skill-execution';
@@ -18,7 +19,7 @@ export class AutomationScheduler {
   readonly ruleConditions: Array<{rule:string;conditions:PredicateTrace[]}>=[];
   conditionState(rule:string,conditions:ActorPredicate[]|undefined,observations:ActorObservationSnapshot|undefined):PredicateTrace['state'] {
     if(!conditions?.length)return 'matched';
-    const traces=conditions.map(actorPredicateEvaluator(observations));
+    const traces=map(conditions, actorPredicateEvaluator(observations));
     if(this.ruleConditions.length<32)this.ruleConditions.push({rule,conditions:traces});
     return traces.some(trace=>trace.state==='unavailable')?'unavailable':traces.some(trace=>trace.state==='unmatched')?'unmatched':'matched';
   }

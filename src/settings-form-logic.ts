@@ -1,6 +1,7 @@
+import { map } from 'remeda';
 import type { FormDocument } from './current-form';
 import type { FeatureUi } from './feature-ui';
-import type { MapInfo } from './map-data';
+import type { MapInfo, MapMonster } from './map-data-logic';
 import type { Settings } from './settings';
 export type AutomationEditor = Pick<FeatureUi, 'read' | 'write' | 'levelDifference' | 'selectedProfileId' | 'restoreProfileSelection'>;
 
@@ -24,3 +25,8 @@ export interface SettingsFormContext {
 export interface Hooks { context(): SettingsFormContext; changed(): void }
 
 export interface TargetRow { label: HTMLLabelElement; input: HTMLInputElement; name: HTMLElement; detail: HTMLElement; count: HTMLElement }
+
+export function targetRosterIdentity(options: readonly Pick<MapMonster, 'classId'>[]): { ids: number[]; order: string } {
+  const ids = map(options, monster => monster.classId);
+  return { ids, order: ids.join(',') };
+}

@@ -1,3 +1,5 @@
+import { inventoryItemCount } from './character-state-logic';
+import { filter, map, sumBy } from 'remeda';
 import type { ActionIdentity } from './actor-identity';
 import type { InventoryItem } from './protocol-feature';
 import { validateWorldAction, type PartyMember, type ItemRow, type WorldAction, type WorldEvent } from './world-protocol';
@@ -28,9 +30,9 @@ export interface WorkflowWorld extends Omit<WorldSnapshot, 'storage' | 'cart' | 
 export function workflowWorldFromSnapshot(snapshot: WorldSnapshot): WorkflowWorld {
   const detached = structuredClone(snapshot);
   return { ...detached,
-    storage: new Map(detached.storage.map(item => [item.bagId, item])),
-    cart: new Map(detached.cart.map(item => [item.bagId, item])),
-    party: detached.party ? { ...detached.party, members: new Map(detached.party.members.map(member => [member.memberId, member])) } : null };
+    storage: new Map(map(detached.storage, item => [item.bagId, item] as const)),
+    cart: new Map(map(detached.cart, item => [item.bagId, item] as const)),
+    party: detached.party ? { ...detached.party, members: new Map(map(detached.party.members, member => [member.memberId, member] as const)) } : null };
 }
 
 export function workflowWorldSnapshot(world: WorkflowWorld): WorldSnapshot {
@@ -132,8 +134,6 @@ export function validateWorkflowSpec(input: unknown): WorkflowSpec {
     ...(value.timeoutMs === undefined ? {} : { timeoutMs: integer(value.timeoutMs, 1000, 60_000) }) };
 }
 
-function itemCount(items: InventoryItem[], itemId: number): number { return items.reduce((sum, item) => sum + (item.itemId === itemId ? item.count : 0), 0); }
-
 export function stock(items: InventoryItem[]): Map<number, number> {
   const result = new Map<number, number>();
   for (const item of items) result.set(item.itemId, (result.get(item.itemId) ?? 0) + item.count);
@@ -199,7 +199,7 @@ export function barterConsumption(action: Extract<WorldAction, { type: 'npcBarte
   // could consume a refined, socketed, or equipped item the user did not select.
   for (const item of selected) if (item && !required.has(item.itemId)) return null;
   for (const [itemId, count] of required) {
-    const regular = context.inventory.filter(item => item.itemId === itemId && item.type === 1 && !protectedItem(item, context)).reduce((sum, item) => sum + item.count, 0);
+    const regular = sumBy(filter(context.inventory, item => item.itemId === itemId && item.type === 1 && !protectedItem(item, context)), item => item.count);
     const unique = selected.filter(item => item?.itemId === itemId).length;
     if (regular < count && unique !== count) return null;
     if (regular >= count && unique > 0) return null;
@@ -313,7 +313,7 @@ export function createVendingReceipt(action: Extract<WorldAction, { type: 'vendi
   return {
     map: context.map, generation: context.world.generation, vendorId: store.id, npcId: context.world.npc.id,
     beforeZeny: context.zeny, cost,
-    gains: [...counts].map(([itemId, count]) => ({ itemId, before: itemCount(context.inventory, itemId), count })),
+    gains: [...counts].map(([itemId, count]) => ({ itemId, before: inventoryItemCount(itemId)(context.inventory), count })),
   };
 }
 
@@ -324,7 +324,7 @@ export function confirmVendingReceipt(receipt: VendingReceipt, context: Workflow
   if (context.world.viewedVending !== null && context.world.viewedVending.id !== receipt.vendorId) return false;
   if (receipt.beforeZeny - context.zeny !== receipt.cost) return false;
   if (!receipt.gains.length) return context.world.viewedVending === null && context.world.npc.mode === 'idle';
-  return receipt.gains.every(gain => itemCount(context.inventory, gain.itemId) === gain.before + gain.count);
+  return receipt.gains.every(gain => inventoryItemCount(gain.itemId)(context.inventory) === gain.before + gain.count);
 }
 
 export function actionFor(step: WorkflowStep, npcId: number): WorldAction {

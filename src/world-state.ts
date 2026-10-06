@@ -1,3 +1,4 @@
+import { map } from 'remeda';
 import { PartyActorBindings } from './party-actors';
 import type { ActorObservations } from './actor-observations';
 import type { InventoryItem } from './protocol-feature';
@@ -158,13 +159,13 @@ export class WorldState {
     return {
       map: this.map, generation: this.generation, revision: this.revision,
       npc: { ...this.npc, dialog: this.npc.dialog ? { ...this.npc.dialog } : null, options: [...this.npc.options] },
-      shop: this.shop ? { ...this.shop, entries: this.shop.entries.map(item => ({ ...item })) } : null,
-      storage: [...this.storage.values()].map(cloneItem), storageReady: this.storageReady,
-      barter: this.barter.map(cloneOffer), cart: [...this.cart.values()].map(cloneItem), hasCart: this.hasCart, cartReady: this.cartReady,
-      party: this.party ? { id: this.party.id, name: this.party.name, members: [...this.party.members.values()].map(member => ({ ...member })) } : null,
+      shop: this.shop ? { ...this.shop, entries: map(this.shop.entries, item => ({ ...item })) } : null,
+      storage: map([...this.storage.values()], cloneItem), storageReady: this.storageReady,
+      barter: map(this.barter, cloneOffer), cart: map([...this.cart.values()], cloneItem), hasCart: this.hasCart, cartReady: this.cartReady,
+      party: this.party ? { id: this.party.id, name: this.party.name, members: map([...this.party.members.values()], member => ({ ...member })) } : null,
       invite: this.invite ? { ...this.invite } : null,
-      vending: this.vending ? { ...this.vending, rows: this.vending.rows.map(row => ({ ...row })) } : null,
-      viewedVending: this.viewedVending ? { ...this.viewedVending, entries: this.viewedVending.entries.map(entry => ({ item: cloneItem(entry.item), price: entry.price })) } : null,
+      vending: this.vending ? { ...this.vending, rows: map(this.vending.rows, row => ({ ...row })) } : null,
+      viewedVending: this.viewedVending ? { ...this.viewedVending, entries: map(this.viewedVending.entries, entry => ({ item: cloneItem(entry.item), price: entry.price })) } : null,
     };
   }
 }

@@ -1,4 +1,4 @@
-import { validActorSnapshot } from './actor-observations';
+import { manualMonsterChoices } from './manual-target-view-logic';
 import { previewManualTarget } from './manual-target';
 import { manualTargetView } from './manual-target-view';
 import type { Settings } from './settings';
@@ -37,8 +37,7 @@ export class ManualTargetUi {
   render(value:Record<string,unknown>):void {
     this.status=value;const selected=this.monsters.value;this.monsters.replaceChildren();
     const empty=document.createElement('option');empty.value='';empty.textContent='Choose a visible living monster';this.monsters.append(empty);
-    const actors=validActorSnapshot(value.actorObservations)?value.actorObservations:null;
-    for(const raw of Array.isArray(value.monsters)?value.monsters:[]){const actor=object(raw),observed=actors?.actors.find(a=>a.id===actor.id&&a.kind===1);if(!observed||actor.dead===true||typeof actor.hp!=='number'||actor.hp<=0)continue;const option=document.createElement('option');option.value=`${actors!.world}:${actor.id}:${observed.incarnation}`;option.textContent=`${String(actor.name??'Monster').slice(0,64)} #${actor.id} · level ${actor.level} · ${actor.x}, ${actor.y} · lifetime ${observed.incarnation}`;this.monsters.append(option);}
+    for(const row of manualMonsterChoices(value)){const option=document.createElement('option');option.value=row.value;option.textContent=row.label;this.monsters.append(option);}
     this.monsters.value=selected;
     const manual=object(value.manualTarget);const state=`${manual.state??'idle'} · ${manual.reason??''} · ${manual.elapsedSeconds??0}s elapsed · ${manual.remainingSeconds??0}s remaining${manual.settling===true?' · waiting for Stop/movement reconciliation':''}`;
     if(Number(manual.sequence)>0&&this.output.dataset.result!==state){this.output.textContent=state;this.output.dataset.result=state;}

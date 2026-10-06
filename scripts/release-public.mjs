@@ -1,3 +1,4 @@
+import { filter, map, sort } from "remeda";
 // Public artifact proof only. Never publishes, installs or starts the application.
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +14,8 @@ import {
 } from "./release-public-policy.mjs";
 export { HELP, parseOptions, releaseSnapshot, validateArtifactProduction } from "./release-public-policy.mjs";
 
+const compareNames = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+
 export async function publicationEvidence(api, originalRun, originalJobs, options) {
   if (hasSuccessfulPublisher(originalRun, originalJobs, options))
     return { runId: String(originalRun.id), runAttempt: String(originalRun.run_attempt), recoveredOriginalArtifact: false };
@@ -22,7 +25,7 @@ export async function publicationEvidence(api, originalRun, originalJobs, option
   const matchesSource = sourceWorkflowMatches(options);
   const listed = await api(`/actions/workflows/release.yml/runs?head_sha=${options.sourceSha}&per_page=100`);
   requireValue(Array.isArray(listed.workflow_runs) && listed.workflow_runs.length <= 100, "Invalid or oversized publication run list.");
-  const candidates = listed.workflow_runs.filter(matchesSource);
+  const candidates = filter(listed.workflow_runs, matchesSource);
   let checked = 0;
   for (const candidate of candidates) {
     const first = candidate.id === originalRun.id ? originalRun.run_attempt + 1 : 1;
@@ -61,8 +64,8 @@ export async function verifyPublishedRelease(options, io) {
     marker.version === identity.version && marker.firstParentCount === identity.firstParentCount &&
     marker.planSha256 === planner.planSha256(plan), "Public release marker differs from the reserved semantic source.");
   const snapshot = releaseSnapshot(release);
-  const names = core.expectedNames(identity.version, marker.schemaVersion).sort();
-  requireValue(release.assets.length === names.length && release.assets.map(a => a.name).sort().join("|") === names.join("|"), "Public release asset set differs.");
+  const names = sort(core.expectedNames(identity.version, marker.schemaVersion), compareNames);
+  requireValue(release.assets.length === names.length && sort(map(release.assets, a => a.name), compareNames).join("|") === names.join("|"), "Public release asset set differs.");
   let total = 0;
   for (const asset of release.assets) {
     requireValue(/^[A-Za-z0-9_.-]+$/.test(asset.name) && asset.state === "uploaded" &&
@@ -90,7 +93,7 @@ export async function verifyPublishedRelease(options, io) {
   ]);
   validateArtifactProduction(run, jobs, artifact, provenance, marker, options);
   const publication = await publicationEvidence(io.api, run, jobs, options);
-  const assets = release.assets.map(a => ({ name: a.name, size: a.size, sha256: core.sha256(files.get(a.name)) }));
+  const assets = map(release.assets, a => ({ name: a.name, size: a.size, sha256: core.sha256(files.get(a.name)) }));
   const zip = await io.verifyZip({ assets, artifactId: marker.artifact.id, artifactDigest: marker.artifact.digest, limit: total + 1024 * 1024 });
   requireValue(zip.zipDigest === marker.artifact.digest && zip.publicAssetCount === assets.length, "Actions ZIP proof differs from public assets.");
   if (options.latest) await checkMovingFeeds(io, source, release, files);

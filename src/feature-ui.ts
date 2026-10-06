@@ -1,5 +1,6 @@
+import { map } from 'remeda';
 import { browserTextStorage } from './storage-effects';
-import { actorInput, chooseFollowMode, checkedAction, isAction, featureServiceBlocked, featureActive, featureObservation } from './feature-ui-logic';
+import { actorInput, chooseFollowMode, checkedAction, isAction, featureServiceBlocked, featureActive, featureObservation, featureServiceChoices, featureServiceEvidence, featureWorkflowPreviewText, featureRoutinePreviewText, featureAttackStrategiesText, featureRuleConditionsText, featureNpcChoices, featureInventoryText, featureSkillsText } from './feature-ui-logic';
 import { validWarpSnapshot } from './warp-ui-logic';
 import { macroActive } from './macro-ui-logic';
 export { actorInput, chooseFollowMode, validFeatureStatus } from './feature-ui-logic';
@@ -17,7 +18,7 @@ import { WarpUi } from './warp-ui';
 import { type ActorObservationSnapshot } from './actor-observations';
 import { DEFAULT_AUTOMATION, DEFAULT_RETREAT, DEFAULT_PARTY_HEAL, validateAutomation, type AutomationSettings, type Settings } from './settings';
 import { MAX_PROFILES, ProfileStore } from './profiles';
-import { ITEM_CATALOG, SKILL_CATALOG, itemName, skillName } from './game-catalog';
+import { ITEM_CATALOG, SKILL_CATALOG, itemName } from './game-catalog';
 import { validateWorkflowSpec } from './workflows';
 import { NpcServiceStore } from './npc-service-store';
 import { BUILTIN_SERVICES, previewServiceAsync, validateServiceRequest } from './npc-services';
@@ -52,6 +53,7 @@ type Row = Record<string, unknown>;
 const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const text = (v: unknown): string => typeof v === 'string' ? v : '';
 const number = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
+const serviceChoices = featureServiceChoices(BUILTIN_SERVICES);
 const fields: Record<Section, Field[]> = {
   combat: [
     { path:'combat.mode', label:'Attack monsters', options:[['selected','Only selected monsters'],['retaliate','Only monsters attacking me'],['both','Selected monsters + monsters attacking me'],['off','Combat off']] },
@@ -97,7 +99,7 @@ const fields: Record<Section, Field[]> = {
     {path:'supply.minimumIntervalSeconds',label:'Minimum seconds between trips',min:1,max:86400},
     {path:'supply.maxTrips',label:'Maximum supply trips',min:1,max:100},{path:'supply.maxActions',label:'Commands per trip',min:1,max:100},
     {path:'supply.maxDurationSeconds',label:'Trip deadline, seconds',min:30,max:3600},{path:'supply.maxSpend',label:'Whole-trip reserved spending, zeny',min:0,max:2000000000},
-    ...(['storage','buy','sell'] as const).map(kind=>({path:`supply.${kind}Service`,label:`Supply ${kind} service`,options:[['','Select a verified service'],...BUILTIN_SERVICES.filter(def=>kind==='storage'?def.outcome.type==='storageOpened':def.outcome.type==='shopOpened'&&def.outcome.mode===kind).map(def=>[def.contractId,def.name] as [string,string])] as Array<[string,string]>})),
+    ...map(['storage','buy','sell'] as const, kind=>({path:`supply.${kind}Service`,label:`Supply ${kind} service`,options:[['','Select a verified service'],...serviceChoices(kind)] as Array<[string,string]>})),
     { path:'travel.destinationMap',label:'Destination map code',kind:'text' },
     { path:'travel.loop',label:'Repeat waypoint route',kind:'checkbox' },
     { path:'follow.mode',label:'Follow selection',options:[['name','Player name'],['partyLeader','Current party leader']] },
@@ -222,12 +224,7 @@ export class FeatureUi {
       this.hooks.settings().route_avoidWalls]);
   }
   private servicePreviewEvidence(): string {
-    const character = object(this.status.character), stats = object(character.stats);
-    const stock = Array.isArray(character.inventory) ? character.inventory.map(object).map(row => [row.itemId,row.count]) : null;
-    const mastery = Array.isArray(character.learned) ? character.learned.map(object).find(row => row.skillId === 1)?.level : null;
-    const npcs = Array.isArray(this.status.actors) ? this.status.actors.map(object).filter(actor => actor.kind === 2 || actor.kind === 4)
-      .map(actor => [actor.id,actor.kind,actor.classId,actor.name,actor.x,actor.y,actor.dead]) : null;
-    return JSON.stringify([character.inventoryKnown,stats.zeny,character.skillsKnown,mastery,stock,npcs]);
+    return featureServiceEvidence(this.status);
   }
   private cancelRoutePreview(reason = 'Preview cancelled. Generate a new preview from current state.'): void {
     const request = this.routePreview;
@@ -570,7 +567,7 @@ export class FeatureUi {
     const spec = () => ({name:workflowName.value,map:workflowMap.value || this.hooks.map(),npcId:actorInput(workflowNpc.value),maxSpend:Number(budget.value),minStock:workflowStock.read(),steps});
     const run = document.createElement('button'); run.type='button'; run.className='primary compact'; run.textContent='Start workflow'; run.dataset.manual='true'; run.addEventListener('click',()=>void this.operation(()=>this.hooks.workflow(validateWorkflowSpec(spec())))); workflowButtons.append(run);
     const workflowPreview=document.createElement('p');workflowPreview.className='telemetry-summary';workflowPreview.hidden=true;workflow.append(workflowPreview);
-    const preview=document.createElement('button');preview.type='button';preview.className='secondary compact';preview.textContent='Validate / preview';preview.dataset.config='true';preview.addEventListener('click',()=>{try{const checked=validateWorkflowSpec(spec());const expectedFees=checked.steps.reduce((total,step)=>total+('expectedCost' in step?Number(step.expectedCost??0):0),0);workflowPreview.hidden=false;workflowPreview.textContent=`${checked.steps.length} validated steps · budget ${checked.maxSpend} · expected NPC fees ${expectedFees} · ${checked.minStock.length} stock guards.\nNPC fees count toward the spending cap. Live map, NPC, shop prices and stock are checked on Start.\n${checked.steps.map((step,index)=>`${index+1}. ${JSON.stringify(step)}`).join('\n')}`;}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid workflow.',true);}});workflowButtons.append(preview);
+    const preview=document.createElement('button');preview.type='button';preview.className='secondary compact';preview.textContent='Validate / preview';preview.dataset.config='true';preview.addEventListener('click',()=>{try{const checked=validateWorkflowSpec(spec());workflowPreview.hidden=false;workflowPreview.textContent=featureWorkflowPreviewText(checked);}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid workflow.',true);}});workflowButtons.append(preview);
     const workflowDocument=document.createElement('details');workflowDocument.className='manual-group';const workflowDocumentTitle=document.createElement('summary');workflowDocumentTitle.textContent='Advanced workflow document';workflowDocument.append(workflowDocumentTitle);workflow.append(workflowDocument);
     const workflowText=document.createElement('textarea');workflowText.className='document-editor';workflowText.rows=8;workflowText.maxLength=65000;workflowText.spellcheck=false;workflowText.placeholder='Export the builder, or paste a typed workflow for multi-item transactions and exchanges.';workflowDocument.append(workflowText);
     const exportWorkflow=document.createElement('button');exportWorkflow.type='button';exportWorkflow.className='secondary compact';exportWorkflow.textContent='Export builder';exportWorkflow.dataset.config='true';exportWorkflow.addEventListener('click',()=>{try{workflowText.value=JSON.stringify(spec(),null,2);}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid actor selection.',true);}});workflowDocument.append(exportWorkflow);
@@ -584,7 +581,7 @@ export class FeatureUi {
     const routineButtons=document.createElement('div');routineButtons.className='button-row';routine.append(routineButtons);
     const routineStart=document.createElement('button');routineStart.type='button';routineStart.className='primary compact';routineStart.textContent='Start routine';routineStart.dataset.manual='true';routineStart.addEventListener('click',()=>void this.operation(()=>this.hooks.routine(validateRoutineSpec(JSON.parse(routineText.value),isAction))));routineButtons.append(routineStart);
     const routinePreview=document.createElement('p');routinePreview.className='telemetry-summary';routinePreview.hidden=true;routine.append(routinePreview);
-    const dryRun=document.createElement('button');dryRun.type='button';dryRun.className='secondary compact';dryRun.textContent='Validate / dry run';dryRun.dataset.config='true';dryRun.addEventListener('click',()=>{try{const checked=validateRoutineSpec(JSON.parse(routineText.value),isAction);const trace=dryRunRoutine(checked,this.observation(),isAction);routinePreview.hidden=false;routinePreview.textContent=trace.rules.map(rule=>`${rule.name}: ${rule.state} · ${rule.reason}${rule.conditions.map(c=>'\n  '+c.state+' · '+c.reason).join('')}`).join('\n');this.hooks.notify('Routine validated. Dry run sends no commands.');}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid routine.',true);}});routineButtons.append(dryRun);
+    const dryRun=document.createElement('button');dryRun.type='button';dryRun.className='secondary compact';dryRun.textContent='Validate / dry run';dryRun.dataset.config='true';dryRun.addEventListener('click',()=>{try{const checked=validateRoutineSpec(JSON.parse(routineText.value),isAction);const trace=dryRunRoutine(checked,this.observation(),isAction);routinePreview.hidden=false;routinePreview.textContent=featureRoutinePreviewText(trace);this.hooks.notify('Routine validated. Dry run sends no commands.');}catch(error){this.hooks.notify(error instanceof Error?error.message:'Invalid routine.',true);}});routineButtons.append(dryRun);
     const routineState=document.createElement('p');routineState.id='routine-state';routineState.className='telemetry-summary';routine.append(routineState);
   }
   private servicePanel(): void {
@@ -680,7 +677,7 @@ export class FeatureUi {
     const engagement=object(s.partyEngagement);const reasons=Array.isArray(engagement.reasons)?engagement.reasons.map(text):[];
     this.host.querySelector<HTMLElement>('#party-engagement-state')!.textContent=engagement.enabled===true?`Party exception active · ${number(engagement.accepted)??0} verified engagements · ${number(engagement.blocked)??0} excluded${reasons.length?'\n'+reasons.join('\n'):''}`:'Party exception is off; outside engagements remain excluded.';
     const heal=object(s.partyHeal);this.host.querySelector<HTMLElement>('#party-heal-state')!.textContent=`${text(heal.reason)||'Party Heal is off.'} · ${number(heal.attempts)??0} attempts · ${number(heal.confirmed)??0} executions confirmed${heal.resourceReadback===true?' · fresh resource readback':''}`;
-    const strategyState=this.host.querySelector<HTMLElement>('#attack-strategy-state')!;const strategy=object(s.attackStrategies);const engagements=Array.isArray(strategy.entries)?strategy.entries:[];strategyState.hidden=engagements.length===0;strategyState.textContent=engagements.slice(0,8).map(entry=>{const actor=object(entry);const rules=Array.isArray(actor.rules)?actor.rules:[];return `Actor #${number(actor.id)??'?'} · ${actor.normalStarted===true?'normal attack started':'opener window open'}`+rules.slice(0,32).map(value=>{const rule=object(value);return `\n  ${text(rule.id)} · ${number(rule.attempts)??'?'} attempts · ${number(rule.uses)??'?'} confirmed${rule.uncertain===true?' · unresolved':rule.rejected===true?' · rejected':''}`;}).join('');}).join('\n')+(strategy.truncated===true?'\nAdditional actor ledgers omitted from display.':'');
+    const strategyState=this.host.querySelector<HTMLElement>('#attack-strategy-state')!;const strategy=object(s.attackStrategies);const engagements=Array.isArray(strategy.entries)?strategy.entries:[];strategyState.hidden=engagements.length===0;strategyState.textContent=featureAttackStrategiesText(strategy);
     const retreat=object(s.retreat);const retreatState=this.host.querySelector<HTMLElement>('#retreat-state');if(retreatState){retreatState.hidden=retreat.state===undefined||retreat.state==='off';retreatState.textContent=`${text(retreat.state)} · ${text(retreat.reason)} · ${number(retreat.attempts)??0} retreat attempts${retreat.settling===true?' · waiting for target clear or movement; nothing is retried':''}`;}
     this.social.render(s);
     this.memo.render(s);
@@ -688,7 +685,7 @@ export class FeatureUi {
     this.manualTargets.render(s);
     this.refine.render(s);
     this.warp.render(s);
-    const conditionState=this.host.querySelector<HTMLElement>('#actor-condition-state')!;const traces=Array.isArray(s.ruleConditions)?s.ruleConditions:[];conditionState.hidden=traces.length===0;conditionState.textContent=traces.slice(0,32).map(entry=>{const rule=object(entry);const conditions=Array.isArray(rule.conditions)?rule.conditions:[];return text(rule.rule)+(rule.truncated===true?' · additional evidence omitted':'')+conditions.map(condition=>{const trace=object(condition);return '\n  '+text(trace.state)+' · '+text(trace.reason);}).join('');}).join('\n');
+    const conditionState=this.host.querySelector<HTMLElement>('#actor-condition-state')!;const traces=Array.isArray(s.ruleConditions)?s.ruleConditions:[];conditionState.hidden=traces.length===0;conditionState.textContent=featureRuleConditionsText(traces);
     if(this.dispositionPlan){try{const settings=this.automationSettings();if(!dispositionPreviewIsCurrent(this.dispositionPlan,settings.disposition??DEFAULT_DISPOSITION,{...dispositionContextFromStatus(this.status),minimumStock:dispositionStockFloors(settings)})){this.dispositionOutput().textContent='Preview is stale. Generate it again from current state.';this.dispositionPlan=null;}}catch{this.dispositionPlan=null;this.dispositionOutput().textContent='Preview is stale. Validate rules and generate it again.';}}
     const follow=object(s.partyFollow);this.host.querySelector<HTMLElement>('#party-follow-state')!.textContent=follow.state&&follow.state!=='disabled'?`${text(follow.state)} · ${text(follow.reason)}${follow.destination?' · '+text(follow.destination):''} · ${Math.ceil(number(follow.remainingSeconds)??0)}s remaining`:'';
     const supply=object(s.supply),supplyOutput=this.host.querySelector<HTMLElement>('#supply-preview')!;
@@ -707,11 +704,11 @@ export class FeatureUi {
       policyOutput.dataset.telemetry=telemetry;
     }catch(error){policyOutput.textContent='Map policy: '+(error instanceof Error?error.message:'Validate the current settings.');delete policyOutput.dataset.telemetry;}
     const experience=object(character.experience);const taskLabel=dashboardTaskLabel(s);const escape=object(s.escape);this.host.querySelector<HTMLElement>('#session-details')!.textContent=`${Math.floor((number(s.elapsedSeconds)??0)/60)}m ${(number(s.elapsedSeconds)??0)%60}s · ${number(s.deaths)??0} deaths in current game run · Base EXP +${number(experience.baseGained)??'—'} · Job EXP +${number(experience.jobGained)??'—'}${taskLabel?' · '+taskLabel:''}${escape.state&&escape.state!=='idle'?' · '+text(escape.reason):''}${object(escape.threats).enabled?' · Observed monster attackers: '+(number(object(escape.threats).count)??'unavailable')+' / '+number(object(escape.threats).threshold)+' in '+number(object(escape.threats).windowSeconds)+'s (recent attacks, not server aggro)':''}`;
-    const npcChoice=this.host.querySelector<HTMLSelectElement>('#visible-npcs')!;const actors=Array.isArray(s.actors)?s.actors.map(object).filter(actor=>actor.kind===2||actor.kind===4):[];const actorKey=actors.map(actor=>`${actor.id}:${text(actor.name)}`).join('|');
-    if(npcChoice.dataset.actors!==actorKey){const selected=npcChoice.value;npcChoice.dataset.actors=actorKey;npcChoice.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='Choose a visible NPC';npcChoice.append(empty);for(const actor of actors){const option=document.createElement('option');option.value=String(actor.id);option.textContent=`${text(actor.name)||'NPC'} · #${actor.id}`;npcChoice.append(option);}npcChoice.value=actors.some(actor=>String(actor.id)===selected)?selected:'';}
+    const npcChoice=this.host.querySelector<HTMLSelectElement>('#visible-npcs')!;const actors=featureNpcChoices(s.actors);const actorKey=map(actors,actor=>actor.key).join('|');
+    if(npcChoice.dataset.actors!==actorKey){const selected=npcChoice.value;npcChoice.dataset.actors=actorKey;npcChoice.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='Choose a visible NPC';npcChoice.append(empty);for(const actor of actors){const option=document.createElement('option');option.value=actor.value;option.textContent=actor.label;npcChoice.append(option);}npcChoice.value=actors.some(actor=>actor.value===selected)?selected:'';}
     const inventory=Array.isArray(character.inventory)?character.inventory:[];const skills=Array.isArray(character.learned)?character.learned:[];
-    const inventoryText=inventory.slice(0,30).map(item=>{const row=object(item);return `Bag ${number(row.bagId)??'?'} · ${itemName(number(row.itemId)??0)} × ${number(row.count)??'?'}`;}).join('\n');
-    const skillText=skills.slice(0,40).map(skill=>{const row=object(skill);return `${skillName(number(row.skillId)??0)} · Lv ${number(row.level)??'?'}`;}).join(', ');
+    const inventoryText=featureInventoryText(inventory);
+    const skillText=featureSkillsText(skills);
     const summary=this.host.querySelector<HTMLElement>('#character-data')!;summary.textContent=`SP ${number(stats.sp)??number(player.sp)??'—'} / ${number(stats.maxSp)??number(player.maxSp)??'—'} · Zeny ${number(stats.zeny)??'—'} · Weight ${number(stats.weight)??'—'} / ${number(stats.maxWeight)??'—'}\n${character.inventoryKnown===true?`${inventory.length} inventory entries`:'Inventory not observed'}${inventoryText?'\n'+inventoryText:''}\n${character.skillsKnown===true?`${skills.length} learned skills`:'Skills not observed'}${skillText?'\n'+skillText:''}\nLoadout: ${text(object(s.loadout).state)||'off'}${text(object(s.loadout).reason)?' · '+text(object(s.loadout).reason):''}`;
     const world=object(s.world);const npc=object(world.npc);const dialog=object(npc.dialog);this.host.querySelector<HTMLElement>('#npc-dialogue')!.textContent=`${text(dialog.name)}${dialog.name?' · ':''}${text(dialog.text)||'No NPC dialogue open.'}${Array.isArray(npc.options)&&npc.options.length?'\n'+npc.options.map((label,index)=>`${index}: ${text(label)}`).join('\n'):''}`;
     const shop=object(world.shop);this.host.querySelector<HTMLElement>('#shop-state')!.textContent=Array.isArray(shop.entries)?`${text(shop.mode)} shop · ${shop.entries.length} entries\n${shop.entries.slice(0,30).map(entry=>{const row=object(entry);return `${itemName(number(row.itemId)??number(row.id)??0)} · #${number(row.id)??number(row.itemId)??'?'} · ${number(row.price)??'?'} zeny`;}).join('\n')}`:'Open a shop through an NPC first.';

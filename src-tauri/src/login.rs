@@ -238,12 +238,7 @@ pub(crate) async fn saved_login(window: Webview) -> Result<Option<SavedLogin>, S
     super::require_view(&window, "main")?;
     Ok(login_store(window.app_handle())?
         .load()?
-        .map(|profile| SavedLogin {
-            mode: profile.mode,
-            username: profile.username,
-            character_slot: profile.character_slot,
-            auto_login: profile.auto_login,
-        }))
+        .map(SavedLogin::from))
 }
 
 #[tauri::command]

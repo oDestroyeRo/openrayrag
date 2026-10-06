@@ -1,3 +1,4 @@
+import { sort } from "remeda";
 // Pure reservation encoding, ref validation and complete ledger contracts.
 import { canonicalJson } from "../release.config.mjs";
 import {
@@ -26,10 +27,11 @@ function exactKeys(value, keys, label) {
       typeof value === "object" &&
       !Array.isArray(value) &&
       [Object.prototype, null].includes(Object.getPrototypeOf(value)) &&
-      Object.keys(value).sort().join("|") === [...keys].sort().join("|"),
+      sort(Object.keys(value), compareKeys).join("|") === sort(keys, compareKeys).join("|"),
     `Invalid ${label} fields.`,
   );
 }
+const compareKeys = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const baseOf = ({ sourceSha, version, tag }) => ({ sourceSha, version, tag });
 const sameBase = (a, b) => canonicalJson(a) === canonicalJson(baseOf(b));
 
@@ -69,7 +71,7 @@ export function validateLedger(ctx, plans) {
     plans.length <= MAX_RESERVATIONS,
     "Release reservation ledger exceeds its bound.",
   );
-  const sorted = [...plans].sort(
+  const sorted = sort(plans,
     (a, b) => a.firstParentCount - b.firstParentCount,
   );
   const sources = new Set(),

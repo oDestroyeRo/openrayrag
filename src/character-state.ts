@@ -1,6 +1,7 @@
+import { map, pipe, take } from 'remeda';
 import type { FeatureEvent, InventoryItem, PlayerStats } from './protocol-feature';
 
-import type { CharacterSnapshot, StatefulEntity } from './character-state-logic';
+import { inventoryItemCount, type CharacterSnapshot, type StatefulEntity } from './character-state-logic';
 
 export { type CharacterSnapshot, type StatefulEntity } from './character-state-logic';
 
@@ -68,16 +69,16 @@ export class CharacterState {
       case 'experience': { const { type: _type, ...experience } = event; this.experience = experience; break; }
     }
   }
-  count(itemId: number): number { return [...this.inventory.values()].reduce((n,item)=>n+(item.itemId===itemId?item.count:0),0); }
+  count(itemId: number): number { return inventoryItemCount(itemId)([...this.inventory.values()]); }
   skillLevel(skillId: number): number { return Math.max(this.learned.get(skillId) ?? 0,this.granted.get(skillId) ?? 0); }
   snapshot(): CharacterSnapshot {
     const clean = (item: InventoryItem): InventoryItem => ({ bagId:item.bagId,itemId:item.itemId,count:item.count,type:item.type,
       ...(item.flags !== undefined ? { flags:item.flags,refine:item.refine } : {}) });
     return { stats:this.stats ? { ...this.stats, ...(this.stats.attributes ? { attributes:[...this.stats.attributes] } : {}) } : null,
-      inventoryKnown:this.inventoryKnown, skillsKnown:this.skillsKnown, inventory:[...this.inventory.values()].slice(0,600).map(clean),
+      inventoryKnown:this.inventoryKnown, skillsKnown:this.skillsKnown, inventory:pipe([...this.inventory.values()], take(600), map(clean)),
       cart:this.cart?.slice(0,600).map(clean) ?? null, equipment:this.equipment.slice(0,14),ammoId:this.ammoId,
-      learned:[...this.learned].slice(0,512).map(([skillId,level])=>({skillId,level})),
-      granted:[...this.granted].slice(0,512).map(([skillId,level])=>({skillId,level})), sitting:this.sitting,
-      statuses:[...this.statuses].slice(0,128).map(([id,seconds])=>({id,seconds})), experience:this.experience ? { ...this.experience } : null };
+      learned:pipe([...this.learned], take(512), map(([skillId,level])=>({skillId,level}))),
+      granted:pipe([...this.granted], take(512), map(([skillId,level])=>({skillId,level}))), sitting:this.sitting,
+      statuses:pipe([...this.statuses], take(128), map(([id,seconds])=>({id,seconds}))), experience:this.experience ? { ...this.experience } : null };
   }
 }

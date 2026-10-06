@@ -1,3 +1,4 @@
+import { map } from 'remeda';
 import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_LOADOUT, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT, DEFAULT_SETTINGS, validateFormSettings, type Settings } from './settings';
 import { MACRO_LIMITS, validateMacroScript, validMacroStep, type MacroRule, type MacroScript, type MacroStep } from './macros-logic';
 import { validRoutineCondition, type RoutineCondition } from './routines-logic';
@@ -494,7 +495,7 @@ export function formatBotScript(input: BotScriptDocument): string {
     lines.push('', `duration ${script.durationSeconds}s`, `actions ${script.maxActions}`, `spend ${script.maxSpend}`);
     for (const rule of script.rules) {
       lines.push('', `rule ${JSON.stringify(rule.name)}`, `  priority ${rule.priority}`, `  cooldown ${rule.cooldownSeconds}s`, `  runs ${rule.maxRuns}`,
-        ...rule.conditions.map(condition => `  ${formatCondition(condition)}`), ...rule.steps.map(step => `  ${formatStep(step)}`), 'end');
+        ...map(rule.conditions, condition => `  ${formatCondition(condition)}`), ...map(rule.steps, step => `  ${formatStep(step)}`), 'end');
     }
   }
   const text = `${lines.join('\n')}\n`;

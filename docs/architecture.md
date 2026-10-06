@@ -30,13 +30,25 @@ Keep effect ordering visible. A persistence failure must not commit a new in-mem
 Prefer a named input record for decisions with several related arguments, especially booleans. For repeated evaluation against the same context, bind that context once and return a unary function that can be passed directly to `map`, `filter` or `every`:
 
 ```ts
+import { map } from 'remeda';
+
 const evaluate = actorPredicateEvaluator(snapshot);
-const results = conditions.map(evaluate);
+const results = map(conditions, evaluate);
 ```
 
 The observation belongs to one synchronous decision pass. Treat it as read-only and bind a new evaluator when the snapshot changes; do not retain an evaluator across ticks as a cache. Returned traces and actions remain detached from their inputs. Static predicates, such as feature flags, can be composed once at module initialization. Release discovery similarly binds the expected source revision before filtering workflow runs.
 
-Use currying when an earlier argument is reused or the resulting unary function fits a higher-order operation. Keep simple positional functions and language-native iterators when an extra closure adds no useful composition. Preserve short-circuiting, diagnostic precedence and effect timing: read stateful evidence in orchestration only after its admission checks pass. These conventions do not require a generic currying library or a blanket function-arity rule.
+Use currying when an earlier argument is reused or the resulting unary function fits a higher-order operation. Keep simple positional functions and language-native iterators when an extra closure adds no useful composition. Preserve short-circuiting, diagnostic precedence and effect timing: read stateful evidence in orchestration only after its admission checks pass.
+
+## Functional libraries
+
+Remeda is the shared composition library for first-party TypeScript and Bun tooling. Use named imports for pure transformations and reusable predicates, with data-last functions when binding configuration for a pipeline. The architecture policy records the allowed operations; randomness, timers and retained-state helpers belong to effect or orchestration modules. Namespace imports and unrestricted re-exports are rejected in logic.
+
+Remeda can fuse adjacent lazy transformations. Use fused pipelines for dense collections and pure unary callbacks. Preserve intermediate arrays when a callback depends on its index or array, and keep ordered validation separate when evaluating later values would change the first error. Effectful callbacks remain in explicit orchestration. Object transformations must preserve validated key constraints and output detachment.
+
+Frunk is the shared composition library for native Rust logic. Use its typed transformations and validation combinators where they remove repeated domain assembly or validation. Independent pure checks may accumulate internally; public errors and precedence remain part of the existing contract. Keep dependent admission, bounded decoding, locks, file transactions and transport lifetimes sequential. Rust closures bind context for unary evaluation without a separate currying layer.
+
+These libraries apply across application and tooling domains. Data-only schemas, scalar arithmetic, byte codecs, performance-sensitive search loops and effect adapters retain their language-native implementation when no library composition is involved. A dependency import in every file is not an architectural requirement. Generated and vendored code stays with its owning generator or upstream source.
 
 ## Enforcement and proof
 

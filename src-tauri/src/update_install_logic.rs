@@ -1,5 +1,7 @@
 //! Signed archive and bundle metadata policy, without filesystem effects.
 use base64::{engine::general_purpose::STANDARD, Engine};
+#[cfg(any(target_os = "macos", test))]
+use frunk::{hlist_pat, prelude::IntoValidated};
 use minisign_verify::{PublicKey, Signature};
 #[cfg(any(target_os = "macos", test))]
 use std::{
@@ -59,26 +61,50 @@ pub(crate) fn bundle_version(metadata: &plist::Value) -> Option<&str> {
 
 #[cfg(any(target_os = "macos", test))]
 pub(crate) fn version_is_newer(candidate: &str, installed: &str) -> Option<bool> {
-    let (Ok(candidate), Ok(installed)) = (
-        semver::Version::parse(candidate),
-        semver::Version::parse(installed),
-    ) else {
-        return None;
-    };
-    Some(candidate > installed)
+    // Both independent parsers were already evaluated together. Preserve that
+    // contract while retaining their typed success values for comparison.
+    (semver::Version::parse(candidate).into_validated() + semver::Version::parse(installed))
+        .into_result()
+        .ok()
+        .map(|hlist_pat!(candidate, installed)| candidate > installed)
 }
 
 #[cfg(any(target_os = "macos", test))]
+#[derive(frunk::Generic)]
+struct BundleMetadata<'a> {
+    identifier: &'a str,
+    short_version: &'a str,
+    build_version: &'a str,
+    executable: &'a str,
+}
+#[cfg(any(target_os = "macos", test))]
+impl<'a> BundleMetadata<'a> {
+    fn parse(value: &'a plist::Value) -> Option<Self> {
+        let dictionary = value.as_dictionary()?;
+        let text = |key: &'static str| {
+            dictionary
+                .get(key)
+                .and_then(plist::Value::as_string)
+                .ok_or(key)
+        };
+        (text("CFBundleIdentifier").into_validated()
+            + text("CFBundleShortVersionString")
+            + text("CFBundleVersion")
+            + text("CFBundleExecutable"))
+        .into_result()
+        .ok()
+        .map(frunk::from_generic)
+    }
+    fn matches(&self, version: &str) -> bool {
+        self.identifier == "com.rayrag.companion"
+            && self.short_version == version
+            && self.build_version == version
+            && self.executable == "rayrag-companion"
+    }
+}
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn bundle_matches(metadata: &plist::Value, version: &str) -> bool {
-    let Some(d) = metadata.as_dictionary() else {
-        return false;
-    };
-    d.get("CFBundleIdentifier").and_then(|v| v.as_string()) == Some("com.rayrag.companion")
-        && d.get("CFBundleShortVersionString")
-            .and_then(|v| v.as_string())
-            == Some(version)
-        && d.get("CFBundleVersion").and_then(|v| v.as_string()) == Some(version)
-        && d.get("CFBundleExecutable").and_then(|v| v.as_string()) == Some("rayrag-companion")
+    BundleMetadata::parse(metadata).is_some_and(|bundle| bundle.matches(version))
 }
 
 #[cfg(test)]
@@ -143,6 +169,33 @@ mod tests {
         }
         assert!(parse_plist(b"corrupt").is_none());
         assert!(bundle_version(&plist::Value::Boolean(true)).is_none());
+    }
+
+    #[test]
+    fn bundle_projection_requires_four_strings_but_keeps_unrelated_plist_fields() {
+        let mut expected = metadata("1.2.3");
+        expected
+            .as_dictionary_mut()
+            .unwrap()
+            .insert("Extra".into(), true.into());
+        assert!(bundle_matches(&expected, "1.2.3"));
+        for key in [
+            "CFBundleIdentifier",
+            "CFBundleShortVersionString",
+            "CFBundleVersion",
+            "CFBundleExecutable",
+        ] {
+            let mut missing = expected.clone();
+            missing.as_dictionary_mut().unwrap().remove(key);
+            assert!(!bundle_matches(&missing, "1.2.3"));
+            let mut wrong_type = expected.clone();
+            wrong_type
+                .as_dictionary_mut()
+                .unwrap()
+                .insert(key.into(), true.into());
+            assert!(!bundle_matches(&wrong_type, "1.2.3"));
+        }
+        assert!(!bundle_matches(&plist::Value::Boolean(true), "1.2.3"));
     }
 
     #[test]

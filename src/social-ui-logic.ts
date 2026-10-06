@@ -1,13 +1,19 @@
+import { find, map, pipe } from 'remeda';
 import type { SocialContext, SocialSnapshot } from './social';
 const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 export function socialContextFromStatus(value: unknown): SocialContext {
   const s = record(value), p = record(s.player), c = record(s.character);
-  const skills = Array.isArray(c.learned) ? c.learned.map(record) : [];
+  const skills = Array.isArray(c.learned) ? map(c.learned, record) : [];
   const own=typeof p.id==='number'&&Number.isInteger(p.id)&&p.id>=0&&p.id<=0x7fffffff&&p.kind===0;
   return { ready: s.connected === true && s.compatible === true && own, actorId: own ? p.id as number : null,
     name: typeof p.name === 'string' ? p.name : '', job: typeof p.classId === 'number' ? p.classId : null,
-    learnedBasic: c.skillsKnown === true ? Number(skills.find(skill => skill.skillId === 1)?.level ?? 0) : null,
+    learnedBasic: c.skillsKnown === true ? Number(find(skills, skill => skill.skillId === 1)?.level ?? 0) : null,
     inParty: record(s.world).party != null, silenced: Array.isArray(c.statuses) && c.statuses.some(status => record(status).id === 6) };
+}
+export function socialHistoryText(history: unknown): string {
+  const states: Record<string, string> = { sent: 'Sent', echo: 'Echo observed', unconfirmed: 'Unconfirmed', observed: 'Observed' };
+  return pipe(Array.isArray(history) ? history : [], map(record),
+    map(row => `${states[String(row.state)] ?? 'Observed'} · ${String(row.name ?? '')} · ${row.kind === 'chat' ? ['Say', 'Shout', 'Party', 'Notice'][Number(row.channel)] ?? 'Chat' : 'Emote'}: ${String(row.text ?? '')}`)).join('\n');
 }
 export function validSocialSnapshot(value: unknown): value is SocialSnapshot {
   const v = record(value);

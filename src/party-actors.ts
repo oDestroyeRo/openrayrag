@@ -1,8 +1,9 @@
+import { filter } from 'remeda';
 import type { ActorObservations } from './actor-observations';
 import { RESOURCE_STALE_MS } from './actor-resources';
 import type { PartyMember, WorldEvent } from './world-protocol';
 
-import type { PartyActorBinding, Party, Association } from './party-actors-logic';
+import { onlinePartyMembers, distinctPartyActors, type PartyActorBinding, type Party, type Association } from './party-actors-logic';
 
 export { type PartyActorBinding } from './party-actors-logic';
 
@@ -27,9 +28,10 @@ export class PartyActorBindings {
   capturedArrival(captured:PartyActorBinding & {name:string;partyName:string}, party:Party, map:string, observations:ActorObservations):PartyActorBinding|null {
     const member=party?.members.get(captured.memberId), actor=observations.partyActor(captured.entityId);
     if(!party||party.id!==captured.partyId||party.name!==captured.partyName||!member||!member.leader
-      ||member.entityId<=0||member.entityId!==captured.entityId||member.name!==captured.name||member.map!==map
-      ||[...party.members.values()].filter(row=>row.entityId>0&&row.entityId===member.entityId).length!==1
-      ||new Set([...party.members.values()].filter(row=>row.entityId>0).map(row=>row.entityId)).size!==[...party.members.values()].filter(row=>row.entityId>0).length
+      ||member.entityId<=0||member.entityId!==captured.entityId||member.name!==captured.name||member.map!==map)return null;
+    const online=onlinePartyMembers([...party.members.values()]);
+    if(filter(online, row=>row.entityId===member.entityId).length!==1
+      ||!distinctPartyActors(online)
       ||!actor||actor.world===captured.world||actor.kind!==0||actor.name!==member.name||actor.partyId!==party.id||actor.partyName!==party.name||!observations.livingPlayer(member.entityId))return null;
     const at=observations.context().at,visibleAt=observations.visibleAt(member.entityId);
     if(visibleAt===null||at<visibleAt||at-visibleAt>RESOURCE_STALE_MS)return null;

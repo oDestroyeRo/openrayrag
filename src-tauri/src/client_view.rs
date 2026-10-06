@@ -1,4 +1,5 @@
 //! A persistent game webview shares the companion window, never its authority.
+use frunk::{hlist_pat, prelude::IntoValidated};
 use serde::Deserialize;
 use tauri::{webview::WebviewBuilder, Manager, Webview};
 
@@ -22,7 +23,7 @@ pub(crate) fn create_main(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, frunk::Generic)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GameViewBounds {
     x: f64,
@@ -44,20 +45,28 @@ impl GameViewBounds {
         if ![self.x, self.y, self.width, self.height, width, height]
             .iter()
             .all(|value| value.is_finite())
-            || self.x < 0.0
-            || self.y < 0.0
-            || self.width < 1.0
-            || self.height < 1.0
-            || self.x >= width
-            || self.y >= height
         {
             return Err("Invalid game view bounds.".into());
         }
-        Ok(Self {
-            width: self.width.min(width - self.x),
-            height: self.height.min(height - self.y),
-            ..self
+        ((self.x >= 0.0 && self.x < width)
+            .then_some(self.x)
+            .ok_or(())
+            .into_validated()
+            + (self.y >= 0.0 && self.y < height)
+                .then_some(self.y)
+                .ok_or(())
+            + (self.width >= 1.0).then_some(self.width).ok_or(())
+            + (self.height >= 1.0).then_some(self.height).ok_or(()))
+        .into_result()
+        .map(|hlist_pat!(x, y, requested_width, requested_height)| {
+            frunk::from_generic(frunk::hlist![
+                x,
+                y,
+                requested_width.min(width - x),
+                requested_height.min(height - y)
+            ])
         })
+        .map_err(|_| "Invalid game view bounds.".into())
     }
 }
 
@@ -178,6 +187,36 @@ mod tests {
                 height: 700.0,
             }
         );
+    }
+
+    #[test]
+    fn finite_bounds_preserve_fractional_room_after_a_resize() {
+        let bounds = GameViewBounds {
+            x: 99.75,
+            y: 49.5,
+            width: 10.0,
+            height: 10.0,
+        };
+        let expected = GameViewBounds {
+            x: 99.75,
+            y: 49.5,
+            width: 0.25,
+            height: 0.5,
+        };
+        assert_eq!(bounds.clipped(100.0, 50.0).unwrap(), expected);
+        assert_eq!(bounds.clipped(100.0, 50.0).unwrap(), expected);
+        assert_eq!(bounds.width, 10.0);
+        for (width, height) in [
+            (f64::NAN, 50.0),
+            (100.0, f64::INFINITY),
+            (99.75, 50.0),
+            (100.0, 49.5),
+        ] {
+            assert_eq!(
+                bounds.clipped(width, height).unwrap_err(),
+                "Invalid game view bounds."
+            );
+        }
     }
 
     #[test]

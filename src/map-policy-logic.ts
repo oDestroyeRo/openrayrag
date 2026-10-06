@@ -1,3 +1,4 @@
+import { sort, sortBy } from 'remeda';
 import { NAVIGATION_MAPS, mapDimensions, type WalkGrid } from './navigation-logic';
 import type { Position } from './protocol';
 export interface LockArea { map: string; minX: number; minY: number; maxX: number; maxY: number }
@@ -61,7 +62,7 @@ export function insideLockArea(policy: MapPolicy, map: string, p: Position): boo
 }
 
 export function policyIdentity(policy: MapPolicy): string {
-  return JSON.stringify([policy.mode,[...policy.allow].sort(),[...policy.deny].sort(),[...policy.penalties].sort((a,b)=>a.map.localeCompare(b.map)),policy.lockArea]);
+  return JSON.stringify([policy.mode,sortBy(policy.allow, map=>map),sortBy(policy.deny, map=>map),sort(policy.penalties, (a,b)=>a.map.localeCompare(b.map)),policy.lockArea]);
 }
 
 export function policySummary(policy: MapPolicy, origin?: string): string {

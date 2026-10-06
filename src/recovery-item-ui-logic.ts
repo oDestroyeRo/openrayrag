@@ -1,0 +1,34 @@
+import { filter, find, partition, pipe } from 'remeda';
+
+/** Reject the whole observation before exposing any stock from a malformed row. */
+export function recoveryInventory(character: unknown): Map<number, number> | null {
+  const value = character && typeof character === 'object' ? character as Record<string, unknown> : {};
+  if (value.inventoryKnown !== true || !Array.isArray(value.inventory) || value.inventory.length > 600) return null;
+  const stock = new Map<number, number>();
+  for (const entry of value.inventory) {
+    const row = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {};
+    if (!Number.isInteger(row.itemId) || Number(row.itemId) < 1 || Number(row.itemId) > 2147483647
+      || !Number.isInteger(row.count) || Number(row.count) < 0 || Number(row.count) > 32767) return null;
+    const itemId = Number(row.itemId);
+    stock.set(itemId, (stock.get(itemId) ?? 0) + Number(row.count));
+  }
+  return stock;
+}
+
+export const carriedRecoveryItem = (stock: ReadonlyMap<number, number> | null) => (itemId: number): boolean =>
+  (stock?.get(itemId) ?? 0) > 0;
+
+export function recoveryChoices({ selected, itemIds, ids, stock }: {
+  selected: boolean; itemIds: readonly number[]; ids: readonly number[]; stock: ReadonlyMap<number, number> | null;
+}): { order: number[]; visibleOrder: number[] } {
+  const order = selected ? pipe(ids, filter(id => !itemIds.includes(id)), remaining => [...itemIds, ...remaining]) : [...ids];
+  const [visibleOrder] = partition(order, carriedRecoveryItem(stock));
+  return { order, visibleOrder };
+}
+
+export function recoveryStockSummary({ ids, itemIds, stock }: {
+  ids: readonly number[]; itemIds: readonly number[]; stock: ReadonlyMap<number, number> | null;
+}): { carried: boolean; missing: number } {
+  return { carried: find(ids, carriedRecoveryItem(stock)) !== undefined,
+    missing: stock === null ? 0 : filter(itemIds, id => (stock.get(id) ?? 0) === 0).length };
+}

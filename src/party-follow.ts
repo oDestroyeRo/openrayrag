@@ -1,5 +1,6 @@
+import { filter } from 'remeda';
 import { RESOURCE_STALE_MS } from './actor-resources';
-import type { PartyActorBinding } from './party-actors-logic';
+import { onlinePartyMembers, distinctPartyActors, type PartyActorBinding } from './party-actors-logic';
 import { mapAllowed, mapPolicy } from './map-policy-logic';
 import type { GameEvent } from './protocol';
 import { automationSettings, type Settings } from './settings';
@@ -52,9 +53,9 @@ export class PartyFollowRuntime {
   resetEvidence(reason:string):void {this.maps.clear();this.selected=null;this.membershipUnavailable=true;this.cancel(reason);}
   private consistent(context:PartyFollowContext,leader:Leader):boolean {
     const party=context.party,member=party?.members.get(leader.memberId);
-    const online=party?[...party.members.values()].filter(row=>row.entityId>0):[];
+    const online=party?onlinePartyMembers([...party.members.values()]):[];
     return !!party&&party.id===leader.partyId&&party.name===leader.partyName&&!!member&&member.leader&&member.entityId===leader.entityId
-      &&member.name===leader.name&&online.filter(row=>row.leader).length===1&&new Set(online.map(row=>row.entityId)).size===online.length;
+      &&member.name===leader.name&&filter(online, row=>row.leader).length===1&&distinctPartyActors(online);
   }
   /** Partial HP can revoke a captured arrival, but cannot establish identity or shared resources. */
   private observeArrivalHealth(memberId:number,hp:number|undefined,maxHp:number|undefined,context:PartyFollowContext):void {
@@ -106,8 +107,8 @@ export class PartyFollowRuntime {
   }
   visibleLeader(context:PartyFollowContext):PartyActorBinding|null {
     if(!this.enabled||this.terminal||this.membershipUnavailable||!context.party)return null;
-    const online=[...context.party.members.values()].filter(row=>row.entityId>0),leaders=online.filter(row=>row.leader);
-    if(leaders.length!==1||new Set(online.map(row=>row.entityId)).size!==online.length)return null;
+    const online=onlinePartyMembers([...context.party.members.values()]),leaders=filter(online, row=>row.leader);
+    if(leaders.length!==1||!distinctPartyActors(online))return null;
     const member=leaders[0]!;
     if(this.selected&&(member.memberId!==this.selected.memberId||!this.consistent(context,this.selected)))return null;
     const binding=context.bindings.get(member.memberId)??this.arrivalBinding;

@@ -3,7 +3,7 @@ import { settingsWithFieldMap } from './field-controls-logic';
 import { DEFAULT_AUTOMATION, MAX_TARGETS, validateFormSettings, validateSettings, type Settings } from './settings';
 import { MapTargets } from './targets';
 
-import type { AutomationEditor, FormSnapshot, SettingsFormProjection, Hooks, TargetRow } from './settings-form-logic';
+import { targetRosterIdentity, type AutomationEditor, type FormSnapshot, type SettingsFormProjection, type Hooks, type TargetRow } from './settings-form-logic';
 
 export { type SettingsFormProjection, type SettingsFormContext } from './settings-form-logic';
 
@@ -164,8 +164,8 @@ export class SettingsForm {
   private renderTargets(): void {
     const { mapInfo, level, targetsLocked } = this.hooks.context();
     const options = this.targets.options;
-    const order = options.map(monster => monster.classId).join(',');
-    const ids = new Set(options.map(monster => monster.classId));
+    const roster = targetRosterIdentity(options), order = roster.order;
+    const ids = new Set(roster.ids);
     for (const id of this.rows.keys()) if (!ids.has(id)) this.rows.delete(id);
     for (const monster of options) {
       let row = this.rows.get(monster.classId);

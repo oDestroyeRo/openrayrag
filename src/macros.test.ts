@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import cases from './data/macro-script-cases.json';
+import { macroInventoryItemIds } from './macros-logic';
 import { dryRunMacro, MACRO_LIMITS, MacroRuntime, validateMacroCheckpoint, validateMacroScript,
   type MacroCheckpoint, type MacroRule, type MacroScript, type MacroStep } from './macros';
 
@@ -688,5 +689,23 @@ describe('unlimited macro execution', () => {
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
     expect(runtime.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 1, actionsCompleted: 1 });
     expect(runtime.snapshot().reason).toMatch(/identity budget/);
+  });
+});
+
+describe('macro inventory observation projection', () => {
+  it('deduplicates and orders requested item IDs without changing the script', () => {
+    const original = script({ rules: [rule({ conditions: [
+      { field: 'inventory', itemId: 601, operator: 'eq', value: 0 },
+      { field: 'inventory', itemId: 501, operator: 'eq', value: 0 },
+    ] }), rule({ name: 'Second', conditions: [
+      { field: 'inventory', itemId: 601, operator: 'gte', value: 1 },
+      { field: 'level', operator: 'gte', value: 10 },
+    ] })] });
+    const before = structuredClone(original);
+    const ids = macroInventoryItemIds(original);
+    expect(ids).toEqual([501, 601]);
+    ids[0] = 999;
+    expect(macroInventoryItemIds(original)).toEqual([501, 601]);
+    expect(original).toEqual(before);
   });
 });

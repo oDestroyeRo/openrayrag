@@ -1,4 +1,4 @@
-import { mapCoordinate, consoleCharacterText, consoleInventory, consoleMonsters } from './bot-console-logic';
+import { mapCoordinate, consoleCharacterText, consoleInventory, consoleMonsters, consoleSelectedItem, consoleInventorySignature, consoleDropTexts, consoleRadarSignature } from './bot-console-logic';
 export { mapCoordinate } from './bot-console-logic';
 import type { Snapshot } from './engine';
 import { ITEM_CATALOG, itemName } from './game-catalog';
@@ -105,10 +105,7 @@ export class BotConsole {
     this.itemControls();
   }
   private selectedItem(): { itemId: number; count: number } | null {
-    if (!this.status?.character.inventoryKnown || !/^\d+$/.test(this.items.value)) return null;
-    const itemId = Number(this.items.value);
-    const count = this.status.character.inventory.filter(item => item.itemId === itemId).reduce((sum, item) => sum + item.count, 0);
-    return count > 0 ? { itemId, count } : null;
+    return this.status?.character.inventoryKnown ? consoleSelectedItem(this.status, this.items.value) : null;
   }
   private itemControls(): void {
     const item = this.selectedItem(), info = item ? ITEM_CATALOG[item.itemId] : undefined;
@@ -120,7 +117,7 @@ export class BotConsole {
   render(status: Snapshot | null): void {
     this.status = status;
     for (const [id, text] of Object.entries(consoleCharacterText(status))) this.get(`console-${id}`).textContent = text;
-    const character = status?.character, signature = JSON.stringify([this.world(), character?.inventoryKnown, character?.inventory.map(item => [item.itemId, item.count])]);
+    const character = status?.character, signature = consoleInventorySignature(status, this.world());
     if (signature !== this.inventorySignature) {
       this.inventorySignature = signature;
       const selected = this.inventoryWorld === this.world() ? this.items.value : '', stock = consoleInventory(status);
@@ -151,7 +148,7 @@ export class BotConsole {
     let empty = list.querySelector<HTMLElement>('.console-empty');
     if (!empty) { list.textContent = ''; for (const row of this.monsters.values()) list.append(row.root); empty = document.createElement('p'); empty.className = 'console-empty'; list.append(empty); }
     empty.hidden = live.size > 0; empty.textContent = 'No living monsters observed.';
-    const dropTexts = (status?.drops ?? []).map(drop => `${itemName(drop.itemId)} × ${drop.count} · ${drop.x}, ${drop.y}`);
+    const dropTexts = consoleDropTexts(status);
     if (this.dropTexts?.length !== dropTexts.length || dropTexts.some((text, index) => text !== this.dropTexts![index])) {
       const drops = this.get('console-drops'); drops.replaceChildren();
       for (const text of dropTexts) { const row = document.createElement('p'); row.textContent = text; drops.append(row); }
@@ -191,10 +188,7 @@ export class BotConsole {
     const n = status?.navigation;
     this.get('navigation-info').textContent = n ? `${n.width} × ${n.height} · ${n.reachable.toLocaleString()} reachable · ${n.blocked.toLocaleString()} blocked · ${n.excluded.toLocaleString()} portal exclusions${n.routeLength ? ` · ${n.routeLength} route cells` : ''}${n.ready ? '' : ' · character outside verified safe ground'}`
       : map ? `Collision unavailable for ${map}. ${NAVIGATION_MAPS.length} maps supported.` : 'Connect a character to inspect its field.';
-    const point = (position: Position) => [position.x, position.y];
-    const signature = JSON.stringify([map, width, height, status?.player ? point(status.player) : null,
-      (status?.monsters ?? []).map(point), (status?.drops ?? []).map(point), n?.goal ? point(n.goal) : null,
-      (n?.route ?? []).map(point), (n?.leg ?? []).map(point)]);
+    const signature = consoleRadarSignature({ status, map, width, height });
     if (!resized && signature === this.mapSignature) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!this.raster) {

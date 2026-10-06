@@ -1,6 +1,12 @@
+import { filter, map, sort } from "remeda";
+
 // Pure public release metadata, workflow evidence and option contracts.
 const REPOSITORY = "oDestroyeRo/openrayrag";
 function requireValue(ok, message) { if (!ok) throw new Error(message); }
+const compareAssetRows = (a, b) => {
+  const left = String(a), right = String(b);
+  return left < right ? -1 : left > right ? 1 : 0;
+};
 
 export const MAX_PUBLIC_TOTAL = 512 * 1024 * 1024;
 export const MAX_PUBLICATION_ATTEMPTS = 20;
@@ -53,7 +59,8 @@ export function releaseSnapshot(release) {
   return JSON.stringify({
     id: release.id, tag: release.tag_name, body: release.body, draft: release.draft,
     prerelease: release.prerelease, publishedAt: release.published_at,
-    assets: release.assets.map(a => [a.id, a.name, a.state, a.size, a.digest, a.browser_download_url, a.updated_at]).sort(),
+    assets: sort(map(release.assets, a => [a.id, a.name, a.state, a.size, a.digest, a.browser_download_url, a.updated_at]),
+      compareAssetRows),
   });
 }
 
@@ -74,7 +81,7 @@ const successfulStepNamed = name => step => step.name === name && step.conclusio
 
 function namedJobs(jobs, name) {
   requireValue(Array.isArray(jobs.jobs) && jobs.total_count === jobs.jobs.length, "Incomplete hosted job list.");
-  return jobs.jobs.filter(jobNamed(name));
+  return filter(jobs.jobs, jobNamed(name));
 }
 const completed = job => job?.status === "completed" && job.conclusion === "success";
 
@@ -88,7 +95,7 @@ export function validateArtifactProduction(run, jobs, artifact, provenance, mark
   const assembler = namedJobs(jobs, "assemble")[0];
   requireValue(assembler.steps?.some(step => step.name.includes("actions/upload-artifact@") && step.conclusion === "success"), "Assembly artifact upload did not succeed.");
   for (const platform of ["windows", "linux"]) {
-    const matches = jobs.jobs.filter(platformBuilder(platform));
+    const matches = filter(jobs.jobs, platformBuilder(platform));
     requireValue(matches.length === 1 && completed(matches[0]), `Missing successful ${platform} builder.`);
   }
   requireValue(String(artifact.id) === marker.artifact.id && artifact.name === provenance.artifactName &&

@@ -1,3 +1,4 @@
+import { filter } from 'remeda';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,7 +20,7 @@ export async function mergeDependabotUpdate({ request, runId, dryRun = false, pa
   // the recovery path when the release dispatch failed after a successful merge.
   const candidates = run.pull_requests?.length ? run.pull_requests :
     await request('GET', `${root}/commits/${run.head_sha}/pulls?per_page=100`);
-  const associated = candidates.filter(pr =>
+  const associated = filter(candidates, pr =>
     pr.base?.ref === 'main' && pr.base?.repo?.id === run.repository.id &&
     pr.head?.repo?.id === run.repository.id && pr.head?.sha === run.head_sha);
   if (associated.length !== 1) return ignored('no unique matching main PR');
@@ -29,7 +30,7 @@ export async function mergeDependabotUpdate({ request, runId, dryRun = false, pa
   if (rejection) return ignored(rejection);
 
   const jobs = await request('GET', `${root}/actions/runs/${runId}/jobs?filter=latest&per_page=100`);
-  const gates = jobs.jobs.filter(job => job.name === 'CI / required');
+  const gates = filter(jobs.jobs, job => job.name === 'CI / required');
   if (gates.length !== 1 || gates[0].status !== 'completed' || gates[0].conclusion !== 'success') {
     return ignored('required desktop and security gate did not succeed');
   }

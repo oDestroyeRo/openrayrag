@@ -5,6 +5,9 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { runInNewContext } from 'node:vm';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import { createVerificationPlan, createInvocation } from './check-policy.mjs';
 import { bridgeBuildOptions } from './build-bridge-policy.mjs';
 import { buildBridge } from './build-bridge.mjs';
@@ -16,6 +19,8 @@ import { createRunSnapshot } from './hosted-status-policy.mjs';
 import { median, rendererOptions, compareRenderingReports, packetReport, validatePacketReport } from './benchmark-policy.mjs';
 import { sourceModuleFiles } from './release-public-source.mjs';
 import { responsiveFixtureBuildOptions } from './responsive-fixture-policy.mjs';
+import { privateEnvironment } from './release-public-io.mjs';
+import { smokePackagingEnvironment } from './process-diagnostics.mjs';
 
 const run = promisify(execFile);
 const sourceValues = () => [
@@ -24,6 +29,21 @@ const sourceValues = () => [
   'version = 4\n\n[[package]]\nname = "rayrag-companion"\nversion = "0.1.0"\n\n[[package]]\nname = "retained"\nversion = "9.0.0"\n',
   JSON.stringify({ version: '0.1.0', identifier: IDENTIFIER }),
 ];
+
+test('Remeda environment projections preserve unusual own keys without prototype changes', () => {
+  const environment = Object.fromEntries([
+    ['__proto__', 'literal prototype key'], ['constructor', 'literal constructor'],
+    ['toString', 'literal method name'], ['PATH', 'tools'], ['GH_TOKEN', 'synthetic'],
+  ]);
+  for (const result of [privateEnvironment('/private-proof', environment), smokePackagingEnvironment(environment)]) {
+    assert.equal(Object.getPrototypeOf(result), Object.prototype);
+    for (const key of ['__proto__', 'constructor', 'toString', 'PATH']) {
+      assert.equal(Object.hasOwn(result, key), true);
+      assert.equal(result[key], environment[key]);
+    }
+    assert.equal(Object.hasOwn(result, 'GH_TOKEN'), false);
+  }
+});
 
 test('source checks are deterministic from supplied platform and script names', () => {
   const names = ['z-tests.mjs', 'README.md', 'a-tests.mjs'];
@@ -161,6 +181,49 @@ test('fixture configuration uses supplied directories and creates no output by i
   assert.equal(config.write, false);
   assert.equal(config.target, 'safari16');
   assert.match(config.stdin.contents, /Offline route planning/);
+});
+
+test('Git-source benchmark loaders bundle root Remeda into standalone node and browser artifacts', async () => {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  for (const [platform, format] of [['node', 'esm'], ['browser', 'esm'], ['browser', 'iife']]) {
+    const result = await build({
+      stdin: { contents: "export { projected } from './src/engine.ts';", resolveDir: root },
+      bundle: true, platform, format, target: 'safari16', write: false, metafile: true,
+      globalName: 'SnapshotBenchmark', logLevel: 'silent',
+      // Like the real benchmark plugins, replace only source-file contents.
+      plugins: [{ name: 'source-snapshot', setup(builder) {
+        builder.onLoad({ filter: /[\\/]src[\\/]engine\.ts$/ }, () => ({
+          contents: "import { map, sort } from 'remeda'; export const projected = map(sort([3, 1, 2], (a, b) => a - b), n => n * 2);",
+          loader: 'ts',
+        }));
+      } }],
+    });
+    assert.ok(Object.keys(result.metafile.inputs).some(name => name.includes('node_modules/remeda/')));
+    const source = result.outputFiles[0].text;
+    if (format === 'esm') {
+      const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+      assert.deepEqual(module.projected, [2, 4, 6]);
+    } else {
+      const context = {};
+      runInNewContext(source, context);
+      assert.equal(JSON.stringify(context.SnapshotBenchmark.projected), '[2,4,6]');
+    }
+  }
+});
+
+test('renderer fixture bundles Remeda alongside offline native adapters without a browser', async () => {
+  const result = await build({
+    entryPoints: [fileURLToPath(new URL('./client-rendering-fixture.ts', import.meta.url))],
+    bundle: true, format: 'esm', platform: 'browser', target: 'chrome120',
+    loader: { '.svg': 'text' }, write: false, outdir: 'unused', metafile: true, logLevel: 'silent',
+    plugins: [{ name: 'offline-native', setup(builder) {
+      builder.onResolve({ filter: /^@tauri-apps\/api\/(core|event)$/ }, () => ({
+        path: fileURLToPath(new URL('./client-rendering-native.ts', import.meta.url)),
+      }));
+    } }],
+  });
+  assert.ok(Object.keys(result.metafile.inputs).some(name => name.includes('node_modules/remeda/')));
+  assert.ok(result.outputFiles.some(file => file.path.endsWith('.js')));
 });
 
 test('importing tooling entrypoints launches no commands, prints no output and needs no CLI arguments', async () => {

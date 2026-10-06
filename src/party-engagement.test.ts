@@ -6,6 +6,7 @@ import type { Entity, GameEvent } from './protocol';
 import type { SkillResult } from './protocol-feature';
 import type { PartyMember, WorldEvent } from './world-protocol';
 import { PartyEngagements, PARTY_ENGAGEMENT_LIMITS } from './party-engagement';
+import { partyEngagementSnapshot, type Claims } from './party-engagement-logic';
 import type { PartyActorBinding } from './party-actors';
 import cases from './data/party-engagement-settings-cases.json';
 const map='prt_fild08';
@@ -138,4 +139,24 @@ describe('bounded monster claim provenance',()=>{
   const policy=new PartyEngagements();policy.observe(monster(),binding(),false);policy.refresh(()=>null);policy.observe(monster(),binding(),false);expect(policy.allows(monster())).toBe(false);
   policy.observe({...monster(),incarnation:2},binding(),false);expect(policy.allows({...monster(),incarnation:2})).toBe(true);policy.observe({...monster(),incarnation:2},null,true);policy.observe({...monster(),incarnation:2},binding(),false);expect(policy.allows({...monster(),incarnation:2})).toBe(false);
  });
+});
+
+describe('party engagement projection', () => {
+  it('counts accepted and blocked claims separately and keeps distinct reasons in encounter order', () => {
+    const binding: PartyActorBinding = { partyId: 5, memberId: 7, entityId: 3, map,
+      world: 'world', incarnation: 1, affiliationRevision: 1 };
+    const claim = (id: number, blocker: Claims['blocker'], accepted = false): Claims => ({
+      monster: { id, world: 'world', incarnation: 1 }, blocker,
+      sources: new Map(accepted ? [[7, binding]] : []),
+    });
+    const claims = [claim(1, 'unverified source'), claim(2, null, true), claim(3, 'source capacity'),
+      claim(4, 'unverified source'), claim(5, null)];
+    const before = structuredClone(claims);
+    const snapshot = partyEngagementSnapshot({ enabled: true, claims });
+    expect(snapshot).toEqual({ enabled: true, accepted: 1, blocked: 3,
+      reasons: ['Party engagement unavailable: unverified source.', 'Party engagement unavailable: source capacity.'] });
+    snapshot.reasons.reverse();
+    expect(partyEngagementSnapshot({ enabled: false, claims }).reasons[0]).toBe('Party engagement unavailable: unverified source.');
+    expect(claims).toEqual(before);
+  });
 });
