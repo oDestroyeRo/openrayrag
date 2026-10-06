@@ -209,7 +209,7 @@ test('only trusted main signs and centrally publishes every platform',()=>{
   const jobs=Object.entries(release.jobs).filter(([,job])=>JSON.stringify(job).includes('secrets.TAURI_SIGNING_PRIVATE_KEY'));
   assert.deepEqual(jobs.map(([name])=>name),['build']);
   for(const job of [...Object.values(workflow.jobs),...Object.values(release.jobs)])for(const step of job.steps||[]){
-    if(step.uses)assert.match(step.uses,/@v\d+\.\d+\.\d+$/);
+    if(step.uses)assert.match(step.uses,/^(actions|github)\//.test(step.uses)?/@v\d+\.\d+\.\d+$/:/@[a-f0-9]{40}$/);
     if(step.uses?.startsWith('actions/checkout@')){assert.equal(step.with.ref,'${{ github.sha }}');assert.equal(step.with['persist-credentials'],false);}
   }
   for(const platform of ['windows','linux'])assert.ok(release.jobs.assemble.steps.some(s=>s.with?.path===`platform-bundles/${platform}`));

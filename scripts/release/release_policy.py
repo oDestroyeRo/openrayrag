@@ -89,6 +89,8 @@ def validate_workflow_zip(members, names, asset_limit, bundle_limit):
     for member in members:
         checked(PurePosixPath(member.filename).name == member.filename and not member.is_dir(), 'Invalid workflow artifact path.')
         checked(not stat.S_ISLNK(member.external_attr >> 16), 'Workflow artifact links are forbidden.')
+        checked(not member.flag_bits & 1 and member.compress_type in {ZIP_STORED, ZIP_DEFLATED},
+                'Workflow artifact encryption or unsupported compression is forbidden.')
 
 
 def validate_bundle_metadata(info, version):

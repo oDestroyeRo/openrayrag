@@ -88,6 +88,67 @@ class ArchiveSafety(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'bounds'):
                 release.extract_zip(archive, root, ['payload'])
 
+    def test_workflow_zip_stdin_preserves_admitted_bytes(self):
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('payload', b'original release bytes')
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(release.sys, 'stdin') as stdin:
+            stdin.buffer = io.BytesIO(raw.getvalue())
+            release.main(['extract-zip-stdin', tmp, '["payload"]'])
+            self.assertEqual((pathlib.Path(tmp) / 'payload').read_bytes(), b'original release bytes')
+            self.assertEqual([p.name for p in pathlib.Path(tmp).iterdir()], ['payload'])
+
+    def test_workflow_zip_stdin_rejects_oversized_container_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(release.sys, 'stdin') as stdin:
+            stdin.buffer = io.BytesIO(b'x' * (1024 * 1024 + 2))
+            with mock.patch.object(release, 'BUNDLE_LIMIT', 1), self.assertRaisesRegex(ValueError, 'ZIP exceeds bounds'):
+                release.main(['extract-zip-stdin', tmp, '["payload"]'])
+            self.assertEqual(list(pathlib.Path(tmp).iterdir()), [])
+
+    def test_workflow_zip_rejects_unsupported_compression_before_any_output(self):
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, 'w') as archive:
+            archive.writestr('first', b'valid')
+            archive.writestr('second', b'unsupported', compress_type=zipfile.ZIP_BZIP2)
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, 'compression'):
+                release.extract_zip(io.BytesIO(raw.getvalue()), pathlib.Path(tmp), ['first', 'second'])
+            self.assertEqual(list(pathlib.Path(tmp).iterdir()), [])
+
+    def test_workflow_zip_rejects_encryption_before_any_output(self):
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, 'w') as archive:
+            archive.writestr('payload', b'synthetic')
+        data = bytearray(raw.getvalue())
+        central = data.index(b'PK\x01\x02')
+        data[central + 8] |= 1
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, 'encryption'):
+                release.extract_zip(io.BytesIO(data), pathlib.Path(tmp), ['payload'])
+            self.assertEqual(list(pathlib.Path(tmp).iterdir()), [])
+
+    def test_workflow_zip_checks_later_payload_crc_before_any_output(self):
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, 'w') as archive:
+            archive.writestr('first', b'valid')
+            archive.writestr('second', b'corrupt-me')
+        data = raw.getvalue().replace(b'corrupt-me', b'corrupt-no', 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(zipfile.BadZipFile, 'CRC'):
+                release.extract_zip(io.BytesIO(data), pathlib.Path(tmp), ['first', 'second'])
+            self.assertEqual(list(pathlib.Path(tmp).iterdir()), [])
+
+    def test_workflow_zip_preserves_existing_output(self):
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, 'w') as archive:
+            archive.writestr('payload', b'release bytes')
+        with tempfile.TemporaryDirectory() as tmp:
+            output = pathlib.Path(tmp) / 'payload'
+            output.write_bytes(b'caller owned')
+            with self.assertRaises(FileExistsError):
+                release.extract_zip(io.BytesIO(raw.getvalue()), pathlib.Path(tmp), ['payload'])
+            self.assertEqual(output.read_bytes(), b'caller owned')
+
     def test_app_manifest_compares_bytes_modes_paths_and_link_targets(self):
         for mutation in ['bytes', 'mode', 'path', 'link']:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
