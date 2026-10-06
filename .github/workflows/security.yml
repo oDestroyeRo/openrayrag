@@ -27,7 +27,7 @@ jobs:
         language: [actions, javascript-typescript, python, rust]
     env:
       RUSTUP_TOOLCHAIN: "1.98.1"
-      BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/../rayrag-bun-cache
+      BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}-bun-cache
       # Reuse Cargo dependencies, while extracting a fresh database every run.
       CODEQL_EXTRACTOR_RUST_OPTION_CARGO_TARGET_DIR: ${{ github.workspace }}/../rayrag-codeql-target
     steps:
