@@ -1,3 +1,4 @@
+use frunk::{hlist_pat, prelude::IntoValidated, HList, Validated};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -747,6 +748,39 @@ struct Recovery {
     sp_end: u8,
     timeout_seconds: u16,
 }
+type RecoveryValidation = Validated<HList!(u8, u8, u8, u8, u16), &'static str>;
+
+impl Recovery {
+    fn validated_bounds(&self) -> RecoveryValidation {
+        (1..=95)
+            .contains(&self.hp_start)
+            .then_some(self.hp_start)
+            .ok_or("hpStart")
+            .into_validated()
+            + (2..=100)
+                .contains(&self.hp_end)
+                .then_some(self.hp_end)
+                .ok_or("hpEnd")
+            + (self.sp_start <= 95)
+                .then_some(self.sp_start)
+                .ok_or("spStart")
+            + (1..=100)
+                .contains(&self.sp_end)
+                .then_some(self.sp_end)
+                .ok_or("spEnd")
+            + (1..=3600)
+                .contains(&self.timeout_seconds)
+                .then_some(self.timeout_seconds)
+                .ok_or("timeoutSeconds")
+    }
+    fn valid(&self) -> bool {
+        self.validated_bounds().into_result().is_ok_and(
+            |hlist_pat!(hp_start, hp_end, sp_start, sp_end, _timeout)| {
+                hp_start < hp_end && sp_start < sp_end
+            },
+        )
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1116,13 +1150,7 @@ impl AutomationSettings {
                 .rules
                 .iter()
                 .all(|r| positive_id(r.item_id) && (-100..=100).contains(&r.priority))
-            && (1..=95).contains(&self.recovery.hp_start)
-            && (2..=100).contains(&self.recovery.hp_end)
-            && self.recovery.sp_start <= 95
-            && (1..=100).contains(&self.recovery.sp_end)
-            && (1..=3600).contains(&self.recovery.timeout_seconds)
-            && self.recovery.hp_start < self.recovery.hp_end
-            && self.recovery.sp_start < self.recovery.sp_end
+            && self.recovery.valid()
             && (1..=64).contains(&self.escape.threat_count)
             && (1..=60).contains(&self.escape.threat_window_seconds)
             && (1..=95).contains(&self.escape.hp_below_percent)
@@ -1238,8 +1266,44 @@ pub(crate) fn validate_manual_protection_policy(value: &Value) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
-    use super::{Escape, EscapeResumeGuard, Settings, SupplyResumeGuard, SupplySettings};
+    use super::{Escape, EscapeResumeGuard, Recovery, Settings, SupplyResumeGuard, SupplySettings};
     use serde_json::{json, Value};
+
+    #[test]
+    fn recovery_accumulates_scalar_failures_before_checking_hysteresis() {
+        let malformed = Recovery {
+            enabled: true,
+            hp_start: 0,
+            hp_end: 101,
+            sp_start: 96,
+            sp_end: 0,
+            timeout_seconds: 3601,
+        };
+        assert_eq!(
+            malformed.validated_bounds().into_result().unwrap_err(),
+            ["hpStart", "hpEnd", "spStart", "spEnd", "timeoutSeconds"]
+        );
+        assert!(!malformed.valid());
+
+        for (hp_start, hp_end, sp_start, sp_end, timeout_seconds) in
+            [(1, 2, 0, 1, 1), (95, 100, 95, 100, 3600)]
+        {
+            let mut recovery = Recovery {
+                enabled: true,
+                hp_start,
+                hp_end,
+                sp_start,
+                sp_end,
+                timeout_seconds,
+            };
+            assert!(recovery.valid());
+            recovery.hp_end = recovery.hp_start;
+            assert!(!recovery.valid());
+            recovery.hp_end = hp_end;
+            recovery.sp_end = recovery.sp_start;
+            assert!(!recovery.valid());
+        }
+    }
 
     #[test]
     fn shares_strict_optional_party_engagement_settings() {
