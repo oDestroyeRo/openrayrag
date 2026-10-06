@@ -8,25 +8,28 @@ describe('shared initialization proof', () => {
     for (const key of Object.keys(full) as Array<keyof typeof full>) expect(initializationCertificate({ ...full, [key]: false })).toBe(false);
   });
   it('requires ordinary own entry and unchanged known resource revisions', () => {
-    expect(initializationResetAllowed(true, 1, 'resource-v1', 'resource-v1')).toBe(true);
-    expect(initializationResetAllowed(true, 1, 'resource-v1', 'resource-v2')).toBe(false);
-    expect(initializationResetAllowed(true, 1, null, null)).toBe(false);
-    for (const entry of [undefined, 0, 2, 3]) expect(initializationResetCandidate(true, entry, 'resource-v1')).toBe(false);
-    expect(initializationResetCandidate(false, 1, 'resource-v1')).toBe(false);
+    const input = { certificate: true, entryType: 1, baseline: 'resource-v1', current: 'resource-v1' };
+    expect(initializationResetAllowed(input)).toBe(true);
+    expect(initializationResetAllowed({ ...input, current: 'resource-v2' })).toBe(false);
+    expect(initializationResetAllowed({ ...input, baseline: null, current: null })).toBe(false);
+    for (const entryType of [undefined, 0, 2, 3]) expect(initializationResetCandidate({ ...input, entryType })).toBe(false);
+    expect(initializationResetCandidate({ ...input, certificate: false })).toBe(false);
   });
   it('waits for full resources and memo only during initial readiness', () => {
-    expect(shouldSendPlayerReady(false, false, true, true)).toBe(false);
-    expect(shouldSendPlayerReady(true, false, false, false)).toBe(true);
-    expect(shouldSendPlayerReady(true, true, true, true)).toBe(true);
-    expect(shouldSendPlayerReady(true, true, false, true)).toBe(false);
-    expect(shouldSendPlayerReady(true, true, true, false)).toBe(false);
+    const input = { pending: true, initial: true, fullResources: true, memo: true };
+    expect(shouldSendPlayerReady({ ...input, pending: false, initial: false })).toBe(false);
+    expect(shouldSendPlayerReady({ ...input, initial: false, fullResources: false, memo: false })).toBe(true);
+    expect(shouldSendPlayerReady(input)).toBe(true);
+    expect(shouldSendPlayerReady({ ...input, fullResources: false })).toBe(false);
+    expect(shouldSendPlayerReady({ ...input, memo: false })).toBe(false);
   });
   it('rejects guard reconciliation after actor replacement, maintenance or transport retirement', () => {
-    expect(initializationIdentityCurrent(true, 'own-v1', 'own-v1', false, false)).toBe(true);
-    expect(initializationIdentityCurrent(true, 'own-v1', 'own-v2', false, false)).toBe(false);
-    expect(initializationIdentityCurrent(true, null, null, false, false)).toBe(false);
-    expect(initializationIdentityCurrent(false, 'own-v1', 'own-v1', false, false)).toBe(false);
-    expect(initializationIdentityCurrent(true, 'own-v1', 'own-v1', true, false)).toBe(false);
-    expect(initializationIdentityCurrent(true, 'own-v1', 'own-v1', false, true)).toBe(false);
+    const input = { certificate: true, own: 'own-v1', current: 'own-v1', blocked: false, ended: false };
+    expect(initializationIdentityCurrent(input)).toBe(true);
+    expect(initializationIdentityCurrent({ ...input, current: 'own-v2' })).toBe(false);
+    expect(initializationIdentityCurrent({ ...input, own: null, current: null })).toBe(false);
+    expect(initializationIdentityCurrent({ ...input, certificate: false })).toBe(false);
+    expect(initializationIdentityCurrent({ ...input, blocked: true })).toBe(false);
+    expect(initializationIdentityCurrent({ ...input, ended: true })).toBe(false);
   });
 });

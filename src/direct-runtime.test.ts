@@ -82,6 +82,13 @@ describe('clientless shared-controller runtime',()=>{
   await f.frame(spawn({...player,id:fault==='replacedActor'?1:0},fault==='wrongEntry'?0:1));f.step(5000);await f.runtime.cycle();
   expect(f.marker()).toBe(true);if(fault==='partial'||fault==='missingMemo')expect(f.writes()).toEqual([]);
  });
+ it.each(['partial','missingMemo','wrongEntry'])('does not read a reset resource revision before %s admission passes',async fault=>{
+  const f=fixture(true);await f.open();await f.frame(enter());await f.frame(resources(fault!=='partial'));
+  if(fault!=='missingMemo'){await f.frame(memo());if(fault!=='partial')await f.runtime.receive([{kind:'readySent'}]);}
+  const revision=vi.spyOn(f.runtime.controller,'officialInitializationResourceRevision');
+  await f.frame(spawn(player,fault==='wrongEntry'?0:1));
+  expect(revision).not.toHaveBeenCalled();expect(f.marker()).toBe(true);
+ });
  it('ignores fresh approval as settlement and keeps authentication out of the runtime API',async()=>{
   const f=fixture(true);await f.runtime.connect();expect(f.invoke).toHaveBeenCalledWith('direct_connect',{sessionId:f.runtime.sessionId,connectionId:f.runtime.connectionId});
   await f.open();expect(f.runtime.snapshot().player).toBeNull();expect(f.marker()).toBe(true);expect(f.writes()).toEqual([]);
