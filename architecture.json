@@ -72,6 +72,7 @@
   "src-tauri/src/lib.rs": "orchestration",
   "src-tauri/src/main.rs": "orchestration",
   "src-tauri/src/session/direct.rs": "orchestration",
+  "src-tauri/src/session/direct_compatibility_logic.rs": "logic",
   "src-tauri/src/session/direct_wire.rs": "logic",
   "src-tauri/src/session/local_login_logic.rs": "logic",
   "src-tauri/src/session/login/local_store/mod.rs": "effects",
