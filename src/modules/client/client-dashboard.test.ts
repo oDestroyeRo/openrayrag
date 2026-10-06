@@ -1,19 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { clientDashboard } from './client-dashboard';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from '../settings/settings';
+import { DEFAULT_RECOVERY_ITEMS, DEFAULT_SP_ITEMS } from '../recovery/recovery-items';
 
 const context = { fieldRequested: false, held: false, limitReason: '', loginBusy: false };
-const settings = { ...DEFAULT_SETTINGS, automation: structuredClone(DEFAULT_AUTOMATION) };
+const settings = { ...DEFAULT_SETTINGS, automation: {
+  ...structuredClone(DEFAULT_AUTOMATION), hpPotions: structuredClone(DEFAULT_RECOVERY_ITEMS), spPotions: structuredClone(DEFAULT_SP_ITEMS),
+} };
+const recoveryOff = 'Sitting off · HP items off · SP items off · Respawn off';
 
 describe('Run dashboard presentation', () => {
   it.each([
     ['retaliate', [], 'Defend against attackers'],
     ['both', [1002], '1 selected targets + defense'],
   ] as const)('shows %s defense in the setup summary without implying an active attack', (mode, targets, summary) => {
-    const configured = { ...settings, targets: [...targets], automation: structuredClone(DEFAULT_AUTOMATION) };
+    const configured = { ...settings, targets: [...targets], automation: structuredClone(settings.automation) };
     configured.automation.combat.mode = mode;
     expect(clientDashboard(null, context, configured)).toMatchObject({
-      state: 'OFFLINE', headline: 'Connect your character', setup: `${summary} · Own drops · Recovery off`,
+      state: 'OFFLINE', headline: 'Connect your character', setup: `${summary} · Own drops · ${recoveryOff}`,
     });
   });
 
@@ -52,13 +56,87 @@ describe('Run dashboard presentation', () => {
       .toMatchObject({ state: 'WAITING', headline: 'Waiting to continue', reason: 'Death limit reached.' });
   });
   it('summarizes current setup without altering it or borrowing names from another field', () => {
-    const configured = { ...settings, map: 'prt_fild08', targets: [1002], automation: structuredClone(DEFAULT_AUTOMATION) };
+    const configured = { ...settings, map: 'prt_fild08', targets: [1002], automation: structuredClone(settings.automation) };
     configured.automation.loot.ownership = 'all'; configured.automation.recovery.enabled = true;
     const before = structuredClone(configured);
     const mapInfo = { code: 'prt_fild08', name: 'Field', source: 'database' as const, monsters: [{ classId: 1002, name: 'Poring', level: 1, maxHp: 10, spawnCount: 10, visibleCount: 0 }] };
-    expect(clientDashboard(null, context, configured, mapInfo).setup).toBe('Poring · All drops · Recovery on');
-    expect(clientDashboard(null, context, configured, { ...mapInfo, code: 'prontera' }).setup).toBe('1 selected targets · All drops · Recovery on');
+    const recovery = 'Sitting on (HP unobserved; SP unobserved) · HP items off · SP items off · Respawn off';
+    expect(clientDashboard(null, context, configured, mapInfo).setup).toBe(`Poring · All drops · ${recovery}`);
+    expect(clientDashboard(null, context, configured, { ...mapInfo, code: 'prontera' }).setup).toBe(`1 selected targets · All drops · ${recovery}`);
     expect(configured).toEqual(before);
     expect(clientDashboard(null, context, null).setup).toBe('Setup needs attention · review your settings');
+  });
+
+  it.each(Array.from({ length: 16 }, (_, modes) => [modes] as const))('reports independently configured recovery modes for combination %i', modes => {
+    const configured = { ...settings, automation: structuredClone(settings.automation) };
+    configured.automation.recovery.enabled = (modes & 1) !== 0;
+    configured.automation.hpPotions!.mode = (modes & 2) !== 0 ? 'any' : 'off';
+    configured.automation.spPotions!.mode = (modes & 4) !== 0 ? 'selected' : 'off';
+    configured.automation.spPotions!.itemIds = [505];
+    configured.automation.respawn.enabled = (modes & 8) !== 0;
+    const summary = clientDashboard(null, context, configured).setup;
+    expect(summary).toContain((modes & 1) !== 0 ? 'Sitting on' : 'Sitting off');
+    expect(summary).toContain((modes & 2) !== 0 ? 'HP items: any carried (stock unobserved; HP unobserved)' : 'HP items off');
+    expect(summary).toContain((modes & 4) !== 0 ? 'SP items: 1 selected (stock unobserved; SP unobserved)' : 'SP items off');
+    expect(summary).toContain((modes & 8) !== 0 ? 'Respawn on' : 'Respawn off');
+  });
+
+  it('keeps configured item choices separate from missing, carried and reserved stock', () => {
+    const configured = { ...settings, automation: structuredClone(settings.automation) };
+    configured.automation.hpPotions!.mode = 'any';
+    configured.automation.hpPotions!.minStock = 3;
+    configured.automation.spPotions!.mode = 'selected'; configured.automation.spPotions!.itemIds = [505];
+    const snapshot = { player: { hp: 100, maxHp: 100 }, character: {
+      stats: { sp: 20, maxSp: 100 }, inventoryKnown: true, inventory: [{ itemId: 501, count: 1 }, { itemId: 501, count: 2 }],
+    } };
+    const before = structuredClone({ configured, snapshot });
+    expect(clientDashboard(snapshot, context, configured).setup).toContain('Sitting off · HP items: any carried (3 carried; no usable stock) · SP items: 1 selected (0 carried; no usable stock) · Respawn off');
+    expect(clientDashboard({ ...snapshot, character: { ...snapshot.character, inventoryKnown: false } }, context, configured).setup)
+      .toContain('HP items: any carried (stock unobserved) · SP items: 1 selected (stock unobserved)');
+    expect(clientDashboard({ ...snapshot, character: { ...snapshot.character, inventory: [{ itemId: 501, count: -1 }] } }, context, configured).setup)
+      .toContain('HP items: any carried (stock unobserved)');
+    expect({ configured, snapshot }).toEqual(before);
+  });
+
+  it('includes advanced recovery rules when simple item recovery is off without counting the same stock twice', () => {
+    const configured = { ...settings, automation: structuredClone(settings.automation) };
+    configured.automation.items = [
+      { itemId: 501, resource: 'hp', belowPercent: 60, minStock: 0, cooldownSeconds: 5 },
+      { itemId: 505, resource: 'sp', belowPercent: 30, minStock: 0, cooldownSeconds: 5 },
+    ];
+    const snapshot = { player: { hp: 100, maxHp: 100 }, character: {
+      stats: { sp: 20, maxSp: 100 }, inventoryKnown: true, inventory: [{ itemId: 501, count: 3 }, { itemId: 505, count: 2 }],
+    } };
+    expect(clientDashboard(snapshot, context, configured).setup).toContain('HP items: 1 rule (3 carried) · SP items: 1 rule (2 carried)');
+    configured.automation.hpPotions!.mode = 'selected'; configured.automation.hpPotions!.itemIds = [501];
+    expect(clientDashboard(snapshot, context, configured).setup).toContain('HP items: 1 selected + 1 rule (3 carried)');
+  });
+
+  it('uses the larger shared-item reserve and advanced-rule precedence when describing usable stock', () => {
+    const configured = { ...settings, automation: structuredClone(settings.automation) };
+    configured.automation.hpPotions = { ...DEFAULT_RECOVERY_ITEMS, mode: 'selected', itemIds: [518], minStock: 1 };
+    configured.automation.spPotions = { ...DEFAULT_SP_ITEMS, mode: 'selected', itemIds: [518], minStock: 5 };
+    const snapshot = { player: { hp: 100, maxHp: 100 }, character: {
+      stats: { sp: 20, maxSp: 100 }, inventoryKnown: true, inventory: [{ itemId: 518, count: 5 }],
+    } };
+    expect(clientDashboard(snapshot, context, configured).setup).toContain('HP items: 1 selected (5 carried; no usable stock) · SP items: 1 selected (5 carried; no usable stock)');
+    configured.automation.spPotions.mode = 'off';
+    expect(clientDashboard(snapshot, context, configured).setup).toContain('HP items: 1 selected (5 carried) · SP items off');
+    configured.automation.spPotions.mode = 'selected';
+    configured.automation.items = [{ itemId: 518, resource: 'hp', belowPercent: 60, minStock: 0, cooldownSeconds: 5 }];
+    expect(clientDashboard(snapshot, context, configured).setup).toContain('HP items: 1 selected + 1 rule (5 carried) · SP items: 1 selected (5 carried; no usable stock)');
+    configured.automation.items[0]!.minStock = 5;
+    expect(clientDashboard(snapshot, context, configured).setup).toContain('HP items: 1 selected + 1 rule (5 carried; no usable stock)');
+  });
+
+  it('keeps sitting configured when novice skill or SP prerequisites are unavailable', () => {
+    const configured = { ...settings, automation: structuredClone(settings.automation) };
+    configured.automation.recovery.enabled = true;
+    const snapshot = { player: { classId: 0, hp: 50, maxHp: 100 }, character: { skillsKnown: false, learned: [] } };
+    expect(clientDashboard(snapshot, context, configured).setup).toContain('Sitting on (Basic Mastery unverified; SP unobserved)');
+    expect(clientDashboard({ ...snapshot, character: { skillsKnown: true, learned: [{ skillId: 1, level: 1 }], stats: { sp: 10, maxSp: 100 } } }, context, configured).setup)
+      .toContain('Sitting on (Basic Mastery below 2)');
+    expect(clientDashboard({ ...snapshot, character: { skillsKnown: true, learned: [{ skillId: 1, level: 2 }], stats: { sp: 10, maxSp: 100 } } }, context, configured).setup)
+      .toContain('Sitting on · HP items off');
   });
 });

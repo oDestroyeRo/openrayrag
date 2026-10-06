@@ -1,4 +1,5 @@
 import { allPass, map } from 'remeda';
+import { validRunExperience } from '../session/run-experience-logic';
 import { DomainValueError } from '../../shared/domain-values';
 import type { Snapshot } from '../automation/engine';
 import type { EscapeSnapshot } from '../recovery/escape-logic';
@@ -6,8 +7,10 @@ import type { LoginStatus } from '../session/login-logic';
 import { validMapInfo, type MapInfo } from '../navigation/map-data-logic';
 import { validNavigationStatus } from '../navigation/navigation-status';
 import { validFeatureStatus } from './feature-ui-logic';
+import { validSettingsApplySnapshot, validateLiveSettingsGuard, type LiveSettingsGuard, type SettingsApplySnapshot } from '../settings/live-settings-logic';
+import { validateSettings, type SettingsInput } from '../settings/settings';
 
-export type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; connectionMode?: 'botOnly' | 'gameClient'; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean; escape?: EscapeSnapshot; macro?:import('../automation/macros').MacroSnapshot; supplyGuard?:import('../services/supply-trip').SupplyResumeGuard; deathRecoveryGuard?:import('../recovery/death-recovery').DeathRecoveryGuard };
+export type GameStatus = Snapshot & { sessionId: string; login: LoginStatus; mapInfo: MapInfo; connectionMode?: 'botOnly' | 'gameClient'; runRequested?: boolean; state?: 'running' | 'waiting' | 'idle'; reconnectAvailable: boolean; escape?: EscapeSnapshot; macro?:import('../automation/macros').MacroSnapshot; supplyGuard?:import('../services/supply-trip').SupplyResumeGuard; deathRecoveryGuard?:import('../recovery/death-recovery').DeathRecoveryGuard; activeSettings?:SettingsInput|null;settingsApply?:SettingsApplySnapshot|null;liveSettingsGuard?:LiveSettingsGuard|null };
 declare const gameSessionValue: unique symbol;
 export type GameSessionId = string & { readonly [gameSessionValue]: 'GameSessionId' };
 /** Client session IDs retain the existing permissive nonempty, bounded string policy. */
@@ -34,6 +37,9 @@ export function validStatus(value: unknown): value is ValidatedGameStatus {
   const s = value as Record<string, unknown>;
   if (typeof s.reconnectAvailable !== 'boolean') return false;
   if (s.connectionMode !== undefined && s.connectionMode !== 'botOnly' && s.connectionMode !== 'gameClient') return false;
+  if (s.settingsApply !== undefined && s.settingsApply !== null && !validSettingsApplySnapshot(s.settingsApply)) return false;
+  if(s.activeSettings!==undefined&&s.activeSettings!==null){try{validateSettings(s.activeSettings as SettingsInput);}catch{return false;}}
+  if(s.liveSettingsGuard!==undefined&&s.liveSettingsGuard!==null){try{validateLiveSettingsGuard(s.liveSettingsGuard,8_640_000_000_000_000);}catch{return false;}}
   if (!validGameSessionId(s.sessionId)) return false;
   const login = s.login as Partial<LoginStatus> | undefined;
   if (!login || typeof login.message !== 'string' || login.message.length > 1024
@@ -44,6 +50,7 @@ export function validStatus(value: unknown): value is ValidatedGameStatus {
     return Number.isInteger(e.id)&&Number(e.id)>=0&&Number(e.id)<=0x7fffffff&&entityNumbers(e) && typeof e.name === 'string' && e.name.length <= 512;
   };
   if (!validNavigationStatus(s.navigation)) return false;
+  if (s.runExperience !== undefined && s.runExperience !== null && !validRunExperience(s.runExperience)) return false;
   if ((s.runRequested !== undefined && typeof s.runRequested !== 'boolean') || (s.state !== undefined && !['running','waiting','idle'].includes(s.state as string))) return false;
   return statusFlags(s)
     && statusText(s)

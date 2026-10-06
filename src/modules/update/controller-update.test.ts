@@ -126,3 +126,20 @@ describe('safe update controller boundary',()=>{
     expect(next.c.snapshot()).toEqual(before);expect(next.c.macro.active).toBe(false);expect(next.sent).toEqual([]);
   });
 });
+
+it('update continuation carries applied settings and removed resource protection without renewing the run',()=>{
+  const f=fixture(),automation=structuredClone(DEFAULT_AUTOMATION);automation.combat.mode='off';automation.limits.kills=5;
+  automation.items=[{itemId:501,resource:'hp',belowPercent:100,minStock:1,cooldownSeconds:60}];
+  const settings={...f.settings,automation};f.c.start(settings);f.step();f.debit();
+  const removed=structuredClone(settings);removed.automation.items=[];removed.radius=8;
+  f.c.applySettings(removed,'a'.repeat(32));expect(f.c.snapshot().settingsApply?.state).toBe('applied');
+  f.c.engine.kills=2;f.c.prepareUpdate();const checkpoint=f.c.updateCheckpoint()!;
+  expect(checkpoint.liveSettingsGuard).toMatchObject({items:[{itemId:501,minStock:1,cooldownSeconds:60}],cooldowns:[{key:'item:501',at:f.time()}, {key:'hp-potions',at:f.time()}]});
+  const next=fixture('Test',f.time()+1000);next.c.restoreUpdate(checkpoint);next.step();
+  expect(next.c.snapshot()).toMatchObject({runRequested:true,elapsedSeconds:1,activeSettings:{radius:8,automation:{limits:{kills:5},items:[]}}});
+  const readded=structuredClone(settings);readded.radius=7;readded.automation.items[0]!.minStock=0;readded.automation.items[0]!.cooldownSeconds=1;
+  next.c.applySettings(readded,'b'.repeat(32));next.step();
+  expect(next.c.engine.settings).toMatchObject({radius:7,automation:{items:[{minStock:1,cooldownSeconds:60}]}});
+  expect(next.sent.filter(action=>action.type==='useItem')).toHaveLength(0);
+  next.c.engine.kills=3;next.step();expect(next.c.snapshot().reason).toContain('session limit');
+});

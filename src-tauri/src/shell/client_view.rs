@@ -21,6 +21,57 @@ pub(crate) fn create_main(app: &tauri::AppHandle) -> tauri::Result<()> {
         window.inner_size()?,
     )?;
     crate::shell::ci_smoke::milestone("main-webview-built");
+    #[cfg(target_os = "macos")]
+    recover_main(app)?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", test))]
+trait MainWindowEffects {
+    type Error;
+    fn show_application(&mut self) -> Result<(), Self::Error>;
+    fn unminimize(&mut self) -> Result<(), Self::Error>;
+    fn show_window(&mut self) -> Result<(), Self::Error>;
+    fn focus(&mut self) -> Result<(), Self::Error>;
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn recover_main_program<E: MainWindowEffects>(effects: &mut E) -> Result<(), E::Error> {
+    effects.show_application()?;
+    effects.unminimize()?;
+    effects.show_window()?;
+    effects.focus()
+}
+
+#[cfg(target_os = "macos")]
+struct NativeMainWindow<'a> {
+    app: &'a tauri::AppHandle,
+    window: tauri::Window,
+}
+
+#[cfg(target_os = "macos")]
+impl MainWindowEffects for NativeMainWindow<'_> {
+    type Error = tauri::Error;
+    fn show_application(&mut self) -> tauri::Result<()> {
+        self.app.show()
+    }
+    fn unminimize(&mut self) -> tauri::Result<()> {
+        self.window.unminimize()
+    }
+    fn show_window(&mut self) -> tauri::Result<()> {
+        self.window.show()
+    }
+    fn focus(&mut self) -> tauri::Result<()> {
+        self.window.set_focus()
+    }
+}
+
+/// Recover presentation only; reopening never changes settings or run intent.
+#[cfg(target_os = "macos")]
+pub(crate) fn recover_main(app: &tauri::AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_window("main") {
+        recover_main_program(&mut NativeMainWindow { app, window })?;
+    }
     Ok(())
 }
 
@@ -149,6 +200,47 @@ pub(crate) fn set_game_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reopening_restores_a_hidden_minimized_window_before_focusing_it() {
+        struct Window {
+            hidden_app: bool,
+            minimized: bool,
+            hidden_window: bool,
+            focused: bool,
+        }
+        impl MainWindowEffects for Window {
+            type Error = &'static str;
+            fn show_application(&mut self) -> Result<(), Self::Error> {
+                self.hidden_app = false;
+                Ok(())
+            }
+            fn unminimize(&mut self) -> Result<(), Self::Error> {
+                self.minimized = false;
+                Ok(())
+            }
+            fn show_window(&mut self) -> Result<(), Self::Error> {
+                self.hidden_window = false;
+                Ok(())
+            }
+            fn focus(&mut self) -> Result<(), Self::Error> {
+                if self.hidden_app || self.minimized || self.hidden_window {
+                    return Err("Window is not usable");
+                }
+                self.focused = true;
+                Ok(())
+            }
+        }
+        let mut window = Window {
+            hidden_app: true,
+            minimized: true,
+            hidden_window: true,
+            focused: false,
+        };
+        assert_eq!(recover_main_program(&mut window), Ok(()));
+        assert!(window.focused);
+        assert_eq!(recover_main_program(&mut window), Ok(()));
+    }
 
     #[test]
     fn parked_game_keeps_its_size_and_cannot_reappear_on_window_resize() {

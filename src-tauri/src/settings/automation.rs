@@ -33,6 +33,77 @@ pub(crate) struct Settings {
 #[derive(Serialize)]
 #[serde(transparent)]
 pub(crate) struct RunSettings<'a>(&'a Settings);
+
+/// Non-replayable protection transferred only for the same continuing character.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LiveSettingsGuard {
+    version: u8,
+    pub(crate) character: String,
+    items: Vec<ProtectedRecoveryItem>,
+    hp: RecoveryProtection,
+    sp: RecoveryProtection,
+    cooldowns: Vec<RecoveryCooldown>,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecoveryProtection {
+    min_stock: u16,
+    cooldown_seconds: u16,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProtectedRecoveryItem {
+    item_id: u32,
+    min_stock: u16,
+    cooldown_seconds: u16,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RecoveryCooldown {
+    key: String,
+    at: u64,
+}
+impl LiveSettingsGuard {
+    pub(crate) fn validate_at(&self, at: u64) -> Result<(), String> {
+        let mut ids = HashSet::new();
+        let mut keys = HashSet::new();
+        let valid_key = |key: &str| {
+            key == "hp-potions"
+                || key == "sp-potions"
+                || key.strip_prefix("item:").is_some_and(|id| {
+                    id.parse::<u32>().is_ok_and(|value| {
+                        value > 0 && value <= i32::MAX as u32 && id == value.to_string()
+                    })
+                })
+        };
+        if self.version != 1
+            || self.character.is_empty()
+            || self.character.chars().count() > 64
+            || self.character.chars().any(char::is_control)
+            || self.items.len() > 256
+            || self.items.iter().any(|item| {
+                item.item_id == 0
+                    || item.item_id > i32::MAX as u32
+                    || item.min_stock > 9999
+                    || item.cooldown_seconds > 3600
+                    || !ids.insert(item.item_id)
+            })
+            || [&self.hp, &self.sp]
+                .iter()
+                .any(|row| row.min_stock > 9999 || row.cooldown_seconds > 3600)
+            || self.cooldowns.len() > 256
+            || self.cooldowns.iter().any(|row| {
+                !valid_key(&row.key)
+                    || row.at > at.min(9_007_199_254_740_991)
+                    || !keys.insert(&row.key)
+            })
+        {
+            return Err("Invalid live settings resource protection.".into());
+        }
+        Ok(())
+    }
+}
 impl<'a> TryFrom<&'a Settings> for RunSettings<'a> {
     type Error = String;
     fn try_from(value: &'a Settings) -> Result<Self, Self::Error> {
@@ -1418,6 +1489,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn validates_non_replayable_live_settings_protection() {
+        let value = json!({"version":1,"character":"Synthetic","items":[{"itemId":501,"minStock":3,"cooldownSeconds":60}],
+            "hp":{"minStock":3,"cooldownSeconds":60},"sp":{"minStock":0,"cooldownSeconds":0},
+            "cooldowns":[{"key":"item:501","at":1000},{"key":"hp-potions","at":1000}]});
+        let parsed: super::LiveSettingsGuard = serde_json::from_value(value.clone()).unwrap();
+        assert!(parsed.validate_at(1000).is_ok());
+        for (pointer, invalid) in [
+            ("/items/0/itemId", json!(0)),
+            ("/items/0/minStock", json!(10000)),
+            ("/hp/cooldownSeconds", json!(3601)),
+            ("/cooldowns/0/key", json!("item:2147483648")),
+            ("/cooldowns/0/at", json!(1001)),
+        ] {
+            let mut changed = value.clone();
+            *changed.pointer_mut(pointer).unwrap() = invalid;
+            let guard: super::LiveSettingsGuard = serde_json::from_value(changed).unwrap();
+            assert!(guard.validate_at(1000).is_err(), "{pointer}");
+        }
+        let mut unknown = value;
+        unknown["action"] = json!("useItem");
+        assert!(serde_json::from_value::<super::LiveSettingsGuard>(unknown).is_err());
     }
 
     fn settings() -> Value {

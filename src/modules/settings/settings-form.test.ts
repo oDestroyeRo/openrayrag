@@ -159,10 +159,17 @@ describe('settings form interface', () => {
     expect(f.form.snapshot()).toEqual(before); expect(f.changed).not.toHaveBeenCalled();
   });
 
-  it.each([{ runActive: true }, { controlsLocked: true }])('guards complete Setup applying while the form is owned by %o', owner => {
+  it.each([{ controlsLocked: true }])('guards complete Setup applying while the form is owned by %o', owner => {
     const f = setup(); f.form.restore(document(settings())); const before = f.form.snapshot(); f.context(owner);
-    expect(() => f.form.applySettings({ ...settings(), radius: 14 })).toThrow('Stop automation');
+    expect(() => f.form.applySettings({ ...settings(), radius: 14 })).toThrow('current request');
     expect(f.form.snapshot()).toEqual(before); expect(f.changed).not.toHaveBeenCalled();
+  });
+  it('edits the detached saved draft during a run without invoking a runtime command',()=>{
+    const f=setup();f.observe();f.form.restore(document(settings()));f.context({runActive:true,controlsLocked:false,targetsLocked:false});
+    f.form.applySettings({...settings(),radius:9});
+    expect(f.form.snapshot().settings.radius).toBe(9);expect(f.changed).toHaveBeenCalledTimes(1);
+    f.form.applyProfile({...settings(),radius:8});
+    expect(f.form.snapshot().settings.radius).toBe(8);expect(f.changed).toHaveBeenCalledTimes(2);
   });
 
   it('retains configured targets before readiness while field settings use only eligible targets', () => {
@@ -250,12 +257,12 @@ describe('settings form interface', () => {
     expect(f.changed).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects active, wrong-map and invalid profiles before any presentation mutation', () => {
+  it('rejects locked, wrong-map and invalid profiles before any presentation mutation', () => {
     const f = setup(); f.observe(); f.form.restore(document(settings()));
     const before = f.form.snapshot(), write = vi.spyOn(f.editor, 'write');
-    f.context({ runActive: true });
-    expect(() => f.form.applyProfile({ ...settings(), radius: 3 })).toThrow('Stop automation');
-    f.context({ runActive: false });
+    f.context({ controlsLocked: true });
+    expect(() => f.form.applyProfile({ ...settings(), radius: 3 })).toThrow('current request');
+    f.context({ controlsLocked: false });
     expect(() => f.form.applyProfile({ ...settings(), map: 'prontera', radius: 3 })).toThrow('profile map');
     expect(() => f.form.applyProfile({ ...settings(), radius: 99 })).toThrow('Invalid settings');
     expect(() => f.form.applyProfile({ ...settings(), password: 'synthetic' } as Settings)).toThrow('Unknown settings');

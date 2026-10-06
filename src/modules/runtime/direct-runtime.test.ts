@@ -258,3 +258,32 @@ describe('clientless shared-controller runtime',()=>{
   await f.frame(spawn({...player,id:1,name:'Stale'}));expect(f.runtime.snapshot().player).toBeNull();expect(f.writes()).toEqual(writes);
  });
 });
+
+it.each(['hp','sp'] as const)('Bot only acknowledges live %s recovery edits after its pending item and retains run limits',async resource=>{
+  const f=fixture();await f.ready(0,{...player,x:124,y:90,hp:55});f.step(1200);await f.runtime.cycle();
+  const itemId=resource==='hp'?501:514;
+  f.runtime.controller.engine.receive([{type:'sp',sp:10,maxSp:100},{type:'inventory',items:[{bagId:itemId,itemId,type:1,count:4}],equipment:[],ammoId:-1}]);
+  const automation=structuredClone(DEFAULT_AUTOMATION);automation.combat.mode='off';automation.limits.kills=5;
+  automation[resource==='hp'?'hpPotions':'spPotions']={mode:'selected',itemIds:[itemId],belowPercent:60,minStock:1,cooldownSeconds:10};
+  const original={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation};f.runtime.control('start',original);
+  f.step(1000);await f.runtime.cycle();await flush();expect(f.writes().filter(row=>row[0]===FEATURE_OP.useItem)).toHaveLength(1);
+  const draft=structuredClone(original);draft.radius=8;draft.targets=[4007];draft.loot=false;draft.automation.limits.kills=100;
+  draft.automation[resource==='hp'?'hpPotions':'spPotions']!.belowPercent=70;
+  f.runtime.control('apply',draft,undefined,undefined,undefined,'a'.repeat(32));
+  expect(f.runtime.snapshot().settingsApply?.state).toBe('pending');
+  await f.frame(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(itemId).i16(1).i32(0).bool(false).finish());await flush();
+  expect(f.runtime.snapshot()).toMatchObject({runRequested:true,settingsApply:{state:'applied'},activeSettings:{radius:8,targets:[4007],loot:false,automation:{limits:{kills:5}}}});
+  f.step(1000);await f.runtime.cycle();await flush();expect(f.writes().filter(row=>row[0]===FEATURE_OP.useItem)).toHaveLength(1);
+  f.runtime.control('apply',{...draft,radius:99},undefined,undefined,undefined,'b'.repeat(32));
+  expect(f.runtime.snapshot()).toMatchObject({settingsApply:{state:'rejected'},activeSettings:{radius:8}});
+});
+it('Bot only Stop cancels a waiting settings Apply before late item confirmation',async()=>{
+  const f=fixture();await f.ready(0,{...player,x:124,y:90,hp:55});f.step(1200);await f.runtime.cycle();
+  f.runtime.controller.engine.receive([{type:'inventory',items:[{bagId:501,itemId:501,type:1,count:4}],equipment:[],ammoId:-1}]);
+  const automation=structuredClone(DEFAULT_AUTOMATION);automation.combat.mode='off';automation.hpPotions={mode:'selected',itemIds:[501],belowPercent:60,minStock:1,cooldownSeconds:10};
+  const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation};f.runtime.control('start',settings);f.step(1000);await f.runtime.cycle();await flush();
+  f.runtime.control('apply',{...settings,radius:8},undefined,undefined,undefined,'a'.repeat(32));f.runtime.control('stop',settings);
+  await f.frame(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false).finish());await flush();
+  expect(f.runtime.snapshot()).toMatchObject({runRequested:false,activeSettings:null,settingsApply:{state:'cancelled'}});
+  expect(f.writes().filter(row=>row[0]===FEATURE_OP.useItem)).toHaveLength(1);
+});

@@ -5,7 +5,7 @@ import { DEFAULT_MAP_POLICY } from '../navigation/map-policy';
 import { describe, expect, it, vi } from 'vitest';
 import { CompanionController, type ControllerAction } from './controller';
 import { BotEngine, type Action } from '../automation/engine';
-import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT, DEFAULT_SETTINGS } from '../settings/settings';
+import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT, DEFAULT_SETTINGS, validateSettings } from '../settings/settings';
 import { BUILTIN_SERVICES } from '../services/npc-services';
 import { type Entity, type GameEvent, type Position, OP } from '../protocol/protocol';
 import { type FeatureEvent, FEATURE_OP } from '../protocol/protocol-feature';
@@ -1494,4 +1494,87 @@ describe('macro controller supervision',()=>{
     f.controller.engine.receive([{type:'inventoryDelta',add:true,bagId:501,change:2,weight:70,item:{bagId:501,itemId:501,type:1,count:7}},{type:'currency',zeny:979}]);
     f.packet(new BitWriter().u8(WORLD_OP.npc).u8(3));expect(()=>macro(f)).toThrow();
   });
+});
+
+describe('live configuration of the same field run',()=>{
+  const id='a'.repeat(32);
+  function passive(){const automation=policy();automation.combat.mode='off';automation.limits={minutes:2,kills:5,pickups:7,weightPercent:0};return {...settings,automation};}
+  it('atomically applies targets/recovery/loot/radius without a new run or renewed limits',()=>{
+    const f=setup(),original=passive();f.controller.start(original);f.advance(1000);
+    const before=f.controller.snapshot(),actions=f.sent.slice(),draft=structuredClone(original);
+    draft.targets=[4007];draft.radius=8;draft.loot=false;draft.automation.limits.kills=100;
+    draft.automation.hpPotions={mode:'selected',itemIds:[501],belowPercent:70,minStock:1,cooldownSeconds:5};
+    draft.automation.spPotions={mode:'selected',itemIds:[514],belowPercent:30,minStock:1,cooldownSeconds:5};
+    f.controller.applySettings(draft,id);
+    expect(f.controller.snapshot()).toMatchObject({runRequested:true,elapsedSeconds:before.elapsedSeconds,attacks:before.attacks,kills:before.kills,looted:before.looted,
+      settingsApply:{id,state:'applied',nextRun:['automation.limits.kills']},activeSettings:{targets:[4007],radius:8,loot:false,automation:{limits:original.automation.limits,hpPotions:draft.automation.hpPotions,spPotions:draft.automation.spPotions}}});
+    expect(f.sent).toEqual(actions);expect(f.controller.engine.settings.radius).toBe(8);
+    draft.targets.push(9999);expect(f.controller.snapshot().activeSettings?.targets).toEqual([4007]);
+    f.controller.engine.kills=5;f.step();expect(f.controller.snapshot().reason).toContain('session limit');
+  });
+  it('leaves active configuration intact after an invalid full draft including Next run fields',()=>{
+    const f=setup(),original=passive();f.controller.start(original);const draft=structuredClone(original);
+    draft.radius=8;draft.automation.limits.minutes=1441;const before=f.controller.snapshot().activeSettings;
+    f.controller.applySettings(draft,id);
+    expect(f.controller.snapshot().settingsApply).toMatchObject({id,state:'rejected'});
+    expect(f.controller.snapshot().activeSettings).toEqual(before);expect(f.sent).toEqual([]);
+  });
+  it.each(['confirmed','timeout','stop'] as const)('keeps an outstanding item owner across Apply and %s',outcome=>{
+    const f=setup(),original=passive();original.automation.items=[{itemId:501,resource:'hp',belowPercent:90,minStock:1,cooldownSeconds:10}];
+    f.receive({type:'inventory',items:[{bagId:501,itemId:501,type:1,count:4}],equipment:[],ammoId:-1},{type:'heal',id:1,hp:80,maxHp:100});
+    f.controller.start(original);f.step();expect(f.sent.filter(a=>a.type==='useItem')).toHaveLength(1);
+    const draft=structuredClone(original);draft.radius=8;draft.automation.items[0]!.belowPercent=85;draft.automation.items[0]!.cooldownSeconds=1;draft.automation.items[0]!.minStock=0;
+    f.controller.applySettings(draft,id);expect(f.controller.snapshot().settingsApply).toMatchObject({state:'pending'});
+    expect(f.controller.engine.settings.radius).toBe(original.radius);
+    if(outcome==='stop')f.controller.stop();
+    if(outcome==='timeout'){
+      f.advance(7000);expect(f.controller.engine.actionResult.status).toBe('failed');
+      expect(f.controller.snapshot().settingsApply?.state).toBe('pending');
+      expect(f.controller.engine.settings.radius).toBe(original.radius);
+    }
+    f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(10).bool(false));
+    if(outcome==='stop'){
+      expect(f.controller.snapshot()).toMatchObject({runRequested:false,activeSettings:null,settingsApply:{state:'cancelled'}});
+      expect(f.controller.engine.settings.radius).toBe(original.radius);
+    }else{
+      expect(f.controller.snapshot().settingsApply?.state).toBe('applied');
+      expect(f.controller.engine.settings).toMatchObject({radius:8,automation:{items:[{minStock:1,cooldownSeconds:10}]}});
+      f.controller.pause('Temporary wait',1000);
+    }
+    f.advance(2000);expect(f.sent.filter(a=>a.type==='useItem')).toHaveLength(1);
+  });
+  it('waits for the current normal attack to finish before replacing targets',()=>{
+    const f=setup();f.controller.start(settings);f.step();const before=f.sent.slice();
+    f.controller.applySettings({...settings,targets:[4007],radius:8},id);
+    expect(f.controller.snapshot().settingsApply?.state).toBe('pending');expect(f.sent).toEqual(before);
+    f.packet(new BitWriter().u8(OP.death).i32(monster.id));
+    expect(f.controller.snapshot().settingsApply?.state).toBe('applied');expect(f.controller.engine.settings.targets).toEqual([4007]);
+    expect(f.controller.engine.kills).toBe(1);expect(f.sent.filter(a=>a.type==='attack')).toHaveLength(1);
+  });
+});
+
+it('transfers a late-confirmed item cooldown after timed-out Apply through a new controller',()=>{
+  const f=setup(),automation=policy();automation.combat.mode='off';automation.items=[{itemId:501,resource:'hp',belowPercent:90,minStock:1,cooldownSeconds:60}];
+  f.receive({type:'inventory',items:[{bagId:501,itemId:501,type:1,count:4}],equipment:[],ammoId:-1},{type:'heal',id:1,hp:80,maxHp:100});
+  const original={...settings,automation};f.controller.start(original);f.step();
+  f.controller.applySettings({...original,radius:8},'a'.repeat(32));f.advance(7000);
+  expect(f.controller.engine.actionResult.status).toBe('failed');expect(f.controller.snapshot().settingsApply?.state).toBe('pending');
+  f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false));
+  const applied=f.controller.snapshot();expect(applied.settingsApply?.state).toBe('applied');
+  expect(applied.liveSettingsGuard?.cooldowns).toContainEqual({key:'item:501',at:f.time()});
+  const next=setup();next.advance(f.time()-next.time()+1000);
+  next.receive({type:'inventory',items:[{bagId:501,itemId:501,type:1,count:3}],equipment:[],ammoId:-1},{type:'heal',id:1,hp:80,maxHp:100});
+  next.controller.start(applied.activeSettings!,undefined,undefined,undefined,applied.liveSettingsGuard!);next.step();
+  while(next.time()-f.time()<59000){next.advance(1000);next.packet(new BitWriter().u8(OP.heal).i32(1).i32(0).i32(80).i32(100));}
+  expect(next.sent.filter(action=>action.type==='useItem')).toHaveLength(0);
+  next.advance(1500);expect(next.sent.filter(action=>action.type==='useItem')).toHaveLength(1);
+});
+it('rejects a settled runtime projection failure without committing any configuration owner',()=>{
+  const f=setup(),automation=policy();automation.mapPolicy={...DEFAULT_MAP_POLICY,lockArea:{map:'prt_fild08',minX:90,minY:90,maxX:110,maxY:110}};
+  const original={...settings,automation};f.controller.start(original);f.step();
+  f.controller.applySettings({...original,radius:8},'a'.repeat(32));expect(f.controller.snapshot().settingsApply?.state).toBe('pending');
+  f.controller.engine.settings=validateSettings({...original,map:'prt_fild07',automation:{...automation,mapPolicy:{...DEFAULT_MAP_POLICY,lockArea:{map:'prt_fild07',minX:90,minY:90,maxX:110,maxY:110}}}});
+  expect(()=>f.packet(new BitWriter().u8(OP.death).i32(monster.id))).not.toThrow();
+  expect(f.controller.snapshot()).toMatchObject({settingsApply:{state:'rejected'},activeSettings:{radius:12}});
+  expect(f.controller.engine.settings.radius).toBe(12);
 });

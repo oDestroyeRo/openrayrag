@@ -96,7 +96,7 @@ describe('one-shot updater continuation owner',()=>{
     f.continuation.runtime.frozenAt=Date.now();
     f.continuation.runtime.status.macro=macro.snapshot();
     f.owner.claim(f.continuation,f.field);const resumed=f.owner.resume(f.fresh,account,f.field);
-    expect(f.invoke).toHaveBeenCalledWith('update_restore',{requestId,checkpoint:f.continuation.runtime});
+    expect(f.invoke).toHaveBeenCalledWith('update_restore',{requestId,checkpoint:{...f.continuation.runtime,liveSettingsGuard:null}});
     f.owner.restored({requestId,success:true});expect(await resumed).toBe(true);
     expect(f.field.requested).toBe(false);
   });
@@ -216,6 +216,26 @@ describe('update installation transaction', () => {
     await f.install();
     expect(f.calls('update_release')).toEqual([['update_release', { nonce: f.nonce }]]);
     expect(f.adapter.status).toHaveBeenLastCalledWith('Update deferred. Game activity changed during update confirmation. It will retry automatically.');
+  });
+  it('keeps restart failure guidance visible and uses the existing retired continuation recovery', async () => {
+    const f = installationFixture();
+    const diagnostic = 'The update was installed, but the app could not restart. Quit and reopen Rayrag Companion. Your saved settings are preserved.';
+    f.invoke.mockImplementation(async command => {
+      if (command === 'update_reserve') return f.nonce;
+      if (command === 'update_install') {
+        f.adapter.game.mockReturnValue({ open: false, status: f.fresh });
+        throw diagnostic;
+      }
+      if (command === 'update_continuation') return f.continuation;
+      return undefined;
+    });
+    const result = await f.install();
+    expect(f.adapter.status).toHaveBeenLastCalledWith(diagnostic);
+    expect(f.calls('update_release')).toEqual([['update_release', { nonce: f.nonce }]]);
+    expect(result.continuation).not.toBeNull();
+    expect(result.recoveryFailed).toBe(false);
+    expect(f.owner.pending).toBe(true);
+    expect(f.calls('update_cancel')).toEqual([]);
   });
   it('stops before reservation when Close interrupts the pending settings flush', async () => {
     const f = installationFixture(), saving = pending<ReturnType<typeof formDocument>>();

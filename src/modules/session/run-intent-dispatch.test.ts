@@ -244,3 +244,12 @@ describe('run intent dispatch', () => {
     expect(f.field.requested).toBe(false); expect(f.dispatch.pending.resume).toBe(false);
   });
 });
+
+it('Stop fences a deferred settings Apply and ignores its late native acceptance',async()=>{
+  const f=fixture();await f.dispatch.start(settings(),ready());
+  const sent=f.defer('control_bot','apply');
+  const apply=f.dispatch.applySettings({...settings(),radius:8},{...ready(),runRequested:true},'a'.repeat(32));
+  const stopped=f.dispatch.stop();expect(f.field.requested).toBe(false);expect(f.dispatch.stopping).toBe(true);
+  sent.resolve();expect((await apply).outcome.status).toBe('retired');await stopped;
+  expect(f.actions()).toEqual(['start','apply','stop','stop']);expect(f.field.requested).toBe(false);
+});

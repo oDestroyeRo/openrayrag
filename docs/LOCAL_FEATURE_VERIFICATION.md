@@ -4,6 +4,26 @@ Verification separates automated local behavior, the native socket loop against 
 
 ## Current local results
 
+### Active player runs and macOS window recovery
+
+Checked on 2026-10-06 for issues [#179](https://github.com/oDestroyeRo/openrayrag/issues/179), [#180](https://github.com/oDestroyeRo/openrayrag/issues/180), [#181](https://github.com/oDestroyeRo/openrayrag/issues/181), [#182](https://github.com/oDestroyeRo/openrayrag/issues/182) and [#184](https://github.com/oDestroyeRo/openrayrag/issues/184). Final `bun run check` passed: 4,513 frontend tests, 229 production native tests and 231 CI-feature native tests (two existing opt-in probes ignored in each), both strict Clippy configurations, formatting, build/type checks, 301 script checks with two platform skips, and eight Python release tests. The architecture check passed for 274 sources. Independent integration and follow-up source reviews found no blocking findings.
+
+Live checks used local ARM64 release-mode QA bundles from this change, stamped v0.8.2 to match the current public feed. The installed application was not replaced. The final bundle passed strict ad-hoc signature verification; its executable SHA-256 was `1fc302799be2d02f027b65a3acfca5bb9ff3bc2c579a5d54c2583ae3566decee`.
+
+| Final-candidate live proof | Result |
+| --- | --- |
+| Bot only, `prt_fild08` | 34 seconds, 5 defeats, 11 confirmed pickups, zero deaths. Base EXP 3,483 → 3,504 and Job EXP 1,173 → 1,184 matched displayed run gains +21/+11; latest rewards remained separately labelled. |
+| With game client, `prt_fild08` | 120 seconds, 15 defeats, 55 confirmed pickups, zero deaths. Base EXP 3,504 → 3,549 and Job EXP 1,184 → 1,199 matched displayed run gains +45/+15. Game and Bot navigation retained the same connection and progressing run. |
+| Live Apply, both modes | Supported target/recovery edits were acknowledged after action settlement. Active and saved draft summaries were distinct. Invalid HP threshold 101 disabled Apply and left the active run intact. Stop cancelled an Apply waiting for a movement/action boundary in each mode. |
+| Inventory inspection | Browsing stayed available while farming, with fresh quantities and retained choices; manual use remained disabled. With game client, a selected Jellopy quantity read back 27 after the opened picker showed 25 while pickups continued. |
+| Unchanged item rules | Native acknowledgements no longer produced a false Item rules draft. The failing property-order regression passed after structural comparison replaced serialized-object comparison; actual rule ordering still registers as a change. |
+
+Earlier checks on the same native/runtime implementation observed inventory browsing during a low-HP WAITING state, recovery stock updating while a selected potion stayed selected, independent sitting/item/respawn labels, completed EXP surviving Stop and a new Start beginning at +0/+0. Applying supported edits twice did not renew the original three-minute allowance: it reached its configured session limit. Minimizing and reopening the running candidate through Finder restored a usable, connected window with the same process ID. These checks preceded the final item-rule comparison correction.
+
+This establishes ordinary live farming, inspection, configuration admission and window reopening. No new live level rollover, signed EXP loss, forced network-loss reconnect, or Apply during an outstanding item confirmation was exercised; their replay, retained settings/budgets, receipt, reserve and cooldown boundaries have automated coverage. A real signed updater replacement and old/new process handoff still require a published update; window reopening and local restart/failure tests do not establish that release-only behavior.
+
+After verification, automation was stopped and the candidate closed. The original Bot-only saved-login preference and current Settings form were restored; the form restoration used a newer persistence revision and matched the preserved settings/profile snapshot. No installed release replacement was performed.
+
 ### Carried HP and SP recovery items
 
 On 2026-10-05, `npm run check` passed: 3,880 frontend tests in 120 files, 178 production native tests and 180 CI-feature native tests (two existing opt-in probes ignored in each), both strict Clippy configurations, formatting, frontend/release type checks, script checks and eight Python release tests. Independent source review found no blocking findings after the mixed-resource cooldown correction.

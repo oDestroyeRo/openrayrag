@@ -74,6 +74,28 @@ fn exact(value: &Value, keys: &[&str]) -> bool {
         .as_object()
         .is_some_and(|o| o.len() == keys.len() && keys.iter().all(|k| o.contains_key(*k)))
 }
+fn exact_with_live_guard(value: &Value, keys: &[&str]) -> bool {
+    value.as_object().is_some_and(|object| {
+        keys.iter().all(|key| object.contains_key(*key))
+            && object
+                .keys()
+                .all(|key| keys.contains(&key.as_str()) || key == "liveSettingsGuard")
+    })
+}
+fn validate_live_guard(value: &Value, at: u64, name: &str) -> Result<(), String> {
+    if let Some(raw) = value
+        .get("liveSettingsGuard")
+        .filter(|guard| !guard.is_null())
+    {
+        let guard: crate::settings::automation::LiveSettingsGuard =
+            serde_json::from_value(raw.clone()).map_err(|_| ERROR)?;
+        guard.validate_at(at)?;
+        if guard.character != name {
+            return invalid();
+        }
+    }
+    Ok(())
+}
 fn number(value: &Value) -> bool {
     value.as_u64().is_some_and(|n| n <= SAFE_INTEGER)
 }
@@ -123,7 +145,7 @@ fn validate_settings(value: &Value) -> Result<(), String> {
     settings.validate().map_err(|_| ERROR.into())
 }
 pub(crate) fn validate_runtime(value: &Value, at: u64) -> Result<(), String> {
-    if !exact(
+    if !exact_with_live_guard(
         value,
         &[
             "version",
@@ -153,6 +175,11 @@ pub(crate) fn validate_runtime(value: &Value, at: u64) -> Result<(), String> {
     if !value["settings"].is_null() {
         validate_settings(&value["settings"])?;
     }
+    validate_live_guard(
+        value,
+        value["frozenAt"].as_u64().ok_or(ERROR)?,
+        character(value).ok_or(ERROR)?,
+    )?;
     let heal = &value["partyHeal"];
     if !exact(heal, &["version", "attempts", "confirmed", "cooldownUntil"])
         || heal["version"] != 1
@@ -228,30 +255,71 @@ pub(crate) fn validate_runtime(value: &Value, at: u64) -> Result<(), String> {
     }
     Ok(())
 }
+fn experience_gains(value: &Value) -> bool {
+    exact(value, &["baseGained", "jobGained"])
+        && ["baseGained", "jobGained"].iter().all(|key| {
+            value[*key].is_null()
+                || value[*key]
+                    .as_i64()
+                    .is_some_and(|n| n.unsigned_abs() <= SAFE_INTEGER)
+        })
+}
+
+fn field_experience(value: &Value, character: &Value) -> bool {
+    if !exact(value, &["gains", "previous", "session"])
+        || !experience_gains(&value["gains"])
+        || !value["session"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty() && s.len() <= 64)
+    {
+        return false;
+    }
+    let previous = &value["previous"];
+    previous.is_null()
+        || exact(
+            previous,
+            &["character", "run", "revision", "baseGained", "jobGained"],
+        ) && previous["character"] == *character
+            && number(&previous["run"])
+            && previous["run"].as_u64().is_some_and(|run| run > 0)
+            && number(&previous["revision"])
+            && ["baseGained", "jobGained"].iter().all(|key| {
+                previous[*key].is_null()
+                    || previous[*key]
+                        .as_i64()
+                        .is_some_and(|n| n.unsigned_abs() <= SAFE_INTEGER)
+            })
+}
+
 pub(crate) fn validate_field(value: &Value) -> Result<(), String> {
     if value.is_null() {
         return Ok(());
     }
-    if !exact(
-        value,
-        &[
-            "version",
-            "desired",
-            "character",
-            "session",
-            "generation",
-            "startedAt",
-            "metricsSession",
-            "previous",
-            "totals",
-            "escapeGuard",
-            "supplyGuard",
-            "deathGuard",
-            "escapeOverflowUncertain",
-            "supplyOverflow",
-            "deathOverflow",
-        ],
-    ) || value["version"] != 1
+    let mut keys = vec![
+        "version",
+        "desired",
+        "character",
+        "session",
+        "generation",
+        "startedAt",
+        "metricsSession",
+        "previous",
+        "totals",
+        "escapeGuard",
+        "supplyGuard",
+        "deathGuard",
+        "escapeOverflowUncertain",
+        "supplyOverflow",
+        "deathOverflow",
+    ];
+    if value.get("experience").is_some() {
+        keys.push("experience");
+        if !field_experience(&value["experience"], &value["character"]) {
+            return invalid();
+        }
+    }
+    if !exact_with_live_guard(value, &keys)
+        || value["version"] != 1
         || !bounded(value, 0)
         || !["generation", "startedAt"]
             .iter()
@@ -268,6 +336,11 @@ pub(crate) fn validate_field(value: &Value) -> Result<(), String> {
         return invalid();
     }
     validate_settings(&value["desired"])?;
+    validate_live_guard(
+        value,
+        SAFE_INTEGER,
+        value["character"].as_str().ok_or(ERROR)?,
+    )?;
     for k in ["previous", "totals"] {
         if !exact(&value[k], &["kills", "looted", "deaths", "attacks"])
             || !["kills", "looted", "deaths", "attacks"]
@@ -477,6 +550,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn run_experience_retains_signed_unknown_gains_and_character_ownership() {
+        let mut experience = json!({"gains":{"baseGained":-21,"jobGained":null},"session":"first",
+            "previous":{"character":"Test","run":1,"revision":2,"baseGained":-21,"jobGained":null}});
+        assert!(field_experience(&experience, &json!("Test")));
+        assert!(!field_experience(&experience, &json!("Other")));
+        experience["previous"]["revision"] = json!(SAFE_INTEGER + 1);
+        assert!(!field_experience(&experience, &json!("Test")));
+        experience["previous"] = Value::Null;
+        assert!(field_experience(&experience, &json!("Test")));
+        experience["gains"]["baseGained"] = json!(-21.5);
+        assert!(!field_experience(&experience, &json!("Test")));
+    }
+
+    #[test]
     fn restart_arguments_leave_inputs_unchanged_and_repeat_exactly() {
         let input = vec![
             OsString::from("Companion"),
@@ -504,6 +591,45 @@ mod tests {
             "partyHeal":{"version":1,"attempts":2,"confirmed":1,"cooldownUntil":1100},
             "run":null})
     }
+    #[test]
+    fn carries_only_valid_same_character_live_settings_guards() {
+        let mut value = runtime();
+        value["liveSettingsGuard"] = json!({"version":1,"character":"Synthetic","items":[{"itemId":501,"minStock":3,"cooldownSeconds":60}],
+            "hp":{"minStock":3,"cooldownSeconds":60},"sp":{"minStock":0,"cooldownSeconds":0},
+            "cooldowns":[{"key":"item:501","at":1000}]});
+        assert!(validate_runtime(&value, 1000).is_ok());
+        value["liveSettingsGuard"]["cooldowns"][0]["at"] = json!(1001);
+        assert!(validate_runtime(&value, 1000).is_err());
+        value["liveSettingsGuard"]["cooldowns"][0]["at"] = json!(1000);
+        value["liveSettingsGuard"]["character"] = json!("Other");
+        assert!(validate_runtime(&value, 1000).is_err());
+    }
+
+    #[test]
+    fn field_checkpoint_admits_experience_and_live_protection_together() {
+        let settings = json!({"map":"prt_fild08","targets":[4000],"radius":8,"minHpPercent":45,"loot":true,
+            "route_randomWalk":0,"route_step":10,"route_avoidWalls":true,
+            "route_randomWalk_maxRouteTime":75,"attackRouteMaxPathDistance":20,"attackMaxRouteTime":4});
+        let mut field = json!({"version":1,"desired":settings,"character":"Test","session":"first","generation":1,
+            "startedAt":1000,"metricsSession":"first","previous":{"kills":0,"looted":0,"deaths":0,"attacks":0},
+            "totals":{"kills":2,"looted":0,"deaths":0,"attacks":3},"escapeGuard":null,"supplyGuard":null,"deathGuard":null,
+            "escapeOverflowUncertain":true,"supplyOverflow":false,"deathOverflow":false,
+            "experience":{"gains":{"baseGained":-20,"jobGained":40},"session":"first",
+                "previous":{"character":"Test","run":1,"revision":2,"baseGained":-20,"jobGained":40}},
+            "liveSettingsGuard":{"version":1,"character":"Test","items":[{"itemId":501,"minStock":3,"cooldownSeconds":60}],
+                "hp":{"minStock":3,"cooldownSeconds":60},"sp":{"minStock":0,"cooldownSeconds":0},
+                "cooldowns":[{"key":"item:501","at":1000}]}});
+        assert!(validate_field(&field).is_ok());
+        field["experience"]["previous"]["character"] = json!("Other");
+        assert!(validate_field(&field).is_err());
+        field["experience"]["previous"]["character"] = json!("Test");
+        field["liveSettingsGuard"]["character"] = json!("Other");
+        assert!(validate_field(&field).is_err());
+        field["liveSettingsGuard"]["character"] = json!("Test");
+        field["unknown"] = json!(true);
+        assert!(validate_field(&field).is_err());
+    }
+
     fn checkpoint() -> DiskCheckpoint {
         serde_json::from_value(json!({
             "version":1,"targetVersion":"1.2.3","createdAt":1000,
