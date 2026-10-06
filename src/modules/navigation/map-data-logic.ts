@@ -1,6 +1,7 @@
 import { map, take } from 'remeda';
 import type { Entity } from '../protocol/protocol';
 import { addQuantities, mapCode as admittedMapCode, quantity, speciesId, type MapCode, type Quantity, type SpeciesId } from '../../shared/domain-values';
+import { MAX_MAP_DOCUMENT_BYTES, type MapDataResult } from './map-data-policy';
 
 export interface MapMonster {
   classId: number; name: string; level: number; maxHp: number;
@@ -101,15 +102,47 @@ export function validMapInfo(value: unknown, code: string): value is MapInfo {
 }
 /** Decode bounded HTTP response text without performing the request. */
 export function parseMapDataText(data: string): unknown {
-  if (data.length > 2_000_000) throw new Error('Map database exceeds its limit');
+  if (data.length > MAX_MAP_DOCUMENT_BYTES) throw new Error('Map database exceeds its limit');
   return JSON.parse(data) as unknown;
 }
 
-/** Native IPC is untrusted until both documents pass their existing admission. */
-export function parseMapCatalogAssets(value: unknown): MapCatalog {
+function mapCatalogAssetTexts(value: unknown): { readonly maps: string; readonly monsters: string } {
   const assets = record(value);
   if (Object.keys(assets).length !== 2 || typeof assets.maps !== 'string' || typeof assets.monsters !== 'string') {
     throw new Error('Invalid map database assets');
   }
+  return { maps: assets.maps, monsters: assets.monsters };
+}
+
+/** Native IPC is untrusted until both documents pass their existing admission. */
+export function parseMapCatalogAssets(value: unknown): MapCatalog {
+  const assets = mapCatalogAssetTexts(value);
   return parseMapCatalog(parseMapDataText(assets.maps), parseMapDataText(assets.monsters));
+}
+
+/** Total admission APIs for composition; legacy throwing parsers remain compatible. */
+function mapDataAdmission<T>(parse: () => T): MapDataResult<T> {
+  try { return { kind: 'success', value: parse() }; }
+  catch (error) {
+    return { kind: 'failure', cause: { kind: 'invalid-data', message: error instanceof Error ? error.message : 'Invalid map database' } };
+  }
+}
+
+export function parseMapDataTextResult(data: string): MapDataResult<unknown> {
+  if (data.length > MAX_MAP_DOCUMENT_BYTES) return { kind: 'failure', cause: { kind: 'size-limit' } };
+  return mapDataAdmission(() => parseMapDataText(data));
+}
+
+export function parseMapCatalogResult(mapData: unknown, monsterData: unknown): MapDataResult<MapCatalog> {
+  return mapDataAdmission(() => parseMapCatalog(mapData, monsterData));
+}
+
+export function parseMapCatalogAssetsResult(value: unknown): MapDataResult<MapCatalog> {
+  const assets = mapDataAdmission(() => mapCatalogAssetTexts(value));
+  if (assets.kind === 'failure') return assets;
+  const maps = parseMapDataTextResult(assets.value.maps);
+  if (maps.kind === 'failure') return maps;
+  const monsters = parseMapDataTextResult(assets.value.monsters);
+  if (monsters.kind === 'failure') return monsters;
+  return parseMapCatalogResult(maps.value, monsters.value);
 }

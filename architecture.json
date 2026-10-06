@@ -155,6 +155,7 @@
   "src/modules/navigation/database-travel-protocol.ts": "logic",
   "src/modules/navigation/map-data-effects.ts": "effects",
   "src/modules/navigation/map-data-logic.ts": "logic",
+  "src/modules/navigation/map-data-policy.ts": "logic",
   "src/modules/navigation/map-data.ts": "orchestration",
   "src/modules/navigation/map-policy-logic.ts": "logic",
   "src/modules/navigation/map-policy.ts": "orchestration",
