@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
-const repository = 'oDestroyeRo/openrayrag';
-const statuses = new Set(['queued', 'in_progress', 'completed', 'waiting', 'pending', 'requested']);
-function requireValue(ok, message) { if (!ok) throw new Error(message); }
-function id(value) { requireValue(/^[1-9]\d*$/.test(String(value)), 'Expected a positive numeric GitHub ID.'); return String(value); }
+import {
+  repository, statuses, requireValue, id, createPullRequestStatus, validateRun,
+  createRunSnapshot, parseOptions,
+} from './hosted-status-policy.mjs';
+export { parseOptions } from './hosted-status-policy.mjs';
 
 export async function readApi(path, binary = false, execute = exec) {
   // Colored job logs are raw bytes saved privately, never rendered in a terminal.
@@ -24,23 +25,13 @@ export async function pullRequestStatus(number, expectedSha, execute = exec) {
   const { stdout } = await execute('gh', ['pr', 'view', id(number), '--repo', repository, '--json', 'headRefOid,state,mergeStateStatus,reviewDecision,statusCheckRollup'], {
     encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: 60_000, windowsHide: true, shell: false,
   });
-  const result = JSON.parse(stdout);
-  requireValue(result.headRefOid === expectedSha, 'Pull request head differs from the workflow source.');
-  requireValue(Array.isArray(result.statusCheckRollup) && typeof result.mergeStateStatus === 'string', 'Missing pull request check metadata.');
-  const checks = result.statusCheckRollup.map(check => ({
-    name: check.name ?? check.context,
-    status: check.status?.toLowerCase() ?? (['PENDING', 'EXPECTED'].includes(check.state) ? 'pending' : 'completed'),
-    conclusion: check.conclusion?.toLowerCase() ?? (check.state === 'SUCCESS' ? 'success' : check.state === 'FAILURE' || check.state === 'ERROR' ? 'failure' : null),
-  })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  return { number: id(number), state: result.state, mergeState: result.mergeStateStatus, reviewDecision: result.reviewDecision ?? null, checks };
+  return createPullRequestStatus(number, JSON.parse(stdout), expectedSha);
 }
 
 export async function snapshot(runId, read = readApi, expectedSha) {
   runId = id(runId);
   const run = await read(`actions/runs/${runId}`);
-  requireValue(String(run.id) === runId && /^[a-f0-9]{40}$/.test(run.head_sha ?? '') && statuses.has(run.status), 'Unexpected workflow run metadata.');
-  if (expectedSha) requireValue(run.head_sha === expectedSha, 'Workflow source differs from the expected SHA.');
-  requireValue(Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0, 'Missing workflow attempt.');
+  validateRun(runId, run, expectedSha);
   const jobs = [];
   let count;
   for (let page = 1; page <= 5; page++) {
@@ -55,9 +46,7 @@ export async function snapshot(runId, read = readApi, expectedSha) {
     if (jobs.length === count) break;
     requireValue(response.jobs.length === 100 && jobs.length < count, 'Incomplete job listing.');
   }
-  requireValue(jobs.length === count && new Set(jobs.map(job => job.id)).size === count, 'Incomplete or duplicate job listing.');
-  jobs.sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }));
-  return { repository, runId, sourceSha: run.head_sha, attempt: run.run_attempt, status: run.status, conclusion: run.conclusion ?? null, url: `https://github.com/${repository}/actions/runs/${runId}`, jobs };
+  return createRunSnapshot(runId, run, jobs, count);
 }
 
 export async function saveFailedLog(state, jobId, read = readApi) {
@@ -72,24 +61,6 @@ export async function saveFailedLog(state, jobId, read = readApi) {
   await writeFile(path, bytes, { flag: 'wx', mode: 0o600 });
   // Logs stay private; console output contains only the path and job identity.
   return { jobId, path, bytes: bytes.length };
-}
-
-export function parseOptions(args) {
-  if (args.length === 1 && args[0] === '--help') return { help: true };
-  const options = { runId: id(args[0]), watch: false };
-  for (let index = 1; index < args.length; index++) {
-    const flag = args[index];
-    if (flag === '--watch' && !options.watch) options.watch = true;
-    else if (flag === '--sha' && !options.expectedSha) {
-      const sha = args[++index];
-      requireValue(/^[a-f0-9]{40}$/.test(sha ?? ''), 'Expected a complete source SHA.');
-      options.expectedSha = sha;
-    } else if (flag === '--failed-log' && !options.jobId) options.jobId = id(args[++index]);
-    else if (flag === '--pr' && !options.pullRequest) options.pullRequest = id(args[++index]);
-    else throw new Error('Usage: bun run ci:status <run-id> [--sha <source-sha>] [--pr <number>] [--watch | --failed-log <job-id>]');
-  }
-  requireValue(!(options.watch && options.jobId), 'Download one failed log from a snapshot, or watch status changes.');
-  return options;
 }
 
 export async function watchRun(options, { read = readApi, readPullRequest = pullRequestStatus, output = console.log, wait = milliseconds => new Promise(done => setTimeout(done, milliseconds)), maxSnapshots = 160 } = {}) {

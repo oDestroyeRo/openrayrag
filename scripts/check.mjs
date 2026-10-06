@@ -2,40 +2,21 @@
 import { readdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createVerificationPlan, createInvocation } from './check-policy.mjs';
 import { runLoggedProcess } from './process-diagnostics.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+export { createVerificationPlan } from './check-policy.mjs';
+
 export async function verificationPlan(platform = process.platform, directory = root) {
+  // Reject unsupported runners before reading their scripts directory.
   if (!['darwin', 'linux', 'win32'].includes(platform)) throw new Error('Unsupported desktop platform.');
-  const scripts = (await readdir(join(directory, 'scripts')))
-    .filter(name => name.endsWith('-tests.mjs')).sort().map(name => `scripts/${name}`);
-  if (!scripts.length) throw new Error('No script tests found.');
-  const cargo = ['--locked', '--manifest-path', 'src-tauri/Cargo.toml'];
-  const steps = [
-    { tool: 'bun', args: ['install', '--cwd', 'tools/release', '--frozen-lockfile', '--ignore-scripts'], report: 'release-tools.log' },
-    { tool: 'bun', args: ['run', 'typecheck:release'], report: 'release-types.log' },
-    { tool: 'python', args: ['vendor/glib/verify.py', ...(platform === 'linux' ? ['--test'] : [])], report: 'glib.log' },
-    // Process/packaging regressions can exceed Bun's five-second default on CI.
-    { tool: 'bun', args: ['test', '--timeout', '120000', ...scripts.map(name => `./${name}`)], report: 'scripts.log' },
-    { tool: 'bun', args: ['run', 'build'], report: 'frontend-build.log' },
-    { tool: 'bun', args: ['run', 'test', '--reporter=default', '--reporter=junit', '--outputFile=reports/frontend.xml'], report: 'frontend.log' },
-    { tool: 'cargo', args: ['test', ...cargo], report: 'native.log' },
-    { tool: 'cargo', args: ['test', ...cargo, '--features', 'ci-smoke'], report: 'native-ci.log' },
-    { tool: 'cargo', args: ['clippy', ...cargo, '--all-targets', '--', '-D', 'warnings'], report: 'clippy.log' },
-    { tool: 'cargo', args: ['clippy', ...cargo, '--features', 'ci-smoke', '--all-targets', '--', '-D', 'warnings'], report: 'clippy-ci.log' },
-    { tool: 'cargo', args: ['fmt', '--manifest-path', 'src-tauri/Cargo.toml', '--', '--check'], report: 'format.log' },
-  ];
-  if (platform === 'darwin') steps.push({
-    tool: 'python', args: ['-m', 'unittest', 'discover', '-s', 'scripts', '-p', 'release_test.py'], report: 'release-native.log',
-  });
-  return steps;
+  return createVerificationPlan(platform, await readdir(join(directory, 'scripts')));
 }
 
 export function invocation(step, env = process.env, platform = process.platform) {
-  // Reuse the running Bun executable directly, including bun.exe on Windows.
-  // No package-manager shim or shell is needed.
-  return { file: step.tool === 'bun' ? process.execPath : step.tool === 'python' ? (platform === 'win32' ? 'python' : 'python3') : step.tool, args: step.args };
+  return createInvocation(step, platform, process.execPath);
 }
 
 export async function executePlan(steps, run = runLoggedProcess, directory = root, env = process.env) {

@@ -9,6 +9,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { createContext, runInContext } from 'node:vm';
+export async function runBenchmark(args = process.argv.slice(2)) {
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const folder=await mkdtemp(join(tmpdir(),'rayrag-responsive-'));
 const entry="export {TravelPlanner} from './src/travel.ts';export {DEFAULT_MAP_POLICY} from './src/map-policy.ts';";
@@ -49,3 +50,9 @@ try{
   }
   console.log(JSON.stringify({host:`Bun ${process.versions.bun}`,sliceBudgetMs:8,results},null,2));
 }finally{await rm(folder,{recursive:true,force:true});}
+
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await runBenchmark();
+}
