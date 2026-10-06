@@ -2,7 +2,7 @@ import type { DeathRecoveryGuard } from './death-recovery';
 import { MaintenanceLease } from './maintenance';
 import { couldOwnOfficialGameplay, isOfficialGameplayCommand, isOfficialLookCommand, isOfficialMovementCommand, isOfficialRefineCommand } from './official-input';
 import { type Settings } from './engine';
-import { decode, OP, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
+import { OP, GAME_URL, SOCKET_URL, VERIFIED_BUILD } from './protocol';
 import { officialWarpSkill, warpInitializationPacket } from './warp-protocol';
 import type { CompanionSnapshot } from './controller';
 import type { ControllerUpdateCheckpoint, ControllerUpdateRestore } from './controller-update';
@@ -280,17 +280,19 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
           // are read while an explicitly requested sign-in is active.
           login?.receive(data);
           mutation();
-          const incoming=decode(data),firstOwn=incoming.find(e=>e.type==='spawn'&&e.entity.kind===0&&e.entity.id===engine.playerId);
-          if(firstOwn?.type==='spawn'&&!firstOwnSeen){firstOwnSeen=true;if(initialEnter&&fullResources&&memoObserved&&this.readyObserved&&firstOwn.entryType===1&&resetResources!==null&&resetResources===controller.officialInitializationResourceRevision())guardResetAllowed=true;}
-          controller.receive(data, connectionGeneration);
+          const observation=controller.receive(data,connectionGeneration,before=>{
+            const firstOwn=before.spawns.find(e=>e.kind===0&&e.id===engine.playerId);
+            if(firstOwn&&!firstOwnSeen){firstOwnSeen=true;if(initialEnter&&fullResources&&memoObserved&&this.readyObserved&&firstOwn.entryType===1&&resetResources!==null&&resetResources===controller.officialInitializationResourceRevision())guardResetAllowed=true;}
+          });
+          if(!observation)return;
           if(engine.actorActionIdentity(undefined,true)){this.gameplayReady=true;this.gameplayCharacter=engine.player?.name??null;}
-          if(data[0]===OP.enter){enterCount++;initialEnter=enterCount===1;memoObserved=false;firstOwnSeen=false;this.readyObserved=false;guardResetAllowed=false;fullResources=false;readyOwn=null;refineResources=null;resetResources=null;firstResources=false;refineBaselineConsumed=false;reconciliationEligible=initialEnter&&officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0;reconciliationRevision=reconciliationEligible?officialRevision:null;}
-          if(data[0]===OP.clear||data[0]===OP.map){reconciliationEligible=false;readyOwn=null;}
-          if(initialEnter&&data[0]===56&&!firstResources){firstResources=true;const events=decode(data);fullResources=events.some(e=>e.type==='inventory')&&events.some(e=>e.type==='skills')&&events.some(e=>e.type==='stats');
+          if(observation.enter){enterCount++;initialEnter=enterCount===1;memoObserved=false;firstOwnSeen=false;this.readyObserved=false;guardResetAllowed=false;fullResources=false;readyOwn=null;refineResources=null;resetResources=null;firstResources=false;refineBaselineConsumed=false;reconciliationEligible=initialEnter&&officialUncertain&&!officialOwnerOverflow&&officialOwners.size===0;reconciliationRevision=reconciliationEligible?officialRevision:null;}
+          if(observation.clear||observation.map){reconciliationEligible=false;readyOwn=null;}
+          if(initialEnter&&observation.opcode===56&&!firstResources){firstResources=true;fullResources=observation.fullResources;
             if(fullResources){refineResources=controller.officialRefineResourceRevision();resetResources=controller.officialInitializationResourceRevision();}}
-          if(initialEnter&&incoming.some(e=>e.type==='memoSlots'))memoObserved=true;
-          if(initialEnter&&data[0]===OP.spawn){const own=decode(data).find(e=>e.type==='spawn'&&e.entity.kind===0&&e.entity.id===engine.playerId);
-            if(own?.type==='spawn'){const identity=engine.actorActionIdentity(undefined,true);readyOwn=fullResources&&own.entryType===1&&identity?JSON.stringify(identity):null;}}
+          if(initialEnter&&observation.memoSlots)memoObserved=true;
+          if(initialEnter&&observation.opcode===OP.spawn){const own=observation.spawns.find(e=>e.kind===0&&e.id===engine.playerId);
+            if(own){const identity=engine.actorActionIdentity(undefined,true);readyOwn=fullResources&&own.entryType===1&&identity?JSON.stringify(identity):null;}}
           reconcileInitialization(revision);
           if (engine.player) { enteredWorld = true; login?.complete(); }
         }).catch(error => {

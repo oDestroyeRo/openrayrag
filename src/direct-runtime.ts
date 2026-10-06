@@ -1,7 +1,7 @@
 import { wireController } from './controller-wire';
 import type { CompanionController } from './controller';
 import type { ControllerUpdateCheckpoint, ControllerUpdateRestore } from './controller-update';
-import { decode, OP, VERIFIED_BUILD } from './protocol';
+import { OP, VERIFIED_BUILD } from './protocol';
 import { MaintenanceLease } from './maintenance';
 import type { LoginStatus } from './login';
 import { currentMapInfo, type MapCatalog } from './map-data';
@@ -100,34 +100,35 @@ export class DirectRuntime {
       if(this.enterCount||this.login.phase!=='selecting')throw new Error('Unexpected enter request');
       this.controller.observeOfficialPacket(bytes);this.login={phase:'entering',message:'Waiting for authoritative character state.'};return;
     }
-    const events=decode(bytes);
-    const ownEntry=events.find(e=>e.type==='spawn'&&e.entity.id===this.controller.engine.playerId&&e.entity.kind===0);
-    if(ownEntry?.type==='spawn'&&!this.firstOwnSeen){this.firstOwnSeen=true;
-      if(this.initial&&this.certificate&&ownEntry.entryType===1&&this.resources!==null&&this.resources===this.controller.officialInitializationResourceRevision())this.resetAllowed=true;}
-    this.controller.receive(bytes,this.controller.connectionGeneration);
-    if(events.some(e=>e.type==='enter')){
+    const observation=this.controller.receive(bytes,this.controller.connectionGeneration,before=>{
+      const ownEntry=before.spawns.find(e=>e.id===this.controller.engine.playerId&&e.kind===0);
+      if(ownEntry&&!this.firstOwnSeen){this.firstOwnSeen=true;
+        if(this.initial&&this.certificate&&ownEntry.entryType===1&&this.resources!==null&&this.resources===this.controller.officialInitializationResourceRevision())this.resetAllowed=true;}
+    });
+    if(!observation)return;
+    if(observation.enter){
       this.enterCount++;this.initial=this.enterCount===1;this.full=false;this.memo=false;this.firstResources=false;this.firstOwnSeen=false;
       this.resources=null;this.refineResources=null;this.own=null;this.certificate=false;this.readyPending=true;
     }
-    if(events.some(e=>e.type==='map')){
+    if(observation.map){
       this.initial=false;this.readyPending=true;this.certificate=false;this.own=null;
     }
-    if(events.some(e=>e.type==='clear')){this.certificate=false;this.own=null;}
-    if(this.initial&&bytes[0]===56&&!this.firstResources){
-      this.firstResources=true;this.full=events.some(e=>e.type==='inventory')&&events.some(e=>e.type==='skills')&&events.some(e=>e.type==='stats');
+    if(observation.clear){this.certificate=false;this.own=null;}
+    if(this.initial&&observation.opcode===56&&!this.firstResources){
+      this.firstResources=true;this.full=observation.fullResources;
       if(this.full){this.resources=this.controller.officialInitializationResourceRevision();this.refineResources=this.controller.officialRefineResourceRevision();}
     }
-    if(this.initial&&events.some(e=>e.type==='memoSlots'))this.memo=true;
+    if(this.initial&&observation.memoSlots)this.memo=true;
     // Initial full resources and memo are sent before PlayerReady. Map changes need
     // their applied reset only. A duplicate/stale opcode never supplies this proof.
     if(this.readyPending&&(!this.initial||this.full&&this.memo)){
       this.readyPending=false;await this.send(new Uint8Array([2]));
       if(this.ended)return;
     }
-    if(this.initial&&bytes[0]===OP.spawn){
-      const own=events.find(e=>e.type==='spawn'&&e.entity.kind===0&&e.entity.id===this.controller.engine.playerId);
+    if(this.initial&&observation.opcode===OP.spawn){
+      const own=observation.spawns.find(e=>e.kind===0&&e.id===this.controller.engine.playerId);
       const identity=this.controller.engine.actorActionIdentity(undefined,true);
-      this.own=this.certificate&&own?.type==='spawn'&&own.entryType===1&&identity?JSON.stringify(identity):null;
+      this.own=this.certificate&&own?.entryType===1&&identity?JSON.stringify(identity):null;
     }
     this.reconcile();
     if(this.controller.engine.player){this.entered=true;this.login={phase:'complete',message:'Character connected. Bot controls are ready.'};}
