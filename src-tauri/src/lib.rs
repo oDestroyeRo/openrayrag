@@ -455,7 +455,11 @@ pub fn run() {
             update::update_continuation::initialize(app.handle())?;
             #[cfg(target_os = "macos")]
             settings::settings_close::install_macos_quit(app.handle())?;
-            shell::client_view::create_main(app.handle())?;
+            if let Err(error) = shell::client_view::create_main(app.handle()) {
+                #[cfg(target_os = "macos")]
+                shell::client_view::report_main_failure();
+                return Err(error.into());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -539,10 +543,11 @@ pub fn run() {
         .expect("Could not launch Rayrag Companion")
         .run(|app, event| {
             #[cfg(target_os = "macos")]
-            if matches!(event, tauri::RunEvent::Reopen { .. })
-                && shell::client_view::recover_main(app).is_err()
-            {
-                eprintln!("Could not restore the Companion window. Quit and reopen the app.");
+            if matches!(
+                event,
+                tauri::RunEvent::Ready | tauri::RunEvent::Reopen { .. }
+            ) {
+                shell::client_view::recover_main(app);
             }
             if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
                 settings::settings_close::exit_requested(app, code, &api);

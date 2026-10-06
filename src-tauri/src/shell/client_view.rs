@@ -15,64 +15,145 @@ pub(crate) fn create_main(app: &tauri::AppHandle) -> tauri::Result<()> {
         .expect("The main window configuration must exist");
     let window = tauri::window::WindowBuilder::from_config(app, config)?.build()?;
     crate::shell::ci_smoke::milestone("main-webview-building");
-    window.add_child(
-        WebviewBuilder::from_config(config).auto_resize(),
-        tauri::LogicalPosition::new(0, 0),
-        window.inner_size()?,
-    )?;
+    let controller = (|| {
+        window.add_child(
+            WebviewBuilder::from_config(config).auto_resize(),
+            tauri::LogicalPosition::new(0, 0),
+            window.inner_size()?,
+        )
+    })();
+    if let Err(error) = controller {
+        // A failed controller must not leave an empty registered main window
+        // which would prevent a later, safe reconstruction.
+        let _ = window.destroy();
+        return Err(error);
+    }
     crate::shell::ci_smoke::milestone("main-webview-built");
-    #[cfg(target_os = "macos")]
-    recover_main(app)?;
     Ok(())
 }
 
 #[cfg(any(target_os = "macos", test))]
-trait MainWindowEffects {
-    type Error;
-    fn show_application(&mut self) -> Result<(), Self::Error>;
-    fn unminimize(&mut self) -> Result<(), Self::Error>;
-    fn show_window(&mut self) -> Result<(), Self::Error>;
-    fn focus(&mut self) -> Result<(), Self::Error>;
+const RECOVERY_ERROR: &str = "Could not restore the Companion window. Quit and reopen Rayrag Companion. Your saved settings are preserved.";
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MainWindowState {
+    Complete,
+    Absent,
+    Incomplete,
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn recover_main_program<E: MainWindowEffects>(effects: &mut E) -> Result<(), E::Error> {
+trait MainWindowEffects {
+    fn state(&mut self) -> MainWindowState;
+    fn create(&mut self) -> Result<(), &'static str>;
+    fn show_application(&mut self) -> Result<(), &'static str>;
+    fn unminimize(&mut self) -> Result<(), &'static str>;
+    fn show_window(&mut self) -> Result<(), &'static str>;
+    fn focus(&mut self) -> Result<(), &'static str>;
+    fn verify_visible(&mut self) -> Result<(), &'static str>;
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn recover_main_program<E: MainWindowEffects>(effects: &mut E) -> Result<(), &'static str> {
+    match effects.state() {
+        MainWindowState::Complete => (),
+        MainWindowState::Absent => {
+            effects.create()?;
+            if effects.state() != MainWindowState::Complete {
+                return Err(RECOVERY_ERROR);
+            }
+        }
+        // Rebuilding around a surviving controller or game could duplicate its
+        // lifecycle. Preserve that owner and provide native recovery guidance.
+        MainWindowState::Incomplete => return Err(RECOVERY_ERROR),
+    }
     effects.show_application()?;
     effects.unminimize()?;
     effects.show_window()?;
-    effects.focus()
+    effects.focus()?;
+    effects.verify_visible()
 }
 
 #[cfg(target_os = "macos")]
 struct NativeMainWindow<'a> {
     app: &'a tauri::AppHandle,
-    window: tauri::Window,
+    window: Option<tauri::Window>,
+}
+
+#[cfg(target_os = "macos")]
+impl NativeMainWindow<'_> {
+    fn window(&self) -> Result<&tauri::Window, &'static str> {
+        self.window.as_ref().ok_or(RECOVERY_ERROR)
+    }
 }
 
 #[cfg(target_os = "macos")]
 impl MainWindowEffects for NativeMainWindow<'_> {
-    type Error = tauri::Error;
-    fn show_application(&mut self) -> tauri::Result<()> {
-        self.app.show()
+    fn state(&mut self) -> MainWindowState {
+        self.window = self.app.get_window("main");
+        match (self.window.as_ref(), self.app.get_webview("main")) {
+            (Some(_), Some(controller)) if controller.window().label() == "main" => {
+                MainWindowState::Complete
+            }
+            (None, None) if self.app.get_webview("game").is_none() => MainWindowState::Absent,
+            _ => MainWindowState::Incomplete,
+        }
     }
-    fn unminimize(&mut self) -> tauri::Result<()> {
-        self.window.unminimize()
+    fn create(&mut self) -> Result<(), &'static str> {
+        create_main(self.app).map_err(|_| RECOVERY_ERROR)
     }
-    fn show_window(&mut self) -> tauri::Result<()> {
-        self.window.show()
+    fn show_application(&mut self) -> Result<(), &'static str> {
+        self.app.show().map_err(|_| RECOVERY_ERROR)
     }
-    fn focus(&mut self) -> tauri::Result<()> {
-        self.window.set_focus()
+    fn unminimize(&mut self) -> Result<(), &'static str> {
+        self.window()?.unminimize().map_err(|_| RECOVERY_ERROR)
+    }
+    fn show_window(&mut self) -> Result<(), &'static str> {
+        self.window()?.show().map_err(|_| RECOVERY_ERROR)
+    }
+    fn focus(&mut self) -> Result<(), &'static str> {
+        self.window()?.set_focus().map_err(|_| RECOVERY_ERROR)
+    }
+    fn verify_visible(&mut self) -> Result<(), &'static str> {
+        let window = self.window()?;
+        if window.is_visible().map_err(|_| RECOVERY_ERROR)?
+            && !window.is_minimized().map_err(|_| RECOVERY_ERROR)?
+        {
+            Ok(())
+        } else {
+            Err(RECOVERY_ERROR)
+        }
     }
 }
 
 /// Recover presentation only; reopening never changes settings or run intent.
 #[cfg(target_os = "macos")]
-pub(crate) fn recover_main(app: &tauri::AppHandle) -> tauri::Result<()> {
-    if let Some(window) = app.get_window("main") {
-        recover_main_program(&mut NativeMainWindow { app, window })?;
+pub(crate) fn recover_main(app: &tauri::AppHandle) {
+    if recover_main_program(&mut NativeMainWindow { app, window: None }).is_err() {
+        report_main_failure();
     }
-    Ok(())
+}
+
+/// A recovery error must remain visible even when the HTML window is absent.
+#[cfg(target_os = "macos")]
+pub(crate) fn report_main_failure() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSAlert, NSApplication};
+    use objc2_foundation::NSString;
+
+    eprintln!("{RECOVERY_ERROR}");
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return;
+    };
+    let application = NSApplication::sharedApplication(main_thread);
+    #[allow(deprecated)]
+    application.activateIgnoringOtherApps(true);
+    let alert = NSAlert::new(main_thread);
+    alert.setMessageText(&NSString::from_str("Could not restore Companion"));
+    alert.setInformativeText(&NSString::from_str(RECOVERY_ERROR));
+    alert.addButtonWithTitle(&NSString::from_str("OK"));
+    alert.runModal();
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -201,45 +282,140 @@ pub(crate) fn set_game_view(
 mod tests {
     use super::*;
 
+    struct Window {
+        state: MainWindowState,
+        created_state: MainWindowState,
+        calls: Vec<&'static str>,
+        failure: Option<&'static str>,
+        hidden_app: bool,
+        minimized: bool,
+        hidden_window: bool,
+        focused: bool,
+    }
+    impl Window {
+        fn hidden(state: MainWindowState) -> Self {
+            Self {
+                state,
+                created_state: MainWindowState::Complete,
+                calls: vec![],
+                failure: None,
+                hidden_app: true,
+                minimized: true,
+                hidden_window: true,
+                focused: false,
+            }
+        }
+        fn effect(&mut self, call: &'static str) -> Result<(), &'static str> {
+            self.calls.push(call);
+            if self.failure == Some(call) {
+                Err(RECOVERY_ERROR)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    impl MainWindowEffects for Window {
+        fn state(&mut self) -> MainWindowState {
+            self.calls.push("state");
+            self.state
+        }
+        fn create(&mut self) -> Result<(), &'static str> {
+            self.effect("create")?;
+            self.state = self.created_state;
+            Ok(())
+        }
+        fn show_application(&mut self) -> Result<(), &'static str> {
+            self.effect("show-application")?;
+            self.hidden_app = false;
+            Ok(())
+        }
+        fn unminimize(&mut self) -> Result<(), &'static str> {
+            self.effect("unminimize")?;
+            self.minimized = false;
+            Ok(())
+        }
+        fn show_window(&mut self) -> Result<(), &'static str> {
+            self.effect("show-window")?;
+            self.hidden_window = false;
+            Ok(())
+        }
+        fn focus(&mut self) -> Result<(), &'static str> {
+            self.effect("focus")?;
+            if self.hidden_app || self.minimized || self.hidden_window {
+                return Err(RECOVERY_ERROR);
+            }
+            self.focused = true;
+            Ok(())
+        }
+        fn verify_visible(&mut self) -> Result<(), &'static str> {
+            self.effect("verify-visible")
+        }
+    }
+
     #[test]
     fn reopening_restores_a_hidden_minimized_window_before_focusing_it() {
-        struct Window {
-            hidden_app: bool,
-            minimized: bool,
-            hidden_window: bool,
-            focused: bool,
-        }
-        impl MainWindowEffects for Window {
-            type Error = &'static str;
-            fn show_application(&mut self) -> Result<(), Self::Error> {
-                self.hidden_app = false;
-                Ok(())
-            }
-            fn unminimize(&mut self) -> Result<(), Self::Error> {
-                self.minimized = false;
-                Ok(())
-            }
-            fn show_window(&mut self) -> Result<(), Self::Error> {
-                self.hidden_window = false;
-                Ok(())
-            }
-            fn focus(&mut self) -> Result<(), Self::Error> {
-                if self.hidden_app || self.minimized || self.hidden_window {
-                    return Err("Window is not usable");
-                }
-                self.focused = true;
-                Ok(())
-            }
-        }
-        let mut window = Window {
-            hidden_app: true,
-            minimized: true,
-            hidden_window: true,
-            focused: false,
-        };
+        let mut window = Window::hidden(MainWindowState::Complete);
         assert_eq!(recover_main_program(&mut window), Ok(()));
         assert!(window.focused);
+        assert_eq!(
+            window.calls,
+            [
+                "state",
+                "show-application",
+                "unminimize",
+                "show-window",
+                "focus",
+                "verify-visible"
+            ]
+        );
+        window.calls.clear();
         assert_eq!(recover_main_program(&mut window), Ok(()));
+        assert!(!window.calls.contains(&"create"));
+    }
+
+    #[test]
+    fn reopening_reconstructs_only_a_missing_window_without_surviving_owners() {
+        let mut absent = Window::hidden(MainWindowState::Absent);
+        assert_eq!(recover_main_program(&mut absent), Ok(()));
+        assert_eq!(&absent.calls[..3], ["state", "create", "state"]);
+        assert!(absent.focused);
+
+        let mut orphaned = Window::hidden(MainWindowState::Incomplete);
+        assert_eq!(recover_main_program(&mut orphaned), Err(RECOVERY_ERROR));
+        assert_eq!(orphaned.calls, ["state"]);
+        assert_eq!(orphaned.state, MainWindowState::Incomplete);
+    }
+
+    #[test]
+    fn creation_or_presentation_failure_remains_a_recovery_error() {
+        let operations = [
+            "create",
+            "show-application",
+            "unminimize",
+            "show-window",
+            "focus",
+            "verify-visible",
+        ];
+        for failed in operations {
+            let mut window = Window::hidden(MainWindowState::Absent);
+            window.failure = Some(failed);
+            assert_eq!(recover_main_program(&mut window), Err(RECOVERY_ERROR));
+            assert_eq!(window.calls.last(), Some(&failed));
+            if failed == "create" {
+                assert_eq!(window.state, MainWindowState::Absent);
+            }
+        }
+    }
+
+    #[test]
+    fn accepted_creation_without_a_registered_controller_is_not_success() {
+        for created_state in [MainWindowState::Absent, MainWindowState::Incomplete] {
+            let mut window = Window::hidden(MainWindowState::Absent);
+            window.created_state = created_state;
+            assert_eq!(recover_main_program(&mut window), Err(RECOVERY_ERROR));
+            assert_eq!(window.calls, ["state", "create", "state"]);
+            assert!(!window.focused);
+        }
     }
 
     #[test]
