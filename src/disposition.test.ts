@@ -11,7 +11,7 @@ const unique = (bagId: number, guid = `unique-${bagId}`): InventoryItem => ({ ba
 const rule = (changes: Partial<DispositionRule> = {}): DispositionRule => ({ itemId: 501, keep: 2, minimum: 3, desired: 5, maximum: 6,
   store: false, sell: false, cart: false, restock: 'off', allowUnique: false, ...changes });
 const policy = (changes: Partial<DispositionRule> = {}, maxSpend = 0): DispositionPolicy => ({ maxSpend, rules: [rule(changes)] });
-function context(mode: 'sell' | 'buy' | 'storage' | 'cart' = 'sell'): DispositionContext {
+function context(mode: 'sell' | 'buy' | 'storage' | 'cart' = 'sell'): DispositionContext & { workflow: DispositionContext['workflow'] & { world: WorldState } } {
   const world = new WorldState(); world.reset('prontera');
   world.npc = { id: mode === 'cart' ? null : 42, mode: mode === 'storage' ? 'storage' : mode === 'cart' ? 'idle' : 'shop', dialog: null, options: [] };
   if (mode === 'sell' || mode === 'buy') world.shop = { mode, discountLevel: 0, entries: [{ itemId: 501, price: 50 }, { itemId: 512, price: 15 }] };

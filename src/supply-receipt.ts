@@ -1,8 +1,8 @@
-import type { InventoryItem } from "./protocol-feature";
-import type { DispositionAction } from "./disposition";
-import type { SupplyContext } from "./supply-trip";
-import type { WorldEvent } from "./world-protocol";
-import { confirmWorkflowReceipt, type WorkflowReceipt } from "./workflows";
+import type { InventoryItem } from './protocol-feature';
+import type { DispositionAction } from './disposition';
+import type { SupplyContext } from './supply-trip-logic';
+import type { WorldEvent } from './world-protocol';
+import { confirmWorkflowReceipt, type WorkflowReceipt } from './workflows-logic';
 
 export interface SupplyReceipt {
   economic: WorkflowReceipt;

@@ -1,6 +1,7 @@
 import weapons from './data/weapon-catalog.json';
 import { ITEM_CATALOG } from './game-catalog';
-import type { CharacterSnapshot, CharacterState } from './character-state';
+import type { CharacterSnapshot } from './character-state-logic';
+import type { CharacterState } from './character-state';
 import type { Position } from './protocol';
 
 interface WeaponInfo { code: string; range: number; weaponClass: number }

@@ -1,17 +1,10 @@
-import { PersistentFieldRun, ReconnectPolicy, type RunSession } from './reconnect';
+import type { PersistentFieldRun, ReconnectPolicy } from './reconnect';
+import type { RunSession } from './reconnect-logic';
 import type { Settings } from './settings';
 
-export type DispatchOutcome =
-  | { readonly status: 'accepted'; readonly value: unknown }
-  | { readonly status: 'failed'; readonly error: unknown }
-  | { readonly status: 'retired' };
+import { type DispatchOutcome, type DispatchReceipt, retiredOutcome, type PendingKind, type NativeDispatch } from './run-intent-dispatch-logic';
 
-/** Read immediately before synchronous effects; read again after any additional await. */
-export interface DispatchReceipt { readonly outcome: DispatchOutcome }
-const retiredOutcome: DispatchOutcome = Object.freeze({ status: 'retired' });
-
-type PendingKind = 'resume' | 'login' | 'service' | 'manual' | 'limit';
-type NativeDispatch = (command: 'control_bot' | 'login_game' | 'reconnect_game', args?: Record<string, unknown>) => Promise<unknown>;
+export { type DispatchOutcome, type DispatchReceipt } from './run-intent-dispatch-logic';
 
 /** Owns dispatch lifetime; retiring intent never erases work already sent to native. */
 export class RunIntentDispatch {

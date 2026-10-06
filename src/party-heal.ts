@@ -1,43 +1,14 @@
 import { sameActionIdentity, type ActionIdentity } from './actor-identity';
-import { evaluateActorPredicate, type ActorObservationSnapshot, type ActorPredicate } from './actor-observations';
+import type { ActorObservationSnapshot } from './actor-observations-logic';
 import { resourceFresh } from './actor-resources';
-import type { PartyActorBinding } from './party-actors';
-import type { Entity, GameEvent } from './protocol';
-import type { ExpandedAction } from './protocol-feature';
+import type { GameEvent } from './protocol';
 import type { PartyHealSettings } from './settings';
 import { matchesPartyHealExecution } from './skill-execution';
 
-export type HealAction=Extract<ExpandedAction,{type:'skill';mode:'target'}>;
-export interface PartyHealCandidate { binding:PartyActorBinding; hp:number; maxHp:number; hpAt:number }
-export interface PartyHealSnapshot { state:'disabled'|'waiting'|'ready'|'pending'|'uncertain'|'confirmed'; reason:string; attempts:number; confirmed:number; targetMemberId:number|null; sequence:number|null; resourceReadback:boolean }
-export interface PartyHealCheckpoint { version:1; attempts:number; confirmed:number; cooldownUntil:number }
-export function validatePartyHealCheckpoint(value:unknown):PartyHealCheckpoint {
-  const c=value as PartyHealCheckpoint;
-  if(!c||typeof c!=='object'||Array.isArray(c)||Object.keys(c).length!==4||c.version!==1
-    ||!Number.isInteger(c.attempts)||c.attempts<0||c.attempts>100||!Number.isInteger(c.confirmed)||c.confirmed<0||c.confirmed>c.attempts
-    ||!Number.isSafeInteger(c.cooldownUntil)||c.cooldownUntil<0)throw new Error('Invalid party Heal checkpoint.');
-  return structuredClone(c);
-}
-interface Owner { sequence:number; identity:ActionIdentity; action:HealAction; binding:PartyActorBinding; since:number; retired:boolean; hpAt:number; cooldownSeconds:number }
-function sameOwnIdentity(a:ActionIdentity|null,b:ActionIdentity):boolean {
-  return !!a&&a.world===b.world&&a.selfId===b.selfId&&a.selfIncarnation===b.selfIncarnation;
-}
-export function partyHpCondition(binding:PartyActorBinding,threshold:number):ActorPredicate {
-  return {field:'actorHpPercent',actor:{scope:'actor',id:binding.entityId,world:binding.world,incarnation:binding.incarnation},operator:'lte',value:threshold};
-}
-/** Uses the shared binding and resource evidence; it creates no actors or HP cache. */
-export function partyHealCandidates(bindings:PartyActorBinding[],actors:ReadonlyMap<number,Entity>,selfId:number,observations:ActorObservationSnapshot,threshold:number):PartyHealCandidate[] {
-  if(!observations.connected)return [];
-  const candidates:PartyHealCandidate[]=[];
-  for(const binding of bindings){
-    const actor=actors.get(binding.entityId),row=observations.actors.find(a=>a.id===binding.entityId);
-    if(binding.entityId<=0||binding.entityId===selfId||!actor||actor.kind!==0||actor.dead||actor.hp<=0||!row||row.incarnation!==binding.incarnation||observations.world!==binding.world||!resourceFresh(row.hp,observations.at)||row.hp!.value!<=0)continue;
-    if(evaluateActorPredicate(partyHpCondition(binding,threshold),observations).state!=='matched')continue;
-    candidates.push({binding,hp:row.hp!.value!,maxHp:row.hp!.max!,hpAt:row.hp!.at!});
-  }
-  // Cross multiplication is exact even at int32 resource bounds.
-  return candidates.sort((a,b)=>{const delta=BigInt(a.hp)*BigInt(b.maxHp)-BigInt(b.hp)*BigInt(a.maxHp);return delta<0n?-1:delta>0n?1:a.binding.memberId-b.binding.memberId;});
-}
+import { type HealAction, type PartyHealCandidate, type PartyHealSnapshot, type PartyHealCheckpoint, validatePartyHealCheckpoint, type Owner, sameOwnIdentity } from './party-heal-logic';
+
+export { type HealAction, type PartyHealCandidate, type PartyHealSnapshot, type PartyHealCheckpoint, validatePartyHealCheckpoint, partyHpCondition, partyHealCandidates, validPartyHealSnapshot } from './party-heal-logic';
+
 /** A sender-free per-run allowance and retained receipt. Stop is not CancelCast. */
 export class PartyHealPolicy {
   private owner:Owner|null=null;
@@ -115,14 +86,4 @@ export class PartyHealPolicy {
     return receipt;
   }
   snapshot():PartyHealSnapshot{return {state:this.state,reason:this.reason,attempts:this.attempts,confirmed:this.confirmed,targetMemberId:(this.owner??this.last)?.binding.memberId??null,sequence:(this.owner??this.last)?.sequence??null,resourceReadback:this.readback};}
-}
-
-export function validPartyHealSnapshot(value:unknown):value is PartyHealSnapshot {
-  if(!value||typeof value!=='object'||Array.isArray(value))return false;
-  const s=value as Record<string,unknown>;
-  const fields=['state','reason','attempts','confirmed','targetMemberId','sequence','resourceReadback'];
-  const count=(v:unknown,min:number,max:number):v is number=>typeof v==='number'&&Number.isInteger(v)&&v>=min&&v<=max;
-  return Object.keys(s).length===fields.length&&fields.every(key=>Object.hasOwn(s,key))&&['disabled','waiting','ready','pending','uncertain','confirmed'].includes(s.state as string)
-    &&typeof s.reason==='string'&&s.reason.length<=512&&count(s.attempts,0,100)&&count(s.confirmed,0,s.attempts)
-    &&(s.targetMemberId===null||count(s.targetMemberId,1,0x7fffffff))&&(s.sequence===null||count(s.sequence,1,Number.MAX_SAFE_INTEGER))&&typeof s.resourceReadback==='boolean';
 }

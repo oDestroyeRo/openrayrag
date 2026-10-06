@@ -1,6 +1,6 @@
 import { BitReader, BitWriter } from './binary';
 import { decodeWarp, type WarpStateEvent } from './warp-protocol';
-import {actorId,optionalWireActorId} from './actor-identity';
+import { actorId, optionalWireActorId } from './actor-identity';
 import { decodeFeatures, FEATURE_OP } from './protocol-feature';
 import type { FeatureEvent } from './protocol-feature';
 import { decodeSocial, type SocialEvent } from './social-protocol';

@@ -1,5 +1,5 @@
 import { MAX_TARGETS } from './engine';
-import { type MapInfo, type MapMonster } from './map-data';
+import type { MapInfo, MapMonster } from './map-data';
 
 export class MapTargets {
   map = '';

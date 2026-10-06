@@ -1,10 +1,10 @@
-import { validateMapPolicy, type MapPolicy } from './map-policy';
+import { validateMapPolicy, type MapPolicy } from './map-policy-logic';
 import { validateHpPotions, type HpPotionSettings } from './hp-potions';
 import { validateRecoveryItems, type RecoveryItemSettings } from './recovery-items';
 import type { Position } from './protocol';
-import { validActorConditions, type ActorPredicate } from './actor-observations';
+import { validActorConditions, type ActorPredicate } from './actor-observations-logic';
 import { validateDispositionPolicy, type DispositionPolicy } from './disposition';
-import { validateSupplySettings, type SupplySettings } from './supply-trip';
+import { validateSupplySettings, type SupplySettings } from './supply-trip-logic';
 
 export const MAX_TARGETS = 64;
 export interface MonsterRule { classId: number; action: 'attack' | 'ignore'; priority: number; conditions?: ActorPredicate[] }

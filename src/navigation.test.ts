@@ -384,7 +384,7 @@ it('bounds cached route cells as well as entries when many paths are long', () =
   expect(nav.plan(from,to)).toEqual(first);expect(calls.mock.calls.length).toBeGreaterThan(0);
 });
 
-it('keeps reused search scratch equivalent to fresh searches across A* and capped BFS fallback', () => {
+it('keeps cached searches equivalent to independent queries across A* and capped BFS fallback', () => {
   const grid=openGrid(30,22,p=>p.y===7&&p.x>=4&&p.x<=23),nav=new GridNavigator(grid);
   for(let i=0;i<90;i++){
     const from={x:2+i%2,y:8+i%3},to={x:25+i%3,y:8+i%4};
@@ -393,12 +393,20 @@ it('keeps reused search scratch equivalent to fresh searches across A* and cappe
   }
 });
 
-it('clears visited generations before the reusable search stamp wraps', () => {
-  const grid=openGrid(20,20),nav=new GridNavigator(grid);
-  nav.plan({x:2,y:2},{x:10,y:2});
-  // Exercise the otherwise multi-billion-search rollover without changing the public API.
-  Reflect.set(Reflect.get(nav,'scratch'),'stamp',0xffff_ffff);
-  expect(nav.plan({x:2,y:2},{x:10,y:3})).toEqual(new GridNavigator(grid).plan({x:2,y:2},{x:10,y:3}));
+
+it('keeps uncached queries independent of accumulated searches and clock magnitude', () => {
+  const grid = openGrid(20, 20), nav = new GridNavigator(grid);
+  const from = { x: 2, y: 2 }, to = { x: 10, y: 3 };
+  const expected = new GridNavigator(grid).plan(from, to);
+  for (let search = 0; search < 300; search++) {
+    nav.time(search);
+    nav.temporaryBlocked({ x: 19, y: 19 }, search + 1);
+    expect(nav.plan(from, to)).toEqual(expected);
+  }
+  nav.time(Number.MAX_SAFE_INTEGER);
+  expect(nav.plan(from, to)).toEqual(expected);
+  nav.time(0);
+  expect(nav.plan(from, to)).toEqual(expected);
 });
 
 it('retains the exact weighted route and original capped fallback after a reachability preflight', () => {

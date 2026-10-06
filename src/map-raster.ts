@@ -1,4 +1,4 @@
-import { MAX_MAP_DIMENSION, type WalkGrid } from './navigation';
+import { MAX_MAP_DIMENSION, type WalkGrid } from './navigation-logic';
 
 /** Collision colors only: route clearance/components are unnecessary for paint. */
 export function paintMapCollision(grid: WalkGrid, pixels: Uint8ClampedArray): void {

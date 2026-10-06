@@ -1,5 +1,5 @@
 import type { Snapshot } from './engine';
-import type { EscapeSnapshot } from './escape';
+import type { EscapeSnapshot } from './escape-logic';
 import type { LoginStatus } from './login-logic';
 import { validMapInfo, type MapInfo } from './map-data-logic';
 import { validNavigationStatus } from './navigation-status';

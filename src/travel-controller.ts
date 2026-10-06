@@ -1,62 +1,15 @@
-import type { PlanningOptions } from './route-planning';
-import { DEFAULT_MAP_POLICY, insideLockArea, mapAllowed, policyIdentity, type MapPolicy } from './map-policy';
+import { DEFAULT_MAP_POLICY, insideLockArea, mapAllowed, policyIdentity, type MapPolicy } from './map-policy-logic';
 import type { Entity, GameEvent, Position, Walk } from './protocol';
 import type { Action } from './engine';
-import { distance, GridNavigator, routeSegment, searchGrid, type WalkGrid } from './navigation';
+import { distance, routeSegment, type WalkGrid } from './navigation-logic';
+import { GridNavigator, searchGrid } from './navigation';
 import { walkDuration } from './movement';
-import { planArrivalEscape, planPortalApproach, routeBetweenMaps, routeBetweenMapsAsync, travelNavigator, type TravelStep } from './travel';
+import { planArrivalEscape, planPortalApproach, routeBetweenMaps, routeBetweenMapsAsync, travelNavigator } from './travel';
+import type { TravelStep } from './travel-logic';
 
-export interface TravelSnapshot {
-  state: 'idle' | 'planning' | 'walking' | 'transition' | 'complete' | 'failed' | 'cancelled';
-  destination: string; reason: string; policy: MapPolicy; purpose: 'travel' | 'service' | 'return' | 'field-entry' | 'party-follow'; remainingMaps: string[]; route: Position[]; leg: Position[];
-}
-export interface TravelTransition {
-  trip:number; phase:'remove'|'clear'|'map'|'spawn'; fromMap:string; toMap:string; event:GameEvent;
-}
-export interface DatabaseTravelTransport {
-  supported: (map: string) => boolean;
-  /** Wait for server input cooldown before reserving or writing another request. */
-  ready?: () => boolean;
-  waitReason?: () => string;
-  /** Reserve an existing owner's finite command allowance before any write. */
-  reserve?: () => boolean;
-  send: (map: string) => void;
-}
-interface DatabaseTrip {
-  trip:number; fromMap:string; toMap:string; ownId:number; ownName:string; identity:string; connection:string;
-  sent:boolean; phase:'source'|'departed'|'map'; ready:boolean; contradictory:boolean;
-}
-interface MovementReceipt {
-  map:string; ownId:number; ownName:string; identity:string|null; requestedEnd:Position; cells:Position[]; acceptedUntil:number|null;
-  expectedMap:string|null; expectedArrival:Position|null; portalArea:{x:number;y:number;halfWidth:number;halfHeight:number}|null; awaitingSpawn:boolean;
-}
-export interface TravelPlanningContext {
-  /** Connection, world and observed own-actor lifetime, independent of actor ID reuse. */
-  identity: string | null;
-  /** Stable across map/actor replacement, changed on every transport reconnect. */
-  connection?: string;
-  map: string;
-  player: Entity | undefined;
-}
-export interface TravelPlanningOptions {
-  context?: () => TravelPlanningContext;
-  dispatchReady?: () => boolean;
-  /** Retain a requested trip through current-character official movement. */
-  continueRequested?: () => boolean;
-  databaseTravel?: DatabaseTravelTransport;
-  /** The same verified retired walk may reconcile the transport's original endpoint owner. */
-  retiredWalkAccepted?: (requested:Position,accepted:Position) => void;
-  scheduler?: PlanningOptions['scheduler'];
-  plan?: typeof routeBetweenMapsAsync;
-}
-interface PlanningRequest {
-  generation: number;
-  abort: AbortController;
-  identity: string | null;
-  start: Position;
-  policy: string;
-}
-const cell = (p: Position): Position => ({ x: Math.floor(p.x), y: Math.floor(p.y) });
+import { type TravelSnapshot, type TravelTransition, type DatabaseTrip, type MovementReceipt, type TravelPlanningContext, type TravelPlanningOptions, type PlanningRequest, cell } from './travel-controller-logic';
+
+export { type TravelSnapshot, type TravelTransition, type DatabaseTravelTransport, type TravelPlanningContext, type TravelPlanningOptions } from './travel-controller-logic';
 
 /** Owns movement only while the field engine is stopped. Never infers a map transition from elapsed time. */
 export class TravelController {

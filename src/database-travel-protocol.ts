@@ -1,5 +1,5 @@
 import { BitWriter } from './binary';
-import { NAVIGATION_MAPS } from './navigation';
+import { NAVIGATION_MAPS } from './navigation-logic';
 import type { GameEvent } from './protocol';
 
 // Deployed-server Database cooldown, observed through Teleport Now on 2026-10-04.

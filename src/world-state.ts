@@ -1,23 +1,11 @@
 import { PartyActorBindings } from './party-actors';
 import type { ActorObservations } from './actor-observations';
 import type { InventoryItem } from './protocol-feature';
-import type { BarterOffer, PartyMember, PricedRow, ShopEntry, VendingEntry, WorldEvent } from './world-protocol';
+import type { BarterOffer, PartyMember, WorldEvent } from './world-protocol';
 
-export type NpcMode = 'idle' | 'dialog' | 'options' | 'shop' | 'storage' | 'barter' | 'refine' | 'vending';
-export interface WorldSnapshot {
-  map: string; generation: number; revision: number;
-  npc: { id: number | null; mode: NpcMode; dialog: { name: string; text: string; big: boolean } | null; options: string[] };
-  shop: { mode: 'buy' | 'sell'; discountLevel: number; entries: ShopEntry[] } | null;
-  storage: InventoryItem[]; storageReady: boolean;
-  barter: BarterOffer[]; cart: InventoryItem[]; hasCart: boolean; cartReady: boolean;
-  party: { id: number; name: string; members: PartyMember[] } | null;
-  invite: { partyId: number; name: string; sender: string } | null;
-  vending: { name: string; rows: PricedRow[] } | null;
-  viewedVending: { id: number; name: string; entries: VendingEntry[] } | null;
-}
+import { type NpcMode, type WorldSnapshot, cloneItem, cloneOffer } from './world-state-logic';
 
-function cloneItem(item: InventoryItem): InventoryItem { return { ...item, ...(item.slots ? { slots: [...item.slots] } : {}) }; }
-function cloneOffer(offer: BarterOffer): BarterOffer { return { ...offer, item: cloneItem(offer.item), required: offer.required.map(item => ({ ...item })) }; }
+export { type NpcMode, type WorldSnapshot } from './world-state-logic';
 
 /** Server-owned world state. Sending a request never changes inventory or money. */
 export class WorldState {

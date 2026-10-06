@@ -1,9 +1,9 @@
 import { sameActionIdentity, type ActionIdentity } from './actor-identity';
 
-export const THREAT_LIMIT = 64;
-export const MAX_THREAT_WINDOW_SECONDS = 60;
-export interface ThreatSnapshot { count: number | null; windowSeconds: number; truncated: boolean }
-interface Observation { identity: ActionIdentity; at: number }
+import { THREAT_LIMIT, MAX_THREAT_WINDOW_SECONDS, type ThreatSnapshot, type Observation } from './observed-threats-logic';
+
+export { THREAT_LIMIT, MAX_THREAT_WINDOW_SECONDS, type ThreatSnapshot } from './observed-threats-logic';
+
 /** Recent decoded Attack observations, never a claim about server aggro. */
 export class ObservedThreats {
   private own: ActionIdentity | null = null;

@@ -1,4 +1,4 @@
-import { type Position, type Walk } from './protocol';
+import type { Position, Walk } from './protocol';
 
 export function walkDuration(walk: Walk): number {
   let seconds = walk.cells.length > 1 ? Math.max(0, walk.firstSeconds) : 0;

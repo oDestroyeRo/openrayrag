@@ -53,7 +53,7 @@ const configured: Settings = {
     },
   },
 };
-function context(stock = 4): SupplyContext {
+function context(stock = 4): SupplyContext & { disposition: SupplyContext['disposition'] & { workflow: SupplyContext['disposition']['workflow'] & { world: WorldState } } } {
   const world = new WorldState();
   world.reset("prt_fild05");
   world.replaceCart([]);

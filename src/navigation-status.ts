@@ -1,5 +1,5 @@
 import type { NavigationStatus } from './engine';
-import { MAX_MAP_DIMENSION } from './navigation';
+import { MAX_MAP_DIMENSION } from './navigation-logic';
 
 // Exhaustive keys make a new engine mode a compile-time boundary change.
 const modes: Record<NavigationStatus['mode'], true> = {

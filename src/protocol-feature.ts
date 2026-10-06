@@ -1,4 +1,4 @@
-import {actorId,optionalWireActorId} from './actor-identity';
+import { actorId, optionalWireActorId } from './actor-identity';
 import { BitReader, BitWriter } from './binary';
 import type { Position } from './protocol';
 

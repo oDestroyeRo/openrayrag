@@ -1,18 +1,10 @@
-import { sameActionIdentity, type ActionIdentity } from './actor-identity';
+import { sameActionIdentity } from './actor-identity';
 import type { Entity, GameEvent, LookAction } from './protocol';
 import type { WorldEvent } from './world-protocol';
 
-export interface ObservedCast {
-  identity:ActionIdentity; revision:number; capturedAt:number; remainingSeconds:number; facing:number|undefined; ambiguous:boolean;
-}
-export interface AvailabilityContext {
-  cast:ObservedCast|null; requested:boolean; ready:boolean; exclusive:boolean; reason:string;
-}
-interface Probe { cast:ObservedCast; readyAt:number; deadline:number; attempts:number; lastSent:number|null; stopped:boolean; reason:string }
-export const CAST_AVAILABILITY_ATTEMPTS=6;
-export const CAST_AVAILABILITY_INTERVAL=1000;
-export const CAST_AVAILABILITY_WINDOW=10_000;
-const CAST_SCHEDULING_MARGIN=250;
+import { type ObservedCast, type AvailabilityContext, type Probe, CAST_AVAILABILITY_ATTEMPTS, CAST_AVAILABILITY_INTERVAL, CAST_AVAILABILITY_WINDOW, CAST_SCHEDULING_MARGIN } from './cast-availability-logic';
+
+export { type ObservedCast, type AvailabilityContext, CAST_AVAILABILITY_ATTEMPTS, CAST_AVAILABILITY_INTERVAL, CAST_AVAILABILITY_WINDOW } from './cast-availability-logic';
 
 /** Sender-free policy. Look is independent availability, never a private probe
  * acknowledgment. Its FIFO/source proof requires durable non-vending authority. */

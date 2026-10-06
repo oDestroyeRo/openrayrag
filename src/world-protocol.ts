@@ -1,4 +1,4 @@
-import {actorId} from './actor-identity';
+import { actorId } from './actor-identity';
 // Source: Rebuild pin 4099e2c000c3c550516760b9c1241595aac9aceb plus deployed V8 evidence in docs/PROTOCOL.md.
 // Normal player actions only. Inventory and combat packets have separate owners.
 import { BitReader, BitWriter } from './binary';
