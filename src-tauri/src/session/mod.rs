@@ -1,4 +1,5 @@
 pub(crate) mod direct;
+pub(crate) mod direct_compatibility_logic;
 pub(crate) mod direct_wire;
 pub(crate) mod local_login_logic;
 pub(crate) mod login;

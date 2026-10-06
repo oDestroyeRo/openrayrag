@@ -1,8 +1,61 @@
-//! Signed-update feed and stable-version policy, without networking.
+//! Signed-update feed, stable-version and scheduling policy, without effects.
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 pub(crate) const MAX_METADATA: usize = 64_000;
+const CHECK_INTERVAL: Duration = Duration::from_secs(3600);
+const MAX_FAILURES: u8 = 6;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScheduleOutcome {
+    CheckSucceeded,
+    CheckFailed,
+    InstallationFailed,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UpdateSchedule {
+    pub next: Instant,
+    pub failures: u8,
+}
+impl UpdateSchedule {
+    pub(crate) fn initial(at: Instant) -> Self {
+        Self {
+            next: at,
+            failures: 0,
+        }
+    }
+    pub(crate) fn after(self, outcome: ScheduleOutcome, at: Instant) -> Self {
+        let (failures, delay) = match outcome {
+            ScheduleOutcome::CheckSucceeded => (0, CHECK_INTERVAL),
+            ScheduleOutcome::CheckFailed => {
+                let failures = self.failures.saturating_add(1).min(MAX_FAILURES);
+                let delay = Duration::from_secs((60u64 * 2u64.pow(failures as u32)).min(3600));
+                (failures, delay)
+            }
+            ScheduleOutcome::InstallationFailed => (self.failures, CHECK_INTERVAL),
+        };
+        Self {
+            next: at + delay,
+            failures,
+        }
+    }
+}
+pub(crate) struct CheckAdmission {
+    pub busy: bool,
+    pub candidate_available: bool,
+    pub due_at: Instant,
+}
+pub(crate) fn check_deadline(admission: CheckAdmission) -> Option<Instant> {
+    if admission.busy || admission.candidate_available {
+        None
+    } else {
+        Some(admission.due_at)
+    }
+}
+pub(crate) fn check_due(due_at: Instant, observed_at: Instant) -> bool {
+    observed_at >= due_at
+}
 
 #[derive(Deserialize)]
 struct Feed {
@@ -107,6 +160,79 @@ pub(crate) fn parse_feed(bytes: &[u8], current: &str) -> Result<Option<Candidate
 mod tests {
     use super::*;
     use crate::update::update_install_logic as update_install;
+
+    #[test]
+    fn retries_begin_at_two_minutes_and_saturate_at_six_failures_and_one_hour() {
+        let at = Instant::now();
+        let initial = UpdateSchedule::initial(at);
+        let mut schedule = initial;
+        for (index, delay) in [120, 240, 480, 960, 1920, 3600, 3600, 3600]
+            .into_iter()
+            .enumerate()
+        {
+            schedule = schedule.after(ScheduleOutcome::CheckFailed, at);
+            assert_eq!(schedule.failures, ((index + 1) as u8).min(6));
+            assert_eq!(schedule.next, at + Duration::from_secs(delay));
+        }
+        assert_eq!(initial, UpdateSchedule::initial(at));
+        assert_eq!(initial.failures, 0);
+        assert_eq!(initial.next, at);
+        // Scratch counters outside the retained-state invariant still cannot overflow.
+        let saturated = UpdateSchedule {
+            next: at,
+            failures: u8::MAX,
+        }
+        .after(ScheduleOutcome::CheckFailed, at);
+        assert_eq!(saturated, schedule);
+    }
+
+    #[test]
+    fn successful_observation_resets_retry_and_schedules_from_its_explicit_time() {
+        let previous_at = Instant::now();
+        let observed_at = previous_at + Duration::from_secs(15);
+        let schedule = UpdateSchedule {
+            next: previous_at + Duration::from_secs(3600),
+            failures: 6,
+        };
+        let next = schedule.after(ScheduleOutcome::CheckSucceeded, observed_at);
+        assert_eq!(next.failures, 0);
+        assert_eq!(next.next, observed_at + Duration::from_secs(3600));
+        assert_eq!(
+            schedule.after(ScheduleOutcome::CheckSucceeded, observed_at),
+            next
+        );
+        let retried = next.after(ScheduleOutcome::CheckFailed, observed_at);
+        assert_eq!(retried.failures, 1);
+        assert_eq!(retried.next, observed_at + Duration::from_secs(120));
+        let install_failure = schedule.after(ScheduleOutcome::InstallationFailed, observed_at);
+        assert_eq!(install_failure.failures, schedule.failures);
+        assert_eq!(install_failure.next, next.next);
+    }
+
+    #[test]
+    fn active_work_and_verified_candidates_block_checks_and_due_equality_is_admitted() {
+        let due_at = Instant::now();
+        for (busy, candidate_available) in [(true, false), (false, true), (true, true)] {
+            assert!(check_deadline(CheckAdmission {
+                busy,
+                candidate_available,
+                due_at,
+            })
+            .is_none());
+        }
+        assert_eq!(
+            check_deadline(CheckAdmission {
+                busy: false,
+                candidate_available: false,
+                due_at,
+            }),
+            Some(due_at)
+        );
+        assert!(!check_due(due_at, due_at - Duration::from_nanos(1)));
+        assert!(check_due(due_at, due_at));
+        assert!(check_due(due_at, due_at + Duration::from_nanos(1)));
+    }
+
     fn feed(version: &str) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "version": version,
