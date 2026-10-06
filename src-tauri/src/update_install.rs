@@ -1,7 +1,5 @@
 //! Bounded signed archive validation and a same-volume replacement with rollback.
 //! This does not invoke the plugin's privileged macOS installer.
-#[cfg(test)]
-pub(crate) use crate::update_install_logic::verify;
 pub(crate) use crate::update_install_logic::MAX_ARCHIVE;
 #[cfg(target_os = "macos")]
 use crate::update_install_logic::{self as policy, safe_path};
@@ -333,6 +331,8 @@ fn install_at(bytes: &[u8], version: &str, current: &Path) -> io::Result<()> {
 mod tests {
     #[cfg(target_os = "macos")]
     use super::*;
+    #[cfg(target_os = "macos")]
+    use crate::update_install_logic::verify;
     mod replacement_program_tests {
         use super::super::{replacement_program, ReplacementEffects, ReplacementFailure};
 
