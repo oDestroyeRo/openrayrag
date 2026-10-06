@@ -1,3 +1,5 @@
+import type { BotEngine } from './engine';
+import type { ManualEngineSettings } from './manual-target-logic';
 import { describe, expect, it } from 'vitest';
 import { percentage, seconds, type ItemId, type Percentage, type Seconds, type SkillId } from './domain-values';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, automationDraft, automationSettings, settingsDraft,
@@ -46,7 +48,12 @@ describe('settings domain admission', () => {
 
 // Compile-time contracts run through the same tsc gate as production consumers.
 function typeContracts(raw: Settings, rawAutomation: AutomationSettings, form: ValidatedFormSettings,
-  run: RunSettings, automation: ValidatedAutomationSettings) {
+  run: RunSettings, automation: ValidatedAutomationSettings, engine:BotEngine, manual:ManualEngineSettings) {
+  engine.settings=manual;
+  // @ts-expect-error A structural manual settings copy must pass its own aggregate admission.
+  engine.settings={...manual};
+  // @ts-expect-error Unrelated policy edits cannot forge manual settings admission at the real engine consumer.
+  engine.settings={...manual,minHpPercent:percentage(0)};
   const acceptsRun = (_value: RunSettings) => undefined;
   const acceptsForm = (_value: ValidatedFormSettings) => undefined;
   const acceptsAutomation = (_value: ValidatedAutomationSettings) => undefined;

@@ -84,13 +84,15 @@ export function manualTargetSettings(request:ManualTargetRequest):Settings {
 }
 
 /** Observed monsters may have protocol class zero, outside configured species IDs. */
-export type ManualEngineSettings = Omit<ValidatedFormSettings,'targets'> & {
+declare class ManualSettingsAdmission {private readonly manualSettingsAdmission:void}
+export type ManualEngineSettings = Omit<ValidatedFormSettings,'targets'> & ManualSettingsAdmission & {
   readonly targets:readonly (SpeciesId|0)[];
 };
 export function manualEngineSettings(request:ManualTargetRequest,observedClass:number|null):ManualEngineSettings {
   const base=validateFormSettings(manualTargetSettings(request));
   const targets=observedClass===null?[]:[observedClass===0?0 as const:speciesId(observedClass)];
-  return {...base,targets};
+  // This parser is the sole constructor of the erased aggregate proof.
+  return {...base,targets} as unknown as ManualEngineSettings;
 }
 
 export function manualAmmoGuard(policy:Pick<ManualTargetPolicy,'minAmmoStock'>,player:Entity,state:CharacterState|CharacterSnapshot):string|null {
