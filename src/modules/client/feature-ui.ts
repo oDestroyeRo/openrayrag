@@ -504,7 +504,7 @@ export class FeatureUi {
     const formTab = this.host.querySelector<HTMLButtonElement>('#setup-tab-form')!;
     const scriptTab = this.host.querySelector<HTMLButtonElement>('#setup-tab-script')!;
     const select = (showScript: boolean): void => {
-      if (!showScript && this.macroUi.dirty) { this.hooks.notify('Apply & save or Discard draft before switching to Form.', true); return; }
+      if (!showScript && this.macroUi.dirty) { this.hooks.notify('Correct the invalid Script or Discard draft before switching to Form.', true); return; }
       if (showScript) { try { this.macroUi.syncSettings(this.hooks.macroSettings?.() ?? this.hooks.settings()); } catch (error) { this.hooks.notify(error instanceof Error ? error.message : 'Finish the Form settings before opening Script.', true); return; } }
       form.hidden = showScript; script.hidden = !showScript;
       formTab.setAttribute('aria-selected', String(!showScript)); scriptTab.setAttribute('aria-selected', String(showScript));

@@ -22,7 +22,7 @@ export class MacroRuntime {
   private pending: { intent: MacroIntent; issuedAt: number } | null = null;
   private retainedField: Extract<MacroStep, { type: 'farm' }> | null = null;
   private state: MacroState = 'idle';
-  private reason = 'Start a macro explicitly to run its rules.';
+  private reason = 'Use Start bot to run the shared setup and its rules.';
   private generation = 0;
   private nextId = 0;
   private startedAt = 0;

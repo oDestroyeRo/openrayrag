@@ -17,7 +17,7 @@ describe('panel policy', () => {
     expect(panelUpdateWaitReason(settled)).toBeNull();
     expect(panelUpdateWaitReason({ ...settled, closeBusy: true, busy: true, unsavedMacro: true })).toBe('Update waits for the settings window to finish closing.');
     expect(panelUpdateWaitReason({ ...settled, accountDraft: true, updateBusy: true })).toBe('Update waits for your account draft. Sign in or clear the draft first.');
-    expect(panelUpdateWaitReason({ ...settled, unsavedMacro: true, continuationPending: true })).toBe('Update waits for your Script draft. Apply & save or Discard draft first.');
+    expect(panelUpdateWaitReason({ ...settled, unsavedMacro: true, continuationPending: true })).toBe('Update waits for your Script draft. Correct it and retry Save script, or Discard draft first.');
     expect(panelUpdateWaitReason({ ...settled, featuresSettled: false, reconnectScheduled: true })).toBe('Update waits for pending game actions or previews to finish.');
   });
   it.each(['login', 'resume', 'service', 'manual', 'limit'] as const)('holds update and disconnect during a pending %s', kind => {

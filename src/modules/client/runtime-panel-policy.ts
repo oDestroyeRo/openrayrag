@@ -28,7 +28,7 @@ export function panelUpdateWaitReason(state: UpdatePanelState): string | null {
   if (state.pending.service) return 'Update waits for the pending service action to finish.';
   if (state.pending.manual) return 'Update waits for the pending manual action to finish.';
   if (state.pending.limit) return 'Update waits for automation to stop at its configured limit.';
-  if (state.unsavedMacro) return 'Update waits for your Script draft. Apply & save or Discard draft first.';
+  if (state.unsavedMacro) return 'Update waits for your Script draft. Correct it and retry Save script, or Discard draft first.';
   if (state.continuationPending) return 'The previous update is waiting to continue your run.';
   if (!state.featuresSettled) return 'Update waits for pending game actions or previews to finish.';
   if (state.reconnectScheduled) return 'Update waits for the scheduled reconnect to finish.';
