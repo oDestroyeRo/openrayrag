@@ -268,7 +268,7 @@ describe('bot script diagnostics and boundaries', () => {
   });
 
   it('applies existing cross-field setting safety and macro action bounds', () => {
-    lineError('script "Test"\nset emergency-hp = 60%\nset automation.recovery.enabled = true', 3, 'above the emergency');
+    lineError('script "Test"\nset emergency-hp = 60%\nset automation.recovery.enabled = true', 3, 'Rest below HP % (60%) must be above Emergency HP stop (60%).');
     lineError(withRule(`when level >= 1\n${'use item 501\n'.repeat(17).trim()}`), 20, 'at most 16 actions');
     lineError(withRule(`${'when level >= 1\n'.repeat(17)}use item 501`), 19, 'at most 16 conditions');
     const rule = 'rule "One"\nwhen level >= 1\nuse item 501\nend';

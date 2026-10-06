@@ -202,7 +202,21 @@ impl Settings {
             return Err("Choose selected monsters or disable selected combat.".into());
         }
         if automation.recovery.enabled && !automation.recovery.starts_above(self.min_hp_percent) {
-            return Err("Recovery HP start must be above the emergency HP stop limit.".into());
+            let hp_start = automation.recovery.hp_start;
+            let remedy = if self.min_hp_percent == 95 {
+                "Rest below HP % cannot exceed 95%; lower Emergency HP stop below 95% and set Rest below HP % above it, keeping Resume above HP % higher".into()
+            } else {
+                let lower_stop = if hp_start > 20 {
+                    format!(", lower Emergency HP stop below {hp_start}%")
+                } else {
+                    String::new()
+                };
+                format!(
+                    "Raise Rest below HP % to {}–95% and keep Resume above HP % higher{lower_stop}",
+                    self.min_hp_percent + 1
+                )
+            };
+            return Err(format!("Rest below HP % ({hp_start}%) must be above Emergency HP stop ({}%). {remedy}, or turn off Sit to recover HP and SP.", self.min_hp_percent));
         }
         Ok(())
     }
@@ -2253,6 +2267,87 @@ mod tests {
         value["automation"]["recovery"]["enabled"] = true.into();
         value["automation"]["recovery"]["hpStart"] = 45.into();
         assert!(!valid(value));
+    }
+
+    #[test]
+    fn explains_conflicting_recovery_controls_at_form_and_run_boundaries() {
+        for hp_start in [2, 45] {
+            let mut value = settings();
+            value["automation"] = automation();
+            value["automation"]["recovery"]["enabled"] = true.into();
+            value["automation"]["recovery"]["hpStart"] = hp_start.into();
+            let settings: Settings = serde_json::from_value(value).unwrap();
+            for result in [settings.validate(), settings.validate_form()] {
+                let error = result.unwrap_err();
+                assert!(
+                    error.contains(&format!(
+                        "Rest below HP % ({hp_start}%) must be above Emergency HP stop (45%)."
+                    )),
+                    "{error}"
+                );
+                assert!(
+                    error.contains(
+                        "Raise Rest below HP % to 46–95% and keep Resume above HP % higher"
+                    ),
+                    "{error}"
+                );
+                assert!(
+                    error.contains("turn off Sit to recover HP and SP"),
+                    "{error}"
+                );
+                if hp_start == 45 {
+                    assert!(
+                        error.contains("lower Emergency HP stop below 45%"),
+                        "{error}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn explains_recovery_ceiling_at_the_maximum_emergency_stop() {
+        let mut value = settings();
+        value["minHpPercent"] = 95.into();
+        value["automation"] = automation();
+        value["automation"]["recovery"]["enabled"] = true.into();
+        value["automation"]["recovery"]["hpStart"] = 95.into();
+        value["automation"]["recovery"]["hpEnd"] = 100.into();
+        let settings: Settings = serde_json::from_value(value).unwrap();
+        for result in [settings.validate(), settings.validate_form()] {
+            let error = result.unwrap_err();
+            assert!(
+                error.contains("Rest below HP % (95%) must be above Emergency HP stop (95%)."),
+                "{error}"
+            );
+            assert!(
+                error.contains("Rest below HP % cannot exceed 95%"),
+                "{error}"
+            );
+            assert!(
+                error.contains("lower Emergency HP stop below 95%"),
+                "{error}"
+            );
+            assert!(
+                error.contains("turn off Sit to recover HP and SP"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn admits_corrected_recovery_and_disabled_conflicting_thresholds_unchanged() {
+        for (enabled, hp_start) in [(true, 46), (false, 2)] {
+            let mut value = settings();
+            value["automation"] = automation();
+            value["automation"]["recovery"]["enabled"] = enabled.into();
+            value["automation"]["recovery"]["hpStart"] = hp_start.into();
+            let settings: Settings = serde_json::from_value(value.clone()).unwrap();
+            let original = serde_json::to_value(&settings).unwrap();
+            assert!(settings.validate().is_ok());
+            assert!(settings.validate_form().is_ok());
+            assert_eq!(serde_json::to_value(&settings).unwrap(), original);
+        }
     }
 
     #[test]

@@ -42,7 +42,7 @@ describe('settings domain admission', () => {
     expect(() => validateSettings(invalid)).toThrow('Invalid automation settings. Check rules, recovery thresholds and session limits.');
     expect(() => validateAutomation({ ...DEFAULT_AUTOMATION, recovery: { ...DEFAULT_AUTOMATION.recovery, hpStart: 85, hpEnd: 60 } })).toThrow('Invalid automation settings. Check rules, recovery thresholds and session limits.');
     invalid.automation!.recovery = { ...DEFAULT_AUTOMATION.recovery, enabled: true, hpStart: invalid.minHpPercent };
-    expect(() => validateSettings(invalid)).toThrow('Recovery HP start must be above the emergency HP stop limit.');
+    expect(() => validateSettings(invalid)).toThrow('Rest below HP % (45%) must be above Emergency HP stop (45%).');
   });
 });
 

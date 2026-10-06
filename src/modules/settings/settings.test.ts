@@ -1,6 +1,6 @@
 import followCases from '../../data/party-follow-settings-cases.json';
 import {describe,it,expect} from 'vitest';
-import {DEFAULT_SETTINGS,DEFAULT_AUTOMATION,DEFAULT_ESCAPE,validateSettings,type Settings} from './settings';
+import {DEFAULT_SETTINGS,DEFAULT_AUTOMATION,DEFAULT_ESCAPE,validateFormSettings,validateSettings,type Settings} from './settings';
 import { CurrentForm, formDocument, type FormDocument } from './current-form';
 const settings=():Settings=>({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation:structuredClone(DEFAULT_AUTOMATION)});
 describe('automation settings boundary',()=>{
@@ -10,6 +10,34 @@ describe('automation settings boundary',()=>{
   it('rejects unknown credential fields at every object boundary',()=>{const value=settings();expect(()=>validateSettings({...value,password:'secret'} as Settings)).toThrow();expect(()=>validateSettings({...value,automation:{...value.automation!,follow:{...value.automation!.follow,password:'secret'}}} as Settings)).toThrow();});
   it('permits noncombat travel and follow with no monster selection',()=>{const value=settings();value.targets=[];value.automation!.combat.mode='off';value.automation!.follow.name='Leader';expect(validateSettings(value).targets).toEqual([]);value.automation!.combat.mode='selected';expect(()=>validateSettings(value)).toThrow('Choose selected');});
   it('requires recovery hysteresis above the emergency stop floor',()=>{const value=settings();value.automation!.recovery.enabled=true;value.automation!.recovery.hpStart=45;expect(()=>validateSettings(value)).toThrow('above');value.automation!.recovery.hpStart=60;value.automation!.recovery.hpEnd=60;expect(()=>validateSettings(value)).toThrow();});
+  it.each([2, 45])('explains the conflicting recovery controls at rest HP %i', hpStart => {
+    const value = settings();
+    value.automation!.recovery = { ...value.automation!.recovery, enabled: true, hpStart };
+    for (const validate of [validateSettings, validateFormSettings]) {
+      expect(() => validate(value)).toThrow(`Rest below HP % (${hpStart}%) must be above Emergency HP stop (45%).`);
+      expect(() => validate(value)).toThrow('Raise Rest below HP % to 46–95% and keep Resume above HP % higher');
+      expect(() => validate(value)).toThrow('turn off Sit to recover HP and SP');
+      if (hpStart === 45) expect(() => validate(value)).toThrow('lower Emergency HP stop below 45%');
+    }
+  });
+  it('explains the recovery ceiling when the emergency stop is already at 95%', () => {
+    const value = settings();
+    value.minHpPercent = 95;
+    value.automation!.recovery = { ...value.automation!.recovery, enabled: true, hpStart: 95, hpEnd: 100 };
+    for (const validate of [validateSettings, validateFormSettings]) {
+      expect(() => validate(value)).toThrow('Rest below HP % (95%) must be above Emergency HP stop (95%).');
+      expect(() => validate(value)).toThrow('Rest below HP % cannot exceed 95%');
+      expect(() => validate(value)).toThrow('lower Emergency HP stop below 95%');
+      expect(() => validate(value)).toThrow('turn off Sit to recover HP and SP');
+    }
+  });
+  it('admits corrected recovery and disabled conflicting thresholds without changing them', () => {
+    for (const [enabled, hpStart] of [[true, 46], [false, 2]] as const) {
+      const value = settings();
+      value.automation!.recovery = { ...value.automation!.recovery, enabled, hpStart };
+      for (const validate of [validateSettings, validateFormSettings]) expect(validate(value)).toEqual(value);
+    }
+  });
   it('accepts zero remaining death allowance and rejects values outside the bounded range',()=>{const value=settings();value.automation!.respawn={enabled:true,maxDeaths:0};expect(validateSettings(value).automation!.respawn.maxDeaths).toBe(0);for(const limit of [-1,101,0.5]){value.automation!.respawn.maxDeaths=limit;expect(()=>validateSettings(value)).toThrow();}});
   it('rejects duplicated rules and unbounded work',()=>{const value=settings();value.automation!.items=[{itemId:501,resource:'hp',belowPercent:70,minStock:0,cooldownSeconds:1},{itemId:501,resource:'hp',belowPercent:80,minStock:0,cooldownSeconds:1}];expect(()=>validateSettings(value)).toThrow();value.automation!.items=[];value.automation!.recovery.timeoutSeconds=3601;expect(()=>validateSettings(value)).toThrow();});
   it('normalizes omitted escape settings to disabled without changing legacy profiles',()=>{
