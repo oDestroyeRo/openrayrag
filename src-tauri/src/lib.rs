@@ -17,6 +17,7 @@ mod maintenance;
 mod maintenance_logic;
 mod mode_guard;
 mod settings_close;
+mod settings_close_logic;
 mod update_continuation;
 mod update_continuation_logic;
 mod update_install;
