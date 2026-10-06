@@ -1,15 +1,85 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
+import { cp, lstat, readFile, realpath, mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { spawnSync } from 'node:child_process';
 import { platforms, packageConfig, packageSmokes, assertArchitecture, installerFiles } from './ci-platform.mjs';
+import { createReportDirectory, privateEnvironment, runReadOnly } from './release-public-io.mjs';
 
 const workflow=parse(await readFile(new URL('../.github/workflows/release.yml',import.meta.url),'utf8'));
 const release=parse(await readFile(new URL('../.github/workflows/release-publish.yml',import.meta.url),'utf8'));
 const planName='release-plan-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}';
+const runtimeInstall='bun install --production --frozen-lockfile --ignore-scripts';
+
+test('every release stage provisions locked runtime dependencies before root entrypoints without step credentials',()=>{
+  for(const [name,{steps}] of Object.entries(release.jobs)){
+    const setup=steps.findIndex(step=>step.uses?.startsWith('oven-sh/setup-bun@'));
+    const runtime=steps.findIndex(step=>step.run===runtimeInstall);
+    assert.ok(runtime>setup,name);
+    assert.equal(steps[runtime].if,undefined,name);
+    assert.equal(steps[runtime].env,undefined,name);
+    const source=steps.map(step=>step.run??'').join('\n');
+    assert.ok(source.indexOf(runtimeInstall)<source.indexOf('bun install --cwd tools/release'),name);
+    for(const step of steps.filter(step=>/bun scripts\/(?:release|ci-platform)\.mjs/.test(step.run??'')))
+      assert.ok(runtime<steps.indexOf(step),name);
+  }
+});
+
+test('a clean hosted checkout imports tooling with auto-install disabled and production-only root dependencies',async()=>{
+  const parent=await createReportDirectory(),checkout=join(parent,'checkout');
+  try{
+    await mkdir(checkout);
+    await cp(new URL('./',import.meta.url),join(checkout,'scripts'),{recursive:true});
+    for(const name of ['package.json','bun.lock','bunfig.toml','release.config.mjs','release-policy-history.json','release-migration.json'])
+      await writeFile(join(checkout,name),await readFile(new URL(`../${name}`,import.meta.url)));
+    await mkdir(join(checkout,'tools/release'),{recursive:true});
+    for(const name of ['package.json','bun.lock','bunfig.toml'])
+      await writeFile(join(checkout,'tools/release',name),await readFile(new URL(`../tools/release/${name}`,import.meta.url)));
+    for(const directory of [checkout,join(checkout,'tools/release')]){
+      const manifest=JSON.parse(await readFile(join(directory,'package.json'),'utf8'));
+      manifest.scripts={...manifest.scripts,postinstall:`${JSON.stringify(process.execPath)} -e "require('node:fs').writeFileSync('lifecycle-ran','unsafe')"`};
+      await writeFile(join(directory,'package.json'),JSON.stringify(manifest));
+    }
+    const options={cwd:checkout,env:privateEnvironment(parent)};
+    const isolated=release.jobs.publish.steps.find(step=>step.run==='bun install --cwd tools/release --frozen-lockfile --ignore-scripts');
+    runReadOnly(process.execPath,isolated.run.split(' ').slice(1),options);
+    const unavailable=spawnSync(process.execPath,['--no-install','--eval','await import("./scripts/release.mjs");'],{...options,encoding:'utf8',timeout:30_000});
+    assert.notEqual(unavailable.status,0);
+    assert.match(unavailable.stderr,/Cannot find (?:package|module).*remeda/);
+
+    // Rebuild the isolated tools in the corrected hosted order as well.
+    await rm(join(checkout,'tools/release/node_modules'),{recursive:true});
+    runReadOnly(process.execPath,runtimeInstall.split(' ').slice(1),options);
+    runReadOnly(process.execPath,isolated.run.split(' ').slice(1),options);
+    const proof=`import assert from 'node:assert/strict';
+      const release=await import('./scripts/release.mjs');
+      const dependabot=await import('./scripts/dependabot-auto-merge.mjs');
+      assert.equal(typeof release.GitHubReleaseApi,'function');
+      assert.equal(typeof dependabot.mergeDependabotUpdate,'function');
+      const {planRelease,bumpVersion}=await import('./scripts/semantic-release-plan.mjs');
+      const {migrationBridge:bridge}=await import('./scripts/release-policy.mjs');
+      const sourceSha='a'.repeat(40),commits=[{hash:sourceSha,message:'fix: resolve hosted policy dependencies'}];
+      const result=await planRelease({source:{sourceSha,firstParentCount:bridge.firstParentCount+1,pubDate:'2026-10-06T00:00:00.000Z'},published:{sourceSha:bridge.sourceSha,version:bridge.version,tag:bridge.tag},reservation:null,analysisCommits:commits,notesCommits:commits});
+      assert.equal(result.state,'release');assert.equal(result.plan.version,bumpVersion(bridge.version,'patch'));
+      assert.match(result.plan.notes,/resolve hosted policy dependencies/);`;
+    const imported=spawnSync(process.execPath,['--no-install','--eval',proof],{...options,encoding:'utf8',timeout:30_000});
+    assert.equal(imported.error,undefined);
+    assert.equal(imported.status,0,imported.stderr);
+    assert.equal(imported.stdout,'');
+    assert.equal(imported.stderr,'');
+    assert.equal((await lstat(join(checkout,'node_modules'))).isSymbolicLink(),false);
+    assert.notEqual(await realpath(join(checkout,'node_modules')),await realpath(join(checkout,'tools/release/node_modules')));
+    for(const name of ['esbuild','typescript','vite','vitest','yaml','@tauri-apps/cli'])
+      await assert.rejects(lstat(join(checkout,'node_modules',name)),{code:'ENOENT'});
+    for(const directory of [checkout,join(checkout,'tools/release')])
+      await assert.rejects(lstat(join(directory,'lifecycle-ran')),{code:'ENOENT'});
+    for(const name of ['bun.lock','tools/release/bun.lock'])
+      assert.deepEqual(await readFile(join(checkout,name)),await readFile(new URL(`../${name}`,import.meta.url)));
+  }finally{await rm(parent,{recursive:true,force:true});}
+});
+
 test('main PRs and merge queue always run all native platform lanes',()=>{
   assert.deepEqual(workflow.on.pull_request.branches,['main']);
   assert.ok(Object.hasOwn(workflow.on,'merge_group'));

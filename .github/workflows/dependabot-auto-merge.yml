@@ -47,6 +47,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version-file: .bun-version
+      - name: Install locked tooling runtime dependencies
+        run: bun install --production --frozen-lockfile --ignore-scripts
       - name: Merge the verified dependency update and start main release
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -186,7 +186,7 @@ test('run ID validation rejects shell or path input before making API requests',
   }
 });
 
-test('privileged completion workflow executes trusted main code without PR artifacts, installs or release secrets', async () => {
+test('privileged completion provisions locked runtime dependencies and executes trusted main without PR artifacts or release secrets', async () => {
   const workflow = parse(await readFile(new URL('../.github/workflows/dependabot-auto-merge.yml', import.meta.url), 'utf8'));
   assert.deepEqual(workflow.on.workflow_run, { workflows: ['Desktop CI and release'], types: ['completed'] });
   assert.equal(workflow.on.workflow_dispatch.inputs.run_id.required, true);
@@ -198,13 +198,16 @@ test('privileged completion workflow executes trusted main code without PR artif
     assert.ok(job.if.includes(condition));
   }
   assert.deepEqual(job.permissions, { contents: 'write', 'pull-requests': 'write', actions: 'write' });
-  assert.equal(job.steps.length, 3);
+  assert.equal(job.steps.length, 4);
   assert.match(job.steps[0].uses, /^actions\/checkout@v\d+\.\d+\.\d+$/);
   assert.deepEqual(job.steps[0].with, { ref: '${{ github.sha }}', 'persist-credentials': false });
   assert.equal(job.steps[1].uses, 'oven-sh/setup-bun@v2.2.0');
   assert.equal(job.steps[1].with['bun-version-file'], '.bun-version');
-  assert.equal(job.steps[2].run, 'bun scripts/dependabot-auto-merge.mjs');
-  assert.equal(job.steps[2].env.GITHUB_TOKEN, '${{ github.token }}');
+  assert.equal(job.steps[2].run, 'bun install --production --frozen-lockfile --ignore-scripts');
+  assert.equal(job.steps[2].env, undefined);
+  assert.equal(job.steps[2].if, undefined);
+  assert.equal(job.steps[3].run, 'bun scripts/dependabot-auto-merge.mjs');
+  assert.equal(job.steps[3].env.GITHUB_TOKEN, '${{ github.token }}');
   assert.ok(!JSON.stringify(workflow).includes('secrets.'));
   assert.equal(job.environment, undefined);
 });
