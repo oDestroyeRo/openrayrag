@@ -20,7 +20,7 @@ import { type Drop, type Entity, type GameEvent, type Position, type Walk, type 
 import { walkDuration, walkPosition } from './movement';
 import { GridNavigator, routeSegment, searchGrid, distance, minimumRouteCost, type NavigationSummary, type WalkGrid } from './navigation';
 
-import { automationSettings, validateAutomation, DEFAULT_SETTINGS, validateSettings, validateFormSettings, type ValidatedFormSettings, type SettingsInput as Settings, type AutomationSettingsInput as AutomationSettings } from './settings';
+import { automationSettings, DEFAULT_SETTINGS, validateSettings, validateFormSettings, type ValidatedFormSettings, type RunSettings, type SettingsInput as Settings, type AutomationSettingsInput as AutomationSettings } from './settings';
 import { admitDrop, type DomainDrop } from './automation-logic';
 import { acceptsMonster, acceptsLoot, inSchedule, monsterRule, lootRule, effectiveSkillLevel, AutomationScheduler, type AutomationTask, type ActionResult, type ActionReceipts } from './automation';
 import { CharacterState, type CharacterSnapshot, type StatefulEntity } from './character-state';
@@ -1587,8 +1587,8 @@ export class BotEngine {
   /** Installation is gated by sent owners, not HP or an equipment policy fault. */
   settledForMaintenance(): boolean { this.advanceMovement(); return !this.updatePending&&this.observedOwnCastSettled()&&!this.partySupport?.busy()&&!this.running&&!this.retreatOwned&&!this.manualTargetOwned&&!this.pending&&!this.leg&&!this.route&&!this.automation.busy&&!this.awaitsImplicitWalk()&&!this.ownMotion()&&this.loadout.equipmentSettled; }
   /** Death recovery owns only the existing posture scheduler, never field decisions. */
-  recoveryOnly(settings: Settings): { complete: boolean; reason: string } {
-    const p=this.player,a=validateAutomation(automationSettings(settings));
+  recoveryOnly(settings: RunSettings): { complete: boolean; reason: string } {
+    const p=this.player,a=automationSettings(settings);
     if(!p||p.dead||!this.actorActionIdentity())return {complete:false,reason:'Waiting for a ready living character before recovery.'};
     if(!this.idleForActions())return {complete:false,reason:'Waiting for the recovery posture and movement to settle.'};
     const next=this.automation.recover(a,p,this.character);

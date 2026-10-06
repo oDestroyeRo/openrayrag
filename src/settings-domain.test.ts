@@ -49,6 +49,8 @@ describe('settings domain admission', () => {
 // Compile-time contracts run through the same tsc gate as production consumers.
 function typeContracts(raw: Settings, rawAutomation: AutomationSettings, form: ValidatedFormSettings,
   run: RunSettings, automation: ValidatedAutomationSettings, engine:BotEngine, manual:ManualEngineSettings) {
+  // @ts-expect-error Recovery ticks consume settings admitted once at run entry.
+  engine.recoveryOnly(raw);
   engine.settings=manual;
   // @ts-expect-error A structural manual settings copy must pass its own aggregate admission.
   engine.settings={...manual};
