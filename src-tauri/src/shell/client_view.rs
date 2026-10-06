@@ -1,7 +1,5 @@
 //! A persistent game webview shares the companion window, never its authority.
-use crate::shared::domain_values::{ClippedViewExtent, RequestedViewExtent, ViewOrigin};
-use frunk::{hlist_pat, prelude::IntoValidated};
-use serde::Deserialize;
+use crate::shell::client_view_logic::{parked_x, GameViewBounds};
 use tauri::{webview::WebviewBuilder, Manager, Webview};
 
 pub(crate) fn create_main(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -210,77 +208,72 @@ fn show_main_failure(app: &tauri::AppHandle) {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct GameViewBounds {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ClippedViewBounds {
-    x: ViewOrigin,
-    y: ViewOrigin,
-    width: ClippedViewExtent,
-    height: ClippedViewExtent,
-}
-#[cfg(test)]
-impl ClippedViewBounds {
-    fn raw(self) -> GameViewBounds {
-        GameViewBounds {
-            x: self.x.get(),
-            y: self.y.get(),
-            width: self.width.get(),
-            height: self.height.get(),
-        }
-    }
-}
-
-fn parked_x(width: f64) -> Result<f64, String> {
-    if !width.is_finite() || width < 1.0 {
-        return Err("Game view size unavailable.".into());
-    }
-    // The right edge stays left of the client area even when the window grows.
-    Ok(-width - 1.0)
-}
-
-impl GameViewBounds {
-    fn clipped(self, width: f64, height: f64) -> Result<ClippedViewBounds, String> {
-        if ![self.x, self.y, self.width, self.height, width, height]
-            .iter()
-            .all(|value| value.is_finite())
-        {
-            return Err("Invalid game view bounds.".into());
-        }
-        (ViewOrigin::try_from((self.x, width)).into_validated()
-            + ViewOrigin::try_from((self.y, height))
-            + RequestedViewExtent::try_from(self.width)
-            + RequestedViewExtent::try_from(self.height))
-        .into_result()
-        .map_err(|_| "Invalid game view bounds.")
-        .and_then(|hlist_pat!(x, y, requested_width, requested_height)| {
-            Ok(ClippedViewBounds {
-                x,
-                y,
-                width: ClippedViewExtent::clip(requested_width, width - x.get())
-                    .map_err(|_| "Invalid game view bounds.")?,
-                height: ClippedViewExtent::clip(requested_height, height - y.get())
-                    .map_err(|_| "Invalid game view bounds.")?,
-            })
-        })
-        .map_err(|_| "Invalid game view bounds.".into())
-    }
-}
-
 #[tauri::command]
-pub(crate) fn set_game_view(
+pub(crate) async fn set_game_view(
     app: tauri::AppHandle,
     window: Webview,
     bounds: Option<GameViewBounds>,
 ) -> Result<(), String> {
     crate::require_view(&window, "main")?;
+    let main_identity = view_identity(&window);
+    // Retain the original instance while its resource-table address is used as
+    // identity, including Hide: a replacement cannot reuse that allocation.
+    let retained_game = app.get_webview("game");
+    let generation = app
+        .state::<crate::session::maintenance::SharedGate>()
+        .lock()
+        .map_err(|_| "Update state unavailable.")?
+        .game_generation;
+    let (finished, completion) = tokio::sync::oneshot::channel();
+    let main = window.clone();
+    window
+        .with_webview(move |platform| {
+            complete_presentation(finished, || {
+                let game_identity = retained_game.as_ref().map(view_identity);
+                if app.get_webview("main").as_ref().map(view_identity) != Some(main_identity)
+                    || app.get_webview("game").as_ref().map(view_identity) != game_identity
+                {
+                    return Err("Game view changed before presentation.".into());
+                }
+                let inset = if bounds.is_some() {
+                    super::client_view_geometry::top_content_inset(&platform)?
+                } else {
+                    0.0
+                };
+                present_game_view(&app, &main, bounds, inset, generation)
+            });
+        })
+        .map_err(|_| "Could not schedule Game presentation.")?;
+    tokio::time::timeout(std::time::Duration::from_secs(2), completion)
+        .await
+        .map_err(|_| "Game presentation timed out.")?
+        .map_err(|_| "Game presentation was interrupted.")?
+}
+
+fn view_identity(view: &Webview) -> usize {
+    // Clones share this retained instance; label equality alone also matches a
+    // replacement webview. Tauri uses the same resource-table identity itself.
+    (&*view.resources_table()) as *const tauri::ResourceTable as usize
+}
+
+fn complete_presentation(
+    finished: tokio::sync::oneshot::Sender<Result<(), String>>,
+    present: impl FnOnce() -> Result<(), String>,
+) {
+    // Timeout or cancellation of this Rust request drops the receiver. A queued callback must
+    // not show Game after the frontend has already sent its next Hide.
+    if !finished.is_closed() {
+        let _ = finished.send(present());
+    }
+}
+
+fn present_game_view(
+    app: &tauri::AppHandle,
+    window: &Webview,
+    bounds: Option<GameViewBounds>,
+    top_inset: f64,
+    generation: u64,
+) -> Result<(), String> {
     let Some(game) = app.get_webview("game") else {
         return if bounds.is_none() {
             Ok(())
@@ -313,7 +306,10 @@ pub(crate) fn set_game_view(
         return Err("Game is unavailable in Bot only mode.".into());
     }
     // Presentation cannot expose official input during update installation.
-    let _permit = crate::session::maintenance::admit(&app)?;
+    let permit = crate::session::maintenance::admit(app)?;
+    if permit.game_generation != generation {
+        return Err("Game view changed before presentation.".into());
+    }
     let parent = window.window();
     let size = parent
         .inner_size()
@@ -323,10 +319,10 @@ pub(crate) fn set_game_view(
                 .scale_factor()
                 .map_err(|_| "Game view scale unavailable.")?,
         );
-    let bounds = bounds.clipped(size.width, size.height)?;
+    let bounds = bounds.clipped(size.width, size.height, top_inset)?.raw();
     game.set_bounds(tauri::Rect {
-        position: tauri::LogicalPosition::new(bounds.x.get(), bounds.y.get()).into(),
-        size: tauri::LogicalSize::new(bounds.width.get(), bounds.height.get()).into(),
+        position: tauri::LogicalPosition::new(bounds.x, bounds.y).into(),
+        size: tauri::LogicalSize::new(bounds.width, bounds.height).into(),
     })
     .and_then(|()| game.show())
     .map_err(|_| "Could not show Game.".into())
@@ -403,6 +399,32 @@ mod tests {
         }
         fn verify_visible(&mut self) -> Result<(), &'static str> {
             self.effect("verify-visible")
+        }
+    }
+
+    #[test]
+    fn a_cancelled_or_timed_out_request_cannot_later_present_game() {
+        let (finished, completion) = tokio::sync::oneshot::channel();
+        drop(completion);
+        let mut shown = false;
+        complete_presentation(finished, || {
+            shown = true;
+            Ok(())
+        });
+        assert!(!shown);
+    }
+
+    #[test]
+    fn a_live_request_receives_the_actual_presentation_outcome() {
+        for result in [Ok(()), Err("View changed".to_string())] {
+            let (finished, mut completion) = tokio::sync::oneshot::channel();
+            let mut calls = 0;
+            complete_presentation(finished, || {
+                calls += 1;
+                result.clone()
+            });
+            assert_eq!(calls, 1);
+            assert_eq!(completion.try_recv().unwrap(), result);
         }
     }
 
@@ -587,7 +609,7 @@ mod tests {
             height: 720.0,
         };
         assert_eq!(
-            bounds.clipped(1100.0, 880.0).unwrap().raw(),
+            bounds.clipped(1100.0, 880.0, 0.0).unwrap().raw(),
             GameViewBounds {
                 x: 24.0,
                 y: 180.0,
@@ -611,8 +633,8 @@ mod tests {
             width: 0.25,
             height: 0.5,
         };
-        assert_eq!(bounds.clipped(100.0, 50.0).unwrap().raw(), expected);
-        assert_eq!(bounds.clipped(100.0, 50.0).unwrap().raw(), expected);
+        assert_eq!(bounds.clipped(100.0, 50.0, 0.0).unwrap().raw(), expected);
+        assert_eq!(bounds.clipped(100.0, 50.0, 0.0).unwrap().raw(), expected);
         assert_eq!(bounds.width, 10.0);
         for (width, height) in [
             (f64::NAN, 50.0),
@@ -621,7 +643,7 @@ mod tests {
             (100.0, 49.5),
         ] {
             assert_eq!(
-                bounds.clipped(width, height).unwrap_err(),
+                bounds.clipped(width, height, 0.0).unwrap_err(),
                 "Invalid game view bounds."
             );
         }
@@ -667,7 +689,7 @@ mod tests {
                 height: 1.0,
             },
         ] {
-            assert!(bounds.clipped(1100.0, 880.0).is_err());
+            assert!(bounds.clipped(1100.0, 880.0, 0.0).is_err());
         }
     }
 }

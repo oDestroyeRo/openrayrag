@@ -92,6 +92,8 @@
   "src-tauri/src/shared/mod.rs": "orchestration",
   "src-tauri/src/shell/ci_smoke.rs": "orchestration",
   "src-tauri/src/shell/client_view.rs": "orchestration",
+  "src-tauri/src/shell/client_view_geometry.rs": "effects",
+  "src-tauri/src/shell/client_view_logic.rs": "logic",
   "src-tauri/src/shell/mod.rs": "orchestration",
   "src-tauri/src/update/mod.rs": "orchestration",
   "src-tauri/src/update/update_continuation.rs": "orchestration",
