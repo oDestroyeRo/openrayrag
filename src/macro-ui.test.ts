@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FeatureUi } from './feature-ui';
-import { formatBotScript, parseBotScript } from './bot-script';
+import { BOT_SCRIPT_LIMITS, formatBotScript, parseBotScript } from './bot-script';
 import * as botScript from './bot-script';
 import { MacroDraft, MacroUi, macroActive, macroExample, macroBaseSettings, validMacroSnapshot } from './macro-ui';
 import { dryRunMacro, MacroRuntime } from './macros';
@@ -105,6 +105,43 @@ describe('macro editor documents', () => {
     expect(draft.text).toBe(manual); expect(draft.read().settings.radius).toBe(14);
     expect(() => draft.configured()).toThrow('Apply or discard');
     draft.discard(); expect(draft.configured().settings.radius).toBe(18); expect(draft.dirty).toBe(false);
+  });
+  it('synchronizes distinct applied and saved rules while retaining a dirty draft and detached configuration', () => {
+    const store = new Store(), draft = new MacroDraft(store);
+    draft.text = '# saved notes\r\n' + formatBotScript({ settings: DEFAULT_SETTINGS, script: macroExample('item') }).replaceAll('\n', '\r\n');
+    draft.save(); const persisted = [...store.data];
+    draft.text = '# applied notes\r\n' + formatBotScript({ settings: DEFAULT_SETTINGS, script: macroExample('continuous') }).replaceAll('\n', '\r\n');
+    draft.apply(draft.read());
+    const settings = { ...structuredClone(DEFAULT_SETTINGS), radius: 18 };
+    draft.syncSettings(settings);
+    const configured = draft.configured();
+    expect(configured).toEqual({ settings, script: macroExample('continuous') });
+    expect(configured).toEqual(draft.read());
+    configured.settings.radius = 1; configured.script!.rules.length = 0; settings.radius = 19;
+    expect(draft.configured().settings.radius).toBe(18); expect(draft.enabledScript?.rules).toHaveLength(2);
+    expect(draft.text).toContain('# applied notes\r\n'); expect(draft.unsaved).toBe(true);
+    draft.text += '\r\ninvalid manual draft'; const manual = draft.text;
+    draft.syncSettings(settings);
+    expect(draft.text).toBe(manual); expect(draft.dirty).toBe(true);
+    expect(() => draft.configured()).toThrow('Apply or discard');
+    draft.discard();
+    expect(draft.configured()).toEqual({ settings, script: macroExample('item') });
+    expect(draft.text).toContain('# saved notes\r\n'); expect(draft.unsaved).toBe(false);
+    expect([...store.data]).toEqual(persisted);
+  });
+  it('retains applied configuration when a saved-source conversion fails after the applied transition succeeds', () => {
+    const draft = new MacroDraft(new Store());
+    draft.text = `script "Saved"\n#${'x'.repeat(BOT_SCRIPT_LIMITS.authoringBytes - 2_000)}`;
+    draft.save();
+    draft.text = formatBotScript({ settings: DEFAULT_SETTINGS, script: macroExample('item') });
+    draft.apply(draft.read());
+    const before = draft.text, document = draft.configured(), settings = largeSettings('self');
+    expect(() => draft.syncSettings(settings)).toThrow('Script source is too large');
+    expect(draft.text).toBe(before); expect(draft.configured()).toEqual(document);
+    expect(draft.dirty).toBe(false); expect(draft.unsaved).toBe(true);
+    draft.syncSettings({ ...structuredClone(DEFAULT_SETTINGS), radius: 18 });
+    expect(draft.configured().settings.radius).toBe(18);
+    draft.discard(); expect(draft.configured().script).toBeNull(); expect(draft.configured().settings.radius).toBe(18);
   });
   it('keeps the previous saved source when an invalid draft is saved', () => {
     const store = new Store(); const draft = new MacroDraft(store); draft.save(); const before = [...store.data.values()][0];

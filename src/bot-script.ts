@@ -504,9 +504,12 @@ export function formatBotScript(input: BotScriptDocument): string {
 }
 
 /** Preserve rule/limit spelling and comments while replacing the settings view. Invalid drafts never change. */
-export function replaceBotScriptSettings(text: string, settings: Settings): string {
+export function updateBotScriptSettings(text: string, settings: Settings): { text: string; document: BotScriptDocument } {
   const original = parseBotScript(text, settings), checked = checkedSettings(settings, 1);
-  if (text.trimStart().startsWith('{')) return formatBotScript({ ...original, settings: checked });
+  if (text.trimStart().startsWith('{')) {
+    const document = { ...original, settings: checked };
+    return { text: formatBotScript(document), document };
+  }
   const replacements = settingLines(checked), newline = text.includes('\r\n') ? '\r\n' : '\n';
   const result: string[] = []; let inserted = false;
   for (const [index, source] of text.split(/\r?\n/).entries()) {
@@ -519,6 +522,11 @@ export function replaceBotScriptSettings(text: string, settings: Settings): stri
       if (!inserted && /^script\s/.test(code)) { result.push(...replacements); inserted = true; }
     }
   }
-  const updated = result.join(newline); parseBotScript(updated);
-  return updated;
+  const updated = result.join(newline);
+  return { text: updated, document: parseBotScript(updated) };
+}
+
+/** String-only adapter for callers that do not retain a compiled document. */
+export function replaceBotScriptSettings(text: string, settings: Settings): string {
+  return updateBotScriptSettings(text, settings).text;
 }
