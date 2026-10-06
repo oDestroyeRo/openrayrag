@@ -57,19 +57,26 @@ export function releaseSnapshot(release) {
   });
 }
 
-export function sameSourceWorkflow(run, options) {
-  return Number.isSafeInteger(run.id) && run.id > 0 &&
+export function sourceWorkflowMatches({ sourceSha }) {
+  return run => Number.isSafeInteger(run.id) && run.id > 0 &&
     Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0 &&
-    run.head_sha === options.sourceSha && run.head_branch === "main" &&
+    run.head_sha === sourceSha && run.head_branch === "main" &&
     ["push", "workflow_dispatch"].includes(run.event) && run.path === ".github/workflows/release.yml";
 }
 
+export function sameSourceWorkflow(run, options) {
+  return sourceWorkflowMatches(options)(run);
+}
+
+const jobNamed = name => job => typeof job.name === "string" && job.name.split(" / ").at(-1) === name;
+const platformBuilder = platform => job => job.name.split(" / ").at(-1).startsWith(`release-platforms (${platform},`);
+const successfulStepNamed = name => step => step.name === name && step.conclusion === "success";
+
 function namedJobs(jobs, name) {
   requireValue(Array.isArray(jobs.jobs) && jobs.total_count === jobs.jobs.length, "Incomplete hosted job list.");
-  return jobs.jobs.filter(job => typeof job.name === "string" && job.name.split(" / ").at(-1) === name);
+  return jobs.jobs.filter(jobNamed(name));
 }
 const completed = job => job?.status === "completed" && job.conclusion === "success";
-const stepSucceeded = (job, name) => job.steps?.some(step => step.name === name && step.conclusion === "success");
 
 export function validateArtifactProduction(run, jobs, artifact, provenance, marker, options) {
   requireValue(sameSourceWorkflow(run, options) && String(run.id) === provenance.runId &&
@@ -81,7 +88,7 @@ export function validateArtifactProduction(run, jobs, artifact, provenance, mark
   const assembler = namedJobs(jobs, "assemble")[0];
   requireValue(assembler.steps?.some(step => step.name.includes("actions/upload-artifact@") && step.conclusion === "success"), "Assembly artifact upload did not succeed.");
   for (const platform of ["windows", "linux"]) {
-    const matches = jobs.jobs.filter(job => job.name.split(" / ").at(-1).startsWith(`release-platforms (${platform},`));
+    const matches = jobs.jobs.filter(platformBuilder(platform));
     requireValue(matches.length === 1 && completed(matches[0]), `Missing successful ${platform} builder.`);
   }
   requireValue(String(artifact.id) === marker.artifact.id && artifact.name === provenance.artifactName &&
@@ -94,6 +101,6 @@ export function hasSuccessfulPublisher(run, jobs, options) {
   const publisher = namedJobs(jobs, "publish");
   return sameSourceWorkflow(run, options) && run.status === "completed" && run.conclusion === "success" &&
     publisher.length === 1 && completed(publisher[0]) &&
-    stepSucceeded(publisher[0], "Restore and verify the exact workflow artifact") &&
-    stepSucceeded(publisher[0], "Stage, verify and publish without moving latest backwards");
+    publisher[0].steps?.some(successfulStepNamed("Restore and verify the exact workflow artifact")) &&
+    publisher[0].steps?.some(successfulStepNamed("Stage, verify and publish without moving latest backwards"));
 }
