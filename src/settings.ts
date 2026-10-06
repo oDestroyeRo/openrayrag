@@ -5,8 +5,8 @@ import type { Position } from './protocol';
 import { validActorConditions, type ActorPredicate } from './actor-observations-logic';
 import { validateDispositionPolicy, type DispositionPolicy } from './disposition';
 import { validateSupplySettings, type SupplySettings } from './supply-trip-logic';
-import { itemId, skillId, speciesId, quantity, percentage, seconds, mapCode,
-  type ItemId, type SkillId, type SpeciesId, type Quantity, type Percentage, type Seconds, type MapCode } from './domain-values';
+import { itemId, skillId, speciesId, quantity, percentage, seconds, minutes, mapCode,
+  type ItemId, type SkillId, type SpeciesId, type Quantity, type Percentage, type Seconds, type Minutes, type MapCode } from './domain-values';
 
 export const MAX_TARGETS = 64;
 export interface MonsterRule { classId: number; action: 'attack' | 'ignore'; priority: number; conditions?: ActorPredicate[] }
@@ -91,8 +91,8 @@ type DomainAutomation = Omit<AutomationSettings, 'loadout' | 'combat' | 'loot' |
   follow: Omit<AutomationSettings['follow'], 'lostSeconds'> & { lostSeconds: Seconds };
   travel: Omit<AutomationSettings['travel'], 'destinationMap' | 'waypoints'>
     & { destinationMap: MapCode | ''; waypoints: (Position & { map: MapCode })[] };
-  limits: Omit<AutomationSettings['limits'], 'kills' | 'pickups' | 'weightPercent'>
-    & { kills: Quantity; pickups: Quantity; weightPercent: Percentage };
+  limits: Omit<AutomationSettings['limits'], 'minutes' | 'kills' | 'pickups' | 'weightPercent'>
+    & { minutes: Minutes; kills: Quantity; pickups: Quantity; weightPercent: Percentage };
   partyHeal?: Omit<PartyHealSettings, 'hpBelowPercent' | 'spReserve' | 'cooldownSeconds' | 'maxAttempts'>
     & { hpBelowPercent: Percentage; spReserve: Quantity; cooldownSeconds: Seconds; maxAttempts: Quantity };
 };
@@ -254,7 +254,7 @@ function admitAutomation(a: AutomationSettingsInput): ValidatedAutomationSetting
     follow: { ...a.follow, lostSeconds: seconds(a.follow.lostSeconds) },
     travel: { ...a.travel, destinationMap: a.travel.destinationMap === '' ? '' : mapCode(a.travel.destinationMap),
       waypoints: a.travel.waypoints.map(point => ({ ...point, map: mapCode(point.map) })) },
-    limits: { ...a.limits, kills: quantity(a.limits.kills), pickups: quantity(a.limits.pickups), weightPercent: percentage(a.limits.weightPercent) },
+    limits: { ...a.limits, minutes: minutes(a.limits.minutes), kills: quantity(a.limits.kills), pickups: quantity(a.limits.pickups), weightPercent: percentage(a.limits.weightPercent) },
     ...(partyHeal ? { partyHeal: { ...partyHeal, hpBelowPercent: percentage(partyHeal.hpBelowPercent), spReserve: quantity(partyHeal.spReserve),
       cooldownSeconds: seconds(partyHeal.cooldownSeconds), maxAttempts: quantity(partyHeal.maxAttempts) } } : {}),
   };

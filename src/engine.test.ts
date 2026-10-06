@@ -1,3 +1,5 @@
+import { settingsDraft, validateFormSettings } from './settings';
+import { itemId as domainItemId } from './domain-values';
 import { DEFAULT_MAP_POLICY, insideLockArea } from './map-policy';
 import { describe, expect, it, vi } from 'vitest';
 import { BotEngine, DEFAULT_SETTINGS, DEFAULT_AUTOMATION, type Action, validateSettings } from './engine';
@@ -583,7 +585,7 @@ describe('opt-in ammo ownership and reserve receipts',()=>{
     t.engine.start({...settings,automation});return {...t,automation};
   }
   it('equips preferred arrows and waits for slot13 readback before attacking',()=>{
-    const t=ammoSetup();t.engine.settings.automation!.loadout.ammoPreferences=[{itemId:1751}];
+    const t=ammoSetup();t.engine.settings=validateFormSettings({...t.engine.settings,automation:{...t.engine.settings.automation!,loadout:{...t.engine.settings.automation!.loadout,ammoPreferences:[{itemId:1751}]}}});
     t.step();expect(t.sent).toEqual([{type:'equip',bagId:1751,equipped:true}]);t.step();expect(t.sent).toHaveLength(1);
     t.engine.receive([{type:'equipment',bagId:1751,slot:13,equipped:true}]);t.step();expect(t.sent.at(-1)).toEqual({type:'attack',id:2});
     expect(t.engine.snapshot().loadout.stock).toBe(20);
@@ -594,7 +596,7 @@ describe('opt-in ammo ownership and reserve receipts',()=>{
     expect(t.engine.running).toBe(false);expect(t.sent).toEqual([{type:'attack',id:2},{type:'stop'}]);expect(t.engine.snapshot().loadout.state).toBe('fault');
     t.step(1000);t.step(7000);expect(t.sent).toHaveLength(2);expect(t.engine.snapshot().loadout.reason).toContain('reserve');
     expect(()=>t.engine.start({...settings,automation:t.automation})).toThrow('Wait');
-    t.engine.receive([{type:'inventoryDelta',add:false,bagId:1750,change:1,weight:0}]);expect(t.engine.character.count(1750)).toBe(2);
+    t.engine.receive([{type:'inventoryDelta',add:false,bagId:1750,change:1,weight:0}]);expect(t.engine.character.count(domainItemId(1750))).toBe(2);
     t.engine.receive([{type:'changeTarget',id:0}]);expect(t.engine.snapshot().loadout.state).toBe('ready');expect(t.engine.running).toBe(false);
   });
   it('does not use a walk Stop as a firing confirmation or mistake another target change for clear',()=>{
@@ -617,7 +619,7 @@ describe('opt-in ammo ownership and reserve receipts',()=>{
     t.engine.receive([{type:'map',map:'prt_fild05'}]);t.step();expect(t.engine.snapshot().loadout.priorCaptured).toBe(false);expect(t.sent.filter(a=>a.type==='equip')).toHaveLength(1);
   });
   it('does not let new equipment override an outstanding server walk leg',()=>{
-    const t=ammoSetup();t.engine.settings.automation!.loadout.ammoPreferences=[{itemId:1751}];
+    const t=ammoSetup();t.engine.settings=validateFormSettings({...t.engine.settings,automation:{...t.engine.settings.automation!,loadout:{...t.engine.settings.automation!.loadout,ammoPreferences:[{itemId:1751}]}}});
     t.engine.receive([{type:'walk',id:1,walk:{cells:[{x:100,y:100},{x:101,y:100}],secondsPerCell:2,firstSeconds:2,origin:{x:100.5,y:100.5},locked:false}}]);
     t.step(100);expect(t.sent).toEqual([]);t.step(100);expect(t.sent).toEqual([]);t.step(2000);expect(t.sent).toEqual([{type:'equip',bagId:1751,equipped:true}]);
   });
@@ -676,6 +678,6 @@ describe('field lock area ownership',()=>{
   it('random search legs stay inside the inclusive mask and a policy mutation cancels the old owner',()=>{
     const {engine,sent,step}=setup();engine.entities.delete(2);const value={...bounded(),route_randomWalk:2 as const};engine.start(value);step(100);
     const walk=sent.find(a=>a.type==='walk');expect(walk?.type).toBe('walk');if(walk?.type==='walk')expect(insideLockArea(area(),'prt_fild08',walk.destination)).toBe(true);
-    engine.settings.automation!.mapPolicy!.lockArea!.maxX=100;step(100);expect(engine.running).toBe(false);expect(sent.at(-1)).toEqual({type:'stop'});
+    const edited=settingsDraft(engine.settings);edited.automation!.mapPolicy!.lockArea!.maxX=100;engine.settings=validateFormSettings(edited);step(100);expect(engine.running).toBe(false);expect(sent.at(-1)).toEqual({type:'stop'});
   });
 });

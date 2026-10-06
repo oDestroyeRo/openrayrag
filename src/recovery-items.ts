@@ -1,3 +1,4 @@
+import type { ReadonlyData } from './settings';
 import catalog from './data/recovery-item-catalog.json';
 
 export type RecoveryResource = 'hp' | 'sp';
@@ -39,6 +40,6 @@ export function validateRecoveryItems(value: unknown, resource: RecoveryResource
     belowPercent: row.belowPercent as number, minStock: row.minStock as number, cooldownSeconds: row.cooldownSeconds as number };
 }
 
-export function recoveryItemIds(policy: RecoveryItemSettings | undefined, resource: RecoveryResource): readonly number[] {
+export function recoveryItemIds(policy: ReadonlyData<RecoveryItemSettings> | undefined, resource: RecoveryResource): readonly number[] {
   return !policy || policy.mode === 'off' ? [] : policy.mode === 'any' ? RECOVERY_ITEM_IDS[resource] : policy.itemIds;
 }

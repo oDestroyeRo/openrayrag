@@ -219,11 +219,11 @@ describe('field run updater checkpoints', () => {
   it('returns a defensive data-only checkpoint only for active intent and restores without begin resets', () => {
     const f = fixture(), original = f.run.checkpoint()!;
     const copied = f.run.checkpoint()!;
-    copied.desired.targets.push(999); copied.totals.kills = 0; copied.supplyGuard!.guard.remainingTrips = 100;
+    Array.prototype.push.call(copied.desired.targets,999); copied.totals.kills = 0; copied.supplyGuard!.guard.remainingTrips = 100;
     expect(f.run.checkpoint()).toEqual(original);
     const restored = new PersistentFieldRun(f.now), input = roundtrip(original);
     restored.restore(input);
-    input.previous.kills = 0; input.desired.targets.push(999); input.supplyGuard!.guard.remainingTrips = 100;
+    input.previous.kills = 0; Array.prototype.push.call(input.desired.targets,999); input.supplyGuard!.guard.remainingTrips = 100;
     expect(restored.checkpoint()).toEqual({ ...original, generation: original.generation + 1 });
     expect(restored.metrics).toEqual({ kills: 3, looted: 4, deaths: 1, attacks: 5 });
     expect(restored.targetIds).toEqual([1002]);
@@ -385,7 +385,7 @@ describe('field run updater checkpoints', () => {
     ['unknown protocol', value => { (value as { version: number }).version = 2; }],
     ['extra credential', value => { Object.assign(value, { password: 'forbidden' }); }],
     ['executable queue', value => { Object.assign(value, { queue: [{ type: 'useItem' }] }); }],
-    ['corrupt settings', value => { value.desired.radius = 99; }],
+    ['corrupt settings', value => { Object.assign(value.desired,{radius:99}); }],
     ['wrong metrics session', value => { value.metricsSession = 'Other'; }],
     ['empty session', value => { value.session = ''; }],
     ['wrong supply character', value => { value.supplyGuard!.guard.character = 'Other'; }],

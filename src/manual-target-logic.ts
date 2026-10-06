@@ -1,17 +1,18 @@
+import { bagId as domainBagId } from './domain-values';
 import type { EngagementIdentity } from './attack-strategy-logic';
 import type { ActorObservationSnapshot } from './actor-observations-logic';
 import type { CharacterSnapshot } from './character-state-logic';
 import type { CharacterState } from './character-state';
 import { AMMO_CATALOG, WEAPON_CATALOG } from './loadout-logic';
-import { validateMapPolicy, type MapPolicy } from './map-policy-logic';
+import { validateMapPolicy, type MapPolicyInput as MapPolicy } from './map-policy-logic';
 import { mapDimensions } from './navigation-logic';
 import type { Entity, Position } from './protocol';
-import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateAutomation, type MonsterRule, type Settings } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateAutomation, type MonsterRule, type ReadonlyData, type SettingsInput as Settings } from './settings';
 /** Command-only policy. No automatic action, saved run, or selected-species list. */
 export interface ManualTargetPolicy {
   minHpPercent:number; routeStep:number; avoidWalls:boolean; walkSeconds:number;
   approachSeconds:number; maxPathDistance:number; levelDifference:number;
-  monsterRules:MonsterRule[]; minAmmoStock:number; mapPolicy?:MapPolicy;
+  monsterRules:ReadonlyData<MonsterRule>[]; minAmmoStock:number; mapPolicy?:MapPolicy;
 }
 
 export interface ManualTargetRequest {
@@ -48,7 +49,10 @@ export function validateManualTargetPolicy(value:unknown):ManualTargetPolicy {
   if(!integer(v.minHpPercent,20,95)||!integer(v.routeStep,1,20)||typeof v.avoidWalls!=='boolean'||!integer(v.walkSeconds,1,600)||!integer(v.approachSeconds,1,60)||!integer(v.maxPathDistance,1,200)||!integer(v.levelDifference,-100,100)||!integer(v.minAmmoStock,0,9999))throw new Error('Invalid bounded manual policy.');
   const automation=validateAutomation({...structuredClone(DEFAULT_AUTOMATION),combat:{mode:'selected',levelDifference:v.levelDifference as number,rules:v.monsterRules as MonsterRule[]}});
   const mapPolicy=Object.hasOwn(v,'mapPolicy')?validateMapPolicy(v.mapPolicy):undefined;
-  return {...v,monsterRules:automation.combat.rules,...(mapPolicy?{mapPolicy}:{})} as ManualTargetPolicy;
+  return {minHpPercent:v.minHpPercent as number,routeStep:v.routeStep as number,avoidWalls:v.avoidWalls,
+    walkSeconds:v.walkSeconds as number,approachSeconds:v.approachSeconds as number,maxPathDistance:v.maxPathDistance as number,
+    levelDifference:v.levelDifference as number,minAmmoStock:v.minAmmoStock as number,
+    monsterRules:automation.combat.rules.map(rule=>({...rule,conditions:rule.conditions?.map(condition=>({...condition}))})),...(mapPolicy?{mapPolicy}:{})};
 }
 
 export function manualTargetPolicy(settings:Settings):ManualTargetPolicy {
@@ -83,10 +87,10 @@ export function manualAmmoGuard(policy:Pick<ManualTargetPolicy,'minAmmoStock'>,p
   if(!state.inventoryKnown||state.equipment.length<10)return 'Verify weapon and ammo inventory before attacking.';
   const inventory=state.inventory instanceof Map?state.inventory:new Map(state.inventory.map(item=>[item.bagId,item]));
   const weaponId=state.equipment[4]??0;if(!weaponId)return null;
-  const weaponItem=inventory.get(weaponId),weapon=weaponItem?WEAPON_CATALOG[weaponItem.itemId]:undefined;
+  const weaponItem=inventory.get(domainBagId(weaponId)),weapon=weaponItem?WEAPON_CATALOG[weaponItem.itemId]:undefined;
   if(!weapon)return 'Normal-attack weapon compatibility is not verified.';
   if(weapon.weaponClass!==12)return null;
-  const item=inventory.get(state.ammoId),ammo=item?AMMO_CATALOG[item.itemId]:undefined;
+  const item=state.ammoId>0?inventory.get(domainBagId(state.ammoId)):undefined,ammo=item?AMMO_CATALOG[item.itemId]:undefined;
   if(!item||!ammo||ammo.ammoType!==0)return 'Equip verified arrows before attacking.';
   if(player.level<ammo.minLevel)return `Ammo needs level ${ammo.minLevel}.`;
   return item.count<=policy.minAmmoStock?`Observed arrows ${item.count} reached reserve ${policy.minAmmoStock}.`:null;

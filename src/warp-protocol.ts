@@ -1,4 +1,4 @@
-import { validateAutomation, type AutomationSettings } from './settings';
+import { validateAutomation, type AutomationSettingsInput as AutomationSettings } from './settings';
 import { BitReader, BitWriter } from './binary';
 import { validateMemoRequest, type MemoBinding, type MemoSlot } from './memo-protocol';
 

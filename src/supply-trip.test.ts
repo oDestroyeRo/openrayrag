@@ -1,3 +1,4 @@
+import { itemId, bagId, quantity } from './domain-values';
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SUPPLY,
@@ -746,9 +747,9 @@ describe("phase planning and exact receipts", () => {
       zeny: 1000,
       cost: 300,
       credit: 0,
-      items: new Map([[501, 4]]),
-      bags: new Map([[501, 4]]),
-      itemChanges: new Map([[501, 6]]),
+      items: new Map([[itemId(501), quantity(4)]]),
+      bags: new Map([[bagId(501), quantity(4)]]),
+      itemChanges: new Map([[itemId(501), 6]]),
       bagChanges: new Map(),
       strictStock: false,
     };
@@ -785,10 +786,10 @@ describe("phase planning and exact receipts", () => {
       zeny: 1000,
       cost: 0,
       credit: 0,
-      items: new Map([[501, 12]]),
-      bags: new Map([[501, 12]]),
-      itemChanges: new Map([[501, -2]]),
-      bagChanges: new Map([[501, -2]]),
+      items: new Map([[itemId(501), quantity(12)]]),
+      bags: new Map([[bagId(501), quantity(12)]]),
+      itemChanges: new Map([[itemId(501), -2]]),
+      bagChanges: new Map([[bagId(501), -2]]),
       strictStock: false,
     };
     const r = createSupplyReceipt(action, economic, c);

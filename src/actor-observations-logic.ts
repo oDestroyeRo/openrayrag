@@ -150,7 +150,7 @@ export function evaluateActorPredicate(condition: ActorPredicate, snapshot: Acto
   return actorPredicateEvaluator(snapshot)(condition);
 }
 
-export function actorConditionsMatch(conditions: ActorPredicate[] | undefined, snapshot: ActorObservationSnapshot | undefined): boolean {
+export function actorConditionsMatch(conditions: readonly ActorPredicate[] | undefined, snapshot: ActorObservationSnapshot | undefined): boolean {
   if (!conditions?.length) return true;
   const evaluate = actorPredicateEvaluator(snapshot);
   return conditions.every(condition => evaluate(condition).state === 'matched');

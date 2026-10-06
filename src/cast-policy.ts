@@ -1,3 +1,4 @@
+import { bagId as domainBagId, skillId as domainSkillId } from './domain-values';
 import { map } from 'remeda';
 import data from './data/cast-policy.json';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost } from './game-catalog';
@@ -29,7 +30,7 @@ export function effectiveSpCost(state:CharacterState, skillId:number, level:numb
   for (const bagId of state.equipment) {
     if (bagId<=0 || equipped.has(bagId)) continue;
     equipped.add(bagId);
-    const item=state.inventory.get(bagId);
+    const item=bagId>0?state.inventory.get(domainBagId(bagId)):undefined;
     if (!item || item.type!==2 || item.count!==1 || !known(item.itemId) || items[item.itemId]!.card
       || !item.guid || !Number.isInteger(item.refine) || item.refine!<0 || item.refine!>255 || item.slots?.length!==4) return null;
     ids.add(item.itemId);
@@ -57,7 +58,7 @@ export const BLIND_CONDITION= selfStatus(5,true);
 export function castReadiness(skillId:number,level:number,state:CharacterState,observations:ActorObservationSnapshot|undefined,ownCastSettled?:boolean):CastReadiness {
   if (![...AUTOMATIC_ATTACK_SKILLS,MANUAL_GROUND_SKILL,PARTY_HEAL_SKILL].includes(skillId)) return {state:'unavailable',reason:'This skill has no verified cast policy.'};
   const skill=SKILL_CATALOG[skillId];
-  if(!skill || !skill.adjustableLevel || skill.maxLevel!==10 || !state.skillsKnown || !Number.isInteger(level) || level<1 || level>10 || state.skillLevel(skillId)<level)
+  if(!skill || !skill.adjustableLevel || skill.maxLevel!==10 || !state.skillsKnown || !Number.isInteger(level) || level<1 || level>10 || state.skillLevel(domainSkillId(skillId))<level)
     return {state:'unavailable',reason:'Verified learned or granted skill level is required.'};
   const evaluate = actorPredicateEvaluator(observations);
   for(const condition of CAST_PREREQUISITES) {
@@ -84,7 +85,7 @@ export function castReadiness(skillId:number,level:number,state:CharacterState,o
 /** Warp's learned level and stage-specific SP checks belong to its manual owner.
  * Cast availability is checked by the controller's shared observed owner, not a timer. */
 export function warpCastReadiness(state:CharacterState,observations:ActorObservationSnapshot|undefined):CastReadiness {
-  const level=state.skillsKnown?state.learned.get(55)??0:0;
+  const level=state.skillsKnown?state.learned.get(domainSkillId(55))??0:0;
   if(!Number.isInteger(level)||level<1||level>4)return {state:'unavailable',reason:'Warp Portal requires observed learned level 1–4; granted-only skills are unsupported.'};
   const evaluate = actorPredicateEvaluator(observations);
   for(const condition of CAST_PREREQUISITES){const trace=evaluate(condition);if(trace.state!=='matched')return {state:trace.state==='unavailable'?'unavailable':'blocked',reason:'Verified clear body-state prerequisites are required for Warp Portal.'};}

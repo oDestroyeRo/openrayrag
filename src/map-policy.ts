@@ -1,3 +1,4 @@
+import type { ReadonlyData } from './settings';
 import { GridNavigator } from './navigation';
 import type { WalkGrid } from './navigation-logic';
 import type { Position } from './protocol';
@@ -9,7 +10,7 @@ export { type LockArea, type MapPolicy, DEFAULT_MAP_POLICY, PORTAL_COST, MAX_MAP
 /** Collision-safe entry into any reachable safe cell, rather than a possibly blocked centre.
  * BFS is bounded by the physical grid; first entry is deterministic and uses no portal cells.
  */
-export function lockEntry(map: string, origin: Position, grid: WalkGrid, policy: MapPolicy): Position | null {
+export function lockEntry(map: string, origin: Position, grid: WalkGrid, policy: ReadonlyData<MapPolicy>): Position | null {
   if (!mapAllowed(policy,map) || policy.lockArea?.map !== map) return null;
   const nav = new GridNavigator(grid), from={x:Math.floor(origin.x),y:Math.floor(origin.y)};
   if (!nav.safe(from)) return null;

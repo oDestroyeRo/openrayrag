@@ -202,7 +202,7 @@ describe('revision-bound preview and future execution boundary', () => {
   it('requires revalidation for revision, money, inventory, equipment and policy changes', () => {
     const ctx = context(); const configured = policy({ sell: true }); const result = planDisposition(configured, ctx);
     expect(revalidateDisposition(result, configured, ctx)).toEqual({ ok: true, reasons: [] });
-    const mutations = [() => { ctx.revision += ':new'; }, () => { ctx.workflow.zeny++; }, () => { ctx.containers.inventory.items![0]!.count++; }, () => { ctx.equipment!.push(501); }, () => { configured.rules[0]!.maximum++; }];
+    const mutations = [() => { ctx.revision += ':new'; }, () => { ctx.workflow.zeny++; }, () => { Object.assign(ctx.containers.inventory.items![0]!,{count:ctx.containers.inventory.items![0]!.count+1}); }, () => { ctx.equipment!.push(501); }, () => { configured.rules[0]!.maximum++; }];
     for (const mutate of mutations) { const before = planDisposition(configured, ctx); mutate(); expect(revalidateDisposition(before, configured, ctx).ok).toBe(false); }
     expect(dispositionPreviewIsCurrent(result, configured, ctx)).toBe(false);
   });

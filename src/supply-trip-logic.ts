@@ -1,6 +1,7 @@
+import { itemId as domainItemId } from './domain-values';
 import { inventoryItemCount } from './character-state-logic';
 import type { Position } from './protocol';
-import type { Settings } from './settings';
+import type { SettingsInput as Settings } from './settings';
 import type { DispositionAction, DispositionContext, DispositionPolicy } from './disposition';
 export interface SupplySettings {
   enabled: boolean;
@@ -219,4 +220,4 @@ export function validateSupplyResumeGuard(input: unknown): SupplyResumeGuard {
 
 export const count = (context: SupplyContext, id: number) =>
   context.disposition.containers.inventory.items == null ? null
-    : inventoryItemCount(id)(context.disposition.containers.inventory.items);
+    : inventoryItemCount(domainItemId(id))(context.disposition.containers.inventory.items);

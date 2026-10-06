@@ -1,3 +1,5 @@
+import { minutesToMilliseconds } from './domain-values';
+import { skillId as domainSkillId } from './domain-values';
 import { flatMap, map } from 'remeda';
 import { manualActionBlocker } from './engine-action-policy';
 import { ObservedThreats, type ThreatSnapshot } from './observed-threats';
@@ -6,7 +8,7 @@ import { matchesSkillExecution, matchesPartyHealExecution } from './skill-execut
 import { PartyEngagements, type PartyEngagementSnapshot } from './party-engagement';
 import type { PartyActorBinding } from './party-actors';
 import { resourceFresh } from './actor-resources';
-import {sameActionIdentity,type ActionIdentity} from './actor-identity';
+import {actionIdentity,sameActionIdentity,type ActionIdentity} from './actor-identity';
 import { deathLimitGuidance } from './death-recovery';
 import { AttackStrategyPolicy, engagementIdentity, type StrategyChoice, type AttackStrategySnapshot, type EngagementIdentity } from './attack-strategy';
 import { castReadiness, skillAfterCastSeconds, CAST_PREREQUISITES, BLIND_CONDITION, AUTOMATIC_ATTACK_SKILLS, MANUAL_GROUND_SKILL } from './cast-policy';
@@ -18,7 +20,7 @@ import { type Drop, type Entity, type GameEvent, type Position, type Walk, type 
 import { walkDuration, walkPosition } from './movement';
 import { GridNavigator, routeSegment, searchGrid, distance, minimumRouteCost, type NavigationSummary, type WalkGrid } from './navigation';
 
-import { automationSettings, DEFAULT_SETTINGS, validateSettings, type Settings, type AutomationSettings } from './settings';
+import { automationSettings, DEFAULT_SETTINGS, validateSettings, validateFormSettings, type ValidatedFormSettings, type SettingsInput as Settings, type AutomationSettingsInput as AutomationSettings } from './settings';
 import { acceptsMonster, acceptsLoot, inSchedule, monsterRule, lootRule, effectiveSkillLevel, AutomationScheduler, type AutomationTask, type ActionResult, type ActionReceipts } from './automation';
 import { CharacterState, type CharacterSnapshot, type StatefulEntity } from './character-state';
 import { validateExpandedAction, type ExpandedAction, type FeatureEvent } from './protocol-feature';
@@ -83,7 +85,7 @@ export class BotEngine {
   readonly drops = new Map<number, Drop>();
   readonly log: LogEntry[] = [];
   attacks = 0; kills = 0; looted = 0;
-  settings: Settings = DEFAULT_SETTINGS;
+  settings: ValidatedFormSettings = validateFormSettings(DEFAULT_SETTINGS);
   private motions = new Map<number, { walk: Walk; at: number }>();
   private navigator: GridNavigator | null = null;
   private navigationMap = '';
@@ -187,9 +189,9 @@ export class BotEngine {
   actorActionIdentity(targetId?:number,allowDeadSelf=false):ActionIdentity|null {
     const p=this.player;if(!p||!this.connected||!this.compatible)return null;
     const self=this.observations.context(p.id);if(!self.incarnation&&!allowDeadSelf)return null;
-    const identity:ActionIdentity={world:self.world,selfId:p.id,selfIncarnation:self.incarnation??0};
-    if(targetId!==undefined){const target=this.observations.context(targetId);if(!target.incarnation)return null;identity.targetId=targetId;identity.targetIncarnation=target.incarnation;}
-    return identity;
+    const own={world:self.world,selfId:p.id,selfIncarnation:self.incarnation??0};
+    if(targetId!==undefined){const target=this.observations.context(targetId);if(!target.incarnation)return null;return actionIdentity({...own,targetId,targetIncarnation:target.incarnation});}
+    return actionIdentity(own);
   }
   actionIdentity(action:ExpandedAction):ActionIdentity|null {
     const target=action.type==='skill'&&action.mode==='target'?action.target:action.type==='useItem'&&action.target!==undefined&&action.target>=0?action.target:undefined;
@@ -725,7 +727,7 @@ export class BotEngine {
     if (now - Math.max(this.lastFrame, this.runStarted) > 15000) { this.stop('No recent server updates.'); return; }
     const a = automationSettings(this.settings);
     if (!inSchedule(a,now)) { this.stop('Daily schedule ended. Press Start during the next allowed period.'); return; }
-    if ((a.limits.minutes && now - this.runStarted >= a.limits.minutes * 60000) || (a.limits.kills && this.kills - this.runKills >= a.limits.kills) || (a.limits.pickups && this.looted - this.runPickups >= a.limits.pickups)) { this.stop('Configured session limit reached.'); return; }
+    if ((a.limits.minutes && now - this.runStarted >= minutesToMilliseconds(a.limits.minutes)) || (a.limits.kills && this.kills - this.runKills >= a.limits.kills) || (a.limits.pickups && this.looted - this.runPickups >= a.limits.pickups)) { this.stop('Configured session limit reached.'); return; }
     if(!dispatchDecisions){
       if(this.retreatTask)this.tickRetreat(now,false);
       // Panel input yields decisions, not ownership. Advance accepted legs and
@@ -820,7 +822,7 @@ export class BotEngine {
     const enemy=candidateEnemy&&!candidateEnemy.dead&&candidateEnemy.hp>0&&this.observations.context(candidateEnemy.id).incarnation?candidateEnemy:null;
     const conditions=flatMap([...a.items,...a.skills,...a.equipment], rule=>rule.conditions??[]);
     const observations=conditions.length?this.actorObservation(conditions):undefined;
-    const featureSettings=enemy&&a.attackStrategies?.some(rule=>rule.speciesIds.includes(enemy.classId))?{...a,skills:a.skills.filter(rule=>rule.target!=='enemy')}:a;
+    const featureSettings=enemy&&a.attackStrategies?.some(rule=>rule.speciesIds.some(id=>id===enemy.classId))?{...a,skills:a.skills.filter(rule=>rule.target!=='enemy')}:a;
     const next=this.automation.next(a.loadout.enabled?{...featureSettings,equipment:[]}:featureSettings,p,this.character,enemy,observations);
     if(next.failure) {this.stop(next.failure);return;}
     if(next.action) {
@@ -1512,8 +1514,9 @@ export class BotEngine {
   }
   startManual(input:unknown):void {
     const request=validateManualTargetRequest(input),cells=this.previewManual(request),since=this.now();
-    this.settings=manualTargetSettings(request);this.navigation();this.routeStep=request.policy.routeStep;
-    if(request.command.type==='attack')this.settings.targets=[this.entities.get(request.command.target.id)!.classId];
+    const manualSettings=manualTargetSettings(request);
+    this.settings=validateFormSettings({...manualSettings,...(request.command.type==='attack'?{targets:[this.entities.get(request.command.target.id)!.classId]}:{})});
+    this.navigation();this.routeStep=request.policy.routeStep;
     this.runIntent=false;this.lastTick=since;this.lastAction=0;this.routeFailures=0;
     this.manualTask={request,since,attackSent:false,attackObserved:false,acceptedAttack:false,acceptedWalk:false};
     this.manualStatus={sequence:this.manualStatus.sequence+1,kind:request.command.type,state:request.command.type==='walk'?'walking':'approaching',active:true,settling:false,reason:'Manual command admitted; waiting for verified execution.',map:request.map,goal:request.command.type==='walk'?{...request.command.destination}:cell(this.entities.get(request.command.target.id)!),target:request.command.type==='attack'?{...request.command.target}:null,elapsedSeconds:0,remainingSeconds:request.timeoutSeconds};
@@ -1610,10 +1613,10 @@ export class BotEngine {
     if(!p)throw new Error('A verified character is required.');
     if(action.type==='skill') {
       const requestedLevel=action.level;
-      if(this.character.skillLevel(action.skillId)<requestedLevel)throw new Error('An active learned or granted skill is required.');
+      if(this.character.skillLevel(domainSkillId(action.skillId))<requestedLevel)throw new Error('An active learned or granted skill is required.');
       action={...action,level:effectiveSkillLevel(action.skillId,requestedLevel,this.character)};
       const skill=SKILL_CATALOG[action.skillId],cost=skillCost(action.skillId,action.level);
-      if(!this.character.skillsKnown||this.character.skillLevel(action.skillId)<action.level||!skill||skill.target===0||cost===null)throw new Error('An active learned or granted skill is required.');
+      if(!this.character.skillsKnown||this.character.skillLevel(domainSkillId(action.skillId))<action.level||!skill||skill.target===0||cost===null)throw new Error('An active learned or granted skill is required.');
       const supported=(AUTOMATIC_ATTACK_SKILLS as readonly number[]).includes(action.skillId)||action.skillId===MANUAL_GROUND_SKILL;
       const readiness=supported?castReadiness(action.skillId,action.level,this.character,this.actorObservation([...CAST_PREREQUISITES,BLIND_CONDITION])):null;
       if(readiness&&readiness.state!=='ready')throw new Error(readiness.reason);
@@ -1661,7 +1664,7 @@ export class BotEngine {
     if(!this.route||this.route.type!=='waypoint')this.route={type:'waypoint',destination:{x:waypoint.x,y:waypoint.y},cells:[],since:null};
     this.routeTick(p,now);
   }
-  actorObservation(conditions:ActorPredicate[]=[], targetId:number|null=this.currentTargetId,candidateId:number|null=null): ActorObservationSnapshot {
+  actorObservation(conditions:readonly ActorPredicate[]=[], targetId:number|null=this.currentTargetId,candidateId:number|null=null): ActorObservationSnapshot {
     return this.observations.snapshot(this.player?.id??null,targetId,this.connected&&this.compatible,conditions,false,candidateId);
   }
   get currentTargetId():number|null {

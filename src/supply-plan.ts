@@ -1,3 +1,4 @@
+import { itemId as domainItemId } from './domain-values';
 import { inventoryItemCount } from './character-state-logic';
 import { sort } from 'remeda';
 import { insideLockArea, mapAllowed, mapPolicy, policySummary } from './map-policy-logic';
@@ -22,7 +23,7 @@ export function nextSupplyAction(
   const c = context.disposition,
     world = c.workflow.world;
   const carried = (id: number) =>
-    inventoryItemCount(id)(c.containers.inventory.items ?? []);
+    inventoryItemCount(domainItemId(id))(c.containers.inventory.items ?? []);
   const floor = (rule: DispositionRule) =>
     Math.max(
       rule.maximum,
@@ -179,7 +180,7 @@ export function previewSupplyTrip(
   )
     return "Waiting for observed stock, weight and capacity.";
   const stock = (id: number) =>
-    inventoryItemCount(id)(inventory.items!);
+    inventoryItemCount(domainItemId(id))(inventory.items!);
   const goals = supply.stockEnabled
     ? policy.rules
         .filter(

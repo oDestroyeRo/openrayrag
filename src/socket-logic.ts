@@ -1,6 +1,7 @@
 import { sort } from 'remeda';
+import { inventoryItemDraft } from './character-state-logic';
 import catalog from './data/socket-catalog.json';
-import type { InventoryItem } from './protocol-feature';
+import type { InventoryItemInput as InventoryItem } from './protocol-feature';
 import type { SocketSelection } from './socket-protocol';
 export interface SocketMetadata { code:string; name:string; itemClass:number; mask:number; capacity:number }
 
@@ -27,7 +28,7 @@ export interface SocketSnapshot {
   targets:SocketTarget[]; cards:SocketCard[]; preview:SocketPreview|null;
 }
 
-export const clone=(i:InventoryItem):InventoryItem=>({...i,...(i.slots?{slots:i.slots.slice()}: {})});
+export const clone=inventoryItemDraft;
 
 const itemKey=(i:InventoryItem):string=>JSON.stringify([i.bagId,i.itemId,i.type,i.count,i.flags??null,i.refine??null,i.guid??null,i.slots??null]);
 

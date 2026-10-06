@@ -1,9 +1,10 @@
+import { actionIdentity } from './actor-identity';
 import { describe, expect, it } from 'vitest';
 import { CastAvailability, type ObservedCast } from './cast-availability';
 import type { Entity } from './protocol';
 
 const own:Entity={id:0,classId:6,name:'Test',kind:0,level:15,hp:100,maxHp:100,x:100,y:100,dead:false};
-const identity={world:'world',selfId:0,selfIncarnation:1};
+const identity=actionIdentity({world:'00000000-0000-0000-0000-000000000001',selfId:0,selfIncarnation:1});
 function fixture(initialized=true) {
   let now=100_000;const owner=new CastAvailability(()=>now);owner.connectionChanged();owner.allowRun();
   if(initialized){owner.observe({type:'enter',id:0,map:'prt_fild08'},undefined);owner.observe({type:'spawn',entity:own,entryType:1},own);}
@@ -33,8 +34,8 @@ describe('bounded stationary availability owner',()=>{
     f.owner.observe({type:'spawn',entity:own,entryType:1},own);f.owner.capture(f.cast()!);f.advance(1250);
     expect(f.owner.nonVending).toBe(true);expect(f.take()).toBeNull();expect(f.owner.attempts).toBe(0);
   });
-  it.each([{...identity,selfIncarnation:2},{...identity,world:'later'},{...identity,selfId:1}])('rejects replacement actor ownership %j',next=>{
-    const f=fixture();f.setCast({...f.cast()!,identity:next});f.advance(1250);expect(f.take()).toBeNull();
+  it.each([{...identity,selfIncarnation:2},{...identity,world:'00000000-0000-0000-0000-000000000002'},{...identity,selfId:1}])('rejects replacement actor ownership %j',next=>{
+    const f=fixture();f.setCast({...f.cast()!,identity:actionIdentity(next)});f.advance(1250);expect(f.take()).toBeNull();
   });
   it('does not attribute a retired episode to a newer cast revision',()=>{
     const f=fixture();f.advance(1250);expect(f.take()).not.toBeNull();f.setCast({...f.cast()!,revision:2});expect(f.take()).toBeNull();

@@ -1,9 +1,10 @@
+import { bagId as domainBagId } from './domain-values';
 import { filter, pipe, sort } from 'remeda';
 import catalog from './data/weapon-catalog.json';
 import type { CharacterState } from './character-state';
 import type { Entity } from './protocol';
-import type { ExpandedAction, InventoryItem } from './protocol-feature';
-import type { AutomationSettings } from './settings';
+import type { ExpandedAction, InventoryItemInput as InventoryItem } from './protocol-feature';
+import type { AutomationSettingsInput as AutomationSettings } from './settings';
 interface Weapon { code:string; range:number; weaponClass:number; minLevel:number; jobs:number[]|null; twoHanded:boolean }
 
 interface Armor { code:string; position:string; headPosition:string; minLevel:number; jobs:number[]|null }
@@ -39,7 +40,7 @@ export function bag(state:CharacterState,slot:number):number { return slot===13?
 
 export function vector(state:CharacterState):Vector {
   if(!state.inventoryKnown||state.equipment.length<10)throw new Error('A full equipment and inventory update is required.');
-  return slots.map(slot=>{const id=bag(state,slot);if(!id)return null;const item=state.inventory.get(id);
+  return slots.map(slot=>{const id=bag(state,slot);if(!id)return null;const item=state.inventory.get(domainBagId(id));
     // Exhausted regular ammo can remain equipped on the server.
     if(!item&&slot===13&&AMMO_CATALOG[id])return {itemId:id,type:1};
     if(!item)throw new Error('Equipped item is absent from verified inventory.');if(item.type===2&&[...state.inventory.values()].filter(i=>i.type===2&&i.guid===item.guid).length!==1)throw new Error('Unique equipment identity is ambiguous.');return identity(item);});

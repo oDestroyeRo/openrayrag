@@ -1,3 +1,4 @@
+import { itemId as domainItemId } from './domain-values';
 import { manualTargetPolicy } from './manual-target';
 import { DEFAULT_MAP_POLICY } from './map-policy';
 import { describe, expect, it, vi } from 'vitest';
@@ -1483,7 +1484,7 @@ describe('macro controller supervision',()=>{
     f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(2).i32(30).bool(false));f.step();f.step();
     expect(f.sent).toContainEqual({type:'storage',operation:'close'});expect(f.controller.macro.snapshot().actionsCompleted).toBe(0);
     f.packet(new BitWriter().u8(WORLD_OP.npc).u8(3));expect(f.controller.macro.snapshot()).toMatchObject({state:'completed',actionsCompleted:1});
-    expect(f.controller.engine.character.count(501)).toBe(3);
+    expect(f.controller.engine.character.count(domainItemId(501))).toBe(3);
   });
   it('retains a stopped buy receipt; late result plus contradictory balance cannot release ownership or advance',()=>{
     const f=serviceFixture('buy');f.start();f.open();f.controller.stop();const count=f.sent.length;

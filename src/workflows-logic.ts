@@ -1,7 +1,8 @@
+import { itemId as domainItemId, bagId as domainBagId, quantity, type ItemId, type BagId, type Quantity } from './domain-values';
 import { inventoryItemCount } from './character-state-logic';
 import { filter, map, sumBy } from 'remeda';
 import type { ActionIdentity } from './actor-identity';
-import type { InventoryItem } from './protocol-feature';
+import type { InventoryItemInput as InventoryItem, InventoryItem as InventoryItemDraft } from './protocol-feature';
 import { validateWorldAction, type PartyMember, type ItemRow, type WorldAction, type WorldEvent } from './world-protocol';
 import type { WorldSnapshot } from './world-state-logic';
 export type WorkflowStep =
@@ -21,8 +22,8 @@ export interface WorkflowSpec {
 
 /** Data consumed by workflow policy. Runtime state owners satisfy this view structurally. */
 export interface WorkflowWorld extends Omit<WorldSnapshot, 'storage' | 'cart' | 'party'> {
-  storage: Map<number, InventoryItem>;
-  cart: Map<number, InventoryItem>;
+  storage: Map<number, InventoryItemDraft>;
+  cart: Map<number, InventoryItemDraft>;
   party: { id: number; name: string; members: Map<number, PartyMember> } | null;
 }
 
@@ -134,9 +135,9 @@ export function validateWorkflowSpec(input: unknown): WorkflowSpec {
     ...(value.timeoutMs === undefined ? {} : { timeoutMs: integer(value.timeoutMs, 1000, 60_000) }) };
 }
 
-export function stock(items: InventoryItem[]): Map<number, number> {
-  const result = new Map<number, number>();
-  for (const item of items) result.set(item.itemId, (result.get(item.itemId) ?? 0) + item.count);
+export function stock(items: readonly InventoryItem[]): Map<ItemId, Quantity> {
+  const result = new Map<ItemId, Quantity>();
+  for (const item of items) {const id=domainItemId(item.itemId);result.set(id,quantity((result.get(id) ?? 0) + item.count));}
   return result;
 }
 
@@ -313,7 +314,7 @@ export function createVendingReceipt(action: Extract<WorldAction, { type: 'vendi
   return {
     map: context.map, generation: context.world.generation, vendorId: store.id, npcId: context.world.npc.id,
     beforeZeny: context.zeny, cost,
-    gains: [...counts].map(([itemId, count]) => ({ itemId, before: inventoryItemCount(itemId)(context.inventory), count })),
+    gains: [...counts].map(([itemId, count]) => ({ itemId, before: inventoryItemCount(domainItemId(itemId))(context.inventory), count })),
   };
 }
 
@@ -324,7 +325,7 @@ export function confirmVendingReceipt(receipt: VendingReceipt, context: Workflow
   if (context.world.viewedVending !== null && context.world.viewedVending.id !== receipt.vendorId) return false;
   if (receipt.beforeZeny - context.zeny !== receipt.cost) return false;
   if (!receipt.gains.length) return context.world.viewedVending === null && context.world.npc.mode === 'idle';
-  return receipt.gains.every(gain => inventoryItemCount(gain.itemId)(context.inventory) === gain.before + gain.count);
+  return receipt.gains.every(gain => inventoryItemCount(domainItemId(gain.itemId))(context.inventory) === gain.before + gain.count);
 }
 
 export function actionFor(step: WorkflowStep, npcId: number): WorldAction {
@@ -366,8 +367,8 @@ export function dryRunWorkflow(input: unknown, context: WorkflowContext): Workfl
 }
 
 export interface WorkflowReceipt {
-  zeny: number; cost: number; credit: number; items: Map<number, number>; bags: Map<number, number>;
-  itemChanges: Map<number, number>; bagChanges: Map<number, number>; strictStock: boolean;
+  zeny: number; cost: number; credit: number; items: ReadonlyMap<ItemId, Quantity>; bags: ReadonlyMap<BagId, Quantity>;
+  itemChanges: Map<ItemId, number>; bagChanges: Map<BagId, number>; strictStock: boolean;
 }
 
 export interface Pending extends WorkflowReceipt {
@@ -381,7 +382,7 @@ export const npcResponses = new Set<WorldEvent['type']>(['npcDialog', 'npcOption
 /** Shared authoritative accounting for workflows and canceled service requests. */
 export function confirmWorkflowReceipt(pending: WorkflowReceipt, context: WorkflowContext): boolean {
   if (context.zeny !== pending.zeny - pending.cost + pending.credit) return false;
-  const items = stock(context.inventory); const bags = new Map(context.inventory.map(item => [item.bagId,item.count]));
+  const items = stock(context.inventory); const bags = new Map(context.inventory.map(item => [domainBagId(item.bagId),quantity(item.count)]));
   const itemIds = pending.strictStock ? new Set([...pending.items.keys(), ...items.keys()]) : pending.itemChanges.keys();
   const bagIds = pending.strictStock ? new Set([...pending.bags.keys(), ...bags.keys()]) : pending.bagChanges.keys();
   for (const id of itemIds) if ((items.get(id) ?? 0) !== (pending.items.get(id) ?? 0) + (pending.itemChanges.get(id) ?? 0)) return false;

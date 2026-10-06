@@ -1,6 +1,6 @@
 import { map } from 'remeda';
 import { foldConditions, unavailableFirstConditions } from './condition-logic';
-import type { AttackStrategyRule } from './settings';
+import type { AttackStrategyRule, ReadonlyData } from './settings';
 import type { ActorObservationSnapshot } from './actor-observations-logic';
 import { actorPredicateEvaluator } from './actor-observations-logic';
 import { castReadiness } from './cast-policy';
@@ -24,7 +24,7 @@ export class AttackStrategyPolicy {
   reset():void {this.engagements.clear();this.pending=null;}
   remove(id:number):void {for(const [idKey,value] of this.engagements)if(value.identity.id===id)this.engagements.delete(idKey);if(this.pending?.identity.id===id)this.pending=null;}
   normalDispatched(identity:EngagementIdentity|null):void {if(identity){const value=this.get(identity);if(value)value.normalStarted=true;}}
-  choose(rules:AttackStrategyRule[],identity:EngagementIdentity|null,speciesId:number,state:CharacterState,observations:ActorObservationSnapshot|undefined,now:number):StrategyChoice {
+  choose(rules:readonly ReadonlyData<AttackStrategyRule>[],identity:EngagementIdentity|null,speciesId:number,state:CharacterState,observations:ActorObservationSnapshot|undefined,now:number):StrategyChoice {
     if(!rules.some(rule=>rule.speciesIds.includes(speciesId)))return {state:'normal'};
     if(!identity)return {state:'wait',reason:'Attack strategy target identity is unavailable.'};
     const engagement=this.get(identity);

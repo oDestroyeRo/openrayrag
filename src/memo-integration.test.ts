@@ -1,3 +1,4 @@
+import { skillId as domainSkillId } from './domain-values';
 import {describe,expect,it} from 'vitest';
 import {BitWriter} from './binary';
 import {CompanionController} from './controller';
@@ -53,7 +54,7 @@ describe('memo integration with ready actor identity and field movement',()=>{
   expect(s.c.engine.playerId).toBeNull();expect(s.c.engine.actorActionIdentity()).toBeNull();expect(s.c.engine.character.skillsKnown).toBe(false);
   expect(s.c.snapshot().memo.ready).toBeNull();expect(()=>s.preview()).toThrow();
   s.enter();s.packet(initialization());s.slots();
-  expect(s.c.engine.character.learned.get(55)).toBe(4);expect(s.c.engine.character.inventoryKnown).toBe(true);
+  expect(s.c.engine.character.learned.get(domainSkillId(55))).toBe(4);expect(s.c.engine.character.inventoryKnown).toBe(true);
   expect(s.c.snapshot().memo.slots).toEqual(empty);expect(s.c.snapshot().memo.ready).toBeNull();
   expect(()=>s.c.perform('command',{type:'sit',sitting:false})).toThrow();expect(()=>s.preview()).toThrow();
   s.packet(spawn(own));const request=s.preview(3);expect(request.preview.actorId).toBe(0);

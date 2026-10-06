@@ -1,3 +1,4 @@
+import { validateFormSettings } from './settings';
 import { describe, expect, it } from 'vitest';
 import { BotEngine, type Action } from './engine';
 import { CompanionController } from './controller';
@@ -231,7 +232,7 @@ describe('combined actor-zero manual wire ownership',()=>{
   it.each([0,1])('does not turn own %s manual death into configured automatic respawn or return',self=>{
     const f=wire(self,2),automation=structuredClone(DEFAULT_AUTOMATION);
     automation.respawn.enabled=true;automation.respawn.maxDeaths=3;automation.travel.returnToLockMap=true;
-    f.c.engine.settings={...settings,automation};f.c.engine.deaths=2;
+    f.c.engine.settings=validateFormSettings({...settings,automation});f.c.engine.deaths=2;
     const request=f.request();request.policy=manualTargetPolicy({...settings,automation});
     f.c.perform('command',request);f.step();expect(f.c.engine.deaths).toBe(2);
     f.packet(new BitWriter().u8(OP.death).i32(self));for(let i=0;i<4;i++)f.step(1000);

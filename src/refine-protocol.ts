@@ -1,5 +1,5 @@
 import { BitWriter } from './binary';
-import { validateAutomation, type AutomationSettings } from './settings';
+import { validateAutomation, type AutomationSettingsInput as AutomationSettings } from './settings';
 
 export interface RefineGuards { policy: AutomationSettings; maxSpend: number; minZeny: number }
 export interface RefinePreviewRequest extends RefineGuards { targetBagId: number; catalystBagId: 0 }

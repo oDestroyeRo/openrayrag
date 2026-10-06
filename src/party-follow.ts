@@ -3,7 +3,7 @@ import { RESOURCE_STALE_MS } from './actor-resources';
 import { onlinePartyMembers, distinctPartyActors, type PartyActorBinding } from './party-actors-logic';
 import { mapAllowed, mapPolicy } from './map-policy-logic';
 import type { GameEvent } from './protocol';
-import { automationSettings, type Settings } from './settings';
+import { automationSettings, type SettingsInput as Settings } from './settings';
 import type { TravelTransition } from './travel-controller-logic';
 import type { PartyMember, WorldEvent } from './world-protocol';
 

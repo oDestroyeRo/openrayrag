@@ -1,3 +1,4 @@
+import { itemId as domainItemId, skillId as domainSkillId } from './domain-values';
 import { map } from 'remeda';
 import { foldConditions, unavailableFirstConditions } from './condition-logic';
 import { sameActionIdentity, type ActionIdentity } from './actor-identity';
@@ -5,7 +6,7 @@ import { isRecoveryItem, recoveryItemIds } from './recovery-items';
 import { matchesSkillExecution } from './skill-execution';
 import { recoveryItemCooldown } from './hp-potions';
 import { skillAfterCastSeconds } from './cast-policy';
-import type { AutomationSettings } from './settings';
+import type { AutomationSettingsInput as AutomationSettings } from './settings';
 import type { Entity } from './protocol';
 import { actorPredicateEvaluator, type ActorObservationSnapshot, type ActorPredicate, type PredicateTrace } from './actor-observations-logic';
 import type { CharacterState } from './character-state';
@@ -18,13 +19,13 @@ export { monsterRule, lootRule, acceptsMonster, acceptsLoot, inSchedule, percent
 
 export class AutomationScheduler {
   readonly ruleConditions: Array<{rule:string;conditions:PredicateTrace[]}>=[];
-  conditionState(rule:string,conditions:ActorPredicate[]|undefined,observations:ActorObservationSnapshot|undefined):PredicateTrace['state'] {
+  conditionState(rule:string,conditions:readonly ActorPredicate[]|undefined,observations:ActorObservationSnapshot|undefined):PredicateTrace['state'] {
     if(!conditions?.length)return 'matched';
     const traces=map(conditions, actorPredicateEvaluator(observations));
     if(this.ruleConditions.length<32)this.ruleConditions.push({rule,conditions:traces});
     return foldConditions(traces,unavailableFirstConditions);
   }
-  private matches(rule:string,conditions:ActorPredicate[]|undefined,observations:ActorObservationSnapshot|undefined):boolean {
+  private matches(rule:string,conditions:readonly ActorPredicate[]|undefined,observations:ActorObservationSnapshot|undefined):boolean {
     return this.conditionState(rule,conditions,observations)==='matched';
   }
   private pending: PendingFeature | null = null;
@@ -61,8 +62,8 @@ export class AutomationScheduler {
     if(!receipt||this.pending||receipt.identity&&!sameActionIdentity(receipt.identity,this.identity?.(receipt.action)))return null;
     const action=receipt.action;
     const execution=action.type==='skill'?events.find((event):event is Extract<FeatureEvent,{type:'skillResult'}>=>matchesSkillExecution(action,event,playerId)):undefined;
-    const confirmed=action.type==='useItem'?state.inventoryKnown&&state.count(action.itemId)<receipt.count
-      :action.type==='allocateSkill'?state.skillsRevision>receipt.skills&&(state.learned.get(action.skillId)??0)>receipt.skillLevel
+    const confirmed=action.type==='useItem'?state.inventoryKnown&&state.count(domainItemId(action.itemId))<receipt.count
+      :action.type==='allocateSkill'?state.skillsRevision>receipt.skills&&(state.learned.get(domainSkillId(action.skillId))??0)>receipt.skillLevel
       :action.type==='allocateStats'?state.statsRevision>receipt.stats&&!!receipt.attributes&&!!state.stats?.attributes
         &&action.attributes.every((count,i)=>state.stats!.attributes![i]!>=receipt.attributes![i]!+count)
       :action.type==='skill'&&execution!==undefined;
@@ -91,8 +92,8 @@ export class AutomationScheduler {
   submit(action: ExpandedAction, state: CharacterState, equipmentReceipt?: (state: CharacterState)=>boolean, afterCastSeconds=0, reservation?:{receipt:typeof matchesSkillExecution; reserved:(sequence:number,identity:ActionIdentity)=>void; retainReceipt?:false}): void {
     if (this.busy) throw new Error('Wait for the current action confirmation.');
     const identity=this.identity?.(action);if(this.identity&&!identity)throw new Error('A current observed own and target identity is required.');
-    const count = action.type === 'useItem' ? state.count(action.itemId) : 0;
-    const skillLevel = action.type === 'allocateSkill' ? state.learned.get(action.skillId) ?? 0 : 0;
+    const count = action.type === 'useItem' ? state.count(domainItemId(action.itemId)) : 0;
+    const skillLevel = action.type === 'allocateSkill' ? state.learned.get(domainSkillId(action.skillId)) ?? 0 : 0;
     const since=this.now();
     this.pending = { sequence:++this.sequence,...(identity?{identity}:{}),action,since,equipmentReceipt,skillReceipt:reservation?.receipt,afterCastSeconds,deadline:since+actionConfirmationTimeout(action),inventory:state.inventoryRevision,equipment:state.equipmentRevision,
       stats:state.statsRevision,skills:state.skillsRevision,count,skillLevel,attributes:state.stats?.attributes?.slice() as Attributes ?? null };
@@ -118,12 +119,12 @@ export class AutomationScheduler {
     let confirmed = false;
     switch(action.type) {
       case 'sit': confirmed = event.type==='sit'&&event.id===playerId&&event.sitting===action.sitting; break;
-      case 'useItem': confirmed = event.type==='inventoryDelta'&&!event.add&&state.inventoryKnown&&state.inventoryRevision>pending.inventory&&state.count(action.itemId)<pending.count; break;
+      case 'useItem': confirmed = event.type==='inventoryDelta'&&!event.add&&state.inventoryKnown&&state.inventoryRevision>pending.inventory&&state.count(domainItemId(action.itemId))<pending.count; break;
       case 'equip': confirmed = pending.equipmentReceipt ? (event.type==='equipment'||event.type==='inventory')&&pending.equipmentReceipt(state) : event.type==='equipment'&&event.bagId===action.bagId&&event.equipped===action.equipped; break;
       case 'skill':
         confirmed = (pending.skillReceipt??matchesSkillExecution)(action,event,playerId);
         break;
-      case 'allocateSkill': confirmed = (event.type==='learnedSkill'&&event.skillId===action.skillId&&event.level>pending.skillLevel) || (event.type==='skills'&&!!event.learned&&state.skillsRevision>pending.skills&&(state.learned.get(action.skillId)??0)>pending.skillLevel); break;
+      case 'allocateSkill': confirmed = (event.type==='learnedSkill'&&event.skillId===action.skillId&&event.level>pending.skillLevel) || (event.type==='skills'&&!!event.learned&&state.skillsRevision>pending.skills&&(state.learned.get(domainSkillId(action.skillId))??0)>pending.skillLevel); break;
       case 'allocateStats': confirmed = event.type==='stats'&&!!event.attributes&&!!pending.attributes&&action.attributes.every((n,i)=>event.attributes![i]!>=pending.attributes![i]!+n); break;
       case 'respawn': confirmed = event.type==='map'||event.type==='resurrection'; break;
     }
@@ -151,7 +152,7 @@ export class AutomationScheduler {
   }
   recover(a: AutomationSettings, p: Entity, state: CharacterState): { action?: ExpandedAction; failure?: string } {
     const hp=percent(p.hp,p.maxHp),sp=percent(state.stats?.sp,state.stats?.maxSp);
-    if(p.classId===0&&(!state.skillsKnown||(state.learned.get(1)??0)<2))return {failure:'A novice needs verified Basic Mastery level 2 to sit for recovery.'};
+    if(p.classId===0&&(!state.skillsKnown||(state.learned.get(domainSkillId(1))??0)<2))return {failure:'A novice needs verified Basic Mastery level 2 to sit for recovery.'};
     if(a.recovery.spStart>0&&sp===null)return {failure:'SP is unavailable; recovery needs a verified SP update.'};
     this.recoverySince ??= this.now();
     if(this.now()-this.recoverySince>=a.recovery.timeoutSeconds*1000)return {failure:'Recovery time limit reached. Check regeneration and carried weight.'};
@@ -176,7 +177,7 @@ export class AutomationScheduler {
       const resource=r.resource==='hp'?hp:sp;
       if(resource===null)return {failure:`${r.resource.toUpperCase()} is unavailable for item rules.`};
       if(resource<=r.belowPercent&&ITEM_CATALOG[r.itemId]?.useType!==1)return {failure:`Item ${r.itemId} is not an untargeted usable item.`};
-      if(resource<=r.belowPercent&&state.count(r.itemId)>r.minStock&&now-(this.cooldown.get(`item:${r.itemId}`)??-Infinity)>=r.cooldownSeconds*1000)return {action:{type:'useItem',itemId:r.itemId}};
+      if(resource<=r.belowPercent&&state.count(domainItemId(r.itemId))>r.minStock&&now-(this.cooldown.get(`item:${r.itemId}`)??-Infinity)>=r.cooldownSeconds*1000)return {action:{type:'useItem',itemId:r.itemId}};
     }
     for(const resource of ['hp','sp'] as const) {
       const potions=resource==='hp'?a.hpPotions:a.spPotions,percent=resource==='hp'?hp:sp;
@@ -190,7 +191,7 @@ export class AutomationScheduler {
             const otherResource=resource==='hp'?'sp':'hp',other=resource==='hp'?a.spPotions:a.hpPotions;
             if(other&&other.mode!=='off'&&isRecoveryItem(id,otherResource)&&now-(this.cooldown.get(`${otherResource}-potions`)??-Infinity)<other.cooldownSeconds*1000)return false;
             const reserve=Math.max(potions.minStock,recoveryItemIds(other,otherResource).includes(id)?other!.minStock:0);
-            return state.count(id)>reserve;
+            return state.count(domainItemId(id))>reserve;
           });
           if(itemId!==undefined)return {action:{type:'useItem',itemId}};
         }
@@ -202,7 +203,7 @@ export class AutomationScheduler {
       if(sp===null)return {failure:'SP is unavailable for skill rules.'};
       const catalog=SKILL_CATALOG[r.skillId],level=effectiveSkillLevel(r.skillId,r.level,state),cost=skillCost(r.skillId,level);
       if(!catalog||catalog.target===0||cost===null||(r.target==='enemy'&&![1,3].includes(catalog.target))||(r.target==='self'&&![2,3,5].includes(catalog.target)))return {failure:`Skill ${r.skillId} targeting or level is unavailable.`};
-      if(state.skillLevel(r.skillId)<r.level)return {failure:`Skill ${r.skillId} level ${r.level} is not learned or granted.`};
+      if(state.skillLevel(domainSkillId(r.skillId))<r.level)return {failure:`Skill ${r.skillId} level ${r.level} is not learned or granted.`};
       if(hp!==null&&hp<=r.hpBelowPercent&&sp>=r.spAbovePercent&&(state.stats?.sp??0)>=cost&&now-(this.cooldown.get(`skill:${r.skillId}`)??-Infinity)>=r.cooldownSeconds*1000) {
         if(r.target==='self')return {action:{type:'skill',mode:'self',skillId:r.skillId,level}};
         if(enemy&&distanceBetween(p,enemy)<=1)return {action:{type:'skill',mode:'target',skillId:r.skillId,level,target:enemy.id}};
@@ -231,10 +232,10 @@ export class AutomationScheduler {
     }
     if(a.allocation.skills.length) {
       if(!state.skillsKnown||state.stats?.skillPoints===undefined)return {failure:'Learned skills and skill points are unavailable for allocation.'};
-      if(state.stats.skillPoints>0)for(const r of a.allocation.skills)if((state.learned.get(r.skillId)??0)<r.target) {
+      if(state.stats.skillPoints>0)for(const r of a.allocation.skills)if((state.learned.get(domainSkillId(r.skillId))??0)<r.target) {
         const skill=SKILL_CATALOG[r.skillId],requirements=skillPrerequisites(p.classId,r.skillId);
         if(!skill||r.target>skill.maxLevel||requirements===null)return {failure:`Skill ${r.skillId} is not in the verified class skill tree.`};
-        if(requirements.some(requirement=>(state.learned.get(requirement.skillId)??0)<requirement.level))break;
+        if(requirements.some(requirement=>(state.learned.get(domainSkillId(requirement.skillId))??0)<requirement.level))break;
         return {action:{type:'allocateSkill',skillId:r.skillId}};
       }
     }

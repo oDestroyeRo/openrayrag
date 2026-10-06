@@ -1,3 +1,4 @@
+import { actionIdentity } from './actor-identity';
 import { describe, expect, it } from 'vitest';
 import { ActorObservations } from './actor-observations';
 import { DEFAULT_MAP_POLICY } from './map-policy';
@@ -16,7 +17,7 @@ function fixture() {
  const observations=new ActorObservations(()=>now),world=new WorldState(),runtime=new PartyFollowRuntime(()=>now);
  world.reset('prt_fild08');observations.spawn(own,1,1);observations.spawn(leader,1,0);observations.frame();
  const context=():PartyFollowContext=>{const self=observations.partyActor(1);return {party:world.party,bindings:world.partyActors,observations,actors,map:world.map,player,connection,
-   own:self?{world:self.world,selfId:1,selfIncarnation:self.incarnation}:null};};
+   own:self?actionIdentity({world:self.world,selfId:1,selfIncarnation:self.incarnation}):null};};
  const event=(event:WorldEvent)=>world.observe(event,observations,1,before=>runtime.observeParty(event,before,context()));
  event({type:'partyJoined',partyId:5,name:'Party',login:false,members:[{...member}]});
  const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[],automation:structuredClone(DEFAULT_AUTOMATION)};
@@ -52,7 +53,7 @@ describe('captured party follow allowance',()=>{
  it('captures original loss time, independent map revision and detached policy/settings',()=>{
   const f=fixture();f.start();f.hide();f.advance(5000);f.remote();const trip=f.runtime.prepared()!;
   expect(trip.deadline).toBe(120_000);expect(trip.mapObservedAt).toBe(105_000);expect(trip.destination).toBe('prontera');
-  expect(trip).not.toHaveProperty('position');f.settings.automation.follow.lostSeconds=120;trip.policy.deny.push('prontera');
+  expect(trip).not.toHaveProperty('position');f.settings.automation.follow.lostSeconds=120;Array.prototype.push.call(trip.policy.deny,'prontera');
   expect(f.runtime.prepared()!.policy.deny).toEqual([]);expect(f.runtime.prepared()!.deadline).toBe(120_000);
  });
  it('health and arbitrary traffic cannot refresh an old map row or create coordinates',()=>{

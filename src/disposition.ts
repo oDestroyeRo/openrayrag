@@ -1,6 +1,8 @@
-import { inventoryItemCount } from './character-state-logic';
+import { itemId as domainItemId } from './domain-values';
+import type { ReadonlyData } from './settings';
+import { inventoryItemCount, inventoryItemDraft } from './character-state-logic';
 import { sort } from 'remeda';
-import type { InventoryItem } from './protocol-feature';
+import type { InventoryItemInput as InventoryItem } from './protocol-feature';
 import type { WorldAction } from './world-protocol';
 import { saleProceeds, shopQuote, worldActionBlockers, workflowWorldFromSnapshot, workflowWorldSnapshot, type WorkflowContext, type WorkflowWorld } from './workflows-logic';
 
@@ -90,7 +92,7 @@ function canonical(value: unknown): string {
   if (value && typeof value === 'object') return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
   return JSON.stringify(value) ?? 'null';
 }
-function fingerprint(policy: DispositionPolicy, context: DispositionContext): string {
+function fingerprint(policy: ReadonlyData<DispositionPolicy>, context: DispositionContext): string {
   const ids = new Set(policy.rules.map(row => row.itemId));
   for (const name of names) for (const item of context.containers[name].items ?? []) ids.add(item.itemId);
   const metadata = Object.fromEntries([...ids].sort((a, b) => a - b).map(id => [id, context.metadata[id] ?? null]));
@@ -127,7 +129,11 @@ export function planDisposition(input: unknown, context: DispositionContext): Di
   if (context.equipment === null || context.ammoId === null) fail('Equipment and selected ammunition are not observed.');
   if (context.minimumStock?.some(row => !safeNumber(row.itemId) || row.itemId < 1 || !Number.isInteger(row.count) || row.count < 0 || row.count > 32767)) fail('Invalid protected stock floor.');
   if (plan.blocked.length) return plan;
-  const containers = structuredClone(context.containers);
+  const containers = {
+    inventory: { ...context.containers.inventory, items: context.containers.inventory.items?.map(inventoryItemDraft) ?? null },
+    storage: { ...context.containers.storage, items: context.containers.storage.items?.map(inventoryItemDraft) ?? null },
+    cart: { ...context.containers.cart, items: context.containers.cart.items?.map(inventoryItemDraft) ?? null },
+  };
   const incomingUniqueSlots: Record<ContainerName, number> = { inventory: 0, storage: 0, cart: 0 };
   const world = cloneWorld(context.workflow.world);
   let zeny = context.workflow.zeny;
@@ -156,7 +162,7 @@ export function planDisposition(input: unknown, context: DispositionContext): Di
     const reason = protection(item, name, rules.find(row => row.itemId === item.itemId));
     if (reason) plan.protections.push({ container: name, itemId: item.itemId, bagId: item.bagId, count: item.count, reason });
   }
-  const count = (itemId: number) => inventoryItemCount(itemId)(containers.inventory.items!);
+  const count = (itemId: number) => inventoryItemCount(domainItemId(itemId))(containers.inventory.items!);
   function capacity(item: InventoryItem, destination: ContainerName, requested: number, buy: boolean): { count: number; reason?: string } {
     const target = containers[destination]; const info = context.metadata[item.itemId];
     if (target.items === null) return { count: 0, reason: `${destination} stock is not observed.` };
@@ -187,7 +193,7 @@ export function planDisposition(input: unknown, context: DispositionContext): Di
       // Reserve a slot without inventing a destination bag ID or selectable
       // unique stock. The server alone assigns the new bag ID in its receipt.
       else if (item.type === 2) incomingUniqueSlots[to]++;
-      else target.items!.push({ ...item, bagId: item.itemId, count: quantity });
+      else target.items!.push({ ...inventoryItemDraft(item), bagId: item.itemId, count: quantity });
       if (target.weight !== null) target.weight = safeNumber(weight) ? target.weight + weight * quantity : null;
     }
     world.storage.clear(); for (const row of containers.storage.items ?? []) world.storage.set(row.bagId, row);

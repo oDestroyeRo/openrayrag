@@ -3,7 +3,7 @@ import { BitWriter } from './binary';
 import { CompanionController } from './controller';
 import type { Action } from './engine';
 import { escapeAction, validateEscapeResumeGuard, CONSERVATIVE_ESCAPE_RECOVERY } from './escape';
-import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_SETTINGS, type Settings } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_SETTINGS, type Settings, type SettingsInput } from './settings';
 import { OP, decode, type Entity } from './protocol';
 import { FEATURE_OP, featureCommand, validateExpandedAction } from './protocol-feature';
 import type { WorldAction } from './world-protocol';
@@ -39,7 +39,7 @@ function settings(overrides: Partial<NonNullable<typeof DEFAULT_AUTOMATION.escap
   automation.escape = { ...DEFAULT_ESCAPE, enabled: true, ...overrides };
   return { ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [4000], automation };
 }
-function setup(input: Settings = settings(), hp = 100, resources = true, failSend = false, blockedCell = false, ownId = 1) {
+function setup(input: SettingsInput = settings(), hp = 100, resources = true, failSend = false, blockedCell = false, ownId = 1) {
   let time = 100_000; const sent: Array<Action | WorldAction> = [];
   const controller = new CompanionController(action => { sent.push(action); if (failSend && (action.type === 'useItem' || action.type === 'skill')) throw new Error('transport failed'); }, () => time, map => map === 'unknown' ? null
     : { width: 200, height: 200, walkable: cell => !(blockedCell && cell.x === 102 && cell.y === 100) });

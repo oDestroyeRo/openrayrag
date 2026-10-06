@@ -1,9 +1,10 @@
+import { minutes, minutesToMilliseconds } from './domain-values';
 import { deathLimitGuidance, farmingDestination, validateDeathRecoveryGuard, type DeathRecoveryGuard } from './death-recovery';
-import { validateSettings, type Settings } from './settings';
+import { validateSettings, settingsDraft, type SettingsInput as Settings, type RunSettings } from './settings';
 import { validateSupplyResumeGuard, type SupplyResumeGuard } from './supply-trip-logic';
 import { CONSERVATIVE_ESCAPE_RECOVERY, escapeRecovery, validateEscapeResumeGuard, type EscapeResumeGuard } from './escape-logic';
 
-import { INITIAL_DELAY, MAX_DELAY, transientFailure, type RunSession, type ResumeRequest, MAX_ESCAPE_GUARDS, type RetainedEscape, type RetainedSupply, type RetainedDeath, type FieldRunCheckpoint, sessionIdentity, timestamp, validateFieldRunCheckpoint as validateFieldRunCheckpointAt } from './reconnect-logic';
+import { INITIAL_DELAY, MAX_DELAY, transientFailure, type RunSession, type ResumeRequest, MAX_ESCAPE_GUARDS, type RetainedEscape, type RetainedSupply, type RetainedDeath, type FieldRunCheckpoint, type ValidatedFieldRunCheckpoint, sessionIdentity, timestamp, validateFieldRunCheckpoint as validateFieldRunCheckpointAt } from './reconnect-logic';
 
 export { type RunSession, type ResumeRequest, type FieldRunCheckpoint, } from './reconnect-logic';
 
@@ -64,7 +65,7 @@ export class ReconnectPolicy {
 
 /** Only field settings survive game-page reloads; workflows and passwords do not. */
 export class PersistentFieldRun {
-  private desired: Settings | null = null;
+  private desired: RunSettings | null = null;
   private character = '';
   private session = '';
   private pendingSession = '';
@@ -207,7 +208,7 @@ export class PersistentFieldRun {
   get limitReason(): string {
     const a = this.desired?.automation;
     if (!a) return '';
-    if (a.limits.minutes && this.now() - this.startedAt >= a.limits.minutes * 60_000) return 'Waiting: session time limit reached. Press Stop to change settings.';
+    if (a.limits.minutes && this.now() - this.startedAt >= minutesToMilliseconds(minutes(a.limits.minutes))) return 'Waiting: session time limit reached. Press Stop to change settings.';
     if (a.limits.kills && this.totals.kills >= a.limits.kills) return 'Waiting: monster limit reached. Press Stop to change settings.';
     if (a.limits.pickups && this.totals.looted >= a.limits.pickups) return 'Waiting: pickup limit reached. Press Stop to change settings.';
     if (a.respawn.enabled && this.totals.deaths > a.respawn.maxDeaths) return `Waiting: death limit reached. ${deathLimitGuidance(this.totals.deaths, a.respawn.maxDeaths)}`;
@@ -263,12 +264,12 @@ export class PersistentFieldRun {
     // Choosing ordinary reconnect forfeits that provenance immediately.
     if (!settledUpdate) this.settledUpdateSession = '';
     this.pendingSession = status.sessionId;
-    const settings = validateSettings({ ...this.desired, map: this.desired.automation?.respawn.enabled||this.desired.automation?.travel.returnToLockMap||this.desired.automation?.mapPolicy?.lockArea ? farmingDestination(this.desired) : status.map });
+    const settings = settingsDraft(validateSettings({ ...this.desired, map: this.desired.automation?.respawn.enabled||this.desired.automation?.travel.returnToLockMap||this.desired.automation?.mapPolicy?.lockArea ? farmingDestination(this.desired) : status.map }));
     if (settings.automation) {
       const a = settings.automation;
       // A new page has no captured leader association or explicit trip allowance.
       if (a.follow.mode === 'partyLeader') a.follow.rendezvous = false;
-      if (a.limits.minutes) a.limits.minutes = Math.max(1, Math.ceil((a.limits.minutes * 60_000 - (this.now() - this.startedAt)) / 60_000));
+      if (a.limits.minutes) a.limits.minutes = Math.max(1, Math.ceil((minutesToMilliseconds(minutes(a.limits.minutes)) - (this.now() - this.startedAt)) / 60_000));
       if (a.limits.kills) a.limits.kills -= this.totals.kills;
       if (a.limits.pickups) a.limits.pickups -= this.totals.looted;
       if (a.respawn.enabled) {
@@ -342,6 +343,6 @@ export class PersistentFieldRun {
   get requested(): boolean { return this.desired !== null; }
 }
 
-export function validateFieldRunCheckpoint(input: unknown, now = Date.now()): FieldRunCheckpoint {
+export function validateFieldRunCheckpoint(input: unknown, now = Date.now()): ValidatedFieldRunCheckpoint {
   return validateFieldRunCheckpointAt(input, now);
 }

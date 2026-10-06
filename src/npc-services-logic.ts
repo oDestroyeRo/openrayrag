@@ -1,5 +1,5 @@
 import { allPass, filter } from 'remeda';
-import { DEFAULT_MAP_POLICY, validateMapPolicy, type MapPolicy } from './map-policy-logic';
+import { DEFAULT_MAP_POLICY, validateMapPolicy, type MapPolicyInput as MapPolicy } from './map-policy-logic';
 import { type ActionIdentity } from './actor-identity';
 import catalog from './data/npc-services.json';
 import { distance, publishedGrid } from './navigation-logic';

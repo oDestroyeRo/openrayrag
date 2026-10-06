@@ -136,7 +136,7 @@ export class ActorObservations {
     // Resource and affiliation packets do not supply a newer visibility clock.
     actor.visibleAt=Math.max(actor.visibleAt,actor.observedAt);
   }
-  snapshot(selfId: number | null, targetId: number | null, connected: boolean, requested: ActorPredicate[]=[], includeRest=true,candidateId:number|null=null): ActorObservationSnapshot {
+  snapshot(selfId: number | null, targetId: number | null, connected: boolean, requested: readonly ActorPredicate[]=[], includeRest=true,candidateId:number|null=null): ActorObservationSnapshot {
     const ids=new Set<number>([...(selfId!==null?[selfId]:[]),...(targetId!==null?[targetId]:[]),...(candidateId!==null?[candidateId]:[]),...requested.flatMap(p=>p.actor.scope==='actor'?[p.actor.id]:[]),...(includeRest?this.actors.keys():[])]);
     let remaining:number=includeRest?ACTOR_OBSERVATION_LIMITS.publishedStatuses:ACTOR_OBSERVATION_LIMITS.evaluatedStatuses;let truncated=false;
     const actors:ActorObservation[]=[];

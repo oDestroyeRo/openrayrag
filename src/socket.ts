@@ -1,5 +1,5 @@
 import type { GameEvent } from './protocol';
-import type { InventoryItem } from './protocol-feature';
+import type { InventoryItemInput as InventoryItem } from './protocol-feature';
 import { validateSocketRequest, validateSocketSelection, type SocketAction } from './socket-protocol';
 
 import { SOCKET_METADATA, type SocketContext, type SocketSnapshot, clone, same, target, card, candidates, requireContext, type Prepared, type Receipt, binding } from './socket-logic';

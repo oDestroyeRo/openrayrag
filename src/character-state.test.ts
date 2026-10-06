@@ -1,3 +1,5 @@
+import { admitInventoryItem } from './character-state-logic';
+import { itemId as domainItemId, bagId as domainBagId, skillId as domainSkillId } from './domain-values';
 import { describe, expect, it } from 'vitest';
 import { CharacterState } from './character-state';
 import { inventoryItemCount } from './character-state-logic';
@@ -40,10 +42,10 @@ describe('inventory projections', () => {
     items[1] = { bagId: 501, itemId: 501, type: 1, count: 2 };
     items[2] = { bagId: 502, itemId: 502, type: 1, count: 7 };
     items[3] = { bagId: 900, itemId: 501, type: 2, count: 1 };
-    const before = structuredClone(items), count = inventoryItemCount(501);
+    const before = structuredClone(items), count = inventoryItemCount(domainItemId(501));
     expect(count(items)).toBe(3);
     expect(count([])).toBe(0);
-    expect(inventoryItemCount(999)(items)).toBe(0);
+    expect(inventoryItemCount(domainItemId(999))(items)).toBe(0);
     expect(count(items)).toBe(3);
     expect(items).toEqual(before);
     expect(Object.hasOwn(items, 0)).toBe(false);
@@ -51,8 +53,8 @@ describe('inventory projections', () => {
 
   it('bounds dense state projections and detaches published rows', () => {
     const state = new CharacterState();
-    for (let id = 1; id <= 601; id++) state.inventory.set(id, { bagId: id, itemId: id, type: 1, count: 1 });
-    for (let id = 1; id <= 513; id++) { state.learned.set(id, 2); state.granted.set(id, 3); }
+    for (let id = 1; id <= 601; id++) state.inventory.set(domainBagId(id), admitInventoryItem({ bagId: id, itemId: id, type: 1, count: 1 }));
+    for (let id = 1; id <= 513; id++) { state.learned.set(domainSkillId(id), 2); state.granted.set(domainSkillId(id), 3); }
     for (let id = 1; id <= 129; id++) state.statuses.set(id, 10);
     const snapshot = state.snapshot();
     expect(snapshot.inventory).toHaveLength(600);
@@ -63,8 +65,8 @@ describe('inventory projections', () => {
     snapshot.inventory[0]!.count = 50;
     snapshot.learned[0]!.level = 50;
     snapshot.statuses[0]!.seconds = 50;
-    expect(state.inventory.get(1)?.count).toBe(1);
-    expect(state.learned.get(1)).toBe(2);
+    expect(state.inventory.get(domainBagId(1))?.count).toBe(1);
+    expect(state.learned.get(domainSkillId(1))).toBe(2);
     expect(state.statuses.get(1)).toBe(10);
   });
 });

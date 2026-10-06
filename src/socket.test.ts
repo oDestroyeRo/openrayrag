@@ -1,3 +1,6 @@
+import { validateFormSettings } from './settings';
+import { admitInventoryItem, inventoryItemDraft } from './character-state-logic';
+import { bagId as domainBagId } from './domain-values';
 import {describe,expect,it} from 'vitest';
 import {ManualSocket,SOCKET_METADATA,type SocketContext} from './socket';
 import {socketCommand,validateSocketEnvelope,type SocketAction} from './socket-protocol';
@@ -61,13 +64,13 @@ describe('manual one-card socket boundaries',()=>{
     expect(JSON.stringify(s.owner.snapshot(s.c()))).not.toContain(weapon().guid);
   });
   it('accepts legal duplicate installed cards and always chooses the first zero',()=>{
-    const s=setup();s.state.inventory.set(20001,{...weapon(),slots:[4002,0,4002,0]});expect(s.prepare().slot).toBe(1);
+    const s=setup();s.state.inventory.set(domainBagId(20001),admitInventoryItem({...weapon(),slots:[4002,0,4002,0]}));expect(s.prepare().slot).toBe(1);
   });
   it('covers every generated target capacity and card-mask class without label permissions',()=>{
     const cards=[...new Map(Object.entries(SOCKET_METADATA).filter(([,m])=>m.itemClass===5).map(([id,m])=>[m.mask,{id:Number(id),m}])).values()];
     for(const [id,m]of Object.entries(SOCKET_METADATA).filter(([,m])=>m.itemClass!==5&&m.capacity>0)){
-      for(const source of cards){const s=setup();s.state.inventory.clear();s.state.inventory.set(20001,{...weapon(),itemId:Number(id),slots:[0,0,0,0]});
-        s.state.inventory.set(source.id,{type:1,bagId:source.id,itemId:source.id,count:2});
+      for(const source of cards){const s=setup();s.state.inventory.clear();s.state.inventory.set(domainBagId(20001),admitInventoryItem({...weapon(),itemId:Number(id),slots:[0,0,0,0]}));
+        s.state.inventory.set(domainBagId(source.id),admitInventoryItem({type:1,bagId:source.id,itemId:source.id,count:2}));
         const operation=()=>s.owner.prepare({targetBagId:20001,cardBagId:source.id},s.c());
         if((m.mask&source.m.mask)!==0){expect(operation).not.toThrow();expect(s.owner.snapshot(s.c()).preview!.slot).toBe(0);}
         else expect(operation).toThrow('mask');}
@@ -80,20 +83,21 @@ describe('manual one-card socket boundaries',()=>{
     if(condition==='unknownSlot')t.slots=[999999,0,0,0];if(condition==='missingGuid')delete t.guid;if(condition==='nilGuid')t.guid='0'.repeat(32);
     if(condition==='badGuid')t.guid='bad';if(condition==='refineUnknown')delete t.refine;if(condition==='flagsUnknown')delete t.flags;
     if(condition==='regularTarget')t.type=1;if(condition==='unknownClass')t.itemId=501;
-    s.state.inventory.set(20001,t);
-    if(condition==='incompatible')s.state.inventory.set(4002,{...card(),bagId:4002,itemId:4001});
-    if(condition==='uniqueCard')s.state.inventory.set(4002,{...card(),type:2});if(condition==='reserve')s.context.floors=new Map([[4002,3]]);
-    if(condition==='missingBag')s.state.inventory.delete(20001);if(condition==='equipped')s.state.equipment[9]=20001;if(condition==='ammo')s.state.ammoId=20001;
+    s.state.inventory.set(domainBagId(20001),admitInventoryItem(t));
+    if(condition==='incompatible')s.state.inventory.set(domainBagId(4002),admitInventoryItem({...card(),bagId:4002,itemId:4001}));
+    if(condition==='uniqueCard')s.state.inventory.set(domainBagId(4002),admitInventoryItem({...card(),type:2}));if(condition==='reserve')s.context.floors=new Map([[4002,3]]);
+    if(condition==='missingBag')s.state.inventory.delete(domainBagId(20001));if(condition==='equipped')s.state.equipment[9]=20001;if(condition==='ammo')s.state.ammoId=20001;
     expect(()=>s.prepare()).toThrow();expect(s.sent).toEqual([]);
   });
   it.each(Array.from({length:14},(_,i)=>i))('protects every equipped alias %s',slot=>{
     const s=setup();s.state.equipment[slot]=20001;expect(()=>s.prepare()).toThrow();expect(s.sent).toEqual([]);
   });
   it.each(['inventoryRevision','equipmentRevision','guid','itemId','count','refine','flags','slots','reserve','identity','connection','map','dead','unsettled','unknownInventory','unknownEquipment'])('revalidates %s atomically before dispatch',change=>{
-    const s=setup(),p=s.prepare(),t=s.state.inventory.get(20001)!;
+    const s=setup(),p=s.prepare(),t=s.state.inventory.get(domainBagId(20001))!;
     if(change==='inventoryRevision')s.state.inventoryRevision++;if(change==='equipmentRevision')s.state.equipmentRevision++;
-    if(change==='guid')t.guid='b'.repeat(32);if(change==='itemId')t.itemId=1101;if(change==='count')t.count=2;if(change==='refine')t.refine=5;
-    if(change==='flags')t.flags=2;if(change==='slots')t.slots=[4002,4002,0,0];if(change==='reserve')s.context.floors=new Map([[4002,2]]);
+    const changed={...inventoryItemDraft(t)};
+    if(change==='guid')changed.guid='b'.repeat(32);if(change==='itemId')changed.itemId=1101;if(change==='count')changed.count=2;if(change==='refine')changed.refine=5;
+    if(change==='flags')changed.flags=2;if(change==='slots')changed.slots=[4002,4002,0,0];s.state.inventory.set(t.bagId,admitInventoryItem(changed));if(change==='reserve')s.context.floors=new Map([[4002,2]]);
     if(change==='identity')s.context.identity='new';if(change==='connection')s.context.connection++;if(change==='map')s.context.map='other';
     if(change==='dead')s.context.ready=false;if(change==='unsettled')s.context.settled=false;if(change==='unknownInventory')s.state.inventoryKnown=false;
     if(change==='unknownEquipment')s.context.equipmentKnown=false;
@@ -189,7 +193,7 @@ describe('controller socket ownership',()=>{
   });
   it('honors current visible reserves, detaches them and refuses changed policy without starting a run',()=>{
     const s=live(),historical=structuredClone(DEFAULT_AUTOMATION);historical.items=[{itemId:4002,resource:'hp',belowPercent:50,minStock:99,cooldownSeconds:1}];
-    s.c.engine.settings={...DEFAULT_SETTINGS,automation:historical};
+    s.c.engine.settings=validateFormSettings({...DEFAULT_SETTINGS,automation:historical});
     const visible=structuredClone(DEFAULT_AUTOMATION);
     s.c.perform('socketPreview',{targetBagId:20001,cardBagId:4002,policy:visible});const p=s.c.snapshot().socket.preview!;
     expect(p.card.reserve).toBe(0);expect(s.c.runRequested).toBe(false);expect(s.sent).toEqual([]);

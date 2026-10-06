@@ -1,3 +1,4 @@
+import type { ReadonlyData } from './settings';
 import { sort, sortBy } from 'remeda';
 import { NAVIGATION_MAPS, mapDimensions, type WalkGrid } from './navigation-logic';
 import type { Position } from './protocol';
@@ -10,6 +11,8 @@ export interface MapPolicy {
   penalties: Array<{ map: string; cost: number }>;
   lockArea: LockArea | null;
 }
+
+export type MapPolicyInput = ReadonlyData<MapPolicy>;
 
 export const DEFAULT_MAP_POLICY: MapPolicy = { mode: 'legacy', allow: [], deny: [], penalties: [], lockArea: null };
 
@@ -52,26 +55,26 @@ export function validateMapPolicy(input: unknown): MapPolicy {
   return structuredClone(input) as unknown as MapPolicy;
 }
 
-export function mapPolicy(settings: { automation?: { mapPolicy?: MapPolicy } }): MapPolicy { return settings.automation?.mapPolicy ?? DEFAULT_MAP_POLICY; }
+export function mapPolicy(settings: { readonly automation?: { readonly mapPolicy?: ReadonlyData<MapPolicy> } }): ReadonlyData<MapPolicy> { return settings.automation?.mapPolicy ?? DEFAULT_MAP_POLICY; }
 
-export function mapAllowed(policy: MapPolicy, map: string): boolean { return !policy.deny.includes(map) && (!policy.allow.length || policy.allow.includes(map)); }
+export function mapAllowed(policy: ReadonlyData<MapPolicy>, map: string): boolean { return !policy.deny.includes(map) && (!policy.allow.length || policy.allow.includes(map)); }
 
-export function insideLockArea(policy: MapPolicy, map: string, p: Position): boolean {
+export function insideLockArea(policy: ReadonlyData<MapPolicy>, map: string, p: Position): boolean {
   const a = policy.lockArea;
   return !a || map === a.map && p.x >= a.minX && p.x <= a.maxX && p.y >= a.minY && p.y <= a.maxY;
 }
 
-export function policyIdentity(policy: MapPolicy): string {
+export function policyIdentity(policy: ReadonlyData<MapPolicy>): string {
   return JSON.stringify([policy.mode,sortBy(policy.allow, map=>map),sortBy(policy.deny, map=>map),sort(policy.penalties, (a,b)=>a.map.localeCompare(b.map)),policy.lockArea]);
 }
 
-export function policySummary(policy: MapPolicy, origin?: string): string {
+export function policySummary(policy: ReadonlyData<MapPolicy>, origin?: string): string {
   const a=policy.lockArea;
   return `${policy.mode === 'weighted' ? 'Weighted: walk 10/14 + wall cost, portal 200 + departing-map penalty, including final escape' : 'Fewest portal crossings, then walking cost'}; allow ${policy.allow.join(', ') || 'all'}; deny ${policy.deny.join(', ') || 'none'}; penalties ${policy.penalties.map(p=>`${p.map}=${p.cost}`).join(', ') || 'none'}; ${a ? `lock ${a.map} [${a.minX},${a.minY}]–[${a.maxX},${a.maxY}] inclusive` : 'no lock rectangle'}${origin && !mapAllowed(policy,origin) ? '; current map forbidden: departure only, no reentry' : ''}.`;
 }
 
 /** Only the field owner uses this mask. Service and entry owners retain physical grids. */
-export function fieldGrid(map: string, grid: WalkGrid, policy: MapPolicy): WalkGrid {
+export function fieldGrid(map: string, grid: WalkGrid, policy: ReadonlyData<MapPolicy>): WalkGrid {
   if (!policy.lockArea && mapAllowed(policy,map)) return grid;
   return {...grid,walkable:p=>mapAllowed(policy,map)&&insideLockArea(policy,map,p)&&grid.walkable(p)};
 }

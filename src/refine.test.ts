@@ -7,7 +7,7 @@ import type {RefinePacket} from './refine-protocol';
 const item:InventoryItem={bagId:700,itemId:1201,type:2,count:1,flags:0,refine:0,guid:'01'.repeat(16),slots:[0,0,0,0]};
 const policy=structuredClone(DEFAULT_AUTOMATION);
 function fixture(start=0,itemId=1201){let now=1000;const sent:RefinePacket[]=[];const target={...structuredClone(item),itemId,refine:start},meta=refineMetadata(itemId)!;
- const context:RefineContext={ready:true,settled:true,identity:'own-life',character:'Synthetic',readbackKey:'session-initialization',connection:1,map:'prt_in',npcId:0,npcIdentity:'npc-life',npcGeneration:2,npcMode:'refine',promptToken:'bb'.repeat(16),
+ const context:Omit<RefineContext,'inventory'> & {inventory:InventoryItem[]|null}={ready:true,settled:true,identity:'own-life',character:'Synthetic',readbackKey:'session-initialization',connection:1,map:'prt_in',npcId:0,npcIdentity:'npc-life',npcGeneration:2,npcMode:'refine',promptToken:'bb'.repeat(16),
   inventory:[target,{bagId:meta.oreItemId,itemId:meta.oreItemId,type:1,count:3}],equipment:Array(14).fill(0),zeny:100000,inventoryRevision:1,equipmentRevision:1,currencyRevision:1,activityRevision:1};
  const owner=new ManualRefine(packet=>sent.push(packet),()=>now,()=> 'aa'.repeat(16));
  const input={targetBagId:target.bagId,catalystBagId:0 as const,policy,maxSpend:10000,minZeny:0};

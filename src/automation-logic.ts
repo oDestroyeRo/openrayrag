@@ -1,19 +1,21 @@
+import type { Revision } from './domain-values';
+import { skillId as domainSkillId } from './domain-values';
 import { map } from 'remeda';
 import { foldConditions, unavailableFirstConditions } from './condition-logic';
 import type { AutomationScheduler } from './automation';
 import type { ActionIdentity } from './actor-identity';
 import type { matchesSkillExecution } from './skill-execution';
-import type { AutomationSettings, LootRule, MonsterRule } from './settings';
+import type { AutomationSettingsInput as AutomationSettings, LootRule, MonsterRule, ReadonlyData } from './settings';
 import type { Entity } from './protocol';
 import { actorPredicateEvaluator, type ActorObservationSnapshot } from './actor-observations-logic';
 import type { CharacterState } from './character-state';
 import { SKILL_CATALOG } from './game-catalog';
 import type { ExpandedAction, Attributes } from './protocol-feature';
-export function monsterRule(a: AutomationSettings, classId: number): MonsterRule | undefined { return a.combat.rules.find(r=>r.classId===classId); }
+export function monsterRule(a: AutomationSettings, classId: number): ReadonlyData<MonsterRule> | undefined { return a.combat.rules.find(r=>r.classId===classId); }
 
 export function lootRule(a: AutomationSettings, itemId: number): LootRule | undefined { return a.loot.rules.find(r=>r.itemId===itemId); }
 
-export function acceptsMonster(a: AutomationSettings, e: Entity, player: Entity, selected: number[], aggressive: boolean, observations?:ActorObservationSnapshot): boolean {
+export function acceptsMonster(a: AutomationSettings, e: Entity, player: Entity, selected: readonly number[], aggressive: boolean, observations?:ActorObservationSnapshot): boolean {
   let rule = monsterRule(a,e.classId);
   if(rule?.conditions?.length) {
     const traces=map(rule.conditions, actorPredicateEvaluator(observations));
@@ -44,7 +46,7 @@ export function percent(current: number | undefined, maximum: number | undefined
 
 export interface AutomationTask { kind: string; label: string; pending: boolean; since: number | null }
 
-export interface PendingFeature { sequence:number; identity?:ActionIdentity; afterCastSeconds:number; action: ExpandedAction; since: number; deadline: number; inventory: number; equipment: number; stats: number; skills: number; count: number; skillLevel: number; attributes: Attributes | null; equipmentReceipt?: (state: CharacterState)=>boolean; skillReceipt?:typeof matchesSkillExecution }
+export interface PendingFeature { sequence:number; identity?:ActionIdentity; afterCastSeconds:number; action: ExpandedAction; since: number; deadline: number; inventory: Revision<'inventory'>; equipment: Revision<'equipment'>; stats: Revision<'stats'>; skills: Revision<'skills'>; count: number; skillLevel: number; attributes: Attributes | null; equipmentReceipt?: (state: CharacterState)=>boolean; skillReceipt?:typeof matchesSkillExecution }
 
 export type ActionReceipts = Pick<AutomationScheduler, 'receipt' | 'discardReceipt' | 'retireReceipt' | 'reconcileReceipt'>;
 
@@ -100,7 +102,7 @@ export function actionConfirmationTimeout(action: { type: string }): number {
 }
 
 export function effectiveSkillLevel(skillId: number, requested: number, state: CharacterState): number {
-  return SKILL_CATALOG[skillId]?.adjustableLevel || skillId===55 ? requested : state.skillLevel(skillId);
+  return SKILL_CATALOG[skillId]?.adjustableLevel || skillId===55 ? requested : state.skillLevel(domainSkillId(skillId));
 }
 
 export function distanceBetween(a:{x:number;y:number},b:{x:number;y:number}):number{return Math.max(Math.abs(a.x-b.x),Math.abs(a.y-b.y));}

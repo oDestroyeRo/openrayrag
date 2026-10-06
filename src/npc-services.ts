@@ -1,6 +1,6 @@
 import { sameActionIdentity } from './actor-identity';
 import { confirmWorkflowReceipt } from './workflows-logic';
-import { DEFAULT_MAP_POLICY, mapAllowed, policySummary, type MapPolicy } from './map-policy-logic';
+import { DEFAULT_MAP_POLICY, mapAllowed, policySummary, type MapPolicyInput as MapPolicy } from './map-policy-logic';
 import { routeBetweenMaps, routeBetweenMapsAsync } from './travel';
 import type { PlanningOptions } from './route-planning';
 import catalog from './data/npc-services.json';

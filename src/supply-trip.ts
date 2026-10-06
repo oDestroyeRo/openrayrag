@@ -1,5 +1,5 @@
 import { insideLockArea, mapAllowed, mapPolicy } from './map-policy-logic';
-import type { Settings } from './settings';
+import type { SettingsInput as Settings, ReadonlyData } from './settings';
 import type { DispositionPolicy } from './disposition';
 
 import { type SupplySettings, DEFAULT_SUPPLY, type SupplyGoal, type SupplyContext, type SupplyPorts, type SupplyIntent, type SupplyPhase, type SupplySnapshot, type SupplyResumeGuard, integer, validateSupplySettings, validateSupplyResumeGuard, count } from './supply-trip-logic';
@@ -10,7 +10,7 @@ export { type SupplySettings, DEFAULT_SUPPLY, type SupplyGoal, type SupplyContex
  * economic send before calling its sole transport, including send exceptions. */
 export class SupplyTripRuntime<Receipt> {
   private policy: SupplySettings = DEFAULT_SUPPLY;
-  private disposition: DispositionPolicy = { maxSpend: 0, rules: [] };
+  private disposition: ReadonlyData<DispositionPolicy> = { maxSpend: 0, rules: [] };
   private settings: Settings | null = null;
   private character = "";
   private epoch = "";
@@ -403,7 +403,7 @@ export class SupplyTripRuntime<Receipt> {
         0,
         this.policy.maxSpend - this.committed - this.held,
       );
-      const policy = structuredClone(this.disposition);
+      const policy = { ...this.disposition, rules: this.disposition.rules.map(rule => ({ ...rule })) };
       policy.maxSpend = Math.min(policy.maxSpend, remaining);
       for (const goal of this.goals) {
         const rule = policy.rules.find((rule) => rule.itemId === goal.itemId);

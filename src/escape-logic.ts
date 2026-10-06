@@ -3,7 +3,7 @@ import type { ThreatSnapshot } from './observed-threats-logic';
 import type { CharacterState } from './character-state';
 import type { Entity } from './protocol';
 import type { ExpandedAction } from './protocol-feature';
-import { automationSettings, escapeSettings, type EscapeSettings, type Settings } from './settings';
+import { automationSettings, escapeSettings, type EscapeSettings, type SettingsInput as Settings } from './settings';
 // These are normal player actions at protocol pin 4099e2c. Opcode 21 is an
 // unrelated privileged command and is deliberately absent from this owner.
 export type EscapeAction = Extract<ExpandedAction, { type: 'useItem' }> | Extract<ExpandedAction, { type: 'skill'; mode: 'self' }>;

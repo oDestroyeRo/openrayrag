@@ -8,7 +8,7 @@ export class MapTargets {
   private configured = {map:'',ids:new Set<number>()};
   get configuredMap():string{return this.configured.map;}
   get configuredIds():number[]{return [...this.configured.ids];}
-  restore(map:string,ids:number[]):void{this.configured={map,ids:new Set(ids)};this.selected=new Set(this.map===map?ids:[]);}
+  restore(map:string,ids:readonly number[]):void{this.configured={map,ids:new Set(ids)};this.selected=new Set(this.map===map?ids:[]);}
   private remember():void{this.configured={map:this.map,ids:new Set(this.selected)};}
   private monsters = new Map<number, MapMonster>();
   private selected = new Set<number>();
