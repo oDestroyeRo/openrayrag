@@ -98,7 +98,7 @@ async function inspect(platform,bundle,binary,version,identifier,smoke) {
       const mount=join(temporary,'mount');await mkdir(mount);
       run('hdiutil',['attach',dmg,'-readonly','-nobrowse','-mountpoint',mount]);
       try {
-        run('python',['-c','import importlib.util,sys,pathlib; s=importlib.util.spec_from_file_location("release_native",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.compare_apps(pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]))',join(root,'scripts/release-native.py'),app,join(mount,'Rayrag Companion.app')]);
+        run('python',['-c','import importlib.util,sys,pathlib; sys.path.insert(0,str(pathlib.Path(sys.argv[1]).parent)); s=importlib.util.spec_from_file_location("release_native",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.compare_apps(pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]))',join(root,'scripts/release-native.py'),app,join(mount,'Rayrag Companion.app')]);
       }finally {run('hdiutil',['detach',mount]);}
       if(smoke)await nativeSmoke(executable,join(root,'reports/smoke.json'));
       payload.set(names.dmg,await readFile(dmg));

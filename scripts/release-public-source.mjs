@@ -32,6 +32,8 @@ export function sourceDependencyFiles(sourceSha, git) {
 const SPLIT_SOURCE_FILES = [
   "scripts/release-policy.mjs", "scripts/release-publication.mjs",
   "scripts/release-source-policy.mjs", "scripts/release-reservation-policy.mjs",
+  "scripts/release_policy.py",
+  "scripts/semantic-release-policy.mjs",
 ];
 export function sourceModuleFiles(sourceSha, git) {
   const files = git(["ls-tree", "--name-only", sourceSha, "--", ...SPLIT_SOURCE_FILES])

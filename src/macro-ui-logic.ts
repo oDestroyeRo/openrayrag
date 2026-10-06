@@ -1,4 +1,4 @@
-import { validateMacroScript, type MacroScript } from './macros';
+import { validateMacroScript, type MacroScript } from './macros-logic';
 import { automationSettings, validateSettings, type Settings } from './settings';
 import { formatBotScript, parseBotScript, type BotScriptDocument } from './bot-script';
 export type Example = 'leveling' | 'continuous' | 'buy' | 'store' | 'item' | 'skill';

@@ -1,3 +1,5 @@
+import { sameActionIdentity } from './actor-identity';
+import { confirmWorkflowReceipt } from './workflows-logic';
 import { DEFAULT_MAP_POLICY, mapAllowed, policySummary, type MapPolicy } from './map-policy-logic';
 import { routeBetweenMaps, routeBetweenMapsAsync } from './travel';
 import type { PlanningOptions } from './route-planning';
@@ -9,9 +11,60 @@ import type { WorldAction, WorldEvent } from './world-protocol';
 import { NpcWorkflow } from './workflows';
 import type { TravelController } from './travel-controller';
 
-import { type NpcServiceDefinition, inside, validateServiceDefinition, serviceAvailability, validateServiceRequest, resolveServiceNpc, type ServiceContext, type ServiceSnapshot, type ServiceReceipt, observeServiceReceipt, confirmServiceReceipt, type ServicePreviewContext } from './npc-services-logic';
+import { type NpcServiceDefinition, inside, validateServiceDefinition, serviceAvailability, validateServiceRequest, resolveServiceNpc, type ServiceContext, type ServiceSnapshot, type ServiceReceipt, type ServicePreviewContext } from './npc-services-logic';
 
-export { type ServiceOutcome, type NpcServiceDefinition, validateServiceDefinition, BUILTIN_SERVICES, SERVICE_SOURCE, serviceByContractId, serviceAvailability, validateServiceRequest, type ServiceResolution, resolveServiceNpc, type ServiceContext, type ServiceSnapshot, type ServiceReceipt, observeServiceReceipt, confirmServiceReceipt, validateServiceExecution, type ServicePreviewContext } from './npc-services-logic';
+export { type ServiceOutcome, type NpcServiceDefinition, validateServiceDefinition, BUILTIN_SERVICES, SERVICE_SOURCE, serviceByContractId, serviceAvailability, validateServiceRequest, type ServiceResolution, resolveServiceNpc, type ServiceContext, type ServiceSnapshot, type ServiceReceipt, validateServiceExecution, type ServicePreviewContext } from './npc-services-logic';
+
+/** Late responses may drain a receipt, but this helper never issues another command. */
+export function observeServiceReceipt(
+  r: ServiceReceipt,
+  events: readonly GameEvent[],
+  worldEvents: readonly WorldEvent[],
+  context: ServiceContext,
+): void {
+  if (context.connection !== r.connection || r.outcome?.type!=='arrival'&&r.actorIdentity&&!sameActionIdentity(r.actorIdentity,context.actorIdentity?.(r.npcId))) return;
+  if (r.outcome?.type === 'arrival') {
+    for (const e of events) {
+      if (e.type === 'clear' && r.outcome.map === r.map && context.map === r.map) r.transition = true;
+      if (e.type === 'map' && e.map === r.outcome.map) r.transition = true;
+      if (
+        e.type === 'spawn' &&
+        r.transition &&
+        e.entity.id === r.playerId &&
+        e.entity.name === r.playerName &&
+        e.entity.kind === 0 &&
+        !e.entity.dead &&
+        e.entity.hp > 0 &&
+        (r.outcome.map !== r.map || e.entryType === 2) &&
+        context.map === r.outcome.map &&
+        distance(e.entity, r.outcome.position) === 0
+      )
+        r.arrived = true;
+    }
+    r.acknowledged ||= r.arrived;
+  } else if (context.map === r.map && context.world.generation === r.generation) {
+    const bound = context.world.npc.id === r.npcId || context.world.npc.id === null;
+    r.acknowledged ||=
+      bound &&
+      worldEvents.some((e) =>
+        r.outcome?.type === 'storageOpened'
+          ? e.type === 'storageOpened'
+          : r.outcome?.type === 'shopOpened'
+            ? e.type === 'shopOpened' && e.mode === r.outcome.mode
+            : ['npcDialog', 'npcOptions', 'npcEnd'].includes(e.type),
+      );
+  }
+}
+
+export function confirmServiceReceipt(r: ServiceReceipt, context: ServiceContext): boolean {
+  return (
+    context.connection === r.connection &&
+    (r.outcome?.type==='arrival'||!r.actorIdentity||sameActionIdentity(r.actorIdentity,context.actorIdentity?.(r.npcId))) &&
+    r.acknowledged &&
+    context.inventoryKnown &&
+    confirmWorkflowReceipt(r.economic, context)
+  );
+}
 
 /** One bounded owner coordinates travel, fresh identity binding and the shared workflow accounting. */
 export class NpcServiceRuntime {

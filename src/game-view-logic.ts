@@ -8,4 +8,3 @@ export function gameViewBounds(rect: GameViewBounds, viewport: { width: number; 
   const height = Math.min(rect.y + rect.height, viewport.height) - y;
   return width >= 1 && height >= 1 ? { x, y, width, height } : null;
 }
-

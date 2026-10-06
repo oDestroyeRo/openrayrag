@@ -1,5 +1,5 @@
 import { ITEM_CATALOG, SKILL_CATALOG, skillPrerequisites } from './game-catalog';
-import { AMMO_CATALOG } from './loadout';
+import { AMMO_CATALOG } from './loadout-logic';
 import type { ExpandedAction, InventoryItem, PlayerStats } from './protocol-feature';
 import type { Entity } from './protocol';
 

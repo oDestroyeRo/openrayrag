@@ -1,7 +1,7 @@
 import type { Snapshot } from './engine';
-import { validActorSnapshot } from './actor-observations';
+import { validActorSnapshot } from './actor-observations-logic';
 import { itemName } from './game-catalog';
-import { actorKey } from './manual-target-view';
+import { actorKey } from './manual-target-view-logic';
 import type { Position } from './protocol';
 
 const observed = (value: unknown): string => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value.toLocaleString() : '—';

@@ -1,4 +1,4 @@
-import { validateServiceDefinition, type NpcServiceDefinition } from './npc-services';
+import { validateServiceDefinition, type NpcServiceDefinition } from './npc-services-logic';
 export const MAX_SERVICES = 20;
 export function parseServiceDocument(text: string): NpcServiceDefinition[] {
   if (new TextEncoder().encode(text).length > 256_000) throw new Error('Service document is too large.');

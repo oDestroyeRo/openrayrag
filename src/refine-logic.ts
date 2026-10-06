@@ -1,5 +1,5 @@
 import catalog from './data/socket-catalog.json';
-import { dispositionStockFloors } from './disposition-ui';
+import { dispositionStockFloors } from './disposition-ui-logic';
 import type { InventoryItem } from './protocol-feature';
 import type { RefinePreviewRequest } from './refine-protocol';
 export const REFINE_WINDOW_MS = 10_000;

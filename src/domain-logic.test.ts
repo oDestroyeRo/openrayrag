@@ -7,6 +7,7 @@ import { createMapGrid, mapDimensions, publishedGrid } from './navigation-logic'
 import { findNavigationRoute, type NavigationSearchView } from './navigation-search-logic';
 import { workflowWorldFromSnapshot, workflowWorldSnapshot } from './workflows-logic';
 import type { WorldSnapshot } from './world-state-logic';
+import { dispositionContextFromStatus } from './disposition-ui-logic';
 
 it('validates detached domain inputs without consulting clocks or randomness', () => {
   const clock = vi.spyOn(Date, 'now').mockImplementation(() => { throw new Error('Unexpected clock effect'); });
@@ -70,4 +71,18 @@ it('detaches workflow world data and preserves its complete snapshot', () => {
   world.storage.get(501)!.count = 1; world.party!.members.get(3)!.name = 'Changed';
   expect(snapshot.storage[0]!.count).toBe(5); expect(snapshot.party!.members[0]!.name).toBe('Member');
   expect(readback).toEqual(snapshot);
+});
+
+it('projects disposition telemetry without leaking input or catalog state', () => {
+  const status = { character: { inventoryKnown: true, inventory: [{ bagId: 501, itemId: 501, count: 5, type: 1 }] },
+    world: { storageReady: true, storage: [{ bagId: 501, itemId: 501, count: 7, type: 1 }],
+      map: 'prontera', generation: 2, revision: 3, npc: { id: 4, mode: 'storage' } } };
+  const before = structuredClone(status), expected = dispositionContextFromStatus(status);
+  const altered = dispositionContextFromStatus(status);
+  altered.workflow.world.storage.get(501)!.count = 0;
+  altered.containers.inventory.items![0]!.count = 0;
+  const item = Object.values(altered.metadata)[0]!;
+  item.weight = 999;
+  expect(status).toEqual(before);
+  expect(dispositionContextFromStatus(status)).toEqual(expected);
 });

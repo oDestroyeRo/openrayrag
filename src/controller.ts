@@ -34,12 +34,14 @@ import { DATABASE_TELEPORT_COOLDOWN_MS, databaseTeleportWait } from './database-
 import { inSchedule, actionConfirmationTimeout } from './automation';
 import { searchGrid, type WalkGrid } from './navigation';
 import type { InventoryItem } from './protocol-feature';
-import { NpcServiceRuntime, validateServiceExecution, observeServiceReceipt, confirmServiceReceipt, type ServiceContext, type ServiceReceipt, type ServiceSnapshot } from './npc-services';
+import { NpcServiceRuntime, observeServiceReceipt, confirmServiceReceipt, type ServiceContext, type ServiceReceipt, type ServiceSnapshot } from './npc-services';
+import { validateServiceExecution } from './npc-services-logic';
 import { ITEM_CATALOG } from './game-catalog';
 import { SupplyTripRuntime, validateSupplyResumeGuard, type SupplyContext, type SupplyIntent, type SupplySnapshot, type SupplyResumeGuard } from './supply-trip';
 import { nextSupplyAction, type SupplyPhaseEvidence } from './supply-plan';
-import { createSupplyReceipt, observeSupplyReceipt, confirmSupplyReceipt, type SupplyReceipt } from './supply-receipt';
-import { dispositionStockFloors, publishedDispositionMetadata } from './disposition-ui';
+import { observeSupplyReceipt } from './supply-receipt';
+import { createSupplyReceipt, confirmSupplyReceipt, type SupplyReceipt } from './supply-receipt-logic';
+import { dispositionStockFloors, publishedDispositionMetadata } from './disposition-ui-logic';
 import { BUILTIN_SERVICES, serviceByContractId,resolveServiceNpc, type NpcServiceDefinition } from './npc-services';
 import { confirmWorkflowReceipt, type WorkflowReceipt } from './workflows';
 import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type EscapeSnapshot, type EscapeResumeGuard } from './escape';

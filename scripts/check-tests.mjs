@@ -28,6 +28,8 @@ test('source verification installs policy tools before script checks and covers 
   assert.equal(cargo.filter(step => step.args.includes('ci-smoke')).length, 2);
   for (const step of cargo.filter(step => step.args[0] === 'clippy')) assert.ok(step.args.includes('--all-targets'));
   assert.ok(plan.some(step => step.args.includes('--check')));
+  assert.ok(plan.some(step => step.args.includes('catalog_logic_test.py')));
+  assert.ok(plan.some(step => step.args.includes('scripts/release-public-zip-tests.py')));
 });
 
 test('platform-specific checks remain explicit, and Bun uses its shell-free executable on Windows', async () => {

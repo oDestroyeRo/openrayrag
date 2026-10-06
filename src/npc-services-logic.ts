@@ -1,10 +1,9 @@
 import { DEFAULT_MAP_POLICY, validateMapPolicy, type MapPolicy } from './map-policy-logic';
-import { sameActionIdentity, type ActionIdentity } from './actor-identity';
+import { type ActionIdentity } from './actor-identity';
 import catalog from './data/npc-services.json';
 import { distance, publishedGrid } from './navigation-logic';
-import type { Entity, GameEvent, Position } from './protocol';
-import type { WorldEvent } from './world-protocol';
-import { confirmWorkflowReceipt, validateWorkflowSpec, type WorkflowContext, type WorkflowReceipt, type WorkflowStep } from './workflows-logic';
+import type { Entity, Position } from './protocol';
+import { validateWorkflowSpec, type WorkflowContext, type WorkflowReceipt, type WorkflowStep } from './workflows-logic';
 export type ServiceOutcome =
   | { type: 'storageOpened'; timeoutMs: number }
   | { type: 'arrival'; map: string; position: Position; timeoutMs: number }
@@ -260,57 +259,6 @@ export interface ServiceReceipt {
   acknowledged: boolean;
   transition: boolean;
   arrived: boolean;
-}
-
-/** Late responses may drain a receipt, but this helper never issues another command. */
-export function observeServiceReceipt(
-  r: ServiceReceipt,
-  events: readonly GameEvent[],
-  worldEvents: readonly WorldEvent[],
-  context: ServiceContext,
-): void {
-  if (context.connection !== r.connection || r.outcome?.type!=='arrival'&&r.actorIdentity&&!sameActionIdentity(r.actorIdentity,context.actorIdentity?.(r.npcId))) return;
-  if (r.outcome?.type === 'arrival') {
-    for (const e of events) {
-      if (e.type === 'clear' && r.outcome.map === r.map && context.map === r.map) r.transition = true;
-      if (e.type === 'map' && e.map === r.outcome.map) r.transition = true;
-      if (
-        e.type === 'spawn' &&
-        r.transition &&
-        e.entity.id === r.playerId &&
-        e.entity.name === r.playerName &&
-        e.entity.kind === 0 &&
-        !e.entity.dead &&
-        e.entity.hp > 0 &&
-        (r.outcome.map !== r.map || e.entryType === 2) &&
-        context.map === r.outcome.map &&
-        distance(e.entity, r.outcome.position) === 0
-      )
-        r.arrived = true;
-    }
-    r.acknowledged ||= r.arrived;
-  } else if (context.map === r.map && context.world.generation === r.generation) {
-    const bound = context.world.npc.id === r.npcId || context.world.npc.id === null;
-    r.acknowledged ||=
-      bound &&
-      worldEvents.some((e) =>
-        r.outcome?.type === 'storageOpened'
-          ? e.type === 'storageOpened'
-          : r.outcome?.type === 'shopOpened'
-            ? e.type === 'shopOpened' && e.mode === r.outcome.mode
-            : ['npcDialog', 'npcOptions', 'npcEnd'].includes(e.type),
-      );
-  }
-}
-
-export function confirmServiceReceipt(r: ServiceReceipt, context: ServiceContext): boolean {
-  return (
-    context.connection === r.connection &&
-    (r.outcome?.type==='arrival'||!r.actorIdentity||sameActionIdentity(r.actorIdentity,context.actorIdentity?.(r.npcId))) &&
-    r.acknowledged &&
-    context.inventoryKnown &&
-    confirmWorkflowReceipt(r.economic, context)
-  );
 }
 
 /** Execution policy is deliberately outside the source-matched portable definition. */

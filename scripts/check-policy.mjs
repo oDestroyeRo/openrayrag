@@ -10,6 +10,8 @@ export function createVerificationPlan(platform, scriptNames) {
     { tool: 'python', args: ['vendor/glib/verify.py', ...(platform === 'linux' ? ['--test'] : [])], report: 'glib.log' },
     // Process/packaging regressions can exceed Bun's five-second default on CI.
     { tool: 'bun', args: ['test', '--timeout', '120000', ...scripts.map(name => `./${name}`)], report: 'scripts.log' },
+    { tool: 'python', args: ['-m', 'unittest', 'discover', '-s', 'scripts', '-p', 'catalog_logic_test.py'], report: 'catalogs.log' },
+    { tool: 'python', args: ['scripts/release-public-zip-tests.py'], report: 'public-zip.log' },
     { tool: 'bun', args: ['run', 'build'], report: 'frontend-build.log' },
     { tool: 'bun', args: ['run', 'test', '--reporter=default', '--reporter=junit', '--outputFile=reports/frontend.xml'], report: 'frontend.log' },
     { tool: 'cargo', args: ['test', ...cargo], report: 'native.log' },

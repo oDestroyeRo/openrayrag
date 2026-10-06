@@ -51,4 +51,3 @@ export class SelectionDispatchError extends Error {
       : 'Could not enter with the selected character. Continue in the game window.');
   }
 }
-

@@ -12,6 +12,10 @@ Use the five default triage labels. See `docs/agents/triage-labels.md`.
 
 Use a single-context layout: root `CONTEXT.md` and `docs/adr/`. Before exploring, read `docs/agents/domain.md`.
 
+### Code responsibilities
+
+When adding or changing production code, follow `docs/architecture.md`: pure logic, effects, and orchestration. Keep `architecture.json` current and import pure functions from their logic owners.
+
 ### Client protocol
 
 For packet codecs, connection initialization or new protocol-backed features, read `docs/protocol/README.md` for the opcode catalogue, wire layouts, source/deployment differences and implementation workflow.

@@ -1,0 +1,34 @@
+# Logic, effects and orchestration
+
+First-party application and tooling code follows three responsibilities:
+
+| Role | Responsibility | Dependencies |
+| --- | --- | --- |
+| Logic | Validate, parse, calculate, select or format a result from explicit inputs. | Other logic and static data. |
+| Effects | Read/write files, storage, DOM, network or native APIs; obtain time/randomness; schedule work; print output. | Logic and other effects. |
+| Orchestration | Own lifecycle/state and order calls to logic and effects, including failures and cleanup. | Any role. |
+
+Pure functions do not mutate their inputs, retained instances or caller-visible shared state. Local scratch objects inside a calculation are fine. A mutable controller, store, state machine, cache or job queue belongs to orchestration even when its effects are injected. Embedded immutable native catalogs may be initialized once when only scalar queries escape. A function accepting a query callback requires that query to be read-only. Clock values, generated identifiers and observed state enter logic as arguments.
+
+The separation follows existing domain owners rather than three giant application folders. `*-logic.ts`, `*-policy.ts`, `*_logic.rs`, and the tooling policy modules contain extracted decisions. Effect adapters describe their operation, such as map reads, storage or scheduling. Existing public modules and command/script entrypoints compose those owners and retain compatibility exports. Runtime consumers of a pure function import its logic owner directly; a compatibility facade can also expose stateful orchestration.
+
+Examples:
+
+```text
+profile store      → profile document/collection logic → storage effects
+map loader        → HTTP/timeout effects → map document logic
+controller        → admission/encoding logic → transport
+current form save → document/revision logic → private file transaction
+release command   → version/publication policy → filesystem/GitHub effects
+catalog main      → source reads → build_catalog(inputs) → write/print
+```
+
+Keep effect ordering visible. A persistence failure must not commit a new in-memory collection. A send failure must retain unresolved receipts. Update continuation removes and syncs a one-shot checkpoint before validating/exposing it. Native commands retain view authorization, maintenance admission and lock ownership. Extracting a condition must not eagerly evaluate a previously short-circuited stateful query.
+
+## Enforcement and proof
+
+`architecture.json` records a role for every first-party JavaScript, TypeScript, Python and Rust production source under `src`, `src-tauri/src`, `scripts` and `tools`, plus root configuration and the native build entrypoint. Tests, generated output, static data and vendored upstream code have separate ownership and are excluded from the role inventory. Code beside static data remains covered. New production source must be classified; removed source must be removed from the inventory.
+
+`bun scripts/architecture.mjs` checks the inventory, JavaScript/TypeScript runtime dependencies and ambient effects, Python logic imports/effects, and Rust logic effect references. `bun run check` runs its regression suite with the other script checks. Erased TypeScript imports do not create runtime dependencies. Deterministic hashing and parsing are logic; source acquisition and printing are effects.
+
+This guard establishes dependency and ambient-effect constraints, not mathematical purity. It cannot prove that an injected callback is read-only or that a value is never mutated through an alias. Review those contracts and test unchanged inputs, repeated outputs, ordering, cancellation and failure paths. Native module dependencies and transaction ownership also require source review. Existing integration tests remain the proof for composed behavior; local checks do not establish hosted packaging or live game behavior.

@@ -40,4 +40,3 @@ export function loginDriver(client: UnityClient): LoginDriver {
     },
   };
 }
-

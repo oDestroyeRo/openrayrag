@@ -1,4 +1,4 @@
-import { validActorSnapshot, type ActorObservationSnapshot, type ActorSelector } from './actor-observations';
+import { validActorSnapshot, type ActorObservationSnapshot, type ActorSelector } from './actor-observations-logic';
 
 /** Refresh observation time in a detached snapshot without reading the clock. */
 export function actorSnapshotAt(value: unknown, at: number): ActorObservationSnapshot | undefined {
