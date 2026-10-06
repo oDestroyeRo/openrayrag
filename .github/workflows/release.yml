@@ -86,9 +86,10 @@ jobs:
           python-version: "3.13"
       - name: Install Linux desktop dependencies
         if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf libfuse2 xvfb dbus-daemon
+        id: linux-dependencies
+        uses: ./.github/actions/linux-dependencies
+        with:
+          smoke: true
       - name: Verify source and covered behavior (no signing secrets)
         run: |
           bun install --frozen-lockfile
@@ -118,6 +119,12 @@ jobs:
         with:
           path: ${{ env.BUN_INSTALL_CACHE_DIR }}
           key: ${{ steps.bun-cache.outputs.cache-primary-key }}
+      - name: Save authenticated Linux packages from trusted main
+        if: matrix.platform == 'linux' && github.repository == 'oDestroyeRo/openrayrag' && github.ref == 'refs/heads/main' && steps.linux-dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: ${{ steps.linux-dependencies.outputs.archive-path }}/*.deb
+          key: ${{ steps.linux-dependencies.outputs.cache-primary-key }}
       - name: Save inspected Tauri packaging tools from trusted main
         if: matrix.platform != 'macos' && github.repository == 'oDestroyeRo/openrayrag' && github.ref == 'refs/heads/main' && steps.tauri-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6.1.0

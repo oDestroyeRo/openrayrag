@@ -38,7 +38,9 @@ test('native security is shared by PR, merge queue, main release and daily scans
   const setup = security.jobs.codeql.steps.find(step => step.run?.includes('rustup'));
   assert.equal(setup.if, "matrix.language == 'rust'");
   assert.ok(setup.run.includes('bun run bridge'));
-  assert.ok(setup.run.includes('libwebkit2gtk-4.1-dev'));
+  const dependencies = security.jobs.codeql.steps.find(step => step.uses === './.github/actions/linux-dependencies');
+  assert.equal(dependencies.if, "matrix.language == 'rust'");
+  assert.ok(security.jobs.codeql.steps.indexOf(dependencies) < security.jobs.codeql.steps.indexOf(setup));
 });
 
 test('Rust extraction restores only its Cargo dependencies and still creates a fresh security database', () => {
@@ -147,7 +149,8 @@ test('immutable third-party actions and scan permissions preserve the release tr
     for (const job of Object.values(workflow.jobs)) {
       assert.ok(job.uses || job['timeout-minutes'] > 0);
       for (const step of job.steps ?? []) {
-        if (step.uses) {
+        if (step.uses?.startsWith('./')) assert.equal(step.uses, './.github/actions/linux-dependencies');
+        else if (step.uses) {
           assert.match(step.uses, /^(actions|github)\//.test(step.uses)
             ? /@v\d+\.\d+\.\d+$/ : /@[a-f0-9]{40}$/);
         }

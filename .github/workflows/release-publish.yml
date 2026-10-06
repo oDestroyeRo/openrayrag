@@ -216,9 +216,7 @@ jobs:
           key: tauri-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'src-tauri/Cargo.lock') }}
       - name: Install Linux package dependencies
         if: needs.reconcile.outputs.state == 'build' && matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf libfuse2
+        uses: ./.github/actions/linux-dependencies
       - name: Stamp exact trusted main checkout
         if: needs.reconcile.outputs.state == 'build'
         env:

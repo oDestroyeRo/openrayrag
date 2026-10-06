@@ -1,0 +1,59 @@
+name: Linux desktop dependencies
+description: Reuse authenticated package downloads across desktop checks and releases
+inputs:
+  smoke:
+    description: Include the Xvfb and DBus package smoke tools
+    default: "false"
+outputs:
+  archive-path:
+    description: Normalized package archive directory outside the checkout
+    value: ${{ steps.metadata.outputs.archive-path }}
+  cache-primary-key:
+    description: Cache key for the current signed package plan
+    value: ${{ steps.archives.outputs.cache-primary-key }}
+  cache-hit:
+    description: Whether the current package plan was restored exactly
+    value: ${{ steps.archives.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve current signed desktop package downloads
+      id: metadata
+      shell: bash
+      env:
+        INCLUDE_SMOKE_TOOLS: ${{ inputs.smoke }}
+      run: |
+        source /etc/os-release
+        archive_path="${GITHUB_WORKSPACE}-apt-cache"
+        plan_path=$(mktemp -d "${RUNNER_TEMP}/rayrag-apt-plan.XXXXXX")
+        mkdir -p "$archive_path" "$plan_path/archives"
+        packages=(libwebkit2gtk-4.1-dev build-essential pkg-config libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf libfuse2)
+        if [[ "$INCLUDE_SMOKE_TOOLS" == true ]]; then packages+=(xvfb dbus-daemon); fi
+        sudo apt-get update --error-on=any
+        # An empty archive directory makes APT describe every needed download,
+        # including files that may already exist in the restored cache.
+        sudo apt-get -o Acquire::ForceHash=SHA256 -o "Dir::Cache::archives=$plan_path/archives" --print-uris --download-only install -y "${packages[@]}" > "$plan_path/downloads.txt"
+        python3 scripts/quality/apt-cache.py plan "$plan_path/downloads.txt" > "$plan_path/manifest.json"
+        echo "archive-path=$archive_path" >> "$GITHUB_OUTPUT"
+        echo "manifest-path=$plan_path/manifest.json" >> "$GITHUB_OUTPUT"
+        echo "distribution=$ID-$VERSION_ID-$(dpkg --print-architecture)" >> "$GITHUB_OUTPUT"
+        echo "manifest-hash=$(sha256sum "$plan_path/manifest.json" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+        echo "packages=${packages[*]}" >> "$GITHUB_OUTPUT"
+    - name: Restore authenticated package archives
+      id: archives
+      uses: actions/cache/restore@v6.1.0
+      with:
+        # Do not archive root-owned locks or partial downloads.
+        path: ${{ steps.metadata.outputs.archive-path }}/*.deb
+        key: apt-packages-v1-${{ steps.metadata.outputs.distribution }}-${{ hashFiles('.github/actions/linux-dependencies/action.yml', 'scripts/quality/apt-cache.py') }}-${{ steps.metadata.outputs.manifest-hash }}
+        restore-keys: apt-packages-v1-${{ steps.metadata.outputs.distribution }}-${{ hashFiles('.github/actions/linux-dependencies/action.yml', 'scripts/quality/apt-cache.py') }}-
+    - name: Install current signed desktop packages
+      shell: bash
+      env:
+        APT_ARCHIVE_CACHE_DIR: ${{ steps.metadata.outputs.archive-path }}
+        APT_DOWNLOAD_MANIFEST: ${{ steps.metadata.outputs.manifest-path }}
+        APT_PACKAGES: ${{ steps.metadata.outputs.packages }}
+      run: |
+        python3 scripts/quality/apt-cache.py verify "$APT_DOWNLOAD_MANIFEST" "$APT_ARCHIVE_CACHE_DIR"
+        read -r -a packages <<< "$APT_PACKAGES"
+        sudo apt-get -o "Dir::Cache::archives=$APT_ARCHIVE_CACHE_DIR" -o APT::Keep-Downloaded-Packages=true -o Binary::apt-get::APT::Keep-Downloaded-Packages=true install -y "${packages[@]}"
