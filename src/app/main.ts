@@ -19,6 +19,7 @@ import { mountClientShell } from '../modules/client/client-shell';
 import { EmbeddedGameView, gameViewBounds } from '../modules/client/game-view';
 import { clientStatus, clientSp, clientDeaths, clientDeathCap } from '../modules/client/client-status';
 import { clientDashboard } from '../modules/client/client-dashboard';
+import { liveSettingLabel, planLiveSettings } from '../modules/settings/live-settings-logic';
 import '../modules/client/client-shell.css';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
@@ -32,6 +33,14 @@ element('update-download').addEventListener('click',event=>{
 const openButton = element<HTMLButtonElement>('open');
 const startButton = element<HTMLButtonElement>('start');
 const stopButton = element<HTMLButtonElement>('stop');
+const liveSettingsPanel=document.createElement('section');liveSettingsPanel.className='panel';
+const applySettingsButton=document.createElement('button');applySettingsButton.id='apply-run-settings';applySettingsButton.type='button';applySettingsButton.className='secondary compact';applySettingsButton.textContent='Apply to current run';
+const liveSettingsStatus=document.createElement('p');liveSettingsStatus.id='live-settings-status';liveSettingsStatus.className='hint';liveSettingsStatus.setAttribute('role','status');liveSettingsStatus.setAttribute('aria-live','polite');
+const liveSettingsHelp=document.createElement('p');liveSettingsHelp.className='hint';
+liveSettingsHelp.textContent='Form edits save as a separate draft. Live Apply supports combat targets, scan radius, loot and HP/SP recovery. Lower reserves or cooldowns, limits/schedules, map/travel, supply spending, equipment/allocation, macro/service rules and whole profiles are Next run.';
+liveSettingsPanel.append(applySettingsButton,liveSettingsStatus,liveSettingsHelp);
+element('client-page-bot').prepend(liveSettingsPanel);
+const savedDraftSummary=element('console-saved-draft-summary');
 const activityLog = new ActivityLog(element('log'));
 const native = isTauri();
 let closeRegistered=!native;
@@ -143,10 +152,9 @@ const form = new SettingsForm(shell.main, features, {
     mapInfo: latest?.mapInfo ?? { code: '', name: '', source: 'observed', monsters: [] },
     level: latest?.player?.level ?? null,
     runActive: runActive(),
-    controlsLocked: !closeRegistered || closeBusy || updateBusy || busy || dispatches.stopping || loginBusy || runActive(),
-    targetsLocked: !closeRegistered || closeBusy || updateBusy || busy || dispatches.stopping || loginBusy || !native || Date.now() - receivedAt >= 7000
-      || !latest?.connected || !latest.compatible || !latest.player || runActive() || features.setupDraftDirty(),
-    retainedTargets: fieldRun.requested ? fieldRun.targetIds : undefined,
+    controlsLocked: !closeRegistered || closeBusy || updateBusy || dispatches.stopping,
+    targetsLocked: !closeRegistered || closeBusy || updateBusy || dispatches.stopping || (!runActive()&&(!native||Date.now()-receivedAt>=7000
+      ||!latest?.connected||!latest.compatible||!latest.player)) || features.setupDraftDirty(),
   }),
   changed: () => { formChanged(); updateButtons(); },
 });
@@ -178,6 +186,7 @@ function pendingRequests() {
   return {login:!!pending.login,resume:!!pending.resume,service:!!pending.service,manual:!!pending.manual,limit:!!pending.limit};
 }
 function mainUpdateWaitReason():string|null {
+  if(fieldRun.settingsApplyPending||latest?.settingsApply?.state==='pending')return 'Waiting for Apply to current run to settle. Stop cancels the pending Apply.';
   return panelUpdateWaitReason({closeRegistered,closeBusy,accountReady,formInitialized:currentForm.initialized,
     accountDraft:accountDraft(),updateBusy,busy,stopping:dispatches.stopping,loginBusy,heartbeatPending,pending:pendingRequests(),
     unsavedMacro:features.hasUnsavedMacro(),continuationPending:updateContinuation.pending,
@@ -209,6 +218,14 @@ async function pollUpdate():Promise<void>{
   finally{updatePolling=false;}
 }
 const configHelp = element('config-help');
+applySettingsButton.addEventListener('click',()=>void perform(async()=>{
+  if(!latest||!fieldRun.requested||dispatches.stopping)return;
+  const proposal=form.snapshot().settings;
+  const id=crypto.randomUUID().replaceAll('-','');
+  const result=(await dispatches.applySettings(proposal,latest,id)).outcome;
+  if(result.status==='failed')message(typeof result.error==='string'?result.error:'Could not send the settings Apply request.',true);
+  else if(result.status==='accepted')message('Settings Apply requested. Waiting for the current action confirmation.');
+}));
 const botConsole = new BotConsole(shell.main, {
   settings: () => form.runSettings(), command: request => featureRequest('command', request), notify: message,
   account: () => { shell.showPage('settings'); element<HTMLDetailsElement>('signin-panel').open = true; element<HTMLInputElement>('username').focus(); },
@@ -250,9 +267,31 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   try { dashboardSettings = projection.snapshot().settings; } catch (error) { formError = error; /* Keep invalid drafts editable on Setup. */ }
   if (dashboardSettings) features.syncSetup(dashboardSettings);
   const fresh = Date.now() - receivedAt < 7000;
-  const dashboard = clientDashboard(latest, { fieldRequested: fieldRun.requested, held: features.active(), limitReason: fieldRun.limitReason, loginBusy, fresh }, dashboardSettings, latest?.mapInfo);
+  const activeSettings=runActive()?(latest?.activeSettings??fieldRun.activeSettings):null;
+  const dashboard = clientDashboard(latest, { fieldRequested: fieldRun.requested, held: features.active(), limitReason: fieldRun.limitReason, loginBusy, fresh }, activeSettings??dashboardSettings, latest?.mapInfo);
   element('client-run-title').textContent = dashboard.headline;
-  element('console-setup-summary').textContent = dashboard.setup;
+  element('console-setup-summary').textContent = `${activeSettings?'Active run: ':''}${dashboard.setup}`;
+  savedDraftSummary.hidden=!activeSettings;
+  savedDraftSummary.textContent=`Saved draft: ${clientDashboard(latest,{fieldRequested:false,held:false,limitReason:'',loginBusy:false},dashboardSettings,latest?.mapInfo).setup}`;
+  const receipt=latest?.settingsApply;
+  const lines:string[]=[];
+  const lostApply=fieldRun.settingsApplyWaitReason(latest?.sessionId??'');if(lostApply)lines.push(lostApply);
+  if(receipt){lines.push(`${receipt.state[0]!.toUpperCase()}${receipt.state.slice(1)}: ${receipt.reason}`);
+    if(receipt.applied.length)lines.push(`Applied: ${receipt.applied.map(liveSettingLabel).join(', ')}`);
+    if(receipt.pending.length)lines.push(`Pending: ${receipt.pending.map(liveSettingLabel).join(', ')}`);
+    if(receipt.nextRun.length)lines.push(`Last Apply · Next run: ${receipt.nextRun.map(liveSettingLabel).join(', ')}`);
+  }
+  let liveValid=false;
+  if(activeSettings&&dashboardSettings){
+    try{const plan=planLiveSettings(activeSettings,dashboardSettings,activeSettings,latest?.liveSettingsGuard??fieldRun.liveSettingsGuard);liveValid=true;
+      if(plan.live.length)lines.push(`Draft can Apply now: ${plan.live.map(liveSettingLabel).join(', ')}`);
+      if(plan.nextRun.length)lines.push(`Next run: ${plan.nextRun.map(liveSettingLabel).join(', ')}`);
+    }catch(error){lines.push(`Rejected draft: ${error instanceof Error?error.message:'Invalid settings.'} Active settings are intact.`);}
+  }else if(formError)lines.push(`Rejected draft: ${formError instanceof Error?formError.message:'Invalid settings.'} Active settings are intact.`);
+  else lines.push('Saved draft. Start uses these settings.');
+  if(runActive()&&!fieldRun.requested)lines.push('Macro/service settings are Next run.');
+  liveSettingsStatus.textContent=lines.join('\n');liveSettingsStatus.style.whiteSpace='pre-line';
+  applySettingsButton.disabled=!native||!fieldRun.requested||!latest?.runRequested||!liveValid||!fresh||busy||dispatches.stopping||loginBusy||fieldRun.settingsApplyPending||receipt?.state==='pending'||features.setupDraftDirty();
   element('client-account-label').textContent = latest?.connected && latest.compatible && latest.player ? 'Account' : 'Connect account';
   startButton.hidden = dashboard.state === 'RUNNING';
   element('death-cap').textContent = dashboardSettings ? clientDeathCap(dashboardSettings.automation?.respawn) : '—';
@@ -288,7 +327,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   element<HTMLSelectElement>('connection-mode').disabled = controls.modeDisabled;
   element<HTMLInputElement>('auto-login').disabled = controls.autoLoginDisabled;
   element<HTMLInputElement>('auto-reconnect').disabled = controls.autoReconnectDisabled;
-  features.withSettings(projection.runSettings,()=>features.lock(busy || dispatches.stopping || loginBusy || runActive(),busy || dispatches.stopping || loginBusy || !ready || runActive(),busy || dispatches.stopping || loginBusy || !ready || features.serviceBlocked(),busy || dispatches.stopping || loginBusy || !ready || fieldRun.requested));
+  features.withSettings(projection.runSettings,()=>features.lock(dispatches.stopping,busy || dispatches.stopping || loginBusy || !ready || runActive(),busy || dispatches.stopping || loginBusy || !ready || features.serviceBlocked(),busy || dispatches.stopping || loginBusy || !ready || fieldRun.requested));
 }
 
 function showSavedLogin(profile: SavedLogin | null): void {
@@ -399,7 +438,7 @@ function render(s: ValidatedGameStatus): void {
   fieldRun.observe(s); holdAtRunLimit();
   if (['complete','failed','cancelled'].includes(s.login.phase)) loginBusy = false;
   const projection = form.project();
-  features.withSettings(projection.runSettings,()=>features.render(s));
+  features.withSettings(projection.runSettings,()=>features.render({ ...s, runExperience: fieldRun.experienceFor(s) }));
   if(!updateBusy&&!closeBusy&&!loginBusy&&!dispatches.stopping){
     void updateContinuation.resume(s,accountSelection(),fieldRun).then(resumed=>{
       if(resumed){configureReconnect();message('Update complete. Continuing with the same settings and remaining limits.');updateButtons();}
@@ -427,7 +466,7 @@ function render(s: ValidatedGameStatus): void {
   element('nearby').textContent = String(s.monsters.length);
   element('map-label').textContent = s.map || 'WAITING';
   element('target-label').textContent = s.target || 'No active target';
-  message(reason,
+  message(fieldRun.settingsApplyWaitReason(s.sessionId)||reason,
     s.login.phase === 'failed' || s.connected && !s.compatible);
   activityLog.render(s.log);
   botConsole.render(s); updateButtons(projection); resumeFieldRun(s);

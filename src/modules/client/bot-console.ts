@@ -99,7 +99,7 @@ export class BotConsole {
     const disabled = this.locked || this.pending;
     this.get('console-lock').textContent = this.locked ? this.lockReason : this.pending ? 'Requesting one action…' : 'Manual controls ready · one action at a time';
     this.canvas.setAttribute('aria-disabled', String(disabled)); this.canvas.classList.toggle('console-map-locked', disabled);
-    this.x.disabled = disabled; this.y.disabled = disabled; this.items.disabled = disabled || this.status?.character.inventoryKnown !== true;
+    this.x.disabled = disabled; this.y.disabled = disabled; this.items.disabled = this.status?.character.inventoryKnown !== true;
     this.get<HTMLButtonElement>('console-walk').disabled = disabled || !searchGrid(this.status?.map ?? '');
     for (const row of this.monsters.values()) row.button.disabled = disabled;
     this.itemControls();
@@ -111,7 +111,7 @@ export class BotConsole {
     const item = this.selectedItem(), info = item ? ITEM_CATALOG[item.itemId] : undefined;
     this.use.disabled = this.locked || this.pending || !item || info?.useType !== 1;
     this.get('console-item-info').textContent = !this.status?.character.inventoryKnown ? 'Inventory has not been observed.'
-      : !item ? 'Choose an observed item. No item is selected automatically.'
+      : !item ? this.items.value ? `${itemName(Number(this.items.value))} is no longer carried. Choose another observed item.` : 'Choose an observed item. No item is selected automatically.'
       : `${itemName(item.itemId)} · ${item.count} observed · ${info?.useType === 1 ? 'Untargeted use' : info?.useType === 2 ? 'Requires an explicit target in manual tools' : 'No verified direct-use action'}`;
   }
   render(status: Snapshot | null): void {
@@ -127,7 +127,12 @@ export class BotConsole {
       for (const { itemId, label } of stock) {
         const option = document.createElement('option'); option.value = String(itemId); option.textContent = label; this.items.append(option);
       }
-      this.items.value = stock.some(item => item.itemId === Number(selected)) && selected !== '' ? selected : '';
+      if (selected !== '' && !stock.some(item => item.itemId === Number(selected))) {
+        const unavailable = document.createElement('option'); unavailable.value = selected; unavailable.disabled = true;
+        unavailable.textContent = `${itemName(Number(selected))} · ${character?.inventoryKnown ? 'no longer carried' : 'stock unobserved'}`;
+        this.items.append(unavailable);
+      }
+      this.items.value = selected;
       this.get('console-stock-count').textContent = character?.inventoryKnown ? `${stock.length} item types` : 'Not observed';
     }
     const live = new Set<string>(), list = this.get('monster-list');

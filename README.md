@@ -42,6 +42,10 @@ Bot settings save automatically on this computer. Closing the main window or cho
 
 Setup offers **Form** and **Script** views of the same configuration. [Bot scripts](docs/MACROS.md) convert the current settings to readable commands and let you add conditional rules. Apply a valid script before returning to Form; the common Start and Stop controls use that configuration.
 
+During an ordinary field run, the Settings form remains editable. Use **Apply to current run** for supported combat targets, scan radius, loot and recovery changes. Apply waits for existing actions to settle and preserves the run's allowances and resource protections. The summary separates active settings from the saved draft; unsupported changes, whole profiles and script-owned settings are for the next run. Stop cancels a pending Apply.
+
+**Inventory** remains available for read-only browsing while the bot runs; manual item use still requires Stop and settled actions. **EXP gained this run** accumulates confirmed signed rewards separately from current level totals and the latest reward, and Stop preserves the result.
+
 These controls keep the common Start and Stop controls available:
 
 | Section | Controls |

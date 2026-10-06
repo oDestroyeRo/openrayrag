@@ -2,7 +2,7 @@ import { itemId as domainItemId, skillId as domainSkillId, milliseconds, quantit
 import { map } from 'remeda';
 import { foldConditions, unavailableFirstConditions } from '../../shared/condition-logic';
 import { sameActionIdentity, type ActionIdentity } from '../world/actor-identity';
-import { isRecoveryItem, recoveryItemIds } from '../recovery/recovery-items';
+import { isRecoveryItem, recoveryItemIds, recoveryItemReserve } from '../recovery/recovery-items';
 import { matchesSkillExecution } from '../combat/skill-execution';
 import { recoveryItemCooldown } from '../recovery/hp-potions';
 import { skillAfterCastSeconds } from '../combat/cast-policy';
@@ -56,7 +56,7 @@ export class AutomationScheduler {
   }
   /** Late readback drains uncertainty without confirming a retired caller's step.
    * Unlike active confirmation, item readback may be a complete inventory.
-   * Its caller-wide pause does not stamp the scheduler's active cooldown clocks. */
+   * A confirmed item stamps its resource clocks before continuation can transfer them. */
   reconcileReceipt(events:ReadonlyArray<FeatureEvent|{type:string}>,state:CharacterState,playerId:number|null,policy:AutomationSettings):Seconds|null {
     const receipt=this.captured;
     if(!receipt||this.pending||receipt.identity&&!sameActionIdentity(receipt.identity,this.identity?.(receipt.action)))return null;
@@ -73,6 +73,7 @@ export class AutomationScheduler {
     if(execution)this.settleSkill(execution.motionSeconds,skillAfterCastSeconds(execution.skillId));
     const cooldown=action.type==='useItem'?recoveryItemCooldown(policy,domainItemId(action.itemId))
       :action.type==='skill'?policy.skills.find(rule=>rule.skillId===action.skillId)?.cooldownSeconds??seconds(1):seconds(0);
+    if(action.type==='useItem')this.stampCooldown(action);
     this.discardReceipt();return cooldown;
   }
   settleSkill(motionSeconds:number,afterCastSeconds:number):void {
@@ -83,7 +84,15 @@ export class AutomationScheduler {
     if(this.sequence!==sequence||this.pending)return;
     this.canceledUntil=0;this.settleSkill(motion,afterCast);
   }
-  reset(connection=false): void { this.ruleConditions.length=0; if(connection){this.settlingUntil=0;this.canceledUntil=0;} else if(this.pending)this.canceledUntil=Math.max(this.canceledUntil,this.pending.deadline); if(this.pending)this.outcome={sequence:this.sequence,status:'failed',failure:{type:'cancel',reason:'Action canceled.'}}; this.pending = null; this.recoverySince = null; this.resting = false; this.cooldown.clear(); }
+  reset(connection=false, keepCooldowns=false): void { this.ruleConditions.length=0; if(connection){this.settlingUntil=0;this.canceledUntil=0;} else if(this.pending)this.canceledUntil=Math.max(this.canceledUntil,this.pending.deadline); if(this.pending)this.outcome={sequence:this.sequence,status:'failed',failure:{type:'cancel',reason:'Action canceled.'}}; this.pending = null; this.recoverySince = null; this.resting = false; if(!keepCooldowns)this.cooldown.clear(); }
+  clearCooldowns(): void { this.cooldown.clear(); }
+  private stampCooldown(action:ExpandedAction):void {
+    const key=action.type==='useItem'?`item:${action.itemId}`:action.type==='skill'?`skill:${action.skillId}`:action.type;
+    this.cooldown.set(key,this.now());
+    if(action.type==='useItem')for(const resource of ['hp','sp'] as const){if(isRecoveryItem(action.itemId,resource))this.cooldown.set(`${resource}-potions`,this.now());}
+  }
+  recoveryCooldowns(): Array<{key:string;at:number}> {return [...this.cooldown].filter(([key])=>/^(?:item:|hp-potions$|sp-potions$)/.test(key)).map(([key,at])=>({key,at}));}
+  restoreRecoveryCooldowns(rows:ReadonlyArray<{key:string;at:number}>):void {for(const row of rows)this.cooldown.set(row.key,Math.max(row.at,this.cooldown.get(row.key)??0));}
   task(): AutomationTask {
     return { kind:this.pending?.action.type ?? (this.now()<this.canceledUntil?'settling':this.now()<this.settlingUntil?'skill':this.recovering?'recover':'idle'),
       label:this.pending ? `Waiting for ${this.pending.action.type} confirmation.` : this.now()<this.canceledUntil?'Waiting for the canceled action deadline.':this.now()<this.settlingUntil?'Waiting for skill motion to finish.':this.recovering?'Resting until HP and SP recover.':'Ready.',
@@ -133,11 +142,7 @@ export class AutomationScheduler {
       this.pending = null; this.outcome={sequence:this.sequence,status:'confirmed',reason:`${action.type} confirmed by the server.`};
       this.discardReceipt();
       if (action.type==='sit') { this.resting=action.sitting; if(!action.sitting)this.recoverySince=null; }
-      const key = action.type==='useItem'?`item:${action.itemId}`:action.type==='skill'?`skill:${action.skillId}`:action.type;
-      this.cooldown.set(key,this.now());
-      if(action.type==='useItem')for(const resource of ['hp','sp'] as const) {
-        if(isRecoveryItem(action.itemId,resource))this.cooldown.set(`${resource}-potions`,this.now());
-      }
+      this.stampCooldown(action);
     }
     return {state:confirmed?'confirmed':'ignored'};
   }
@@ -187,10 +192,10 @@ export class AutomationScheduler {
         if(!state.inventoryKnown)return {failure:`Inventory is unavailable; ${resource.toUpperCase()} recovery items need a full inventory update.`};
         if(now-(this.cooldown.get(`${resource}-potions`)??-Infinity)>=secondsToMilliseconds(potions.cooldownSeconds)) {
           const itemId=recoveryItemIds(potions,resource).find(id=> {
-            if(a.items.some(rule=>rule.itemId===id))return false;
+            const reserve=recoveryItemReserve(a,resource,id);
+            if(reserve===null)return false;
             const otherResource=resource==='hp'?'sp':'hp',other=resource==='hp'?a.spPotions:a.hpPotions;
             if(other&&other.mode!=='off'&&isRecoveryItem(id,otherResource)&&now-(this.cooldown.get(`${otherResource}-potions`)??-Infinity)<secondsToMilliseconds(other.cooldownSeconds))return false;
-            const reserve=Math.max(potions.minStock,recoveryItemIds(other,otherResource).includes(id)?other!.minStock:0);
             return state.count(id)>reserve;
           });
           if(itemId!==undefined)return {action:{type:'useItem',itemId}};

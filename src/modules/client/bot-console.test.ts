@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BotConsole, mapCoordinate } from './bot-console';
-import { BotEngine } from '../automation/engine';
+import { BotEngine, type Snapshot } from '../automation/engine';
 import { ITEM_CATALOG } from '../catalog/game-catalog';
 import { actorKey, manualTargetView } from '../combat/manual-target-view';
 import { GridNavigator, searchGrid } from '../navigation/navigation';
@@ -167,6 +167,54 @@ describe('bot console inventory and monitoring', () => {
     expect(f.get('console-item')).toBe(selector); expect(selector.value).toBe('501'); expect(f.get('console-walk-x').value).toBe('123'); expect(f.get('monster-list').all()).toContain(attack);
     f.engine.receive([{ type: 'inventoryDelta', add: false, bagId: 501, change: 1, weight: 0 }]); f.render(); expect(selector.value).toBe('501'); expect(f.get('console-item-info').textContent).toContain('2 observed');
   });
+  it.each([
+    [true, 'Stop automation before sending a manual command.'],
+    [false, 'Wait for pending actions to settle before sending a manual command.'],
+  ])('allows read-only inventory browsing while running=%s and manual controls are locked', async (running, reason) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const f = fixture(), selector = f.get('console-item'), before = f.engine.snapshot(), settings = structuredClone(f.settings);
+    const status = { ...before, running, runRequested: true };
+    f.view.render(status); f.view.lock(true, reason);
+    expect(selector.disabled).toBe(false);
+    selector.value = '501'; await selector.emit('change');
+    expect(f.get('console-item-info').textContent).toContain('3 observed · Untargeted use');
+    selector.value = '610'; await selector.emit('change');
+    expect(f.get('console-item-info').textContent).toContain('2 observed · Requires an explicit target');
+    expect(f.get('console-use-item').disabled).toBe(true); expect(f.get('console-walk').disabled).toBe(true);
+    await f.get('console-use-item').emit('click');
+    const attack = f.get('monster-list').all().find(node => node.tag === 'button')!;
+    expect(attack.disabled).toBe(true); await attack.emit('click');
+    expect(f.command).not.toHaveBeenCalled(); expect(f.settings).toEqual(settings); expect(f.engine.snapshot()).toEqual(before);
+  });
+  it('preserves inspection through active stock updates, unavailable inventory, removal and replacement connections', async () => {
+    const f = fixture(), selector = f.get('console-item'), snapshot = f.engine.snapshot();
+    const status = { ...snapshot, running: true, runRequested: true };
+    f.view.render(status); f.view.lock(true, 'Automation owns manual controls.');
+    selector.value = '501'; await selector.emit('change');
+    const updated: Snapshot = { ...status, character: { ...status.character, inventory: [...status.character.inventory, { itemId: 501, bagId: 502, count: 4, type: 1 }] } };
+    f.view.render(updated);
+    expect(selector.value).toBe('501'); expect(f.get('console-item-info').textContent).toContain('7 observed');
+    f.view.render({ ...updated, character: { ...updated.character, inventoryKnown: false } });
+    expect(selector.value).toBe('501'); expect(selector.disabled).toBe(true); expect(f.get('console-item-info').textContent).toBe('Inventory has not been observed.');
+    f.view.render(updated); expect(selector.value).toBe('501'); expect(selector.disabled).toBe(false);
+    const removed = { ...status, character: { ...status.character, inventory: status.character.inventory.filter(item => item.itemId !== 501) } };
+    f.view.render(removed);
+    expect(selector.value).toBe('501'); expect(selector.children.find(option => option.value === '501')?.disabled).toBe(true);
+    expect(f.get('console-item-info').textContent).toContain('is no longer carried'); expect(f.get('console-use-item').disabled).toBe(true);
+    f.view.render(removed); expect(f.get('console-item-info').textContent).toContain('is no longer carried');
+    selector.value = '610'; await selector.emit('change'); expect(f.get('console-item-info').textContent).toContain('2 observed');
+    f.view.render({ ...updated, actorObservations: { ...updated.actorObservations, world: 'replacement-connection' } });
+    expect(selector.value).toBe(''); expect(f.get('console-item-info').textContent).toContain('No item is selected automatically.');
+    expect(f.command).not.toHaveBeenCalled();
+  });
+  it('does not enable direct use when the inspected item is removed after manual controls unlock', async () => {
+    const f = fixture(), status = f.engine.snapshot(), selector = f.get('console-item');
+    selector.value = '501'; await selector.emit('change');
+    f.view.render({ ...status, character: { ...status.character, inventory: status.character.inventory.filter(item => item.itemId !== 501) } });
+    f.view.lock(false, 'Ready');
+    expect(selector.disabled).toBe(false); expect(f.get('console-use-item').disabled).toBe(true);
+    await f.get('console-use-item').emit('click'); expect(f.command).not.toHaveBeenCalled();
+  });
   it('routes untargeted use through the existing command without attributing shared receipts', async () => {
     const f = fixture(); f.get('console-item').value = '501'; await f.get('console-item').emit('change'); await f.get('console-use-item').emit('click');
     expect(f.command).toHaveBeenCalledWith({ type: 'useItem', itemId: 501 }); expect(f.get('console-item-result').textContent).toContain('outcome unconfirmed'); expect(f.get('console-item-result').textContent).not.toContain('Confirmed');
@@ -206,12 +254,16 @@ describe('bot console inventory and monitoring', () => {
     await f.get('console-use-item').emit('click'); expect(f.command).not.toHaveBeenCalled(); expect(f.get('console-walk').disabled).toBe(true); expect(f.get('console-lock').textContent).toBe('Stop bot first.');
     let finish!: () => void; f.command.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; })); f.view.lock(false, '');
     await f.get('console-use-item').emit('click'); await f.get('console-use-item').emit('click'); expect(f.command).toHaveBeenCalledOnce(); expect(f.get('console-walk').disabled).toBe(true);
+    expect(f.get('console-item').disabled).toBe(false);
+    f.get('console-item').value = '610'; await f.get('console-item').emit('change'); expect(f.command).toHaveBeenCalledOnce();
     f.view.lock(true, 'Update in progress.'); finish(); for (let i = 0; i < 12; i++) await Promise.resolve(); expect(f.get('console-use-item').disabled).toBe(true); expect(f.get('console-lock').textContent).toBe('Update in progress.');
   });
   it('shows only observed level, weight, currency and EXP totals without fabricated percentages', () => {
     const f = fixture(), s = f.engine.snapshot();
     f.view.render({ ...s, character: { ...s.character, stats: { level: 20, hp: 100, maxHp: 100, jobLevel: 15, weight: 200, maxWeight: 1000, zeny: 42 }, experience: { baseTotal: 500, baseGained: 12, jobTotal: 200, jobGained: 7 } } });
-    expect(f.get('console-levels').textContent).toBe('20 / 15'); expect(f.get('console-weight').textContent).toBe('200 / 1,000'); expect(f.get('console-zeny').textContent).toBe('42'); expect(f.get('console-experience').textContent).toBe('Base EXP 500 (+12) · Job EXP 200 (+7)');
+    expect(f.get('console-levels').textContent).toBe('20 / 15'); expect(f.get('console-weight').textContent).toBe('200 / 1,000'); expect(f.get('console-zeny').textContent).toBe('42'); expect(f.get('console-experience').textContent).toBe('Base EXP current 500 (latest +12) · Job EXP current 200 (latest +7)');
+    f.view.render({ ...s, character: { ...s.character, experience: { baseTotal: 479, baseGained: -21, jobTotal: 182, jobGained: -18 } } });
+    expect(f.get('console-base-experience').textContent).toBe('479 (latest -21)');expect(f.get('console-job-experience').textContent).toBe('182 (latest -18)');
     f.view.render(null); expect(f.get('console-weight').textContent).toBe('— / —'); expect(f.get('console-levels').textContent).toBe('— / —'); expect(f.get('console-item').disabled).toBe(true);
   });
 });

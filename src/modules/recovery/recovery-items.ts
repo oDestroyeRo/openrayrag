@@ -1,5 +1,5 @@
 import { itemId, type ItemId } from '../../shared/domain-values';
-import type { ReadonlyData, AutomationPolicy } from '../settings/settings';
+import type { ReadonlyData, AutomationPolicy, AutomationSettingsInput } from '../settings/settings';
 import catalog from '../../data/recovery-item-catalog.json';
 
 export type RecoveryResource = 'hp' | 'sp';
@@ -45,4 +45,13 @@ export function recoveryItemIds(policy: AutomationPolicy['hpPotions'], resource:
 export function recoveryItemIds(policy: ReadonlyData<RecoveryItemSettings> | undefined, resource: RecoveryResource): readonly number[];
 export function recoveryItemIds(policy: ReadonlyData<RecoveryItemSettings> | undefined, resource: RecoveryResource): readonly number[] {
   return !policy || policy.mode === 'off' ? [] : policy.mode === 'any' ? RECOVERY_ITEM_IDS[resource] : policy.itemIds;
+}
+
+/** Advanced rules own their items; shared HP/SP choices protect the larger reserve. */
+export function recoveryItemReserve(policy: Pick<AutomationSettingsInput, 'items' | 'hpPotions' | 'spPotions'>,
+  resource: RecoveryResource, id: number): number | null {
+  const selected = resource === 'hp' ? policy.hpPotions : policy.spPotions;
+  if (!selected || !recoveryItemIds(selected, resource).includes(id) || policy.items.some(rule => rule.itemId === id)) return null;
+  const otherResource = resource === 'hp' ? 'sp' : 'hp', other = resource === 'hp' ? policy.spPotions : policy.hpPotions;
+  return Math.max(selected.minStock, recoveryItemIds(other, otherResource).includes(id) ? other!.minStock : 0);
 }

@@ -6,6 +6,7 @@ import { DEFAULT_SUPPLY, type SupplyResumeGuard } from '../services/supply-trip'
 import type { DeathRecoveryGuard } from '../recovery/death-recovery';
 import { BitWriter } from '../../shared/binary';
 import { OP } from '../protocol/protocol';
+import { liveSettingsGuard, planLiveSettings } from '../settings/live-settings-logic';
 
 describe('session reconnect', () => {
   it('requires account access and a previously ready character', () => {
@@ -427,4 +428,50 @@ describe('field run updater checkpoints', () => {
     expect(request.supplyGuard).toMatchObject({ remainingTrips: 0, uncertain: true });
     expect(request.deathRecoveryGuard).toMatchObject({ phase: 'failed', uncertain: true });
   });
+});
+
+describe('acknowledged live settings across replacement',()=>{
+  const id='a'.repeat(32),old={sessionId:'old',connected:true,compatible:true,map:'prt_fild08',player:{name:'Test'},runRequested:true};
+  function original(){const automation=structuredClone(DEFAULT_AUTOMATION);automation.items=[{itemId:501,resource:'hp' as const,belowPercent:90,minStock:10,cooldownSeconds:60}];automation.limits.kills=5;return {...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation};}
+  it('retains removed-rule floors, confirmed cooldowns and remaining allowances through reconnect and updater checkpoint',()=>{
+    const now=1000,run=new PersistentFieldRun(()=>now),settings=original();run.begin(settings,'Test','old',{kills:100,looted:0,deaths:0});
+    const removed=structuredClone(settings);removed.automation.items=[];removed.radius=8;removed.automation.limits.kills=100;
+    const guard=liveSettingsGuard(settings,null,'Test',[{key:'item:501',at:1000}],now);
+    run.registerSettingsApply(id,old);
+    run.observe({...old,kills:102,activeSettings:removed,settingsApply:{id,state:'applied',applied:['radius','automation.items'],pending:[],nextRun:[],reason:'Applied'},liveSettingsGuard:guard});
+    const restored=new PersistentFieldRun(()=>now);restored.restore(run.checkpoint());
+    const request=restored.resumeFor({...old,sessionId:'new'})!;
+    expect(request.settings).toMatchObject({radius:8,automation:{limits:{kills:3},items:[]}});
+    expect(request.liveSettingsGuard).toMatchObject({items:[{itemId:501,minStock:10,cooldownSeconds:60}],cooldowns:[{key:'item:501',at:1000}]});
+    const readded=structuredClone(settings);readded.automation.items[0]!.minStock=0;readded.automation.items[0]!.cooldownSeconds=1;
+    const plan=planLiveSettings(request.settings,readded,request.settings,request.liveSettingsGuard);
+    expect(plan.settings.automation?.items[0]).toMatchObject({minStock:10,cooldownSeconds:60});
+  });
+  it('holds an unacknowledged Apply across runtime replacement until evidence or Stop',()=>{
+    const run=new PersistentFieldRun(()=>1000),settings=original();run.begin(settings,'Test','old');run.registerSettingsApply(id,old);
+    run.observe({...old,sessionId:'new',runRequested:false});
+    expect(run.resumeFor({...old,sessionId:'new'})).toBeNull();expect(run.settingsApplyWaitReason('new')).toContain('did not confirm');
+    expect(()=>run.checkpoint()).toThrow('Apply confirmation');
+    run.observe({...old,settingsApply:{id:'b'.repeat(32),state:'applied',applied:['radius'],pending:[],nextRun:[],reason:''},activeSettings:{...settings,radius:8}});
+    expect(run.resumeFor({...old,sessionId:'new'})).toBeNull();
+    run.stop();run.begin(settings,'Test','new');
+    run.observe({...old,settingsApply:{id,state:'applied',applied:['radius'],pending:[],nextRun:[],reason:''},activeSettings:{...settings,radius:8}});
+    expect(run.activeSettings?.radius).toBe(12);expect(run.settingsApplyPending).toBe(false);
+  });
+});
+
+it('retains exactly acknowledged live item policies across resource owners and reconnect',()=>{
+  const now=1000,run=new PersistentFieldRun(()=>now),automation=structuredClone(DEFAULT_AUTOMATION);
+  automation.hpPotions={mode:'selected',itemIds:[501],belowPercent:60,minStock:10,cooldownSeconds:60};
+  const original={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation};
+  const status={sessionId:'old',connected:true,compatible:true,map:'prt_fild08',player:{name:'Test'},runRequested:true};
+  run.begin(original,'Test','old');
+  const draft=structuredClone(original);delete draft.automation.hpPotions;draft.automation.items=[{itemId:502,resource:'hp',belowPercent:80,minStock:0,cooldownSeconds:1}];
+  const runtime=planLiveSettings(original,draft).settings;
+  const initialGuard=liveSettingsGuard(original,null,'Test',[],now),guard=liveSettingsGuard(runtime,initialGuard,'Test',[],now);
+  run.registerSettingsApply('a'.repeat(32),status);
+  run.observe({...status,activeSettings:runtime,liveSettingsGuard:guard,settingsApply:{id:'a'.repeat(32),state:'applied',applied:['automation.items'],pending:[],nextRun:[],reason:''}});
+  expect(run.activeSettings).toEqual(runtime);
+  expect(run.resumeFor({...status,sessionId:'new'})?.settings).toEqual(runtime);
+  expect(runtime.automation?.items[0]).toMatchObject({itemId:502,minStock:0,cooldownSeconds:1});
 });

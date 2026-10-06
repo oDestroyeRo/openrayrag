@@ -1,4 +1,5 @@
 import { filter, groupBy, map, mapValues, pipe, sort, sumBy, values } from 'remeda';
+import { signedExperience } from '../session/run-experience-logic';
 import type { Snapshot } from '../automation/engine';
 import { validActorSnapshot } from '../world/actor-observations-logic';
 import { itemName } from '../catalog/game-catalog';
@@ -23,9 +24,9 @@ export function consoleCharacterText(status: Snapshot | null): Record<string, st
     levels: `${observed(stats?.level ?? status?.player?.level)} / ${observed(stats?.jobLevel)}`,
     weight: `${observed(stats?.weight)} / ${observed(stats?.maxWeight)}`,
     zeny: observed(stats?.zeny),
-    experience: `Base EXP ${observed(experience?.baseTotal)} (+${observed(experience?.baseGained)}) · Job EXP ${observed(experience?.jobTotal)} (+${observed(experience?.jobGained)})`,
-    'base-experience': `${observed(experience?.baseTotal)} (+${observed(experience?.baseGained)})`,
-    'job-experience': `${observed(experience?.jobTotal)} (+${observed(experience?.jobGained)})`,
+    experience: `Base EXP current ${observed(experience?.baseTotal)} (latest ${signedExperience(experience?.baseGained)}) · Job EXP current ${observed(experience?.jobTotal)} (latest ${signedExperience(experience?.jobGained)})`,
+    'base-experience': `${observed(experience?.baseTotal)} (latest ${signedExperience(experience?.baseGained)})`,
+    'job-experience': `${observed(experience?.jobTotal)} (latest ${signedExperience(experience?.jobGained)})`,
   };
 }
 export function consoleSelectedItem(status: Snapshot | null, value: string): { itemId: number; count: number } | null {

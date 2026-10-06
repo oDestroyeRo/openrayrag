@@ -89,6 +89,8 @@ export type UpdateStep = 'settings' | 'prepare' | 'reserve' | 'confirmation';
 export function deferredReason(step: UpdateStep, error: unknown): string {
   // Native errors may contain private paths or account details. Only these
   // known generic messages cross the presentation seam.
+  const restartFailure = 'The update was installed, but the app could not restart. Quit and reopen Rayrag Companion. Your saved settings are preserved.';
+  if (error === restartFailure) return restartFailure;
   const reasons: Record<string, string> = {
     'No verified update is ready.': 'The verified update is no longer ready.',
     'Waiting for login to settle.': 'Sign-in has not finished.',

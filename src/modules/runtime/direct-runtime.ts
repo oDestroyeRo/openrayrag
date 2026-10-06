@@ -160,12 +160,15 @@ export class DirectRuntime {
     }catch{this.terminal('Bot connection unavailable. Pending outcomes remain unresolved.',true);}
     finally{this.polling=false;this.confirmPrepared();this.confirmMaintenance();}
   }
-  control(action:'start'|'stop'|'heartbeat',...args:Parameters<CompanionController['start']>):void{
+  control(action:'start'|'stop'|'heartbeat'|'apply',settings:Parameters<CompanionController['start']>[0],escapeGuard?:Parameters<CompanionController['start']>[1],supplyGuard?:Parameters<CompanionController['start']>[2],recoveryGuard?:Parameters<CompanionController['start']>[3],applyId?:string,liveSettingsGuard?:Parameters<CompanionController['start']>[4]):void{
     this.lease.assertDispatch();this.mutate();
     if(action==='heartbeat'){this.heartbeat=this.now();this.controller.heartbeat(true);return;}
     try{
       if(action==='stop'){this.updateRequest=null;this.controller.stop();}
-      else {this.controller.heartbeat(true);this.controller.start(...args);this.heartbeat=this.now();}
+      else {this.controller.heartbeat(true);
+        if(action==='apply')this.controller.applySettings(settings,applyId??'');
+        else this.controller.start(settings,escapeGuard,supplyGuard,recoveryGuard,liveSettingsGuard);
+        this.heartbeat=this.now();}
     }catch(error){this.controller.engine.reason=error instanceof Error?error.message:'Command failed.';}
     void this.publish();
   }

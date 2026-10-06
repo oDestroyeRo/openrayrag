@@ -518,7 +518,7 @@ pub(crate) async fn restart(app: &tauri::AppHandle, target: &str) -> Result<(), 
     app.run_on_main_thread(move || {
         let mut env = restart_app.env().clone();
         let result = (|| -> Result<(), String> {
-            let mut state = restart_app
+            let state = restart_app
                 .state::<SharedContinuation>()
                 .inner()
                 .lock()
@@ -538,11 +538,11 @@ pub(crate) async fn restart(app: &tauri::AppHandle, target: &str) -> Result<(), 
                 )?;
                 env.args_os.push(format!("{LAUNCH_PREFIX}{token}").into());
             }
-            state.reserved = None;
             // Hold the authority lock through restart. Stop admitted before
             // this closure revokes it; no command can arm a ticket afterward.
-            restart_app.cleanup_before_exit();
-            tauri::process::restart(&env);
+            // A failed launch retains the reservation for existing failure
+            // recovery. Cleanup occurs only after LaunchServices accepts it.
+            crate::update::update_restart::restart(&restart_app, &env)
         })();
         // Only a failed handoff returns to the controller. A successful restart
         // exits this process without an IPC success/finally cancellation race.

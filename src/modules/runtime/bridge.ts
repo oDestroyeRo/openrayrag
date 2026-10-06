@@ -8,6 +8,7 @@ import { officialWarpSkill, warpInitializationPacket } from '../warp/warp-protoc
 import type { CompanionSnapshot } from './controller';
 import type { ControllerUpdateCheckpoint, ControllerUpdateRestore } from '../update/controller-update';
 import { wireController } from './controller-wire';
+import type { LiveSettingsGuard } from '../settings/live-settings-logic';
 import { LoginController, loginDriver, loginReady, type LoginProfile, type LoginStatus, type UnityClient } from '../session/login';
 import { currentMapInfo, loadMapCatalog, type MapCatalog } from '../navigation/map-data';
 import type { SupplyResumeGuard } from '../services/supply-trip';
@@ -18,7 +19,7 @@ interface BridgeWindow extends Window {
   createUnityInstance?: (...args: unknown[]) => Promise<UnityClient>;
   __TAURI_INTERNALS__?: { invoke: (name: string, args: unknown) => Promise<unknown> };
   __RAYRAG__?: {
-    control: (action: 'start' | 'stop' | 'heartbeat', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard) => void;
+    control: (action: 'start' | 'stop' | 'heartbeat' | 'apply', settings?: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard, applyId?:string,liveSettingsGuard?:LiveSettingsGuard) => void;
     perform: (action: 'command' | 'workflow' | 'routine' | 'macro' | 'service' | 'social' | 'memo' | 'socketPreview' | 'socket' | 'refinePreview' | 'refine' | 'refineAdvance' | 'warp' | 'warpPreview' | 'warpCancel', request: unknown) => void;
     maintenance:(nonce:string,reserve:boolean|'commit')=>void;
     prepareUpdate:(requestId:string)=>void;
@@ -317,14 +318,17 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
   };
 
   page.__RAYRAG__ = {
-    control(action, settings, escapeGuard, supplyGuard, recoveryGuard) {
+    control(action, settings, escapeGuard, supplyGuard, recoveryGuard, applyId, liveSettingsGuard) {
       maintenance.assertDispatch();mutation();
       if (action === 'heartbeat') { heartbeat = Date.now(); controller.heartbeat(true);retryInitialization();return; }
       if (action === 'stop') { updateRequest=null;cancelLogin(); stop('Stopped by you.'); return; }
       try {
         if (page.buildUrl !== VERIFIED_BUILD) throw new Error('This game build is not verified.');
         if (!settings) throw new Error('Choose combat settings first.');
-        controller.heartbeat(true); controller.start(settings, escapeGuard, supplyGuard, recoveryGuard); heartbeat = Date.now();
+        controller.heartbeat(true);
+        if(action==='apply')controller.applySettings(settings,applyId??'');
+        else controller.start(settings, escapeGuard, supplyGuard, recoveryGuard, liveSettingsGuard);
+        heartbeat = Date.now();
       } catch (error) { controller.engine.reason = error instanceof Error ? error.message : 'Could not start.'; }
       publish();
     },

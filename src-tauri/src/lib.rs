@@ -159,8 +159,16 @@ fn control_bot(
     escape_guard: Option<settings::automation::EscapeResumeGuard>,
     supply_guard: Option<settings::automation::SupplyResumeGuard>,
     death_recovery_guard: Option<settings::automation::DeathRecoveryGuard>,
+    apply_id: Option<String>,
+    live_settings_guard: Option<settings::automation::LiveSettingsGuard>,
 ) -> Result<(), String> {
     require_view(&window, "main")?;
+    if let Some(guard) = &live_settings_guard {
+        if action != "start" {
+            return Err("Live settings protection is only accepted by start.".into());
+        }
+        guard.validate_at(9_007_199_254_740_991)?;
+    }
     let admitted_death = if let Some(guard) = &death_recovery_guard {
         if action != "start" {
             return Err("Death recovery state is only accepted by start.".into());
@@ -188,6 +196,7 @@ fn control_bot(
     if !matches!(
         action.as_str(),
         "start"
+            | "apply"
             | "stop"
             | "heartbeat"
             | "command"
@@ -208,8 +217,26 @@ fn control_bot(
     ) {
         return Err("Unknown bot action.".into());
     }
-    if matches!(action.as_str(), "start" | "stop" | "heartbeat") && request.is_some() {
+    if matches!(action.as_str(), "start" | "apply" | "stop" | "heartbeat") && request.is_some() {
         return Err("This control does not accept an automation request.".into());
+    }
+    if action == "apply" {
+        let id = apply_id
+            .as_deref()
+            .ok_or("Settings Apply identity is required.")?;
+        if id.len() != 32
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("Invalid settings Apply identity.".into());
+        }
+        settings
+            .as_ref()
+            .ok_or("Settings are required.")?
+            .validate_form()?;
+    } else if apply_id.is_some() {
+        return Err("Settings Apply identity is only accepted by apply.".into());
     }
     if matches!(
         action.as_str(),
@@ -298,8 +325,12 @@ fn control_bot(
             serde_json::to_string(&admitted_supply).map_err(|_| "Invalid supply resume state.")?;
         let recovery_json =
             serde_json::to_string(&admitted_death).map_err(|_| "Invalid death recovery state.")?;
+        let apply_json =
+            serde_json::to_string(&apply_id).map_err(|_| "Invalid settings Apply identity.")?;
+        let live_guard_json = serde_json::to_string(&live_settings_guard)
+            .map_err(|_| "Invalid live settings protection.")?;
         format!(
-            "window.__RAYRAG__?.control({action_json},{settings_json},{escape_json},{supply_json},{recovery_json})"
+            "window.__RAYRAG__?.control({action_json},{settings_json},{escape_json},{supply_json},{recovery_json},{apply_json},{live_guard_json})"
         )
     };
     if action == "warp" {
@@ -507,6 +538,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Could not launch Rayrag Companion")
         .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::RunEvent::Reopen { .. })
+                && shell::client_view::recover_main(app).is_err()
+            {
+                eprintln!("Could not restore the Companion window. Quit and reopen the app.");
+            }
             if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
                 settings::settings_close::exit_requested(app, code, &api);
             }

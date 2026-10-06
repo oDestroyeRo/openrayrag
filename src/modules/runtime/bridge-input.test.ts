@@ -39,7 +39,7 @@ function spawn(e:Entity,entryType=0):Uint8Array {
     .u8(e.kind).u8(0).u8(0).i32(e.x).i32(e.y).u8(e.level).i32(e.hp).i32(e.maxHp).i32(e.sp??0).i32(e.maxSp??0).i32(0).u8(0).finish();
   return new BitWriter().u8(OP.spawn).u8(entryType).i32(body.length).take(body).finish();
 }
-type Page={WebSocket:typeof NativeSocket;buildUrl:string;__RAYRAG__?:{control:(action:'start'|'stop'|'heartbeat',settings?:Settings)=>void;maintenance:(nonce:string,reserve:boolean|'commit')=>void;perform:(action:string,request:unknown)=>void;prepareUpdate:(requestId:string)=>void;cancelUpdate:(requestId:string)=>void;restoreUpdate:(payload:ControllerUpdateRestore)=>void}};
+type Page={WebSocket:typeof NativeSocket;buildUrl:string;__RAYRAG__?:{control:(action:'start'|'stop'|'heartbeat'|'apply',settings?:Settings,escape?:unknown,supply?:unknown,death?:unknown,applyId?:string)=>void;maintenance:(nonce:string,reserve:boolean|'commit')=>void;perform:(action:string,request:unknown)=>void;prepareUpdate:(requestId:string)=>void;cancelUpdate:(requestId:string)=>void;restoreUpdate:(payload:ControllerUpdateRestore)=>void}};
 async function fixture(ready=true,ownId=0){
   const invoke=vi.fn(async(name:string):Promise<unknown>=>name==='warp_guard_mark'?'11111111-1111-4111-8111-111111111111':name==='update_ack'||name==='update_lease_alive'?true:undefined);
   const page:Page & Pick<Window,'addEventListener'> & {__TAURI_INTERNALS__:{invoke:typeof invoke}}={WebSocket:NativeSocket,buildUrl:VERIFIED_BUILD,addEventListener:()=>{},__TAURI_INTERNALS__:{invoke}},listeners=new Map<string,EventListener>();
@@ -697,4 +697,30 @@ describe('native persistence admission for official Warp only',()=>{
   expect(f.socket.writes).toHaveLength(outcome==='success'||outcome==='maintenance'?1:0);
   if(outcome==='success'||outcome==='maintenance')expect([...new Uint8Array(f.socket.writes[0] as ArrayBuffer)]).toEqual([...packet]);
  });
+});
+
+it.each(['hp','sp'] as const)('With game client acknowledges live %s edits without replaying a pending item',async resource=>{
+  const f=await fixture();f.c.engine.receive([{type:'heal',id:0,hp:55,maxHp:100},{type:'sp',sp:10,maxSp:100}]);
+  const itemId=resource==='hp'?501:514;f.c.engine.receive([{type:'inventory',items:[{bagId:itemId,itemId,type:1,count:4}],equipment:[],ammoId:-1}]);
+  const automation=structuredClone(DEFAULT_AUTOMATION);automation.combat.mode='off';automation.limits.kills=5;
+  automation[resource==='hp'?'hpPotions':'spPotions']={mode:'selected',itemIds:[itemId],belowPercent:60,minStock:1,cooldownSeconds:10};
+  const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation};f.start(settings);await f.step(1000);
+  const draft=structuredClone(settings);draft.radius=8;draft.targets=[4007];draft.loot=false;draft.automation.limits.kills=100;
+  draft.automation[resource==='hp'?'hpPotions':'spPotions']!.belowPercent=70;
+  f.page.__RAYRAG__!.control('apply',draft,undefined,undefined,undefined,'a'.repeat(32));
+  expect(f.c.snapshot().settingsApply?.state).toBe('pending');
+  await f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(itemId).i16(1).i32(0).bool(false).finish());
+  expect(f.c.snapshot()).toMatchObject({runRequested:true,settingsApply:{state:'applied'},activeSettings:{radius:8,targets:[4007],loot:false,automation:{limits:{kills:5}}}});
+  await f.step(1000);expect(f.socket.writes.filter(raw=>new Uint8Array(raw as ArrayBuffer)[0]===FEATURE_OP.useItem)).toHaveLength(1);
+  f.page.__RAYRAG__!.control('apply',{...draft,radius:99},undefined,undefined,undefined,'b'.repeat(32));
+  expect(f.c.snapshot()).toMatchObject({settingsApply:{state:'rejected'},activeSettings:{radius:8}});
+});
+it('With game client Stop cancels pending Apply without repeating late-confirmed recovery',async()=>{
+  const f=await fixture();f.c.engine.receive([{type:'heal',id:0,hp:55,maxHp:100},{type:'inventory',items:[{bagId:501,itemId:501,type:1,count:4}],equipment:[],ammoId:-1}]);
+  const automation=structuredClone(DEFAULT_AUTOMATION);automation.combat.mode='off';automation.hpPotions={mode:'selected',itemIds:[501],belowPercent:60,minStock:1,cooldownSeconds:10};
+  const settings={...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation};f.start(settings);await f.step(1000);
+  f.page.__RAYRAG__!.control('apply',{...settings,radius:8},undefined,undefined,undefined,'a'.repeat(32));f.page.__RAYRAG__!.control('stop');
+  await f.packet(new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(0).bool(false).finish());
+  expect(f.c.snapshot()).toMatchObject({runRequested:false,activeSettings:null,settingsApply:{state:'cancelled'}});
+  expect(f.socket.writes.filter(raw=>new Uint8Array(raw as ArrayBuffer)[0]===FEATURE_OP.useItem)).toHaveLength(1);
 });

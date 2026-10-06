@@ -1,7 +1,9 @@
 import { farmingDestination, validateDeathRecoveryGuard, type DeathRecoveryGuard } from '../recovery/death-recovery';
+import { validExperienceGains, validRunExperience, type ExperienceGains, type RunExperience } from './run-experience-logic';
 import { validateSettings, type SettingsInput as Settings, type RunSettings } from '../settings/settings';
 import { validateSupplyResumeGuard, type SupplyResumeGuard } from '../services/supply-trip-logic';
 import { validateEscapeResumeGuard, type EscapeRecovery, type EscapeResumeGuard, type EscapeSnapshot } from '../recovery/escape-logic';
+import { validateLiveSettingsGuard, type LiveSettingsGuard, type SettingsApplySnapshot } from '../settings/live-settings-logic';
 export const INITIAL_DELAY = 5_000;
 
 export const MAX_DELAY = 60_000;
@@ -12,10 +14,13 @@ export interface RunSession {
   sessionId: string; connected: boolean; compatible: boolean; map: string;
   player: { name: string; dead?: boolean } | null; runRequested?: boolean;
   kills?: number; looted?: number; deaths?: number; attacks?: number;
+  runExperience?: RunExperience | null;
   escape?: EscapeSnapshot; supplyGuard?:SupplyResumeGuard; deathRecoveryGuard?:DeathRecoveryGuard;
+  settingsApply?:SettingsApplySnapshot|null;activeSettings?:Settings|null;
+  liveSettingsGuard?:LiveSettingsGuard|null;
 }
 
-export interface ResumeRequest { generation: number; sessionId: string; settings: Settings; escapeGuard?: EscapeResumeGuard; supplyGuard?:SupplyResumeGuard; deathRecoveryGuard?:DeathRecoveryGuard }
+export interface ResumeRequest { generation: number; sessionId: string; settings: Settings; escapeGuard?: EscapeResumeGuard; supplyGuard?:SupplyResumeGuard; deathRecoveryGuard?:DeathRecoveryGuard;liveSettingsGuard?:LiveSettingsGuard }
 
 export const MAX_ESCAPE_GUARDS = 64;
 
@@ -33,6 +38,8 @@ export interface FieldRunCheckpoint {
   startedAt: number; metricsSession: string; previous: FieldMetrics; totals: FieldMetrics;
   escapeGuard: RetainedEscape | null; supplyGuard: RetainedSupply | null; deathGuard: RetainedDeath | null;
   escapeOverflowUncertain: boolean; supplyOverflow: boolean; deathOverflow: boolean;
+  experience?: { gains: ExperienceGains; previous: RunExperience | null; session: string };
+  liveSettingsGuard?:LiveSettingsGuard|null;
 }
 
 const MAX_TIMESTAMP = 8_640_000_000_000_000;
@@ -53,7 +60,7 @@ function checkpointRecord(value: unknown, required: string[], optional: string[]
 export type ValidatedFieldRunCheckpoint = Omit<FieldRunCheckpoint, 'desired'> & {desired:RunSettings};
 export function validateFieldRunCheckpoint(value: unknown, now: number): ValidatedFieldRunCheckpoint {
   const v = checkpointRecord(value, ['version', 'desired', 'character', 'session', 'generation', 'startedAt', 'metricsSession',
-    'previous', 'totals', 'escapeGuard', 'supplyGuard', 'deathGuard', 'escapeOverflowUncertain', 'supplyOverflow', 'deathOverflow']);
+    'previous', 'totals', 'escapeGuard', 'supplyGuard', 'deathGuard', 'escapeOverflowUncertain', 'supplyOverflow', 'deathOverflow'], ['experience', 'liveSettingsGuard']);
   if (v.version !== 1 || typeof v.character !== 'string' || !v.character.trim() || v.character.length > 64
     || /[\u0000-\u001f\u007f]/.test(v.character)
     || /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(v.character)
@@ -63,6 +70,14 @@ export function validateFieldRunCheckpoint(value: unknown, now: number): Validat
     || ['escapeOverflowUncertain', 'supplyOverflow', 'deathOverflow'].some(key => typeof v[key] !== 'boolean'))
     throw new Error('Invalid field run checkpoint identity or bounds.');
   const desired = validateSettings(v.desired as Settings);
+  if (v.experience !== undefined) {
+    const experience = checkpointRecord(v.experience, ['gains', 'previous', 'session']);
+    if (!validExperienceGains(experience.gains) || !sessionIdentity(experience.session)
+      || experience.previous !== null && (!validRunExperience(experience.previous) || experience.previous.character !== v.character))
+      throw new Error('Invalid field run experience checkpoint.');
+  }
+  const liveSettingsGuard=v.liveSettingsGuard===undefined||v.liveSettingsGuard===null?null:validateLiveSettingsGuard(v.liveSettingsGuard,now);
+  if(liveSettingsGuard&&liveSettingsGuard.character!==v.character)throw new Error('Live settings protection belongs to another character.');
   if (v.escapeGuard === null && !v.escapeOverflowUncertain
     || desired.automation?.supply?.enabled && v.supplyGuard === null && !v.supplyOverflow)
     throw new Error('Missing field run allowance state.');
@@ -94,5 +109,5 @@ export function validateFieldRunCheckpoint(value: unknown, now: number): Validat
       || guard.returnDeadline > retained.at + (guard.phase === 'return' ? guard.returnSeconds : guard.recoverySeconds + guard.returnSeconds) * 1000)
       throw new Error('Invalid field run death owner or deadline.');
   }
-  return { ...structuredClone(value) as FieldRunCheckpoint, desired };
+  return { ...structuredClone(value) as FieldRunCheckpoint, desired, liveSettingsGuard };
 }

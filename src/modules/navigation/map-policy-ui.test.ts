@@ -11,10 +11,11 @@ function setup(settings=()=>DEFAULT_SETTINGS){
 }
 describe('map policy status rendering',()=>{
   it('omits stale idle/Stopped task labels while retaining observed counters and an active task',()=>{
-    const ui=setup();const observed={elapsedSeconds:123,deaths:2,character:{experience:{baseGained:250,jobGained:125}}};
+    const ui=setup();const observed={elapsedSeconds:123,deaths:2,character:{experience:{baseGained:21,jobGained:18}},runExperience:{baseGained:250,jobGained:125}};
     ui.render({...observed,running:true,task:{kind:'idle',pending:false,label:'Ready. Choose your targets and press Start.'}});
     expect(ui.session.textContent).toContain('2m 3s');expect(ui.session.textContent).toContain('2 deaths');expect(ui.session.textContent).toContain('Base EXP +250');
     expect(ui.session.textContent).not.toContain('Choose your targets');
+    expect(ui.session.textContent).toContain('EXP gained this run');expect(ui.session.textContent).not.toContain('Base EXP +21');
     ui.render({...observed,running:false,task:{kind:'attack',pending:true,label:'Attacking Poring'}});expect(ui.session.textContent).not.toContain('Attacking');
     ui.render({...observed,running:true,task:{kind:'attack',pending:true,label:'Walking toward Poring'}});expect(ui.session.textContent).toContain('Walking toward Poring');
   });

@@ -1,4 +1,5 @@
 import { quantity, revisionFor, partyMemberId, type ItemId, type Quantity } from '../../shared/domain-values';
+import { addExperience, type RunExperience } from '../session/run-experience-logic';
 import { skillId as domainSkillId, itemId as domainItemId, bagId as domainBagId } from '../../shared/domain-values';
 import { filter, map } from 'remeda';
 import { fieldIdentityWaitReason, fieldResumeDecision } from './controller-field-policy';
@@ -49,6 +50,7 @@ import { dispositionStockFloors, publishedDispositionMetadata } from '../service
 import { BUILTIN_SERVICES, serviceByContractId,resolveServiceNpc, type NpcServiceDefinition } from '../services/npc-services';
 import { confirmWorkflowReceipt, stock, type WorkflowReceipt } from '../services/workflows';
 import { EmergencyEscape, validateEscapeResumeGuard, type EscapeContext, type EscapeSnapshot, type EscapeResumeGuard } from '../recovery/escape';
+import { liveSettingsGuard, planLiveSettings, validSettingsApplyId, validateLiveSettingsGuard, type LiveSettingsGuard, type LiveSettingsPlan, type SettingsApplySnapshot } from '../settings/live-settings-logic';
 
 
 export type ControllerAction = ExpandedAction | WorldAction;
@@ -90,6 +92,9 @@ export interface CompanionSnapshot extends Snapshot {
   partyHeal?:PartyHealSnapshot;
   refine: RefineSnapshot;
   warp: WarpSnapshot;
+  activeSettings: Settings | null;
+  settingsApply: SettingsApplySnapshot | null;
+  liveSettingsGuard: LiveSettingsGuard | null;
 }
 function expanded(value: unknown): value is ExpandedAction {
   try { validateExpandedAction(value); return true; } catch { return false; }
@@ -159,6 +164,10 @@ export class CompanionController {
   private returnSettings: Settings | null = null;
   private returning = false;
   private requestedSettings: RunSettings | null = null;
+  private protectedSettings: Settings | null = null;
+  private pendingSettings: { id: string; plan: LiveSettingsPlan; character: string } | null = null;
+  private settingsApply: SettingsApplySnapshot | null = null;
+  private resourceGuard: LiveSettingsGuard | null = null;
   private retryAt = 0;
   private retries = 0;
   private yieldUntil = 0;
@@ -181,6 +190,11 @@ export class CompanionController {
   private enteredConnection = false;
   private runKills = 0;
   private runPickups = 0;
+  private experienceRun = 0;
+  private runExperience: RunExperience | null = null;
+  private experienceConnection = -1;
+  private reconnectExperience: BotEngine['character']['experience'] = null;
+  private reconnectExperienceCharacter: string | null = null;
   private characterName: string | null = null;
   private featureMacroSequence:number|null=null;
   private get featureReceipt(){return this.engine.actionReceipts.receipt;}
@@ -295,6 +309,7 @@ export class CompanionController {
   }
   get active(): boolean { return this.runRequested || this.executing; }
   connect(compatible: boolean): void {
+    if (this.engine.character.experience) { this.reconnectExperience = { ...this.engine.character.experience }; this.reconnectExperienceCharacter = this.engine.player?.name ?? null; }
     this.endMacro('Macro interrupted by reconnect.',true);
     this.partyHeal.cancel('The game transport changed.');
     this.ownArrival=null;this.readyOwn=null;this.enteredConnection=false;
@@ -312,6 +327,7 @@ export class CompanionController {
     this.waitingReason = this.engine.reason; this.retryAt = 0;
   }
   disconnect(): void {
+    if (this.engine.character.experience) { this.reconnectExperience = { ...this.engine.character.experience }; this.reconnectExperienceCharacter = this.engine.player?.name ?? null; }
     this.endMacro('Macro interrupted by disconnect.',true);
     this.ownArrival=null;this.readyOwn=null;
     this.socketInitialization=null;
@@ -364,6 +380,8 @@ export class CompanionController {
 
   }
   stop(reason = 'Stopped by you.'): void {
+    if(this.pendingSettings&&this.settingsApply)this.settingsApply={...this.settingsApply,state:'cancelled',pending:[],reason:'Stop cancelled the pending Apply.'};
+    this.pendingSettings=null;
     this.engine.cancelUpdate();this.updateSuspended=false;
     this.endMacro(reason);
     this.engine.castAvailability.stop(reason);
@@ -501,7 +519,7 @@ export class CompanionController {
     if(!this.updateSuspended||!this.settledForMaintenance())return null;
     const macro=this.macro.active?this.macro.checkpoint():null,partyHeal=this.partyHeal.checkpoint();
     if(this.macro.active&&!macro||!partyHeal)return null;
-    return {version:1,frozenAt:this.now(),status:structuredClone(this.snapshot()),settings:structuredClone(this.macroBase??this.requestedSettings),macro,partyHeal,
+    return {version:1,frozenAt:this.now(),status:structuredClone(this.snapshot()),settings:structuredClone(this.macroBase??this.requestedSettings),macro,partyHeal,liveSettingsGuard:this.liveSettingsProtection(),
       run:this.runRequested||this.macro.active?{startedAt:this.started,kills:Math.max(0,this.engine.kills-this.runKills),pickups:Math.max(0,this.engine.looted-this.runPickups),deaths:this.engine.deaths}:null};
   }
   cancelUpdate():void {this.updateSuspended=false;this.engine.cancelUpdate();this.lastTick=this.now();}
@@ -528,9 +546,14 @@ export class CompanionController {
     if(settings&&checkpoint.run){
       const run=remainingSettings?{...checkpoint.run,startedAt:this.now(),kills:0,pickups:0,deaths:0}:checkpoint.run;
       this.engine.restoreRequestedRun(settings,run);
+      if(checkpoint.liveSettingsGuard){this.resourceGuard=checkpoint.liveSettingsGuard;this.engine.restoreLiveSettingsCooldowns(checkpoint.liveSettingsGuard.cooldowns);}
       this.supply.configure(settings,this.supplyContext(),supplyGuard);
       this.started=run.startedAt;this.runKills=this.engine.kills-run.kills;this.runPickups=this.engine.looted-run.pickups;
       this.cycleDeaths=this.engine.deaths;this.characterName=this.engine.player!.name;
+      if (checkpoint.status.runExperience) {
+        this.runExperience = { ...checkpoint.status.runExperience, ...(remainingSettings ? { revision: 0, baseGained: 0, jobGained: 0 } : {}) };
+        this.experienceRun = this.runExperience.run; this.experienceConnection = this.connectionEpoch;
+      }
       this.requestedSettings=checkpoint.status.runRequested?structuredClone(settings):null;
       this.returnSettings=automationSettings(settings).travel.returnToLockMap?{...structuredClone(settings),map:farmingDestination(settings)}:null;
       if(recoveryGuard){this.deathCycle=deathCycle(recoveryGuard,this.now());this.returning=true;}
@@ -564,9 +587,11 @@ export class CompanionController {
     if(!this.engine.observedOwnCastSettled())throw new Error(OWN_CAST_WAIT_REASON);
     if (this.deathCycle?.guard.uncertain || this.deathCycle?.posture || this.warp.blocked || this.socket.busy || this.memo.blocked || this.active || this.escape.busy || this.supply.uncertain || this.unresolvedWorld || this.now() < this.fencedUntil || !this.engine.idleForActions()) throw new Error('Stop automation and wait for the current action to finish.');
   }
-  start(input: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard): void {
+  start(input: Settings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard, liveGuard?: LiveSettingsGuard): void {
     if(this.updateSuspended)throw new Error('Client update is waiting for current actions to settle.');
     const settings = validateSettings(input);
+    const protection=liveGuard?validateLiveSettingsGuard(liveGuard,this.now()):null;
+    if(protection&&protection.character!==this.engine.player?.name)throw new Error('Live settings protection belongs to a different character.');
     if(recoveryGuard){recoveryGuard=validateDeathRecoveryGuard(recoveryGuard);
       if(recoveryGuard.character!==this.engine.player?.name||recoveryGuard.destination!==farmingDestination(settings))throw new Error('Death recovery state belongs to a different character or farming destination.');}
 
@@ -580,7 +605,61 @@ export class CompanionController {
     if(!this.travel.movementSettled(this.engine.map,this.engine.player))throw new Error('Waiting for canceled rendezvous movement to settle before Start.');
     if(this.partyHeal.busy)throw new Error('Waiting for the previous party Heal execution receipt.');
     this.beginRun(settings, escapeGuard, supplyGuard, recoveryGuard);
+    if(protection){this.resourceGuard=protection;this.engine.restoreLiveSettingsCooldowns(protection.cooldowns);}
     this.tick();
+  }
+  /** An Apply request changes no game action or run allowance. Runtime status,
+   * rather than native dispatch success, acknowledges the committed projection.
+   */
+  applySettings(input: Settings, id: string): void {
+    if(!validSettingsApplyId(id))throw new Error('Invalid settings Apply request.');
+    if(this.settingsApply?.id===id)return;
+    try {
+      if(this.updateSuspended)throw new Error('Wait for the client update before applying settings.');
+      if(!this.requestedSettings)throw new Error('No current field run. Saved settings will be used by Start.');
+      const plan=planLiveSettings(this.requestedSettings,input,this.protectedSettings??this.requestedSettings,this.resourceGuard);
+      if(this.macro.active)throw new Error('Macro field settings are owned by the script. Saved edits are for the next run.');
+      this.pendingSettings={id,plan,character:this.characterName??this.engine.player?.name??''};
+      this.settingsApply={id,state:'pending',applied:[],pending:plan.live,nextRun:plan.nextRun,reason:'Waiting for the current action and its confirmation to settle.'};
+      this.applySettledSettings();
+    } catch(error) {
+      this.pendingSettings=null;
+      this.settingsApply={id,state:'rejected',applied:[],pending:[],nextRun:[],reason:error instanceof Error?error.message:'Invalid settings draft.'};
+    }
+  }
+  private applySettledSettings(): void {
+    const request=this.pendingSettings,e=this.engine;
+    if(!request||!this.requestedSettings||this.updateSuspended)return;
+    if(!e.connected||!e.compatible||!e.player||e.player.name!==request.character||this.now()-this.lastFrame>15_000
+      ||!e.actorActionIdentity(undefined,true)||!this.movementSettled()||!e.settledForSettings()||this.pending||this.featureReceipt||this.workflowOutstanding||this.unresolvedWorld
+      ||this.blockedReason||this.travel.active||this.service.active||this.workflow.snapshot().running||['running','waiting'].includes(this.routine.snapshot().state)
+      ||this.macro.active||this.partyFollow.ownsTravel||this.supply.ownsField||this.supply.uncertain||this.escape.busy||this.warp.blocked
+      ||this.refine.maintenanceBlocked||this.memo.blocked||this.socket.busy||this.social.busy||this.partyHeal.busy||this.partyHeal.awaitingSpReadback
+      ||this.deathCycle?.guard.uncertain||this.deathCycle?.posture||this.now()<this.fencedUntil||this.now()<this.yieldUntil
+      ||this.world.npc.id!==null||this.world.npc.mode!=='idle'||this.world.vending)return;
+    try {
+    const settings=request.plan.settings;
+    const engineSettings=validateSettings({...settings,map:e.settings.map});
+    const returnSettings=this.returnSettings?validateSettings({...settings,map:this.returnSettings.map}):null;
+    const originalGuard=liveSettingsGuard(this.protectedSettings??this.requestedSettings,this.resourceGuard,request.character,e.liveSettingsCooldowns(),this.now());
+    const protection=liveSettingsGuard(settings,originalGuard,request.character,e.liveSettingsCooldowns(),this.now());
+    // All admissions precede this synchronous commit. No new-run initializer,
+    // scheduler reset, guard configuration or transport effect is involved.
+    e.applyRunSettings(engineSettings);
+    this.requestedSettings=settings;
+    this.returnSettings=returnSettings;
+    this.resourceGuard=protection;
+    this.pendingSettings=null;
+    this.settingsApply={id:request.id,state:'applied',applied:request.plan.live,pending:[],nextRun:request.plan.nextRun,
+      reason:'Applied to the same run. Original allowances, reserves and cooldowns remain protected.'};
+    } catch(error) {
+      this.pendingSettings=null;
+      this.settingsApply={id:request.id,state:'rejected',applied:[],pending:[],nextRun:request.plan.nextRun,
+        reason:error instanceof Error?error.message:'Could not admit settings at the settled boundary.'};
+    }
+  }
+  private liveSettingsProtection():LiveSettingsGuard|null {
+    return this.requestedSettings&&this.resourceGuard?liveSettingsGuard(this.requestedSettings,this.resourceGuard,this.characterName??this.resourceGuard.character,this.engine.liveSettingsCooldowns(),this.now()):null;
   }
   /** Explicit run initialization happens once; stage projections only resume it. */
   private beginRun(settings: RunSettings, escapeGuard?: EscapeResumeGuard, supplyGuard?: SupplyResumeGuard, recoveryGuard?: DeathRecoveryGuard): void {
@@ -594,7 +673,10 @@ export class CompanionController {
     this.returnSettings=automationSettings(settings).travel.returnToLockMap?{...structuredClone(settings),map:farmingDestination(settings)}:null;
     this.returning=!!this.deathCycle;
     this.requestedSettings = settings; this.characterName = this.engine.player?.name ?? null; this.engine.actionReceipts.discardReceipt();this.featureMacroSequence=null;
+    this.protectedSettings=settings;this.pendingSettings=null;this.settingsApply=null;this.resourceGuard=null;
     this.started = this.now(); this.lastTick = this.now(); this.retryAt = 0; this.retries = 0;
+    this.runExperience = { character: this.characterName!, run: ++this.experienceRun, revision: 0, baseGained: 0, jobGained: 0 };
+    this.experienceConnection = this.connectionEpoch;
     this.blockedReason = ''; this.waitingReason = 'Preparing the requested run.';
     this.seenActionKey = `${this.engine.actionResult.sequence}:${this.engine.actionResult.status}`;
     this.runKills = this.engine.kills; this.runPickups = this.engine.looted;
@@ -922,6 +1004,20 @@ export class CompanionController {
       ??this.engine.fieldMovementReceiptOwner(event,this.fieldWalkOwner)]));
     this.warp.observeDeath(events,this.warpContext());
     this.engine.receive(events);
+    for (const event of events) if (event.type === 'experience') {
+      const baseline = this.reconnectExperience;
+      // A reconnect can republish the last reward after the fresh own entry.
+      // It remains a current/latest observation, but is not a new run reward.
+      if (baseline && (!this.engine.player || this.engine.player.name === this.reconnectExperienceCharacter)
+        && event.baseTotal === baseline.baseTotal && event.jobTotal === baseline.jobTotal
+        && event.baseGained === baseline.baseGained && event.jobGained === baseline.jobGained) continue;
+      this.reconnectExperience = null;
+      if (this.runExperience && (this.runRequested || this.macro.active)
+        && this.experienceConnection === this.connectionEpoch && this.engine.player?.name === this.runExperience.character) {
+        const revision: number = this.runExperience.revision + 1;
+        this.runExperience = { ...this.runExperience, ...(Number.isSafeInteger(revision) ? addExperience(this.runExperience, event) : { baseGained: null, jobGained: null }), revision: Math.min(Number.MAX_SAFE_INTEGER, revision) };
+      }
+    }
     this.world.refreshPartyActors(this.engine.observations,this.engine.playerId);
     this.engine.partyChanged();
     const readyIdentity=this.engine.actorActionIdentity(),readyPlayer=this.engine.player;
@@ -930,6 +1026,9 @@ export class CompanionController {
       ||event.type==='resurrection'&&event.id===readyPlayer.id&&event.hp>0))
       {this.readyOwn={identity:JSON.stringify([this.connectionEpoch,readyIdentity]),name:readyPlayer.name,
         initialization:!!this.ownArrival?.initialization&&events.some(event=>event.type==='spawn'&&event.entity.id===readyPlayer.id&&event.entryType===1)};this.ownArrival=null;
+        // Observation resumes at verified entry even when HP or travel keeps
+        // automation waiting. Replayed initialization rewards remain filtered.
+        if(this.runRequested&&this.runExperience?.character===readyPlayer.name)this.experienceConnection=this.connectionEpoch;
         // The server freezes accumulated input debt while the actor is inactive
         // during map loading. Start draining time from fresh own arrival.
         if(this.databaseTravel){this.quietUntil=Math.max(this.quietUntil,this.now()+2_000);
@@ -1620,6 +1719,7 @@ export class CompanionController {
     }
   }
   private resumeRun(): void {
+    if(this.pendingSettings)return;
     if(this.macro.active&&(!this.macro.fieldIntent||this.macro.snapshot().fieldSuspended)&&this.macroOwner?.phase!=='farm')return;
     const settings = this.requestedSettings;
     if(this.partyFollow.enabled){this.partyFollow.update(this.partyFollowContext());if(this.partyFollow.snapshot().state!=='following')return;}
@@ -1668,6 +1768,7 @@ export class CompanionController {
         }
         const bound = { ...settings, map: executionPolicy.lockArea ? settings.map : this.engine.map };
         this.engine.resumeRequested(bound);
+        this.experienceConnection = this.connectionEpoch;
         this.returning = false; this.travelSettings = null; this.waitingReason = ''; this.retries = 0;
       }
     } catch (error) {
@@ -1678,6 +1779,7 @@ export class CompanionController {
   }
   tick(): void {
     if(this.updateSuspended){this.updateTick();return;}
+    this.applySettledSettings();
     const now = this.now();
     // Macro duration and step deadlines cannot be renewed by another owner's wait.
     this.pollMacro();
@@ -1761,7 +1863,8 @@ export class CompanionController {
     if(this.macroTick())return;
     const wasRunning = this.engine.running;
     const manualBlocker=this.engine.manualTargetActive?this.manualWorldBlocker():null;if(manualBlocker)this.engine.stop(manualBlocker);
-    this.engine.tick(!this.macroOwner&&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending); this.captureActionFailure();
+    this.engine.tick(!this.pendingSettings&&!this.macroOwner&&this.world.npc.id===null&&this.world.npc.mode==='idle'&&!this.world.vending); this.captureActionFailure();
+    this.applySettledSettings();
     if (this.runRequested && wasRunning && !this.engine.running && !this.engine.player?.dead
       && !this.engine.reason.includes('HP reached')) {
       this.waitingReason = this.engine.reason; this.retryAt = Math.max(this.retryAt, now + 5_000);
@@ -1885,7 +1988,9 @@ export class CompanionController {
       || this.partyFollow.ownsTravel || this.escape.inFlight || this.macro.active || ['running','waiting'].includes(routine.state));
     if (this.runRequested && !executing) snapshot.reason = this.blockedReason || this.waitingReason || snapshot.reason;
     if(this.runRequested&&this.now()<this.yieldUntil&&!this.blockedReason)snapshot.reason=this.waitingReason;
-    return { ...snapshot, running: executing, runRequested: this.runRequested,
+    return { ...snapshot, runExperience: this.runExperience ? { ...this.runExperience } : null, running: executing, runRequested: this.runRequested,
+      activeSettings:this.requestedSettings?structuredClone(this.requestedSettings):null,settingsApply:this.settingsApply?structuredClone(this.settingsApply):null,
+      liveSettingsGuard:this.liveSettingsProtection(),
       state: executing ? 'running' : this.runRequested ? 'waiting' : 'idle',
       runIntent: this.runRequested, elapsedSeconds: this.runRequested ? Math.max(0, Math.floor((this.now() - this.started) / 1000)) : snapshot.elapsedSeconds,
       refine, world: this.world.snapshot(), workflow, routine, macro, travel, service, partyFollow:this.partyFollow.snapshot(), escape: this.escape.snapshot(), supply:this.supply.snapshot(),supplyGuard:this.supply.guard(),deathRecoveryGuard:this.deathCycle?deathGuard(this.deathCycle):undefined,social:this.social.snapshot(),memo:this.memo.snapshot(this.memoContext()),socket:this.socket.snapshot(this.socketContext()),warp:this.warp.snapshot(this.warpContext()),partyHeal:this.partyHeal.snapshot() };

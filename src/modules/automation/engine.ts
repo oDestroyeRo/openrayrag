@@ -41,6 +41,7 @@ export interface NavigationStatus extends NavigationSummary {
   goal: Position | null; route: Position[]; leg: Position[]; routeLength: number;
 }
 export interface Snapshot {
+  runExperience?: import('../session/run-experience-logic').RunExperience | null;
   connected: boolean; compatible: boolean; running: boolean; reason: string;
   map: string; player: Entity | null; monsters: Entity[]; drops: Drop[];
   attacks: number; kills: number; looted: number; target: string; log: LogEntry[]; navigation: NavigationStatus | null;
@@ -239,12 +240,28 @@ export class BotEngine {
     const reserveStop = automationSettings(this.settings).loadout.enabled && this.loadout.requestStop(reason);
     this.loadout.cancel();this.strategies.cancel();this.strategyWait=null;
     const pendingSkill = this.automation.pendingAction?.type === 'skill';
-    this.combatConditions.clear();this.running = false; this.runIntent = false; this.automation.reset(); this.stoppedAt = this.now(); this.pending = null; this.route = null; this.leg = null; this.reason = reason;
+    this.combatConditions.clear();this.running = false; this.runIntent = false; this.automation.reset(false,this.liveSettingsApplied); this.stoppedAt = this.now(); this.pending = null; this.route = null; this.leg = null; this.reason = reason;
     if (sendStop && (wasRunning || pendingSkill || (wasManual || reserveStop) && this.manualReceiptAdmitted()) && this.connected) {
       try { this.send({ type: 'stop' }); }
       catch { this.connected = false; this.compatible = false; this.reason = 'Connection lost while stopping.'; }
     }
     if (wasRunning || this.log[0]?.text !== reason) this.note(reason);
+  }
+  private liveSettingsApplied = false;
+  restoreLiveSettingsCooldowns(rows:ReadonlyArray<{key:string;at:number}>):void {this.automation.restoreRecoveryCooldowns(rows);this.liveSettingsApplied=true;}
+  liveSettingsCooldowns():Array<{key:string;at:number}>{return this.automation.recoveryCooldowns();}
+  /** A run may be active at this boundary; sent ownership must be fully drained. */
+  settledForSettings(): boolean {
+    this.advanceMovement();
+    return this.observedOwnCastSettled() && this.featureActionsSettled && !this.manualTargetOwned
+      && !this.pending && !this.leg && !this.ownMotion() && !this.awaitsImplicitWalk() && !this.loadout.blocked;
+  }
+  applyRunSettings(input: Settings): void {
+    const settings = validateSettings(input);
+    if (!this.settledForSettings()) throw new Error('Waiting for the current action and movement to settle.');
+    this.settings = settings; this.liveSettingsApplied = true;
+    // These are unsent plans, never transmitted action or resource receipts.
+    this.route = null; this.combatConditions.clear();
   }
   start(settings: Settings, continuing = false): void {
     if(this.retreatOwned)throw new Error('Wait for retreat movement and target-clear reconciliation.');
@@ -271,7 +288,8 @@ export class BotEngine {
       if (!navigation.safe(p)) throw new Error('Move onto open ground away from portals before starting.');
     }
     this.route = null; this.leg = null; this.routeFailures = 0; this.routeStep = validated.route_step;
-    this.settings = validated; this.combatConditions.clear();this.automation.reset(); this.loadout.newRun();
+    if(!continuing)this.liveSettingsApplied=false;
+    this.settings = validated; this.combatConditions.clear();this.automation.reset(false,this.liveSettingsApplied); this.loadout.newRun();
     this.retreatStatus={...IDLE_RETREAT,...(retreatSettings(validated).enabled?{state:'watching',reason:'Watching an accepted normal ranged engagement for bounded retreat.'} as const:{})};
     this.pending = null; this.excluded.clear();
     if(!continuing||!sameActionIdentity(this.lootOwner,this.actorActionIdentity()))this.clearLootEvidence();
@@ -366,7 +384,7 @@ export class BotEngine {
     this.observations.reset();this.strategies.reset();this.strategyWait=null;this.serverTargetId=null;this.combatConditions.clear();this.revivableActors.clear();
     this.loadout.reset(preserveCharacter);
     if(!preserveCharacter)this.respawnRefreshPending=false;
-    if(preserveCharacter)this.character.resetField();else {this.character.reset();this.automation.reset(true);this.runIntent=false;} this.implicitWalk = null; this.motions.clear(); this.navigator = null; this.navigationMap = ''; this.route = null; this.leg = null; this.routeFailures = 0;
+    if(preserveCharacter)this.character.resetField();else {this.character.reset();this.automation.reset(true,this.liveSettingsApplied);this.runIntent=false;} this.implicitWalk = null; this.motions.clear(); this.navigator = null; this.navigationMap = ''; this.route = null; this.leg = null; this.routeFailures = 0;
     this.entities.clear(); this.actors.clear(); this.aggressors.clear(); this.drops.clear(); this.foreignTargets.clear(); this.partyEngagements.clear(); this.excluded.clear();
     this.clearLootEvidence();this.skillKills.clear();this.skillTargets.clear();this.pending = null;this.map='';this.playerId=null;
   }
@@ -1043,7 +1061,7 @@ export class BotEngine {
     if (attack || route && this.leg) this.implicitWalk ??= {targetId:null,until:this.now()+4000};
     if (this.implicitWalk) this.implicitWalk.targetId = null;
     if (cast) {
-      this.automation.reset(); this.strategies.cancel();
+      this.automation.reset(false,this.liveSettingsApplied); this.strategies.cancel();
       // Preserve requested intent and clocks, but hand the sent cast back to
       // the controller's retained receipt fence before any new field decision.
       this.running = false; this.stoppedAt = this.now();
@@ -1311,6 +1329,7 @@ export class BotEngine {
   prepareRequestedRun(input:Settings):void {
     if(this.running||this.manualTargetOwned||this.automation.pendingAction)throw new Error('Stop the current run and wait for its action before requesting another.');
     this.settings=validateSettings(input);
+    this.liveSettingsApplied=false;this.automation.clearCooldowns();
     this.clearLootEvidence();
     // Entry travel is part of the requested run, including deaths and elapsed time.
     // This does not release movement/resource fences or authorize field actions.
@@ -1359,7 +1378,7 @@ export class BotEngine {
     this.deaths++;
     const a=automationSettings(this.settings);
     if(this.running&&a.respawn.enabled&&this.deaths<=a.respawn.maxDeaths) {
-      this.pending=null;this.route=null;this.leg=null;this.automation.reset();this.reason='Character died; automatic respawn is enabled.';this.note(this.reason);
+      this.pending=null;this.route=null;this.leg=null;this.automation.reset(false,this.liveSettingsApplied);this.reason='Character died; automatic respawn is enabled.';this.note(this.reason);
     } else this.stop(a.respawn.enabled&&this.deaths>a.respawn.maxDeaths
       ?`Death limit reached. ${deathLimitGuidance(this.deaths,a.respawn.maxDeaths)}`
       :a.respawn.enabled?'Character died. Waiting for revival.':'Character died. Recover manually before restarting.');

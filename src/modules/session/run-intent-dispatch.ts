@@ -40,6 +40,7 @@ export class RunIntentDispatch {
     const character = status.player.name, session = status.sessionId;
     this.field.begin(settings, character, session, {
       kills: status.kills ?? 0, looted: status.looted ?? 0, deaths: status.deaths ?? 0, attacks: status.attacks ?? 0,
+      runExperience: status.runExperience,
     });
     this.held = false;
     const supplyGuard = this.field.supplyGuardForStart(settings, character, session);
@@ -68,7 +69,7 @@ export class RunIntentDispatch {
     return this.track('resume', async () => {
       try {
         const value = await this.dispatch('control_bot', { action: 'start', settings: request.settings,
-          escapeGuard: request.escapeGuard, supplyGuard: request.supplyGuard, deathRecoveryGuard: request.deathRecoveryGuard });
+          escapeGuard: request.escapeGuard, supplyGuard: request.supplyGuard, deathRecoveryGuard: request.deathRecoveryGuard,liveSettingsGuard:request.liveSettingsGuard });
         if (owner !== this.runOwner || !this.field.completeResume(request, true)) return { status: 'retired' };
         return { status: 'accepted', value };
       } catch (error) {
@@ -76,6 +77,16 @@ export class RunIntentDispatch {
         return { status: 'failed', error };
       }
     }, () => owner === this.runOwner);
+  }
+  applySettings(settings:SettingsInput,status:RunSession,id:string):Promise<DispatchReceipt> {
+    if(this.stopping||!this.field.registerSettingsApply(id,status))return Promise.resolve(this.receipt({status:'retired'},()=>false));
+    const owner=this.runOwner;
+    return this.track('manual',async()=>{
+      try{
+        const value=await this.dispatch('control_bot',{action:'apply',settings,applyId:id});
+        return owner===this.runOwner?{status:'accepted',value}:{status:'retired'};
+      }catch(error){this.field.cancelSettingsApply(id);return owner===this.runOwner?{status:'failed',error}:{status:'retired'};}
+    },()=>owner===this.runOwner);
   }
 
   login(request: unknown): Promise<DispatchReceipt> {

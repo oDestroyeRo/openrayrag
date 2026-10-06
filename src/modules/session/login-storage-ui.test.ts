@@ -8,6 +8,7 @@ import type { MacroUi } from '../automation/macro-ui';
 import type { UpdateContinuationInput } from '../update/update-continuation';
 import type { GameStatus } from '../client/game-status';
 import { searchGrid } from '../navigation/navigation';
+import { liveSettingsGuard } from '../settings/live-settings-logic';
 
 const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, scriptStorageFails: false, useEditor: false, editor: null as MacroUi | null, setupScript: null as BotScriptDocument['script'], setupSettings: null as SettingsInput | null, syncSetup: vi.fn(), clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, isTauri: () => true }));
@@ -73,6 +74,7 @@ class Element {
     }
   }
   append(...children:Element[]): void {for(const child of children){child.parentElement=this;this.children.push(child);if(child.id)this.elements.set(child.id,child);}}
+  prepend(...children:Element[]): void {for(const child of [...children].reverse()){child.parentElement=this;this.children.unshift(child);if(child.id)this.elements.set(child.id,child);}}
   replaceChildren(...children:Element[]): void {this.children=[];this.append(...children);}
   get childElementCount():number{return this.children.length;}
   querySelector(selector:string):Element|null {
@@ -156,6 +158,43 @@ async function publishStatus(status: GameStatus) {
   await settleMain();
 }
 function closeGame() { ipc.listen.mock.calls.find(call => call[0] === 'game-closed')![1]({ payload: undefined }); }
+
+it.each(['botOnly','gameClient'] as const)('edits a separate draft and acknowledges live Apply through Main in %s mode',async mode=>{
+  const f=await fixture(),ready={...readyStatus(),connectionMode:mode};
+  await publishStatus(ready);await f.get('select-targets').emit('click');await f.get('start').emit('click');
+  const settings=(f.calls('control_bot').find(call=>(call[1] as {action?:string}).action==='start')![1] as {settings:SettingsInput}).settings;
+  const active={...ready,running:true,runRequested:true,state:'running' as const,activeSettings:settings};
+  await publishStatus(active);
+  expect(f.get('radius').disabled).toBe(false);expect(f.get('loot').disabled).toBe(false);
+  await f.get('clear-targets').emit('click');await publishStatus(active);
+  expect(f.get('target-count').textContent).toBe('0 selected');
+  expect(f.get('apply-run-settings').disabled).toBe(true);
+  expect(f.get('console-setup-summary').textContent).toContain('Synthetic monster');
+  await f.get('select-targets').emit('click');
+  f.get('radius').value='8';f.get('loot').checked=false;f.get('route-step').value='11';await f.main.emit('input',f.get('radius'));
+  expect(f.get('console-setup-summary').textContent).toContain('Active run:');
+  expect(f.get('console-setup-summary').textContent).toContain('Own drops');
+  expect(f.get('console-saved-draft-summary').textContent).toContain('Pickup off');
+  expect(f.get('live-settings-status').textContent).toContain('Next run: Route step');
+  expect(f.calls('control_bot').filter(call=>(call[1] as {action?:string}).action==='apply')).toEqual([]);
+  expect(f.get('apply-run-settings').disabled).toBe(false);await f.get('apply-run-settings').emit('click');await settleMain();
+  const request=f.calls('control_bot').find(call=>(call[1] as {action?:string}).action==='apply')![1] as {applyId:string;settings:SettingsInput};
+  expect(request.settings).toMatchObject({radius:8,loot:false,route_step:11});
+  expect(f.get('apply-run-settings').disabled).toBe(true);
+  await publishStatus({...active,settingsApply:{id:request.applyId,state:'pending',applied:[],pending:['radius','loot'],nextRun:['route_step'],reason:'Waiting for action confirmation.'}});
+  expect(f.get('live-settings-status').textContent).toContain('Pending: Waiting for action confirmation.');
+  expect(f.get('console-setup-summary').textContent).toContain('Own drops');
+  const applied={...settings,radius:8,loot:false};
+  await publishStatus({...active,activeSettings:applied,liveSettingsGuard:liveSettingsGuard(applied,null,'Synthetic',[],Date.now()),
+    settingsApply:{id:request.applyId,state:'applied',applied:['radius','loot'],pending:[],nextRun:['route_step'],reason:'Applied to the same run.'}});
+  expect(f.get('console-setup-summary').textContent).toContain('Pickup off');
+  expect(f.get('live-settings-status').textContent).toContain('Applied to the same run.');
+  expect(f.get('route-step').value).toBe('11');
+  await publishStatus({...readyStatus('replacement'),connectionMode:mode});
+  const starts=f.calls('control_bot').filter(call=>(call[1] as {action?:string}).action==='start');
+  expect(starts).toHaveLength(2);
+  expect(starts[1]![1]).toMatchObject({settings:{radius:8,loot:false,route_step:settings.route_step}});
+});
 
 it('shares the existing login and active run between Game and Bot without reconnecting',async()=>{
   const f=await fixture({username:'synthetic-user',characterSlot:0,autoLogin:false,mode:'gameClient'});

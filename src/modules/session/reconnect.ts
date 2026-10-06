@@ -1,8 +1,10 @@
 import { minutes, minutesToMilliseconds } from '../../shared/domain-values';
+import { addExperience, experienceDifference, validRunExperience, type ExperienceGains, type RunExperience } from './run-experience-logic';
 import { deathLimitGuidance, farmingDestination, validateDeathRecoveryGuard, type DeathRecoveryGuard } from '../recovery/death-recovery';
 import { validateSettings, settingsDraft, type SettingsInput as Settings, type RunSettings } from '../settings/settings';
 import { validateSupplyResumeGuard, type SupplyResumeGuard } from '../services/supply-trip-logic';
 import { CONSERVATIVE_ESCAPE_RECOVERY, escapeRecovery, validateEscapeResumeGuard, type EscapeResumeGuard } from '../recovery/escape-logic';
+import { acknowledgedLiveSettings, mergeLiveSettingsGuards, validSettingsApplyId, validSettingsApplySnapshot, validateLiveSettingsGuard, type LiveSettingsGuard } from '../settings/live-settings-logic';
 
 import { INITIAL_DELAY, MAX_DELAY, transientFailure, type RunSession, type ResumeRequest, MAX_ESCAPE_GUARDS, type RetainedEscape, type RetainedSupply, type RetainedDeath, type FieldRunCheckpoint, type ValidatedFieldRunCheckpoint, sessionIdentity, timestamp, validateFieldRunCheckpoint as validateFieldRunCheckpointAt } from './reconnect-logic';
 
@@ -66,6 +68,8 @@ export class ReconnectPolicy {
 /** Only field settings survive game-page reloads; workflows and passwords do not. */
 export class PersistentFieldRun {
   private desired: RunSettings | null = null;
+  private settingsApplyOwner: { id: string; session: string; character: string } | null = null;
+  private resourceGuard: LiveSettingsGuard | null = null;
   private character = '';
   private session = '';
   private pendingSession = '';
@@ -74,6 +78,10 @@ export class PersistentFieldRun {
   private metricsSession = '';
   private previous = { kills: 0, looted: 0, deaths: 0, attacks: 0 };
   private totals = { kills: 0, looted: 0, deaths: 0, attacks: 0 };
+  private experienceGains: ExperienceGains | null = null;
+  private experiencePrevious: RunExperience | null = null;
+  private experienceCharacter = '';
+  private experienceSession = '';
   private readonly escapeGuards = new Map<string, RetainedEscape>();
   private escapeOverflowUncertain = false;
   private readonly supplyGuards=new Map<string,RetainedSupply>();
@@ -84,13 +92,15 @@ export class PersistentFieldRun {
   constructor(private readonly now = Date.now) {}
   checkpoint(): FieldRunCheckpoint | null {
     if (!this.desired) return null;
+    if(this.settingsApplyOwner)throw new Error('Wait for the settings Apply confirmation or Stop before continuing the run.');
     return validateFieldRunCheckpoint({ version: 1, desired: this.desired, character: this.character, session: this.session,
       generation: this.generation, startedAt: this.startedAt, metricsSession: this.metricsSession,
       previous: this.previous, totals: this.totals, escapeGuard: this.escapeGuards.get(this.character) ?? null,
+      experience: { gains: this.experienceGains ?? { baseGained: null, jobGained: null }, previous: this.experiencePrevious, session: this.experienceSession },
       supplyGuard: this.supplyGuards.get(this.character) ?? null, deathGuard: this.deathGuards.get(this.character) ?? null,
       escapeOverflowUncertain: this.escapeOverflowUncertain || this.escapeGuards.size >= MAX_ESCAPE_GUARDS,
       supplyOverflow: this.supplyOverflow || this.supplyGuards.size >= 64,
-      deathOverflow: this.deathOverflow || this.deathGuards.size >= 64 }, this.now());
+      deathOverflow: this.deathOverflow || this.deathGuards.size >= 64, liveSettingsGuard:this.resourceGuard }, this.now());
   }
   restore(checkpoint: unknown): void {
     if (this.desired) throw new Error('Stop the active field run before restoring its checkpoint.');
@@ -102,8 +112,12 @@ export class PersistentFieldRun {
     const generation = Math.max(this.generation, checked.generation) + 1;
     if (!Number.isSafeInteger(generation)) throw new Error('Field run generation exhausted.');
     this.desired = checked.desired; this.character = checked.character; this.session = checked.session;
+    this.resourceGuard=checked.liveSettingsGuard??null;this.settingsApplyOwner=null;
     this.pendingSession = ''; this.generation = generation; this.startedAt = checked.startedAt;
     this.metricsSession = checked.metricsSession; this.previous = checked.previous; this.totals = checked.totals;
+    this.experienceCharacter = checked.character; this.experienceSession = checked.experience?.session ?? checked.session;
+    this.experienceGains = checked.experience?.gains ?? { baseGained: null, jobGained: null };
+    this.experiencePrevious = checked.experience?.previous ?? null;
     // Preserve unrelated in-memory character guards if restore is used in the
     // same controller; a checkpoint only owns its active character.
     if (checked.escapeGuard) this.escapeGuards.set(checked.character, checked.escapeGuard);
@@ -113,7 +127,7 @@ export class PersistentFieldRun {
     this.supplyOverflow ||= checked.supplyOverflow; this.deathOverflow ||= checked.deathOverflow;
     this.settledUpdateSession = checked.session;
   }
-  begin(settings: Settings, character: string, sessionId: string, metrics: { kills: number; looted: number; deaths: number; attacks?: number } = { kills: 0, looted: 0, deaths: 0 }): void {
+  begin(settings: Settings, character: string, sessionId: string, metrics: { kills: number; looted: number; deaths: number; attacks?: number; runExperience?: RunExperience | null } = { kills: 0, looted: 0, deaths: 0 }): void {
     const checked=validateSettings(settings);
     // Reserve the first enabled allowance before native Start can outlive its
     // last publication. Default-off runs allocate no supply state.
@@ -123,6 +137,7 @@ export class PersistentFieldRun {
     const previousDeath=this.deathGuards.get(character);
     if(previousDeath&&!previousDeath.guard.uncertain)this.deathGuards.delete(character);
     this.desired = checked;
+    this.settingsApplyOwner=null;this.resourceGuard=null;
     if(initial)this.supplyGuards.set(character,{session:sessionId,at:this.now(),guard:initial});
     this.pruneEscapeGuards();
     if (!this.escapeGuards.has(character) && this.escapeGuards.size < MAX_ESCAPE_GUARDS)
@@ -130,10 +145,14 @@ export class PersistentFieldRun {
         ? { session: '', cooldownUntil: this.now() + 3_600_000, latched: true }
         : { session: sessionId, cooldownUntil: 0, latched: false });
     this.character = character; this.session = sessionId; this.pendingSession = ''; this.generation++; this.settledUpdateSession = '';
-    this.startedAt = this.now(); this.metricsSession = sessionId; this.previous = { ...metrics, attacks: metrics.attacks ?? 0 };
+    this.startedAt = this.now(); this.metricsSession = sessionId;
+    this.previous = { kills: metrics.kills, looted: metrics.looted, deaths: metrics.deaths, attacks: metrics.attacks ?? 0 };
     this.totals = { kills: 0, looted: 0, deaths: 0, attacks: 0 };
+    this.experienceGains = { baseGained: 0, jobGained: 0 }; this.experienceCharacter = character; this.experienceSession = sessionId;
+    this.experiencePrevious = validRunExperience(metrics.runExperience) && metrics.runExperience.character === character ? { ...metrics.runExperience } : null;
   }
   stop(): void {
+    this.settingsApplyOwner=null;this.resourceGuard=null;
     this.desired = null; this.character = ''; this.session = ''; this.pendingSession = ''; this.generation++; this.settledUpdateSession = '';
     this.metricsSession = ''; this.totals = { kills: 0, looted: 0, deaths: 0, attacks: 0 };
     // Stop does not prove whether an already sent wing was consumed. Keep the
@@ -142,6 +161,27 @@ export class PersistentFieldRun {
   /** Frozen updater telemetry keeps its capture time so downtime spends timers. */
   observe(status: RunSession, observedAt = this.now()): void {
     if (!timestamp(observedAt) || observedAt > this.now()) return;
+    this.observeExperience(status);
+    const owner=this.settingsApplyOwner,receipt=status.settingsApply;
+    if(owner&&this.desired&&status.sessionId===owner.session&&status.sessionId===this.session&&status.player?.name===owner.character
+      &&validSettingsApplySnapshot(receipt)&&receipt.id===owner.id) {
+      if(receipt.state==='applied'&&status.runRequested&&status.activeSettings) {
+        try{
+          if(!status.liveSettingsGuard)throw new Error('Live settings protection acknowledgement is missing.');
+          const protection=mergeLiveSettingsGuards(this.resourceGuard,status.liveSettingsGuard,this.now());
+          if(protection.character!==this.character)throw new Error('Live settings protection belongs to another character.');
+          const desired=acknowledgedLiveSettings(this.desired,status.activeSettings);
+          this.desired=desired;this.resourceGuard=protection;this.settingsApplyOwner=null;
+        }
+        catch{/* Invalid acknowledgement cannot replace original run intent. */}
+      }else if(receipt.state==='rejected'||receipt.state==='cancelled')this.settingsApplyOwner=null;
+    }
+    if(this.resourceGuard&&status.sessionId===this.session&&status.player?.name===this.character&&status.liveSettingsGuard){
+      try{
+        const protection=validateLiveSettingsGuard(status.liveSettingsGuard,this.now());
+        if(protection.character===this.character)this.resourceGuard=mergeLiveSettingsGuards(this.resourceGuard,protection,this.now());
+      }catch{/* A malformed telemetry guard cannot replace retained protection. */}
+    }
     if(status.deathRecoveryGuard){
       try{const guard=validateDeathRecoveryGuard(status.deathRecoveryGuard),old=this.deathGuards.get(guard.character);
         if(status.connected&&status.compatible&&status.player?.name===guard.character&&(!old&&this.deathGuards.size<64||old?.session===status.sessionId
@@ -201,6 +241,35 @@ export class PersistentFieldRun {
     }
     this.previous = current;
   }
+  private observeExperience(status: RunSession): void {
+    if (!this.experienceGains || !sessionIdentity(status.sessionId)
+      || status.player && status.player.name !== this.experienceCharacter) return;
+    const current = status.runExperience, previous = this.experiencePrevious;
+    if (!validRunExperience(current) || current.character !== this.experienceCharacter) {
+      if (this.desired && status.runRequested && status.connected && status.compatible
+        && status.player?.name === this.experienceCharacter) this.experienceGains = { baseGained: null, jobGained: null };
+      return;
+    }
+    const sameStream = status.sessionId === this.experienceSession && current.run === previous?.run;
+    if (status.sessionId === this.experienceSession && previous && current.run < previous.run) return;
+    if (!sameStream && status.sessionId !== this.session && status.sessionId !== this.pendingSession) return;
+    // Terminal telemetry can publish confirmed rewards after the player is
+    // cleared. Only an already admitted stream has that authority.
+    if (!sameStream && (!this.desired || !status.runRequested || !status.connected || !status.compatible
+      || status.player?.name !== this.experienceCharacter)) return;
+    if (sameStream && current.revision <= previous!.revision) return;
+    this.experienceGains = addExperience(this.experienceGains, sameStream ? experienceDifference(current, previous!) : current);
+    this.experiencePrevious = { ...current }; this.experienceSession = status.sessionId;
+  }
+  /** Detached presentation of the active or completed explicit run. */
+  experienceFor(status: RunSession): RunExperience | null | undefined {
+    if (!this.experienceGains) return status.runExperience;
+    if (!this.desired && validRunExperience(status.runExperience) && status.runExperience.character === status.player?.name
+      && (status.sessionId !== this.experienceSession || status.runExperience.run !== this.experiencePrevious?.run)) return status.runExperience;
+    if (status.player && status.player.name !== this.experienceCharacter) return null;
+    return { character: this.experienceCharacter, run: this.experiencePrevious?.run ?? 1,
+      revision: this.experiencePrevious?.revision ?? 0, ...this.experienceGains };
+  }
   private pruneEscapeGuards(): void {
     for (const [name, guard] of this.escapeGuards) if (!guard.latched && guard.cooldownUntil <= this.now()
       && (!this.desired || name !== this.character)) this.escapeGuards.delete(name);
@@ -256,7 +325,7 @@ export class PersistentFieldRun {
     this.deathGuards.set(character,{session:sessionId,at:this.now(),guard:checked});
   }
   resumeFor(status: RunSession, options: { settledUpdate?: boolean } = {}): ResumeRequest | null {
-    if (!this.desired || this.limitReason || !status.connected || !status.compatible || !status.player
+    if (!this.desired || this.settingsApplyOwner || this.limitReason || !status.connected || !status.compatible || !status.player
       || status.player.name !== this.character || !/^[a-zA-Z0-9_-]{1,64}$/.test(status.map)
       || !sessionIdentity(status.sessionId) || status.sessionId === this.session || status.sessionId === this.pendingSession) return null;
     const settledUpdate = options.settledUpdate === true && this.settledUpdateSession === this.session;
@@ -305,7 +374,7 @@ export class PersistentFieldRun {
       deathRecoveryGuard.recoveryDeadline ||= this.now()+deathRecoveryGuard.recoverySeconds*1000;
       deathRecoveryGuard.returnDeadline ||= deathRecoveryGuard.recoveryDeadline+deathRecoveryGuard.returnSeconds*1000;
     }
-    return { generation: this.generation, sessionId: status.sessionId, settings: validateSettings(settings), ...(escapeGuard ? { escapeGuard } : {}),...(supplyGuard?{supplyGuard}:{}),...(deathRecoveryGuard?{deathRecoveryGuard}:{}) };
+    return { generation: this.generation, sessionId: status.sessionId, settings: validateSettings(settings), ...(escapeGuard ? { escapeGuard } : {}),...(supplyGuard?{supplyGuard}:{}),...(deathRecoveryGuard?{deathRecoveryGuard}:{}),...(this.resourceGuard?{liveSettingsGuard:structuredClone(this.resourceGuard)}:{}) };
   }
   completeResume(request: ResumeRequest, success: boolean): boolean {
     if (request.generation !== this.generation || request.sessionId !== this.pendingSession || !this.desired) return false;
@@ -339,6 +408,15 @@ export class PersistentFieldRun {
     this.supplyGuards.set(character,{session:sessionId,at:this.now(),guard:retained});
   }
   get metrics(): Readonly<typeof this.totals> { return { ...this.totals }; }
+  registerSettingsApply(id:string,status:RunSession):boolean {
+    if(!validSettingsApplyId(id)||!this.desired||status.sessionId!==this.session||status.player?.name!==this.character||!status.runRequested)return false;
+    this.settingsApplyOwner={id,session:this.session,character:this.character};return true;
+  }
+  cancelSettingsApply(id:string):void {if(this.settingsApplyOwner?.id===id)this.settingsApplyOwner=null;}
+  get activeSettings():Settings|null {return this.desired?structuredClone(this.desired):null;}
+  get liveSettingsGuard():LiveSettingsGuard|null {return this.resourceGuard?structuredClone(this.resourceGuard):null;}
+  get settingsApplyPending():boolean {return this.settingsApplyOwner!==null;}
+  settingsApplyWaitReason(sessionId:string):string {return this.settingsApplyOwner&&sessionId!==this.settingsApplyOwner.session?'Previous runtime did not confirm settings Apply. Waiting safely; Stop cancels the pending change.':'';}
   get targetIds(): number[] { return this.desired?.targets.slice() ?? []; }
   get requested(): boolean { return this.desired !== null; }
 }

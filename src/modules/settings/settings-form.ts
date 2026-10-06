@@ -77,7 +77,7 @@ export class SettingsForm {
   applyProfile(settings: SettingsInput): void {
     const checked = validateSettings(settings);
     const context = this.hooks.context();
-    if (context.runActive || checked.map !== this.targets.map) throw new Error('Stop automation and enter the profile map before applying it.');
+    if (context.controlsLocked || checked.map !== this.targets.map) throw new Error('Wait for the current request and enter the profile map before applying it.');
     this.write(checked);
     this.targets.setLevelDifference(this.automation.levelDifference());
     this.targets.clear();
@@ -92,7 +92,7 @@ export class SettingsForm {
   applySettings(settings: SettingsInput): void {
     const checked = validateFormSettings(settings);
     const context = this.hooks.context();
-    if (context.runActive || context.controlsLocked) throw new Error('Stop automation and wait for the current request before applying Setup.');
+    if (context.controlsLocked) throw new Error('Wait for the current request before applying Setup to the saved draft.');
     this.write(checked);
     this.automation.restoreProfileSelection(null);
     this.targets.setLevelDifference(this.automation.levelDifference());
