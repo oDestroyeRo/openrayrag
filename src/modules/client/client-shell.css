@@ -68,7 +68,7 @@ body:has(.client-shell) { margin: 0; background: var(--client-bg); }
 .client-shell .client-account-link { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; font-size: 14px; white-space: nowrap; }
 .client-shell .pill { display: inline-block; width: fit-content; font-size: 12px; line-height: 1.3; letter-spacing: .06em; color: var(--client-secondary); padding: 4px 8px; border: 1px solid var(--client-border); border-radius: 5px; }
 .client-shell .pill.active { color: var(--client-focus); background: var(--client-accent-soft); border-color: var(--client-accent); }
-.client-shell .pill[data-state="WAITING"] { color: var(--client-warning); border-color: var(--client-warning); }
+.client-shell .pill[data-state="WAITING"], .client-shell .pill[data-state="SETUP"] { color: var(--client-warning); border-color: var(--client-warning); }
 .client-run-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .client-run-copy { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 5px 12px; }
 .client-shell #client-run-title { font-size: 28px; line-height: 1.25; letter-spacing: -.5px; overflow-wrap: anywhere; }

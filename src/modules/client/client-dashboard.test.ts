@@ -10,6 +10,11 @@ const settings = { ...DEFAULT_SETTINGS, automation: {
 const recoveryOff = 'Sitting off · HP items off · SP items off · Respawn off';
 
 describe('Run dashboard presentation', () => {
+  it('describes failed current-field admission without claiming readiness or retained target eligibility',()=>{
+    const current={...settings,map:'prt_fild08',targets:[]};
+    expect(clientDashboard({player:{},compatible:true}, {...context,setupReason:'Choose selected monsters or disable selected combat.'},current))
+      .toMatchObject({state:'SETUP',headline:'Setup needs attention',setup:`No targets selected · Own drops · ${recoveryOff}`});
+  });
   it.each([
     ['retaliate', [], 'Defend against attackers'],
     ['both', [1002], '1 selected targets + defense'],

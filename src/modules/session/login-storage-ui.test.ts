@@ -101,6 +101,7 @@ class Element {
   addEventListener(type: string, callback: (event: { preventDefault(): void;stopPropagation():void;target?:Element }) => unknown): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), callback]);
   }
+  click():void{void this.emit('click');}
   closest(selector:string):Element|null{return selector.includes('.settings')?this:null;}
   async emit(type: string,target?:Element): Promise<void> {
     for (const callback of this.listeners.get(type) ?? []) callback({ preventDefault() {},stopPropagation(){},target });
@@ -655,7 +656,7 @@ it('renders the fresh held owner before toolbar status and binds observed sessio
  await f.get('client-tab-settings').emit('click');expect(f.get('notice').textContent).toBe(status.refine.reason);
  expect(f.calls('save_current_form')).toHaveLength(saves);expect(f.calls('control_bot')).toEqual([]);
  publish({payload:{...status,character:{...base.character,stats:null},refine:{...status.refine,state:'idle',blocked:false}}});
- expect(f.get('status').textContent).toBe('READY');expect(f.get('sp-text').textContent).toBe('— / —');expect(f.get('sp-bar').style.width).toBe('0%');
+ expect(f.get('status').textContent).toBe('SETUP');expect(f.get('sp-text').textContent).toBe('— / —');expect(f.get('sp-bar').style.width).toBe('0%');
 });
 
 it('Connect account opens the retained account form without creating or showing a game window',async()=>{
@@ -728,6 +729,32 @@ it('keeps a settings-only setup on the existing projected field Start path', asy
   const request = f.calls('control_bot').find(call => call[1]?.action === 'start')?.[1];
   expect(request?.settings).toMatchObject({map:'prt_fild08',targets:[4000],radius:17});
   expect(f.calls('control_bot').some(call => call[1]?.action === 'macro')).toBe(false);
+});
+
+it('aligns readiness with current-field targets while preserving the retained field choices until an explicit edit',async()=>{
+  const saved={version:1,revision:2,selectedProfileId:null,settings:{...structuredClone(DEFAULT_SETTINGS),map:'prt_fild07',targets:[4005,4006]}};
+  const before=structuredClone(saved),f=await fixture(null,false,saved);
+  await publishStatus(readyStatus('different-field'));
+  expect(f.get('status').textContent).toBe('SETUP');
+  expect(f.get('client-run-title').textContent).toBe('Setup needs attention');
+  expect(f.get('start').disabled).toBe(true);
+  expect(f.get('config-help').textContent).toContain('Choose selected monsters');
+  expect(f.get('console-setup-summary').textContent).toContain('No targets selected');
+  expect(f.get('console-saved-draft-summary').hidden).toBe(false);
+  expect(f.get('console-saved-draft-summary').textContent).toContain('Retained choices for prt_fild07: 2 selected targets');
+  expect(f.get('console-edit-setup').textContent).toBe('Choose current-field targets');
+  const saves=f.calls('save_current_form').length;
+  await f.get('client-bot-tab-recovery').emit('click');
+  await f.get('client-tab-session').emit('click');await f.get('console-edit-setup').emit('click');
+  expect(f.get('client-page-bot').hidden).toBe(false);expect(f.get('client-bot-combat').hidden).toBe(false);
+  expect(f.calls('save_current_form')).toHaveLength(saves);expect(saved).toEqual(before);
+  expect(f.calls('control_bot')).toEqual([]);
+  await f.get('select-targets').emit('click');
+  expect(f.get('status').textContent).toBe('READY');expect(f.get('start').disabled).toBe(false);
+  expect(f.get('console-setup-summary').textContent).toContain('Synthetic monster');
+  expect(f.get('console-saved-draft-summary').hidden).toBe(true);
+  await f.get('start').emit('click');
+  expect(f.calls('control_bot').find(call=>call[1]?.action==='start')?.[1]?.settings).toMatchObject({map:'prt_fild08',targets:[4000]});
 });
 
 it('never sends a Start request while a Script draft is unapplied', async () => {

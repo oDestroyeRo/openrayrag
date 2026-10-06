@@ -6,6 +6,13 @@ const context = { fieldRequested: false, held: false, limitReason: '', loginBusy
 const ready = { connected: true, compatible: true, running: false, runRequested: false, player: { name: 'Synthetic' }, login: { phase: 'idle', message: '' }, reason: 'Stopped by you.' };
 
 describe('current owner presentation', () => {
+  it('presents current-field admission failure as setup work without replacing an active owner',()=>{
+    const setupReason='Choose selected monsters or disable selected combat.';
+    expect(clientStatus(ready,{...context,setupReason})).toEqual({state:'SETUP',reason:setupReason});
+    expect(clientStatus({...ready,running:true},{...context,setupReason}).state).toBe('RUNNING');
+    expect(clientStatus({...ready,refine:{blocked:true,reason:'Waiting for the exact receipt.'}},{...context,setupReason,held:true}))
+      .toEqual({state:'WAITING',reason:'Waiting for the exact receipt.'});
+  });
   it('shows fresh held manual work as WAITING and returns READY only after it settles', () => {
     const pending = { ...ready, refine: { blocked: true, reason: 'Waiting for the refine transaction to reconcile.' } };
     const before = structuredClone(pending);

@@ -71,6 +71,7 @@ export function clientDashboard(value: unknown, context: Parameters<typeof clien
     && status.state !== 'WAITING' && !context.limitReason;
   const headline = stale ? 'Waiting for fresh game status' : status.state === 'RUNNING' ? dashboardTaskLabel(value) || 'Bot running'
     : status.state === 'WAITING' ? 'Waiting to continue'
+    : status.state === 'SETUP' ? 'Setup needs attention'
     : status.state === 'READY' ? 'Ready to start'
     : status.state === 'CONNECTED' ? 'Choose your character' : 'Connect your character';
   if (!settings) return { ...status, headline, setup: 'Setup needs attention · review your settings' };
