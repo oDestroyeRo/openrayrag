@@ -1,9 +1,9 @@
-import { formDocument, type FormDocument } from './current-form-logic';
+import { formDocument, type FormDocumentInput } from './current-form-logic';
 import { settingsWithFieldMap } from './field-controls-logic';
-import { DEFAULT_AUTOMATION, MAX_TARGETS, validateFormSettings, validateSettings, type Settings } from './settings';
+import { DEFAULT_AUTOMATION, MAX_TARGETS, validateFormSettings, validateSettings, automationDraft, type SettingsInput } from './settings';
 import { MapTargets } from './targets';
 
-import { targetRosterIdentity, type AutomationEditor, type FormSnapshot, type SettingsFormProjection, type Hooks, type TargetRow } from './settings-form-logic';
+import { targetRosterIdentity, type AutomationEditor, type FormSnapshot, type FormSnapshotInput, type SettingsFormProjection, type Hooks, type TargetRow } from './settings-form-logic';
 
 export { type SettingsFormProjection, type SettingsFormContext } from './settings-form-logic';
 
@@ -26,7 +26,7 @@ export class SettingsForm {
   }
 
   /** Project field settings; command owners still validate before admission. */
-  runSettings(): Settings {
+  runSettings(): SettingsInput {
     return settingsWithFieldMap(this.read(this.targets.map, this.targets.ids));
   }
 
@@ -39,7 +39,7 @@ export class SettingsForm {
    * Read lazily so FeatureUi has accepted the status before locks are projected.
    */
   project(): SettingsFormProjection {
-    let current: { field: Settings; retained: FormSnapshot } | undefined;
+    let current: { field: SettingsInput; retained: FormSnapshotInput } | undefined;
     let read = false, error: unknown;
     const value = () => {
       if (!read) {
@@ -56,16 +56,16 @@ export class SettingsForm {
     return { runSettings: () => value().field, snapshot: () => this.checkedSnapshot(value().retained) };
   }
 
-  private retainedSettings(value: Settings): Settings {
+  private retainedSettings(value: SettingsInput): SettingsInput {
     return { ...value, targets: this.targets.configuredIds, map: value.automation?.mapPolicy?.lockArea?.map ?? (this.targets.configuredMap || value.map) };
   }
 
-  private checkedSnapshot(value: FormSnapshot): FormSnapshot {
+  private checkedSnapshot(value: FormSnapshotInput): FormSnapshot {
     const document = formDocument({ version: 1, revision: 0, ...value });
     return { settings: document.settings, selectedProfileId: document.selectedProfileId };
   }
 
-  restore(document: FormDocument): void {
+  restore(document: FormDocumentInput): void {
     const checked = formDocument(document);
     this.write(checked.settings);
     this.automation.restoreProfileSelection(checked.selectedProfileId);
@@ -74,7 +74,7 @@ export class SettingsForm {
     this.renderTargets();
   }
 
-  applyProfile(settings: Settings): void {
+  applyProfile(settings: SettingsInput): void {
     const checked = validateSettings(settings);
     const context = this.hooks.context();
     if (context.runActive || checked.map !== this.targets.map) throw new Error('Stop automation and enter the profile map before applying it.');
@@ -89,7 +89,7 @@ export class SettingsForm {
   /** Apply the complete retained configuration, including choices made offline.
    * Validate before touching DOM controls or the selected profile.
    */
-  applySettings(settings: Settings): void {
+  applySettings(settings: SettingsInput): void {
     const checked = validateFormSettings(settings);
     const context = this.hooks.context();
     if (context.runActive || context.controlsLocked) throw new Error('Stop automation and wait for the current request before applying Setup.');
@@ -120,7 +120,7 @@ export class SettingsForm {
     return element;
   }
 
-  private read(map: string, targets: number[]): Settings {
+  private read(map: string, targets: number[]): SettingsInput {
     return {
       map, targets,
       radius: Number(this.element<HTMLInputElement>('radius').value),
@@ -136,8 +136,8 @@ export class SettingsForm {
     };
   }
 
-  private write(value: Settings): void {
-    this.automation.write(value.automation ?? structuredClone(DEFAULT_AUTOMATION));
+  private write(value: SettingsInput): void {
+    this.automation.write(automationDraft(value.automation ?? DEFAULT_AUTOMATION));
     const inputs: Record<string, number> = {
       radius: value.radius, 'min-hp': value.minHpPercent, 'route-step': value.route_step,
       'route-time': value.route_randomWalk_maxRouteTime, 'attack-distance': value.attackRouteMaxPathDistance, 'attack-time': value.attackMaxRouteTime,

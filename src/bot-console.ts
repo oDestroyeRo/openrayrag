@@ -7,10 +7,10 @@ import { manualTargetView } from './manual-target-view';
 import { NAVIGATION_MAPS, searchGrid } from './navigation';
 import { paintMapCollision } from './map-raster';
 import type { Position } from './protocol';
-import type { Settings } from './settings';
+import type { SettingsInput } from './settings';
 
 interface Hooks {
-  settings(): Settings;
+  settings(): SettingsInput;
   command(request: Record<string, unknown>): Promise<unknown>;
   notify(text: string, error?: boolean): void;
   account(): void;

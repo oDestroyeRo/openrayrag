@@ -1,15 +1,15 @@
 import { allPass } from 'remeda';
 import type { WalkGrid } from './navigation-logic';
 import type { Entity } from './protocol';
-import type { Settings } from './settings';
+import type { SettingsInput } from './settings';
 /** Bind a new request to an explicit field identity without replacing targets. */
-export function settingsWithFieldMap(input:Settings):Settings {
+export function settingsWithFieldMap(input:SettingsInput):SettingsInput {
   return {...input,map:input.automation?.mapPolicy?.lockArea?.map??input.map};
 }
 
 export interface FieldStartState {
   native:boolean;fresh:boolean;busy:boolean;stopping:boolean;loginBusy:boolean;runActive:boolean;
-  connected:boolean;compatible:boolean;map:string;player:Pick<Entity,'kind'|'x'|'y'|'dead'>|null;settings:Settings|null;
+  connected:boolean;compatible:boolean;map:string;player:Pick<Entity,'kind'|'x'|'y'|'dead'>|null;settings:SettingsInput|null;
 }
 const fieldReady = allPass<FieldStartState>([
   s => s.native, s => s.fresh, s => !s.busy, s => !s.stopping, s => !s.loginBusy,

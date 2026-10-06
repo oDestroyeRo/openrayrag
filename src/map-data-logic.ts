@@ -1,5 +1,6 @@
 import { map, take } from 'remeda';
 import type { Entity } from './protocol';
+import { addQuantities, mapCode as admittedMapCode, quantity, speciesId, type MapCode, type Quantity, type SpeciesId } from './domain-values';
 
 export interface MapMonster {
   classId: number; name: string; level: number; maxHp: number;
@@ -8,7 +9,13 @@ export interface MapMonster {
 export interface MapInfo {
   code: string; name: string; source: 'loading' | 'database' | 'observed'; monsters: MapMonster[];
 }
-export type MapCatalog = Map<string, { name: string; monsters: MapMonster[] }>;
+/** Database admission is stricter than the live telemetry projection below. */
+export interface CatalogMonster {
+  readonly classId: SpeciesId; readonly name: string; readonly level: Quantity; readonly maxHp: Quantity;
+  readonly spawnCount: Quantity; readonly visibleCount: Quantity;
+}
+export type MapCatalog = ReadonlyMap<MapCode, { readonly name: string; readonly monsters: readonly CatalogMonster[] }>;
+type CatalogMonsterDraft = { -readonly [Key in keyof CatalogMonster]: CatalogMonster[Key] };
 const mapCode = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(value);
 const text = (value: unknown, limit = 128): value is string => typeof value === 'string' && value.length > 0 && value.length <= limit && !/[\x00-\x1f]/.test(value);
 const integer = (value: unknown, min: number, max: number): value is number => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
@@ -23,11 +30,11 @@ function items(value: unknown): unknown[] {
 }
 
 export function parseMapCatalog(mapData: unknown, monsterData: unknown): MapCatalog {
-  const catalog: MapCatalog = new Map();
+  const catalog = new Map<MapCode, { name: string; monsters: CatalogMonsterDraft[] }>();
   for (const value of items(mapData)) {
     const row = record(value);
-    if (!mapCode(row.Code) || !text(row.Name) || catalog.has(row.Code)) throw new Error('Invalid map metadata');
-    catalog.set(row.Code, { name: row.Name, monsters: [] });
+    if (!mapCode(row.Code) || !text(row.Name) || catalog.has(admittedMapCode(row.Code))) throw new Error('Invalid map metadata');
+    catalog.set(admittedMapCode(row.Code), { name: row.Name, monsters: [] });
   }
   const ids = new Set<number>();
   for (const value of items(monsterData)) {
@@ -41,11 +48,12 @@ export function parseMapCatalog(mapData: unknown, monsterData: unknown): MapCata
       if (!mapCode(spawn.Map) || !integer(spawn.Count, 0, 1_000_000)) throw new Error('Invalid spawn metadata');
       if (!spawn.Count) continue;
       // Some published spawns refer to maps absent from the map-name export.
-      if (!catalog.has(spawn.Map)) catalog.set(spawn.Map, { name: spawn.Map, monsters: [] });
-      const monsters = catalog.get(spawn.Map)!.monsters;
+      const code = admittedMapCode(spawn.Map);
+      if (!catalog.has(code)) catalog.set(code, { name: spawn.Map, monsters: [] });
+      const monsters = catalog.get(code)!.monsters;
       const existing = monsters.find(monster => monster.classId === row.Id);
-      if (existing) existing.spawnCount! += spawn.Count;
-      else monsters.push({ classId: row.Id, name: row.Name, level: row.Level, maxHp: row.HP, spawnCount: spawn.Count, visibleCount: 0 });
+      if (existing) existing.spawnCount = addQuantities(existing.spawnCount, quantity(spawn.Count));
+      else monsters.push({ classId: speciesId(row.Id), name: row.Name, level: quantity(row.Level), maxHp: quantity(row.HP), spawnCount: quantity(spawn.Count), visibleCount: quantity(0) });
       if (monsters.length > 128) throw new Error('Map roster exceeds its limit');
     }
   }
@@ -53,7 +61,7 @@ export function parseMapCatalog(mapData: unknown, monsterData: unknown): MapCata
 }
 
 export function currentMapInfo(code: string, entities: Iterable<Entity>, catalog: MapCatalog | null, loading: boolean): MapInfo {
-  const metadata = catalog?.get(code);
+  const metadata = mapCode(code) ? catalog?.get(admittedMapCode(code)) : undefined;
   const monsters = new Map(map(metadata?.monsters ?? [], (monster): [number, MapMonster] => [monster.classId, { ...monster }]));
   const observed = new Set<number>();
   // Aggregate before the radar's 150-entity cap; these counts are visible live

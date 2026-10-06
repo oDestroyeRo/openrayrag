@@ -1,14 +1,14 @@
 import { filter, find, flatMap, map, pipe } from 'remeda';
 import { validateMacroScript, type dryRunMacro, type MacroScript } from './macros-logic';
-import { automationSettings, validateSettings, type Settings } from './settings';
+import { automationSettings, validateSettings, settingsDraft, automationDraft, type SettingsInput, type RunSettings } from './settings';
 import { formatBotScript, parseBotScript, type BotScriptDocument } from './bot-script';
 export type Example = 'leveling' | 'continuous' | 'buy' | 'store' | 'item' | 'skill';
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 export function macroActive(value: unknown): boolean { const state=record(value).state;return typeof state==='string'&&['running', 'waiting', 'monitoring'].includes(state); }
 /** Script targets can supply an empty field draft; non-field scripts need no combat selection. */
-export function macroBaseSettings(value: Settings, script: MacroScript): Settings {
-  const settings=structuredClone(value);
-  const policy=structuredClone(automationSettings(settings));
+export function macroBaseSettings(value: SettingsInput, script: MacroScript): RunSettings {
+  const settings=settingsDraft(value);
+  const policy=automationDraft(automationSettings(settings));
   if(!settings.targets.length&&['selected','both'].includes(policy.combat.mode)) {
     const field=find(flatMap(script.rules, rule=>rule.steps), step=>step.type==='farm');
     if(field?.type==='farm')settings.targets=[...field.targets];
@@ -32,8 +32,8 @@ export function validMacroSnapshot(value: unknown): boolean {
 }
 
 /** Templates are editable proposals. Loading, saving and previewing never start automation. */
-export function macroExample(kind: Example, context: { map?: string; targets?: number[] } = {}): MacroScript {
-  const farm = { type: 'farm' as const, map: context.map || 'prt_fild08', targets: context.targets?.length ? context.targets : [4000, 4012, 4002], timeoutSeconds: 300 };
+export function macroExample(kind: Example, context: { map?: string; targets?: readonly number[] } = {}): MacroScript {
+  const farm = { type: 'farm' as const, map: context.map || 'prt_fild08', targets: context.targets?.length ? [...context.targets] : [4000, 4012, 4002], timeoutSeconds: 300 };
   const common = { priority: 10, cooldownSeconds: 10, maxRuns: 1 };
   const rules: MacroScript['rules'] = kind === 'leveling' ? [
     { ...common, name: 'First field', conditions: [{ field: 'level', operator: 'lt', value: 20 }], steps: [farm] },
@@ -60,7 +60,7 @@ export function macroExample(kind: Example, context: { map?: string; targets?: n
 }
 
 /** Decode saved source and legacy rules without touching storage. */
-export function restoreMacroSource(stored: string | null | undefined, legacy: string | null | undefined, settings: Settings): string {
+export function restoreMacroSource(stored: string | null | undefined, legacy: string | null | undefined, settings: SettingsInput): string {
   if (!stored && !legacy) return formatBotScript({ settings, script: null });
   const raw = stored ?? legacy!;
   if (new TextEncoder().encode(raw).length > 1_000_000) throw new Error('Saved Setup is too large.');

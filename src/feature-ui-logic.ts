@@ -1,6 +1,6 @@
 import { anyPass, filter, find, groupBy, map, mapValues, pipe, sumBy, take } from 'remeda';
 import { actorId } from './actor-identity';
-import type { AutomationSettings } from './settings';
+import type { AutomationSettingsInput } from './settings';
 import { validateExpandedAction } from './protocol-feature';
 import { validateWorldAction } from './world-protocol';
 import { validPartyFollowSnapshot } from './party-follow-logic';
@@ -91,7 +91,7 @@ export function checkedAction(input: unknown): Record<string, unknown> {
 }
 export function isAction(input: unknown): input is Record<string,unknown> { try { checkedAction(input); return true; } catch { return false; } }
 /** Mode selection explicitly clears incompatible policy in the form. */
-export function chooseFollowMode(follow:AutomationSettings['follow'],mode:'name'|'partyLeader'):AutomationSettings['follow'] {
+export function chooseFollowMode(follow:AutomationSettingsInput['follow'],mode:'name'|'partyLeader'):AutomationSettingsInput['follow'] {
   return {...follow,mode,...(mode==='partyLeader'?{name:''}:{rendezvous:false})};
 }
 // Bounded telemetry is treated as data. A new packet field cannot inject HTML or

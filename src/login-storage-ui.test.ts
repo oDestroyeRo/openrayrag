@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BotEngine } from './engine';
 import { CompanionController } from './controller';
 import { PersistentFieldRun } from './reconnect';
-import { DEFAULT_SETTINGS, type Settings } from './settings';
+import { DEFAULT_SETTINGS, type SettingsInput } from './settings';
 import type { BotScriptDocument } from './bot-script';
 import type { MacroUi } from './macro-ui';
-import type { UpdateContinuation } from './update-continuation';
+import type { UpdateContinuationInput } from './update-continuation';
 import type { GameStatus } from './game-status';
 import { searchGrid } from './navigation';
 
-const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, scriptStorageFails: false, useEditor: false, editor: null as MacroUi | null, setupScript: null as BotScriptDocument['script'], setupSettings: null as Settings | null, syncSetup: vi.fn(), clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
+const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, scriptStorageFails: false, useEditor: false, editor: null as MacroUi | null, setupScript: null as BotScriptDocument['script'], setupSettings: null as SettingsInput | null, syncSetup: vi.fn(), clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, isTauri: () => true }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: ipc.listen }));
 vi.mock('./feature-ui', async () => {
@@ -18,7 +18,7 @@ vi.mock('./feature-ui', async () => {
   return { FeatureUi: class {
     private profile:string|null=null;
     private held=false;
-    constructor(_host: HTMLElement, private readonly hooks: {macroSettings(): Settings;applySetup(settings:Settings):void;setupChanged():void;notify(message:string,error?:boolean):void}, mounts: { manualTools: HTMLElement }) {
+    constructor(_host: HTMLElement, private readonly hooks: {macroSettings(): SettingsInput;applySetup(settings:SettingsInput):void;setupChanged():void;notify(message:string,error?:boolean):void}, mounts: { manualTools: HTMLElement }) {
       if(ipc.useEditor)ipc.editor=new MacroUi({settings:()=>hooks.macroSettings(),apply:value=>hooks.applySetup(value),changed:()=>hooks.setupChanged(),notify:hooks.notify},{getItem:()=>null,setItem:()=>{if(ipc.scriptStorageFails)throw new Error('quota');}});
       if(ipc.editor)_host.append(ipc.editor.root);
       const group=document.createElement('details');group.className='manual-group';group.id='synthetic-manual-group';
@@ -30,7 +30,7 @@ vi.mock('./feature-ui', async () => {
     restoreProfileSelection(id:string|null){this.profile=id;}
     write():void{}
     levelDifference(){return 1;}
-    withSettings<T>(_settings:()=>Settings,render:()=>T):T{return render();}
+    withSettings<T>(_settings:()=>SettingsInput,render:()=>T):T{return render();}
     render(status:{refine?:{blocked?:boolean}}):void{this.held=status.refine?.blocked===true;}
     active(): boolean { return this.held; }
     serviceBlocked(): boolean { return false; }
@@ -38,7 +38,7 @@ vi.mock('./feature-ui', async () => {
     settledForMaintenance(): boolean { return ipc.featureSettled; }
     hasUnsavedMacro(): boolean { return ipc.macroDirty || ipc.editor?.unsaved === true; }
     setupDraftDirty(): boolean { return ipc.macroDirty || ipc.editor?.dirty === true; }
-    syncSetup(settings: Settings): void { ipc.syncSetup(settings); ipc.editor?.syncSettings(settings); }
+    syncSetup(settings: SettingsInput): void { ipc.syncSetup(settings); ipc.editor?.syncSettings(settings); }
     setupDocument(): BotScriptDocument { if (ipc.macroDirty) throw new Error('Apply or discard your Script draft before Start.'); if(ipc.editor)return ipc.editor.configured(); return {settings: ipc.setupSettings ?? this.hooks.macroSettings(), script: ipc.setupScript}; }
     clearMacro():void{ipc.clearMacro();}
     clearSocial():void{}
@@ -191,7 +191,7 @@ it('shows connection guidance in Game without creating a second bot-only connect
   expect(f.calls('set_game_view')).toEqual([]);expect(f.calls('login_game')).toEqual([]);
   expect(f.calls('open_game')).toEqual([]);expect(f.calls('reconnect_game')).toEqual([]);
 });
-function continuationFixture():UpdateContinuation {
+function continuationFixture():UpdateContinuationInput {
   const ready=readyStatus(),settings={...DEFAULT_SETTINGS,map:ready.map,targets:[4000]};
   const c=new CompanionController(()=>{});c.connect(true);
   c.engine.receive([{type:'enter',id:ready.player!.id,map:ready.map},{type:'spawn',entity:ready.player!}]);c.world.reset(ready.map);

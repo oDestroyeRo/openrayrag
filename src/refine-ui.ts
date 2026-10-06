@@ -1,7 +1,7 @@
 export { validRefineSnapshot } from './refine-ui-logic';
 import { itemName } from './game-catalog';
 import { validateRefineRequest, type RefinePreviewRequest, type RefineRequest } from './refine-protocol';
-import type { AutomationSettings } from './settings';
+import type { AutomationSettingsInput } from './settings';
 const record=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 function element<K extends keyof HTMLElementTagNameMap>(tag:K,text?:string):HTMLElementTagNameMap[K]{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;return node;}
 export class RefineUi {
@@ -9,7 +9,7 @@ export class RefineUi {
  private readonly previewButton=element('button','Preview one refine');private readonly sendButton=element('button','Spend ore and zeny for one attempt');private readonly closeButton=element('button','Advance / close refining dialogue');
  private readonly output=element('pre');private readonly reason=element('p');private status:Record<string,unknown>={};private locked=true;private sending=false;
  private previewRequest:RefinePreviewRequest|null=null;private previewSignature='';private candidatesKey='';private session='';
- constructor(private readonly policy:()=>AutomationSettings,private readonly preview:(request:RefinePreviewRequest)=>Promise<unknown>,private readonly send:(request:RefineRequest)=>Promise<unknown>,private readonly close:(promptToken:string)=>Promise<unknown>,private readonly notify:(message:string,error?:boolean)=>void){
+ constructor(private readonly policy:()=>AutomationSettingsInput,private readonly preview:(request:RefinePreviewRequest)=>Promise<unknown>,private readonly send:(request:RefineRequest)=>Promise<unknown>,private readonly close:(promptToken:string)=>Promise<unknown>,private readonly notify:(message:string,error?:boolean)=>void){
   this.root.className='manual-refine';this.root.append(element('h3','Refine one item'),element('p','Open a refining dialogue in the game first. Only unequipped weapons and armor are supported. Every attempt spends one ore and zeny; some levels can downgrade by one. Stop cannot refund an attempt or close the NPC.'));
   this.target.setAttribute('aria-label','Refine equipment');this.maximum.type=this.reserve.type='number';this.maximum.min=this.reserve.min='0';this.maximum.max='2000000000';this.reserve.max='2147483647';this.maximum.value='10000';this.reserve.value='0';
   this.maximum.setAttribute('aria-label','Refine spending limit');this.reserve.setAttribute('aria-label','Zeny to keep after refine');

@@ -1,4 +1,5 @@
-import { loginActive, loginPacketStatus, selectionReadiness, validateLoginProfile, type LoginProfile, type LoginStatus, type LoginDriver } from './login-logic';
+import { characterSlot, loginActive, loginPacketStatus, selectionReadiness, validateLoginProfile, type LoginProfile, type LoginStatus, type LoginDriver } from './login-logic';
+import { addMilliseconds, milliseconds, type Milliseconds } from './domain-values';
 import { SelectionDispatchError } from './login-effects';
 export { characterSlots, type LoginProfile, type LoginStatus, type UnityClient, type LoginDriver } from './login-logic';
 export { unityMessage, loginReady } from './login-effects';
@@ -6,9 +7,9 @@ export { loginDriver } from './login-driver';
 
 export class LoginController {
   status: LoginStatus = { phase: 'idle', message: '' };
-  private slot = 0;
-  private deadline = 0;
-  private selectionReadySince: number | null = null;
+  private slot = characterSlot(0);
+  private deadline = milliseconds(0);
+  private selectionReadySince: Milliseconds | null = null;
   constructor(private readonly driver: LoginDriver, private readonly now = Date.now) {}
   get active(): boolean {
     return loginActive(this.status);
@@ -16,9 +17,9 @@ export class LoginController {
   private fail(message: string): void { this.status = { phase: 'failed', message }; }
   async start(profile: LoginProfile): Promise<void> {
     if (this.status.phase !== 'idle') throw new Error('Reopen the game for a new sign-in attempt.');
-    validateLoginProfile(profile);
-    this.slot = profile.characterSlot;
-    this.deadline = this.now() + 30_000;
+    const selection = validateLoginProfile(profile);
+    this.slot = selection.characterSlot;
+    this.deadline = addMilliseconds(milliseconds(this.now()), milliseconds(30_000));
     this.status = { phase: 'signingIn', message: 'Signing in through the game…' };
     try {
       await this.driver.prepare(profile, () => this.active);
@@ -35,7 +36,7 @@ export class LoginController {
     this.status = next;
     if (next.phase === 'selecting') {
       this.selectionReadySince = null;
-      this.deadline = this.now() + 30_000;
+      this.deadline = addMilliseconds(milliseconds(this.now()), milliseconds(30_000));
     }
   }
   tick(): void {
@@ -47,13 +48,13 @@ export class LoginController {
     if (this.status.phase === 'selecting') {
       let ready = false;
       try { ready = this.driver.selectionReady(); } catch { /* Read-only preflight; wait until its bounded deadline. */ }
-      const readiness = selectionReadiness(ready, this.selectionReadySince, this.now());
+      const readiness = selectionReadiness(ready, this.selectionReadySince, milliseconds(this.now()));
       this.selectionReadySince = readiness.since;
       if (!readiness.settled) return;
       try {
         if (this.driver.select(this.slot) === false) return;
         this.status = { phase: 'entering', message: 'Entering the field…' };
-        this.deadline = this.now() + 30_000;
+        this.deadline = addMilliseconds(milliseconds(this.now()), milliseconds(30_000));
       } catch (error) {
         this.fail(error instanceof SelectionDispatchError ? error.message : 'Could not select the character. Continue in the game window.');
       }

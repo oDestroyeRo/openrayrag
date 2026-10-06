@@ -6,7 +6,7 @@ import type { InventoryItem } from './protocol-feature';
 import type { WorldSnapshot } from './world-state-logic';
 import { workflowWorldFromSnapshot } from './workflows-logic';
 import type { ShopEntry } from './world-protocol';
-import type { AutomationSettings } from './settings';
+import type { AutomationSettingsInput } from './settings';
 import { AMMO_CATALOG } from './loadout-logic';
 import { type DispositionContext, type DispositionItemInfo, type DispositionPlan } from './disposition';
 
@@ -44,7 +44,7 @@ export function publishedDispositionMetadata(): Readonly<Record<string, Disposit
 const metadata = publishedDispositionMetadata();
 const compatibleAmmoIds = pipe(AMMO_CATALOG, entries(), filter(([, info]) => info.ammoType === 0), map(([id]) => Number(id)));
 
-export function dispositionStockFloors(settings: AutomationSettings): { itemId: number; count: number }[] {
+export function dispositionStockFloors(settings: AutomationSettingsInput): { itemId: number; count: number }[] {
   const floors = map(settings.items, row => ({ itemId: row.itemId, count: row.minStock }));
   const withReserve = (policy: { minStock: number } | undefined) => (itemId: number) => ({ itemId, count: policy!.minStock });
   floors.push(...map(hpPotionIds(settings.hpPotions), withReserve(settings.hpPotions)));

@@ -2,7 +2,7 @@ import { validSocketSnapshot, socketSlotsText } from './socket-ui-logic';
 export { validSocketSnapshot } from './socket-ui-logic';
 import type { SocketSnapshot, SocketPreview } from './socket';
 import { socketStockFloors, type SocketPreviewRequest, type SocketCommitRequest } from './socket-protocol';
-import type { AutomationSettings } from './settings';
+import type { AutomationSettingsInput } from './settings';
 
 export class SocketUi {
   readonly root=document.createElement('details');
@@ -11,7 +11,7 @@ export class SocketUi {
   private readonly output=document.createElement('p');private locked=true;private sending=false;
   private current:SocketPreview|null=null;private status:SocketSnapshot|null=null;private dismissedToken:string|null=null;private previewPolicy:string|null=null;
   constructor(private readonly prepare:(request:SocketPreviewRequest)=>Promise<unknown>,private readonly send:(request:SocketCommitRequest)=>Promise<unknown>,
-    private readonly notify:(text:string,error?:boolean)=>void,private readonly settings:()=>AutomationSettings){
+    private readonly notify:(text:string,error?:boolean)=>void,private readonly settings:()=>AutomationSettingsInput){
     this.root.className='manual-details';this.root.id='socket-card-action';
     const title=document.createElement('summary');title.textContent='Socket one card · irreversible';
     const help=document.createElement('p');help.className='hint';help.textContent='Consume exactly one observed regular card to fill the first free slot on unequipped gear. Installed cards cannot be removed or replaced here. This action never equips gear or retries.';
@@ -51,7 +51,7 @@ export class SocketUi {
   }
   private async request(commit:boolean):Promise<void>{
     if(commit?this.commit.disabled:this.preview.disabled)return;
-    let policy:AutomationSettings;try{policy=this.settings();}catch(e){this.notify(e instanceof Error?e.message:'Validate the visible protection settings first.',true);return;}
+    let policy:AutomationSettingsInput;try{policy=this.settings();}catch(e){this.notify(e instanceof Error?e.message:'Validate the visible protection settings first.',true);return;}
     const request={targetBagId:Number(this.target.value),cardBagId:Number(this.card.value),policy};
     const token=this.current?.previewToken;this.sending=true;this.update();
     try{if(commit){if(!token)return;this.dismissedToken=token;this.current=null;await this.send({...request,previewToken:token});this.notify('One irreversible socket request accepted. Check pending / confirmed / uncertain; no retry.');}

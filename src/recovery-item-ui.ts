@@ -30,7 +30,7 @@ export class RecoveryItemUi {
   private readonly inventoryMessage = document.createElement('p');
   private readonly rows = new Map<number, PotionRow>();
   private readonly ids: readonly number[];
-  private stock: Map<number, number> | null = null;
+  private stock: ReadonlyMap<number, number> | null = null;
   private itemIds: number[] = [];
   private locked = false;
 
@@ -91,7 +91,7 @@ export class RecoveryItemUi {
   lock(locked: boolean): void { this.locked = locked; this.syncChoices(); }
 
   update(character: unknown): void {
-    const stock = recoveryInventory(character);
+    const stock: ReadonlyMap<number, number> | null = recoveryInventory(character);
     this.stock = stock;
     for (const [itemId, row] of this.rows) setText(row.stock, stock === null ? 'Carried: unknown' : `Carried: ${stock.get(itemId) ?? 0}`);
     this.syncChoices();

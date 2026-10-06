@@ -1,9 +1,9 @@
 import { manualMonsterChoices } from './manual-target-view-logic';
 import { previewManualTarget } from './manual-target';
 import { manualTargetView } from './manual-target-view';
-import type { Settings } from './settings';
+import type { SettingsInput } from './settings';
 
-interface Hooks {settings():Settings;command(request:Record<string,unknown>):Promise<unknown>;stop?():void;notify(text:string,error?:boolean):void}
+interface Hooks {settings():SettingsInput;command(request:Record<string,unknown>):Promise<unknown>;stop?():void;notify(text:string,error?:boolean):void}
 const object=(v:unknown):Record<string,unknown>=>v&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 /** Disposable preview; execution rebuilds its route and checks live identities. */
 export class ManualTargetUi {

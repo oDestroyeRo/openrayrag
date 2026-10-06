@@ -1,3 +1,4 @@
+import { mapCode } from './domain-values';
 import { describe, expect, it, vi } from 'vitest';
 import { currentMapInfo, loadMapCatalog, parseMapCatalog, validMapInfo, MAP_DATA_URL } from './map-data';
 import { type Entity } from './protocol';
@@ -16,10 +17,10 @@ describe('official map information', () => {
     const data = structuredClone(monsters);
     data.Items[0]!.Spawns.push({Map:'prt_fild05',Count:5});
     const catalog = parseMapCatalog(maps,data);
-    expect(catalog.get('prt_fild05')?.name).toBe('Prontera Field 5');
-    expect(catalog.get('prt_fild05')?.monsters).toHaveLength(7);
-    expect(catalog.get('prt_fild05')?.monsters.find(m=>m.classId===4000)?.spawnCount).toBe(75);
-    expect(catalog.get('prontera')?.monsters).toEqual([]);
+    expect(catalog.get(mapCode('prt_fild05'))?.name).toBe('Prontera Field 5');
+    expect(catalog.get(mapCode('prt_fild05'))?.monsters).toHaveLength(7);
+    expect(catalog.get(mapCode('prt_fild05'))?.monsters.find(m=>m.classId===4000)?.spawnCount).toBe(75);
+    expect(catalog.get(mapCode('prontera'))?.monsters).toEqual([]);
   });
   it('keeps configured population distinct from live visible entities, including beyond radar capacity', () => {
     const catalog=parseMapCatalog(maps,monsters);
@@ -30,7 +31,7 @@ describe('official map information', () => {
     expect(info.monsters.find(m=>m.classId===4000)).toMatchObject({spawnCount:70,visibleCount:160});
     expect(info.monsters.find(m=>m.classId===4999)).toMatchObject({spawnCount:null,visibleCount:1});
     expect(info.monsters.find(m=>m.classId===4002)).toMatchObject({spawnCount:30,visibleCount:0});
-    expect(catalog.get('prt_fild05')?.monsters[0]?.visibleCount).toBe(0);
+    expect(catalog.get(mapCode('prt_fild05'))?.monsters[0]?.visibleCount).toBe(0);
     expect(validMapInfo(info,'prt_fild05')).toBe(true);
     expect(validMapInfo(info,'prontera')).toBe(false);
   });
@@ -50,7 +51,7 @@ describe('official map information', () => {
   it('loads only the two public assets without credentials and rejects failed fetches', async () => {
     const fetcher=vi.fn<typeof fetch>(async url => new Response(JSON.stringify(String(url).endsWith('/maps.json') ? maps : monsters)));
     const catalog=await loadMapCatalog(fetcher);
-    expect(catalog.get('prt_fild05')?.monsters).toHaveLength(7);
+    expect(catalog.get(mapCode('prt_fild05'))?.monsters).toHaveLength(7);
     expect(fetcher.mock.calls.map(call=>call[0])).toEqual([`${MAP_DATA_URL}maps.json`,`${MAP_DATA_URL}monsterdatabase.json`]);
     expect(fetcher.mock.calls.every(call=>call[1]?.credentials==='omit')).toBe(true);
     await expect(loadMapCatalog(async()=>new Response('',{status:404}))).rejects.toThrow('unavailable');

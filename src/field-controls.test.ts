@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { canStartField, settingsWithFieldMap } from './field-controls';
-import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateSettings, type Settings } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateSettings, settingsDraft, type Settings } from './settings';
 import { DEFAULT_MAP_POLICY, insideLockArea } from './map-policy';
 import { GridNavigator, type WalkGrid } from './navigation';
 import { ProfileStore } from './profiles';
@@ -24,7 +24,7 @@ describe('main field request boundaries',()=>{
   it('rejects malformed settings, actor identity and position; dead Start requires opted-in respawn',()=>{
     const s=state();expect(canStartField({...s,settings:null},()=>physical)).toBe(false);expect(canStartField({...s,player:null},()=>physical)).toBe(false);
     expect(canStartField({...s,player:{...s.player,kind:1}},()=>physical)).toBe(false);expect(canStartField({...s,player:{...s.player,x:NaN}},()=>physical)).toBe(false);
-    s.player.dead=true;expect(canStartField(s,()=>physical)).toBe(false);s.settings.automation!.respawn.enabled=true;expect(canStartField(s,()=>physical)).toBe(true);
+    s.player.dead=true;expect(canStartField(s,()=>physical)).toBe(false);const draft=settingsDraft(s.settings);draft.automation!.respawn.enabled=true;s.settings=validateSettings(draft);expect(canStartField(s,()=>physical)).toBe(true);
   });
   it('preserves profile map admission and never starts a profile when applying it',()=>{
     const input=validateSettings(settingsWithFieldMap(settings()));const store=new ProfileStore({getItem:()=>null,setItem:()=>{}},()=> 'policy',()=>0);store.save('Field','Test',input);

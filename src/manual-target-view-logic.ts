@@ -3,7 +3,7 @@ import { validActorSnapshot } from './actor-observations-logic';
 import type { CharacterSnapshot } from './character-state-logic';
 import { manualTargetPolicy, validateManualTargetRequest, type ManualPreviewContext, type ManualTargetRequest } from './manual-target-logic';
 import type { Entity, Position } from './protocol';
-import type { Settings } from './settings';
+import type { SettingsInput } from './settings';
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' ? value as Record<string, unknown> : {};
 
 export const actorKey = (world: string, id: number, incarnation: number): string => `${world}:${id}:${incarnation}`;
@@ -21,7 +21,7 @@ export function manualMonsterChoices(status: Record<string, unknown>): { value: 
 }
 
 /** Shared UI admission; the controller still rebuilds the route and checks receipts. */
-export function manualTargetView(status: Record<string, unknown>, settings: Settings,
+export function manualTargetView(status: Record<string, unknown>, settings: SettingsInput,
   command: { type: 'walk'; destination: Position } | { type: 'attack'; key: string }, timeoutSeconds: number,
   now: number): { request: ManualTargetRequest; context: ManualPreviewContext } {
   const actors = status.actorObservations;

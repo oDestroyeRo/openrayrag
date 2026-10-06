@@ -16,7 +16,7 @@ import { SocialUi } from './social-ui';
 import { MemoUi } from './memo-ui';
 import { WarpUi } from './warp-ui';
 import { type ActorObservationSnapshot } from './actor-observations';
-import { DEFAULT_AUTOMATION, DEFAULT_RETREAT, DEFAULT_PARTY_HEAL, validateAutomation, type AutomationSettings, type Settings } from './settings';
+import { DEFAULT_AUTOMATION, DEFAULT_RETREAT, DEFAULT_PARTY_HEAL, validateAutomation, automationDraft, type AutomationSettings, type AutomationSettingsInput, type ValidatedAutomationSettings, type SettingsInput } from './settings';
 import { MAX_PROFILES, ProfileStore } from './profiles';
 import { ITEM_CATALOG, SKILL_CATALOG, itemName } from './game-catalog';
 import { validateWorkflowSpec } from './workflows';
@@ -37,9 +37,9 @@ import { DEFAULT_SP_ITEMS } from './recovery-items';
 type FeatureUiMounts = Pick<ClientShell, 'sections' | 'manualTools' | 'sessionDetails'>;
 type Section = 'combat' | 'recovery' | 'travel' | 'inventory' | 'workflows' | 'profiles';
 interface Hooks {
-  settings(): Settings; apply(settings: Settings): void; map(): string; character(): string;
-  macroSettings?(): Settings;
-  applySetup?(settings: Settings): void;
+  settings(): SettingsInput; apply(settings: SettingsInput): void; map(): string; character(): string;
+  macroSettings?(): SettingsInput;
+  applySetup?(settings: SettingsInput): void;
   setupChanged?(): void;
   command(action: Record<string, unknown>): Promise<unknown>;
   workflow(spec: unknown): Promise<unknown>; routine(spec: unknown): Promise<unknown>; macro?(spec: unknown): Promise<unknown>; service(spec: unknown): Promise<unknown>; social(spec: unknown): Promise<unknown>; memo(spec: unknown): Promise<unknown>; socketPreview?(spec:unknown):Promise<unknown>; socket?(spec:unknown):Promise<unknown>; warp?(spec:unknown):Promise<unknown>;warpPreview?(spec:unknown):Promise<unknown>;warpCancel?():Promise<unknown>;
@@ -202,16 +202,16 @@ export class FeatureUi {
   private readonly spPotions: RecoveryItemUi;
   private readonly recoveryResource = document.createElement('select');
   private macroUi!: MacroUi;
-  private displaySettings: (() => Settings) | undefined;
+  private displaySettings: (() => SettingsInput) | undefined;
   /** Display and lock consumers share a synchronous SettingsForm projection.
    * Action callbacks outside this scope always read current DOM settings.
    */
-  withSettings<T>(settings: () => Settings, render: () => T): T {
+  withSettings<T>(settings: () => SettingsInput, render: () => T): T {
     const previous = this.displaySettings;
     this.displaySettings = settings;
     try { return render(); } finally { this.displaySettings = previous; }
   }
-  private automationSettings(): AutomationSettings {
+  private automationSettings(): AutomationSettingsInput {
     return this.displaySettings?.().automation ?? this.read();
   }
   private routePreview: { abort: AbortController; identity: string; settings: string; output: HTMLElement; current?: () => string; evidence?: string } | null = null;
@@ -418,7 +418,7 @@ export class FeatureUi {
     const summary = document.createElement('div'); summary.id = 'character-data'; summary.className = 'telemetry-summary'; summary.textContent = 'Connect a character to inspect SP, inventory and learned skills.'; this.mounts.sessionDetails.append(summary);
     this.note('workflows','Limits and hours are checked while automation runs. These controls never launch the app or start a stopped session.');
   }
-  read(): AutomationSettings {
+  read(): ValidatedAutomationSettings {
     const automation = structuredClone(DEFAULT_AUTOMATION) as unknown as Record<string,unknown>;
     automation.partyHeal={...DEFAULT_PARTY_HEAL};automation.retreat=structuredClone(DEFAULT_RETREAT);automation.mapPolicy=structuredClone(DEFAULT_MAP_POLICY);automation.disposition=structuredClone(DEFAULT_DISPOSITION);automation.supply=structuredClone(DEFAULT_SUPPLY);
     object(automation.disposition).maxSpend=Number(this.settingInputs.get('disposition.maxSpend')!.value);
@@ -445,9 +445,10 @@ export class FeatureUi {
     else delete automation.spPotions;
     return validateAutomation(automation as unknown as AutomationSettings);
   }
-  write(automation: AutomationSettings): void {
+  write(input: AutomationSettingsInput): void {
+    let automation = automationDraft(input);
     automation = { ...automation, escape: { ...DEFAULT_AUTOMATION.escape!, ...automation.escape } };
-    automation = validateAutomation(automation);automation={...automation,mapPolicy:automation.mapPolicy??structuredClone(DEFAULT_MAP_POLICY),supply:automation.supply??structuredClone(DEFAULT_SUPPLY)};
+    automation = automationDraft(validateAutomation(automation));automation={...automation,mapPolicy:automation.mapPolicy??structuredClone(DEFAULT_MAP_POLICY),supply:automation.supply??structuredClone(DEFAULT_SUPPLY)};
     this.partyHealPresent=Object.hasOwn(automation,'partyHeal');
     automation={...automation,partyHeal:automation.partyHeal??{...DEFAULT_PARTY_HEAL}};
     this.retreatPresent=Object.hasOwn(automation,'retreat');automation={...automation,retreat:automation.retreat??{...DEFAULT_RETREAT}};
@@ -668,7 +669,7 @@ export class FeatureUi {
   hasUnsavedMacro(): boolean { return this.macroUi.unsaved; }
   setupDraftDirty(): boolean { return this.macroUi.dirty; }
   setupDocument(): BotScriptDocument { return this.macroUi.configured(); }
-  syncSetup(settings: Settings): void { this.macroUi.syncSettings(settings); }
+  syncSetup(settings: SettingsInput): void { this.macroUi.syncSettings(settings); }
   private observation(): RoutineObservation { return featureObservation(this.status, Date.now()); }
   render(value: unknown): void {
     this.status=object(value);this.macroUi.render(this.status.macro,this.observation());if(this.routePreview&&(this.routePreview.identity!==this.previewIdentity()||this.routePreview.evidence!==this.routePreview.current?.()))this.cancelRoutePreview();const s=this.status;const character=object(s.character);const player=object(s.player);const stats=object(character.stats);

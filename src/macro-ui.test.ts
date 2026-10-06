@@ -4,7 +4,7 @@ import { BOT_SCRIPT_LIMITS, formatBotScript, parseBotScript } from './bot-script
 import * as botScript from './bot-script';
 import { MacroDraft, MacroUi, macroActive, macroExample, macroBaseSettings, validMacroSnapshot } from './macro-ui';
 import { dryRunMacro, MacroRuntime } from './macros';
-import { DEFAULT_SETTINGS, DEFAULT_AUTOMATION, validateFormSettings, type Settings } from './settings';
+import { DEFAULT_SETTINGS, DEFAULT_AUTOMATION, validateFormSettings, type SettingsInput } from './settings';
 
 class Store {
   data = new Map<string, string>();
@@ -307,7 +307,7 @@ it('preserves custom tab-separated rule budgets while appending examples', () =>
   expect(document.script?.rules).toHaveLength(2); expect(f.input.value).toContain('duration\t7200s');
 });
 
-function largeSettings(scope: 'self' | 'actor'): Settings {
+function largeSettings(scope: 'self' | 'actor'): SettingsInput {
   const automation = structuredClone(DEFAULT_AUTOMATION);
   automation.combat.rules = Array.from({length:32},(_,i)=>({classId:4000+i,action:'attack',priority:0,
     conditions:Array.from({length:16},()=>({field:'actorHpPercent',actor:scope==='self'?{scope:'self'}:{scope:'actor',id:1,world:'00000000-0000-0000-0000-000000000001',incarnation:1},operator:'gte',value:0}))}));

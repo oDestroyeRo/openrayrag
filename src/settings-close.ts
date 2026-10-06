@@ -1,12 +1,13 @@
-import type { FormDocument } from './current-form';
+import type { FormDocument, FormRevision } from './current-form';
+import { closeRequest, type CloseToken } from './settings-close-logic';
+export { type CloseRequest, type CloseToken } from './settings-close-logic';
 
-export interface CloseRequest { token:string }
 interface Hooks {
   settled():Promise<void>;
   flush():Promise<FormDocument>;
   unchanged(document:FormDocument):boolean;
-  complete(token:string,revision:number):Promise<void>;
-  cancel(token:string):Promise<void>;
+  complete(token:CloseToken,revision:FormRevision):Promise<void>;
+  cancel(token:CloseToken):Promise<void>;
   lock(locked:boolean):void;
   status(message:string):void;
 }
@@ -17,17 +18,17 @@ export class SettingsClose {
   constructor(private readonly hooks:Hooks){}
 
   request(value:unknown):Promise<void> {
-    if(!value||typeof value!=='object'||typeof (value as CloseRequest).token!=='string'
-      ||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test((value as CloseRequest).token))return Promise.resolve();
+    const request=closeRequest(value);
+    if(!request)return Promise.resolve();
     if(this.pending)return this.pending;
-    const {token}=value as CloseRequest;
+    const {token}=request;
     this.hooks.lock(true);
     this.hooks.status('Saving current settings before closing…');
     this.pending=this.save(token);
     return this.pending;
   }
 
-  private async save(token:string):Promise<void> {
+  private async save(token:CloseToken):Promise<void> {
     try {
       await this.hooks.settled();
       let document:FormDocument;

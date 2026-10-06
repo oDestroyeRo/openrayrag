@@ -1,6 +1,6 @@
 import { dryRunMacro, macroInventoryItemIds, type MacroScript } from './macros';
 import type { RoutineObservation } from './routines';
-import { DEFAULT_SETTINGS, type Settings } from './settings';
+import { DEFAULT_SETTINGS, settingsDraft, type SettingsInput } from './settings';
 import { formatBotScript, parseBotScript, updateBotScriptSettings, type BotScriptDocument } from './bot-script';
 import { macroSource, restoreMacroSource, encodeMacroSource, addMacroExample, macroStatusText, macroPreviewText, type Example } from './macro-ui-logic';
 import { readStoredText, writeStoredText, browserTextStorage } from './storage-effects';
@@ -39,13 +39,13 @@ export class MacroDraft {
     if (this.dirty) throw new Error('Apply or discard your Script draft before Start.');
     return structuredClone(this.appliedDocument);
   }
-  syncSettings(settings: Settings): void {
+  syncSettings(settings: SettingsInput): void {
     const key = JSON.stringify(settings);
     if (key === this.settingsKey) return;
     const dirty = this.dirty;
     const applied = updateBotScriptSettings(this.appliedText, settings);
     const saved = this.appliedText === this.savedText ? applied : updateBotScriptSettings(this.savedText, settings);
-    const retained = structuredClone(settings);
+    const retained = settingsDraft(settings);
     this.appliedText = applied.text; this.savedText = saved.text;
     if (!dirty) this.text = this.appliedText;
     this.retainedSettings = retained; this.appliedDocument = applied.document; this.settingsKey = key;
@@ -54,7 +54,7 @@ export class MacroDraft {
   apply(document: BotScriptDocument): void {
     this.text = macroSource(this.text, document);
     this.appliedText = this.text;
-    this.retainedSettings = structuredClone(document.settings); this.appliedDocument = structuredClone(document); this.settingsKey = null;
+    this.retainedSettings = settingsDraft(document.settings); this.appliedDocument = structuredClone(document); this.settingsKey = null;
   }
   save(): BotScriptDocument {
     const document = this.read();
@@ -62,7 +62,7 @@ export class MacroDraft {
     const source = macroSource(this.text, document);
     writeStoredText(this.storage, STORAGE_KEY, encodeMacroSource(source));
     this.text = source; this.appliedText = source; this.savedText = source;
-    this.retainedSettings = structuredClone(document.settings); this.appliedDocument = structuredClone(document); this.settingsKey = null;
+    this.retainedSettings = settingsDraft(document.settings); this.appliedDocument = structuredClone(document); this.settingsKey = null;
     return document;
   }
   get enabledScript(): MacroScript | null { return structuredClone(this.appliedDocument.script); }
@@ -76,8 +76,8 @@ export class MacroDraft {
 }
 
 interface Hooks {
-  settings(): Settings;
-  apply(settings: Settings): void;
+  settings(): SettingsInput;
+  apply(settings: SettingsInput): void;
   changed(): void;
   notify(message: string, error?: boolean): void;
 }
@@ -133,7 +133,7 @@ export class MacroUi {
     if (this.syncError) throw new Error(this.syncError);
     return this.draft.configured();
   }
-  syncSettings(settings: Settings): void {
+  syncSettings(settings: SettingsInput): void {
     const key = JSON.stringify(settings);
     if (key === this.syncKey) return;
     this.syncKey = key;

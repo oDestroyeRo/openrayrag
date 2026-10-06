@@ -1,3 +1,4 @@
+import { characterSlot } from './login-logic';
 import { describe, expect, it, vi } from 'vitest';
 import { characterSlots, LoginController, loginDriver, loginReady, unityMessage, type LoginDriver, type UnityClient } from './login';
 
@@ -90,10 +91,10 @@ describe('Unity login interface', () => {
       if (method === '__rayrag_login_ready_probe__') console.log(`SendMessage: object ${object} does not have receiver for function ${method}!`);
       else calls.push(method);
     } });
-    expect(driver.select(2)).toBe(false);
+    expect(driver.select(characterSlot(2))).toBe(false);
     expect(calls).toEqual(['SetCharacterInfo']);
-    expect(driver.select(2)).toBe(true);
-    expect(driver.select(2)).toBe(true);
+    expect(driver.select(characterSlot(2))).toBe(true);
+    expect(driver.select(characterSlot(2))).toBe(true);
     expect(calls).toEqual(['SetCharacterInfo','ClickOk']);
   });
   it('rechecks readiness after slot preparation and never resends the slot', () => {
@@ -105,9 +106,9 @@ describe('Unity login interface', () => {
         : `SendMessage: object ${object} not found!`);
       else calls.push(method);
     } });
-    expect(driver.select(0)).toBe(false); ready = false;
-    expect(driver.select(0)).toBe(false); expect(calls).toEqual(['SetCharacterInfo']);
-    ready = true; expect(driver.select(0)).toBe(true);
+    expect(driver.select(characterSlot(0))).toBe(false); ready = false;
+    expect(driver.select(characterSlot(0))).toBe(false); expect(calls).toEqual(['SetCharacterInfo']);
+    ready = true; expect(driver.select(characterSlot(0))).toBe(true);
     expect(calls).toEqual(['SetCharacterInfo','ClickOk']);
   });
   it('does not submit credentials when a required input no longer exists', async () => {

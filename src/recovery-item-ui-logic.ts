@@ -1,16 +1,18 @@
 import { filter, find, partition, pipe } from 'remeda';
+import { addQuantities, itemId, quantity, type ItemId, type Quantity } from './domain-values';
+export type RecoveryInventory = ReadonlyMap<ItemId, Quantity>;
 
 /** Reject the whole observation before exposing any stock from a malformed row. */
-export function recoveryInventory(character: unknown): Map<number, number> | null {
+export function recoveryInventory(character: unknown): RecoveryInventory | null {
   const value = character && typeof character === 'object' ? character as Record<string, unknown> : {};
   if (value.inventoryKnown !== true || !Array.isArray(value.inventory) || value.inventory.length > 600) return null;
-  const stock = new Map<number, number>();
+  const stock = new Map<ItemId, Quantity>();
   for (const entry of value.inventory) {
     const row = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {};
     if (!Number.isInteger(row.itemId) || Number(row.itemId) < 1 || Number(row.itemId) > 2147483647
       || !Number.isInteger(row.count) || Number(row.count) < 0 || Number(row.count) > 32767) return null;
-    const itemId = Number(row.itemId);
-    stock.set(itemId, (stock.get(itemId) ?? 0) + Number(row.count));
+    const id = itemId(row.itemId);
+    stock.set(id, addQuantities(stock.get(id) ?? quantity(0), quantity(row.count)));
   }
   return stock;
 }
