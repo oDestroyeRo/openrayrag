@@ -554,7 +554,7 @@ it('defers the actual main updater for an unsaved macro and permits installation
  });
  await vi.advanceTimersByTimeAsync(15000);
  expect(f.calls('update_reserve')).toEqual([]);expect(f.calls('update_install')).toEqual([]);
- expect(f.get('update-status').textContent).toBe('Update waits for your Script draft. Apply & save or Discard draft first.');
+ expect(f.get('update-status').textContent).toBe('Update waits for your Script draft. Correct it and retry Save script, or Discard draft first.');
  ipc.macroDirty=false;await vi.advanceTimersByTimeAsync(15000);
  expect(f.calls('update_reserve')).toHaveLength(1);expect(f.calls('update_install')).toEqual([['update_install',{nonce:'d'.repeat(32)}]]);
  expect(f.calls('control_bot')).toEqual([]);
@@ -779,12 +779,12 @@ it('never sends a Start request while a Script draft is unapplied', async () => 
   expect(f.calls('control_bot').some(call => ['start','macro'].includes(call[1]?.action))).toBe(false);
 });
 
-it('restores native retained settings during a manual Script draft without overwriting its text or touching native CurrentForm', async () => {
+it('restores native retained settings during an invalid Script draft without overwriting its text or touching native CurrentForm', async () => {
   let restore!: (value:unknown) => void;
   const pending = new Promise<unknown>(resolve => { restore = resolve; });
   const f = await fixture(null,false,pending,null,false,true);
   const source = f.get('macro-document');
-  source.value = source.value.replace('set radius = 12', 'set radius = 14'); await source.emit('input');
+  source.value = source.value.replace('set radius = 12', 'set radius = 14')+'\nrule "Incomplete"'; await source.emit('input');
   const manual = source.value;
   const settings = { ...structuredClone(DEFAULT_SETTINGS), map:'prt_fild08', targets:[4000], radius:18 };
   restore({version:1,revision:4,selectedProfileId:null,settings}); await settleMain();
@@ -797,27 +797,71 @@ it('restores native retained settings during a manual Script draft without overw
   expect(f.get('macro-document').value).toContain('set radius = 18'); expect(ipc.editor?.dirty).toBe(false);
 });
 
-it('validates and applies a Script draft offline through Main without any game commands or implicit Start', async () => {
+it('synchronizes valid Script edits offline through reentrant Main and saves without any game commands or implicit Start', async () => {
   const f = await fixture(null,false,null,null,false,true);
   const source = f.get('macro-document');
   source.value = '# my field\nscript "Poring"\nset map = prt_fild08\nset targets = [4000]\nset radius = 17'; await source.emit('input');
-  const root = ipc.editor!.root as unknown as Element;
-  const apply = root.children.flatMap(node=>node.children).find(node=>node.textContent==='Apply & save')!;
-  await apply.emit('click'); await settleMain(); await vi.advanceTimersByTimeAsync(350);
+  await settleMain(); await vi.advanceTimersByTimeAsync(350);
   expect(f.get('radius').value).toBe('17'); expect(ipc.editor?.configured().settings).toMatchObject({map:'prt_fild08',targets:[4000],radius:17});
   expect(source.value).toContain('# my field');
   expect(f.calls('control_bot')).toHaveLength(0); expect(f.calls('login_game')).toHaveLength(0);
   expect(f.calls('save_current_form').at(-1)?.[1]?.document.settings).toMatchObject({map:'prt_fild08',targets:[4000],radius:17});
+  expect(ipc.editor?.configured().settings).toEqual(f.calls('save_current_form').at(-1)?.[1]?.document.settings);
+  expect(ipc.editor?.unsaved).toBe(false);
+  f.get('radius').value='19';await f.main.emit('input',f.get('radius'));
+  expect(source.value).toContain('set radius = 19');expect(source.value).toContain('# my field');expect(ipc.editor?.configured().settings.radius).toBe(19);
 });
 
-it('cancels Close for an unapplied Script draft and permits Close after explicit Discard', async () => {
+it('lets valid Script settings edits win over delayed native restore without overwriting comments or rules', async () => {
+  let restore!: (value:unknown)=>void; const pending=new Promise(resolve=>{restore=resolve;});
+  const f=await fixture(null,false,pending,null,false,true),source=f.get('macro-document');
+  source.value='# edited before restore\nscript "Poring"\nset map = prt_fild08\nset targets = [4000]\nset radius = 17';await source.emit('input');
+  restore({version:1,revision:4,selectedProfileId:null,settings:{...structuredClone(DEFAULT_SETTINGS),radius:18}});await settleMain();await vi.advanceTimersByTimeAsync(350);
+  expect(f.get('radius').value).toBe('17');expect(source.value).toContain('# edited before restore');expect(ipc.editor?.dirty).toBe(false);
+  expect(f.calls('save_current_form').at(-1)?.[1]?.document.settings.radius).toBe(17);expect(f.calls('control_bot')).toHaveLength(0);
+});
+
+it('rebases a valid partial Script onto normalized Form defaults and the observed field before global Start', async () => {
+  const f=await fixture(null,false,null,null,false,true);await publishStatus(readyStatus('partial-script'));
+  const source=f.get('macro-document');source.value='script "Potion"\nrule "Potion"\nwhen hpPercent < 60\nuse item 501 timeout 30s\nend';await source.emit('input');await vi.advanceTimersByTimeAsync(350);
+  expect(ipc.editor?.configured().settings).toEqual(f.calls('save_current_form').at(-1)?.[1]?.document.settings);
+  expect(ipc.editor?.configured().settings.map).toBe('prt_fild08');expect(source.value).toContain('set map = "prt_fild08"');
+  expect(f.get('start').disabled).toBe(false);expect(f.calls('control_bot')).toHaveLength(0);
+  await f.get('start').emit('click');await settleMain();
+  expect(f.calls('control_bot').find(call=>call[1]?.action==='macro')?.[1]?.request.settings.map).toBe('prt_fild08');
+});
+
+it('recovers a newly saved sparse Script whose normalized Form settings exceed the source limit', async () => {
+  const f=await fixture(null,false,null,null,false,true);await publishStatus(readyStatus('oversized-normalization'));
+  const {BOT_SCRIPT_LIMITS}=await import('../settings/bot-script'),source=f.get('macro-document');
+  const small='script "Potion"\nrule "Potion"\nwhen hpPercent < 60\nuse item 501 timeout 30s\nend';
+  source.value=small+'\n#'+'x'.repeat(BOT_SCRIPT_LIMITS.authoringBytes-small.length-102);await source.emit('input');
+  expect(()=>ipc.editor?.configured()).toThrow(/too large/);expect(f.get('start').disabled).toBe(true);expect(f.calls('control_bot')).toHaveLength(0);
+  source.value=small;await source.emit('input');
+  expect(ipc.editor?.configured().settings.map).toBe('prt_fild08');expect(ipc.editor?.unsaved).toBe(false);expect(f.get('start').disabled).toBe(false);
+  expect(f.calls('control_bot')).toHaveLength(0);
+});
+
+it('preserves the selected profile and native revision for comment and rule-only Script edits', async () => {
+  const settings={...structuredClone(DEFAULT_SETTINGS),map:'prt_fild08',targets:[4000]};
+  const f=await fixture(null,false,{version:1,revision:4,selectedProfileId:'retained-profile',settings},null,false,true);
+  const source=f.get('macro-document'),saves=f.calls('save_current_form').length;
+  source.value+='\n# my note';await source.emit('input');await vi.advanceTimersByTimeAsync(350);
+  expect(f.calls('save_current_form')).toHaveLength(saves);expect(ipc.editor?.unsaved).toBe(false);
+  const {formatBotScript}=await import('../settings/bot-script'),{macroExample}=await import('../automation/macro-ui');
+  source.value=formatBotScript({settings:ipc.editor!.configured().settings,script:macroExample('item')});await source.emit('input');await vi.advanceTimersByTimeAsync(350);
+  expect(f.calls('save_current_form')).toHaveLength(saves);expect(ipc.editor?.configured().script?.rules).toHaveLength(1);
+  await requestClose();expect(f.calls('save_current_form').at(-1)?.[1]?.document.selectedProfileId).toBe('retained-profile');expect(f.calls('control_bot')).toHaveLength(0);
+});
+
+it('cancels Close for an invalid Script draft and permits Close after explicit Discard', async () => {
   const f = await fixture(null,false,null,null,false,true); const source = f.get('macro-document');
-  source.value += '\n# still editing'; await source.emit('input'); const before = source.value;
+  source.value += '\nrule "Still editing"'; await source.emit('input'); const before = source.value;
   await requestClose(); expect(f.calls('settings_close_complete')).toEqual([]);
   expect(f.calls('settings_close_cancel')).toEqual([['settings_close_cancel',{token:closeToken}]]);
   expect(f.root).toHaveProperty('inert',false); expect(source.value).toBe(before);
   expect(f.get('setup-tab-form').disabled).toBe(false); expect(f.get('setup-tab-script').disabled).toBe(false);
-  expect(f.get('notice').textContent).toContain('Apply & save');
+  expect(f.get('notice').textContent).toContain('Save script');
   const root = ipc.editor!.root as unknown as Element;
   const discard = root.children.flatMap(node=>node.children).find(node=>node.textContent==='Discard draft')!;
   await discard.emit('click'); await requestClose(); expect(f.calls('settings_close_complete')).toHaveLength(1);
@@ -829,10 +873,10 @@ it('keeps failed script saves from Close and discards only unsaved rules while r
   source.value = 'script "Potion"\nset map = prt_fild08\nset targets = [4000]\nset radius = 17\nrule "Potion"\nwhen hpPercent < 60\nuse item 501 timeout 30s\nend'; await source.emit('input');
   const root = ipc.editor!.root as unknown as Element;
   const button = (label:string)=>root.children.flatMap(node=>node.children).find(node=>node.textContent===label)!;
-  await button('Apply & save').emit('click'); expect(ipc.editor?.unsaved).toBe(true); expect(f.get('radius').value).toBe('17');
+  await button('Save script').emit('click'); expect(ipc.editor?.unsaved).toBe(true); expect(f.get('radius').value).toBe('17');
   await requestClose(); expect(f.calls('settings_close_complete')).toHaveLength(0); expect(f.root).toHaveProperty('inert',false);
   const copy = source.value; expect(copy).toContain('rule "Potion"');
-  source.value += '\n# another edit after failed Save'; await source.emit('input'); expect(ipc.editor?.dirty).toBe(true);
+  source.value += '\nrule "another edit after failed Save"'; await source.emit('input'); expect(ipc.editor?.dirty).toBe(true);
   await button('Discard draft').emit('click'); expect(ipc.editor?.unsaved).toBe(false);
   expect(ipc.editor?.configured().script).toBeNull(); expect(f.get('radius').value).toBe('17');
   await requestClose(); expect(f.calls('settings_close_complete')).toHaveLength(1);

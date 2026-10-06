@@ -103,7 +103,7 @@ describe('macro editor documents', () => {
     const draft = new MacroDraft(new Store()); draft.text = draft.text.replace('set radius = 12', 'set radius = 14');
     const manual = draft.text; draft.syncSettings({ ...structuredClone(DEFAULT_SETTINGS), radius: 18 });
     expect(draft.text).toBe(manual); expect(draft.read().settings.radius).toBe(14);
-    expect(() => draft.configured()).toThrow('Apply or discard');
+    expect(() => draft.configured()).toThrow('Finish a valid Script');
     draft.discard(); expect(draft.configured().settings.radius).toBe(18); expect(draft.dirty).toBe(false);
   });
   it('synchronizes distinct applied and saved rules while retaining a dirty draft and detached configuration', () => {
@@ -123,7 +123,7 @@ describe('macro editor documents', () => {
     draft.text += '\r\ninvalid manual draft'; const manual = draft.text;
     draft.syncSettings(settings);
     expect(draft.text).toBe(manual); expect(draft.dirty).toBe(true);
-    expect(() => draft.configured()).toThrow('Apply or discard');
+    expect(() => draft.configured()).toThrow('Finish a valid Script');
     draft.discard();
     expect(draft.configured()).toEqual({ settings, script: macroExample('item') });
     expect(draft.text).toContain('# saved notes\r\n'); expect(draft.unsaved).toBe(false);
@@ -229,47 +229,74 @@ describe('unified Setup editor', () => {
     expect((ui.root as unknown as Node).all().filter(node=>node.tag==='button').map(node=>node.textContent)).not.toContain('Start macro');
     expect(ui.configured().script).toBeNull();
   });
-  it('routes source edits only to draft refresh, retaining the unapplied current settings', () => {
+  it('synchronizes and saves valid source edits without bubbling raw text into Form persistence', () => {
     const f = editor(); const persisted = vi.fn(); const parent = new Node('main'); parent.append(f.root); parent.addEventListener('input', persisted);
     f.change(f.input.value.replace('set radius = 12', 'set radius = 14'));
-    expect(f.ui.dirty).toBe(true); expect(f.settings().radius).toBe(12); expect(f.hooks.changed).toHaveBeenCalledTimes(1);
-    expect(persisted).not.toHaveBeenCalled(); expect(f.hooks.apply).not.toHaveBeenCalled();
+    expect(f.ui.dirty).toBe(false); expect(f.ui.unsaved).toBe(false); expect(f.settings().radius).toBe(14); expect(f.hooks.changed).toHaveBeenCalledTimes(1);
+    expect(persisted).not.toHaveBeenCalled(); expect(f.hooks.apply).toHaveBeenCalledTimes(1);
   });
-  it('previews settings and rules without applying settings or sending commands', () => {
+  it('previews synchronized settings and rules without another settings application', () => {
     const f = editor(); f.change('script "Only settings"\nset radius = 14'); f.button('Validate & preview').emit('click');
     expect(f.root.all().find(node=>node.id==='macro-preview')?.textContent).toContain('Preview sends no commands.');
-    expect(f.hooks.apply).not.toHaveBeenCalled(); expect(f.settings().radius).toBe(12);
+    expect(f.hooks.apply).toHaveBeenCalledTimes(1); expect(f.settings().radius).toBe(14);
     f.change(formatBotScript({ settings: f.settings(), script: macroExample('continuous') }));
-    f.button('Validate & preview').emit('click'); expect(f.hooks.apply).not.toHaveBeenCalled();
+    f.button('Validate & preview').emit('click'); expect(f.hooks.apply).toHaveBeenCalledTimes(1);
   });
   it('validates the entire draft before applying and keeps a bad rule from partially changing settings', () => {
     const f = editor(); f.change('script "Bad"\nset radius = 14\nrule "Bad action"\nwhen level >= 1\nlaunch arbitrary-code\nend');
-    f.button('Apply & save').emit('click'); expect(f.hooks.apply).not.toHaveBeenCalled(); expect(f.settings().radius).toBe(12);
+    f.button('Save script').emit('click'); expect(f.hooks.apply).not.toHaveBeenCalled(); expect(f.settings().radius).toBe(12);
     expect(f.hooks.notify).toHaveBeenCalledWith(expect.stringMatching(/Line 5/i), true); expect(f.ui.dirty).toBe(true);
   });
   it('applies once, preserves comments, and adds examples to existing rules without replacing settings', () => {
     const f = editor(); f.change('# important\n' + formatBotScript({ settings: { ...f.settings(), radius: 17 }, script: macroExample('item') }));
     const select = f.root.all().find(node=>node.id==='macro-example')!; select.value='item'; f.button('Add example rules').emit('click');
     const parsed = parseBotScript(f.input.value); expect(parsed.settings.radius).toBe(17); expect(parsed.script?.rules.map(rule=>rule.name)).toEqual(['Use a potion', 'Use a potion 2']);
-    expect(f.input.value).toContain('# important'); expect(f.hooks.apply).not.toHaveBeenCalled();
-    f.button('Apply & save').emit('click'); expect(f.hooks.apply).toHaveBeenCalledTimes(1); expect(f.settings().radius).toBe(17);
+    expect(f.input.value).toContain('# important'); expect(f.hooks.apply).toHaveBeenCalledTimes(1);
+    f.button('Save script').emit('click'); expect(f.hooks.apply).toHaveBeenCalledTimes(1); expect(f.settings().radius).toBe(17);
     expect(f.ui.configured().script?.rules).toHaveLength(2); expect(f.ui.dirty).toBe(false); expect(f.ui.unsaved).toBe(false);
   });
   it('locks editor mutations during an active request, leaving the draft intact', () => {
-    const f = editor(); f.change(formatBotScript({ settings: { ...f.settings(), radius: 14 }, script: macroExample('item') }));
-    const before = f.input.value; f.ui.lock(true); f.button('Apply & save').emit('click'); f.button('Discard draft').emit('click');
-    expect(f.hooks.apply).not.toHaveBeenCalled(); expect(f.input.value).toBe(before); expect(f.ui.dirty).toBe(true);
+    const f = editor(); const before = f.input.value; f.ui.lock(true);
+    f.change(formatBotScript({ settings: { ...f.settings(), radius: 14 }, script: macroExample('item') }));
+    f.button('Save script').emit('click'); f.button('Discard draft').emit('click');
+    expect(f.hooks.apply).not.toHaveBeenCalled(); expect(f.input.value).toBe(before); expect(f.ui.dirty).toBe(false);
   });
   it('keeps applied source visibly unsaved on storage failure, and protects maintenance', () => {
     const store = new Store(); store.setItem = () => { throw new Error('quota'); };
-    const f = editor(store); f.change(formatBotScript({ settings: f.settings(), script: macroExample('item') })); f.button('Apply & save').emit('click');
-    expect(f.hooks.apply).toHaveBeenCalledTimes(1); expect(f.ui.dirty).toBe(false); expect(f.ui.unsaved).toBe(true);
-    expect(f.root.all().find(node=>node.id==='macro-saved')?.textContent).toContain('Applied but not saved');
+    const f = editor(store); f.change(formatBotScript({ settings: f.settings(), script: macroExample('item') })); f.button('Save script').emit('click');
+    expect(f.hooks.apply).not.toHaveBeenCalled(); expect(f.ui.dirty).toBe(false); expect(f.ui.unsaved).toBe(true);
+    expect(f.root.all().find(node=>node.id==='macro-saved')?.textContent).toContain('Shared setup updated but script not saved');
+  });
+  it('keeps the last valid settings through incomplete text and resumes synchronization after correction', () => {
+    const f = editor(); f.change(f.input.value.replace('set radius = 12','set radius = 14'));
+    const valid = f.input.value; f.change(valid + '\nrule "Incomplete"');
+    expect(f.settings().radius).toBe(14); expect(f.ui.dirty).toBe(true);
+    expect(()=>f.ui.configured()).toThrow(/Finish a valid/); expect(f.input.value).toBe(valid+'\nrule "Incomplete"');
+    expect(f.hooks.notify).not.toHaveBeenCalled();
+    f.change(valid.replace('set radius = 14','set radius = 19'));
+    expect(f.settings().radius).toBe(19); expect(f.ui.configured().settings.radius).toBe(19); expect(f.ui.unsaved).toBe(false);
+  });
+  it('lets a valid smaller replacement recover a restored sparse source that cannot fit expanded settings', () => {
+    const store = new Store(), baseline = `script "Large saved source"\n#${'x'.repeat(BOT_SCRIPT_LIMITS.authoringBytes - 2_000)}`;
+    store.data.set('rayrag.companion.setup-script.v1',JSON.stringify({version:1,source:baseline}));
+    const f = editor(store);
+    f.change(formatBotScript({settings:{...f.settings(),radius:17},script:macroExample('item')}));
+    expect(f.settings().radius).toBe(17);expect(f.ui.configured().settings.radius).toBe(17);expect(f.ui.unsaved).toBe(false);
+    expect(JSON.parse(store.data.get('rayrag.companion.setup-script.v1')!).source).toBe(f.input.value);
+  });
+  it('validates legacy canonical expansion before any Form mutation', () => {
+    vi.stubGlobal('document',{createElement:(tag:string)=>new Node(tag)});
+    const settings=largeSettings('actor'),hooks={settings:()=>settings,apply:vi.fn(),changed:vi.fn(),notify:vi.fn()},store=new Store();
+    const ui=new MacroUi(hooks,store);ui.syncSettings(settings);
+    const input=(ui.root as unknown as Node).all().find(node=>node.id==='macro-document')!;
+    const source=JSON.stringify(macroExample('item'));input.value=source;input.emit('input');
+    expect(hooks.apply).not.toHaveBeenCalled();expect(input.value).toBe(source);expect(store.data.size).toBe(0);expect(ui.dirty).toBe(true);
+    expect(()=>ui.configured()).toThrow(/too large/);
   });
 });
 
 
-it('keeps Form and Script in one workspace and blocks Form switching until Apply or Discard', () => {
+it('lets valid Script edits return to the synchronized Form and blocks only invalid drafts', () => {
   vi.stubGlobal('document', { createElement: (tag: string) => new Node(tag) });
   const host = new Node('main');
   for (const id of ['setup-form','setup-script','setup-tab-form','setup-tab-script']) { const node = new Node(id.includes('tab') ? 'button' : 'div'); node.id=id;host.append(node); }
@@ -280,6 +307,8 @@ it('keeps Form and Script in one workspace and blocks Form switching until Apply
   Reflect.apply(Reflect.get(FeatureUi.prototype,'setup'),feature,[]);
   host.querySelector('#setup-tab-script')!.emit('click'); expect(form.hidden).toBe(true); expect(script.hidden).toBe(false);
   const editor = host.querySelector('#macro-document')!; editor.value=editor.value.replace('set radius = 12','set radius = 14');editor.emit('input');
+  host.querySelector('#setup-tab-form')!.emit('click'); expect(form.hidden).toBe(false); expect(script.hidden).toBe(true); expect(settings.radius).toBe(14);
+  host.querySelector('#setup-tab-script')!.emit('click'); editor.value+='\nrule "Incomplete"';editor.emit('input');
   host.querySelector('#setup-tab-form')!.emit('click'); expect(form.hidden).toBe(true); expect(script.hidden).toBe(false);
   expect(hooks.notify).toHaveBeenCalledWith(expect.stringContaining('Discard draft before switching'),true);
   const discard = host.all().find(node=>node.textContent==='Discard draft')!;discard.emit('click');
@@ -314,7 +343,7 @@ function largeSettings(scope: 'self' | 'actor'): SettingsInput {
   return validateFormSettings({...structuredClone(DEFAULT_SETTINGS),map:'prt_fild08',targets:[4000],automation});
 }
 it('reports oversized Script conversion without losing source or returning stale macro settings, and recovers after a valid Form change', () => {
-  const f=editor();f.change(formatBotScript({settings:f.settings(),script:macroExample('item')}));f.button('Apply & save').emit('click');
+  const f=editor();f.change(formatBotScript({settings:f.settings(),script:macroExample('item')}));f.button('Save script').emit('click');
   const before=f.input.value;
   expect(()=>f.ui.syncSettings(largeSettings('actor'))).not.toThrow();expect(f.input.value).toBe(before);
   expect(()=>f.ui.configured()).toThrow(/cannot be converted.*too large/i);

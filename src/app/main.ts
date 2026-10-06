@@ -179,7 +179,7 @@ const settingsClose=new SettingsClose({
   },
   cancel:token=>invoke('settings_close_cancel',{token}),
   lock:locked=>{closeBusy=locked;root.inert=locked||!closeRegistered;if(locked&&saveTimer){clearTimeout(saveTimer);saveTimer=undefined;}updateButtons();},
-  status:status=>{if(status.startsWith('Close cancelled')&&features.hasUnsavedMacro())status='Close cancelled: your Script changes are not saved. Apply & save, or copy the script and Discard draft, then close again.';closeStatus=status;element('update-status').textContent=status;message(status,status.startsWith('Close cancelled'));},
+  status:status=>{if(status.startsWith('Close cancelled')&&features.hasUnsavedMacro())status='Close cancelled: your Script changes are not saved. Correct the script and retry Save script, or copy it and Discard draft, then close again.';closeStatus=status;element('update-status').textContent=status;message(status,status.startsWith('Close cancelled'));},
 });
 function formChanged():void {
   currentForm.touch();

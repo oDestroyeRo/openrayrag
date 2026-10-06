@@ -83,7 +83,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
         </section>
 
         <section id="client-page-bot" class="client-page" role="tabpanel" aria-labelledby="client-tab-bot" hidden>
-          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Setup</h2><p>Form and Script edit the same settings. Form changes save automatically; apply script changes before Start.</p></div>
+          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Setup</h2><p>Form and Script edit the same settings. Valid changes save automatically in both views. Start bot uses this shared setup.</p></div>
           <nav class="setup-view-tabs" role="tablist" aria-label="Setup view">
             <button id="setup-tab-form" type="button" role="tab" data-client-navigation="setup-view" aria-controls="setup-form" aria-selected="true">Form</button>
             <button id="setup-tab-script" type="button" role="tab" data-client-navigation="setup-view" aria-controls="setup-script" aria-selected="false" tabindex="-1">Script</button>

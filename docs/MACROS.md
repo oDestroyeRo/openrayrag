@@ -7,10 +7,10 @@
 1. Stop the bot and open **Setup → Script**. The editor contains your retained map, targets and settings, including options configured before a character is connected.
 2. Add an example or write a rule. Comments begin with `#`; indentation makes a script easier to read but does not change its meaning.
 3. Select **Validate & preview** to check the script and see which rules match the latest observations. Preview sends no commands.
-4. Select **Apply & save** to update the configuration and save the source on this computer. Invalid text leaves the current configuration intact. Apply or select **Discard draft** before returning to Form.
+4. Valid edits update Form and save the source automatically. Return to **Form** to see the same settings; Form edits update Script while preserving its comments and rules. Incomplete or invalid text leaves the last valid configuration intact. Correct it or select **Discard draft** before returning to Form or starting.
 5. Select the common **Start bot** control. A settings-only script starts ordinary field automation; a script containing rules starts those rules with the settings shown in the editor. **Stop bot** stops either.
 
-Loading, converting, applying, saving and restoring a script never start automation. The editor reports syntax errors with a line number. A preview can check a rule's observed conditions; game actions still require a ready character, known resources and confirmation.
+Loading, editing, converting, saving and restoring a script never start automation. The editor reports syntax errors with a line number. A preview can check a rule's observed conditions; game actions still require a ready character, known resources and confirmation.
 
 ## Settings without JSON
 
@@ -122,7 +122,7 @@ Use `s`, `m` or `h` for durations and `%` for percentages. Counts and IDs remain
 
 For scripts containing rules, `duration`, `actions` and a rule's `runs` accept `unlimited` (or `0`). Each action still has a finite positive timeout, and the configured health, recovery, death, schedule and field-run limits remain active. `spend 0` allows no spending. A settings-only script uses `set automation.limits.minutes = 1h` for its run duration; macro-only limit commands require a rule. Stop and unconfirmed-action handling retain the existing execution behavior.
 
-Existing saved version-1 JSON macros are converted into readable source using the current retained settings. Legacy JSON can also be imported. Comments are preserved when saving source and when graphical setting edits update the settings portion of a script. A pending script draft is retained until you apply or discard it; telemetry and delayed settings restoration cannot silently overwrite it. Closing waits for unapplied or unsaved source. If saving fails, copy your text and use **Discard draft** to return to the last saved rules while retaining the current Form settings.
+Existing saved version-1 JSON macros are converted into readable source using the current retained settings. Legacy JSON can also be imported. Comments are preserved when saving source and when graphical setting edits update the settings portion of a script. Incomplete or invalid text is retained until corrected or discarded; telemetry and delayed settings restoration cannot silently overwrite it. A valid Script settings edit also takes precedence over delayed native restoration. Closing waits for invalid or unsaved source. If saving fails, the shared configuration stays updated: retry **Save script**, or copy your text and use **Discard draft** to return to the last saved rules while retaining the current Form settings.
 
 The current settings form remains the persisted settings owner. Restoring the editor refreshes its settings from that form and retains the saved rules; cached editor settings cannot replace newer saved form values. Saving/restoring never resumes a running macro.
 

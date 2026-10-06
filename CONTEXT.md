@@ -25,7 +25,7 @@ The user’s request to continue field automation subject to its configured limi
 _Avoid_: Running status
 
 **Bot script**:
-A readable configuration containing the retained settings form and optional macro rules. Form and Script are two views of those same choices. Applying a valid draft changes the configuration; saving, converting and previewing never start automation.
+A readable configuration containing the retained settings form and optional macro rules. Form and Script are two views of those same choices. Valid Script edits automatically update and save the shared configuration; Form edits refresh its settings while preserving rules and comments. Invalid or incomplete text retains the last valid configuration and blocks Start. Editing, saving, converting and previewing never start automation.
 _Avoid_: Separate setup, executable code
 
 **Macro script**:
