@@ -132,6 +132,7 @@
   "src/disposition-ui-logic.ts": "logic",
   "src/disposition-ui.ts": "logic",
   "src/disposition.ts": "logic",
+  "src/domain-values.ts": "logic",
   "src/engine-action-policy.ts": "logic",
   "src/engine.ts": "orchestration",
   "src/escape-logic.ts": "logic",
