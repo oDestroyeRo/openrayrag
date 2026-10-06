@@ -1,15 +1,31 @@
 import { BitReader, BitWriter } from './binary';
+import { DomainValueError, actorId, incarnation, mapCode as checkedMapCode, revisionFor, worldId, type ActorId, type Incarnation, type MapCode, type Revision, type WorldId } from './domain-values';
 
 export const MEMO_OP = 94;
 export type MemoSlot = 0 | 1 | 2 | 3;
 export interface MemoLocation { map: string; x: number; y: number }
 export type MemoSlots = [MemoLocation | null, MemoLocation | null, MemoLocation | null, MemoLocation | null];
+export type MemoSlotsInput = Readonly<[Readonly<MemoLocation> | null, Readonly<MemoLocation> | null, Readonly<MemoLocation> | null, Readonly<MemoLocation> | null]>;
 export interface MemoEvent { type: 'memoSlots'; slots: MemoSlots }
 /** Coordinates only bind the preview to the current cell. The wire sends a slot. */
-export interface MemoBinding extends MemoLocation {
+export interface MemoBindingInput extends MemoLocation {
   world: string; actorId: number; incarnation: number; connectionEpoch: number; revision: number;
 }
-export interface MemoRequest { type: 'memoSave'; slot: MemoSlot; preview: MemoBinding }
+declare const memoCellValue: unique symbol;
+/** Current-cell request coordinates are bounded more tightly than observed memo locations. */
+export type MemoCell = number & { readonly [memoCellValue]: 'MemoCell' };
+export function memoCell(value: unknown): MemoCell {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 511) throw new DomainValueError('MemoCell', typeof value === 'number' ? 'range' : 'type', 'memo cell');
+  return value as MemoCell;
+}
+export type MemoRevision = Revision<'memo'>;
+export type MemoGeneration = Revision<'memo-generation'>;
+export interface MemoBinding {
+  readonly world: WorldId; readonly actorId: ActorId; readonly incarnation: Incarnation;
+  readonly connectionEpoch: Revision<'connection'>; readonly revision: MemoRevision;
+  readonly map: MapCode; readonly x: MemoCell; readonly y: MemoCell;
+}
+export interface MemoRequest { readonly type: 'memoSave'; readonly slot: MemoSlot; readonly preview: MemoBinding }
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const keys = (v: Record<string, unknown>, allowed: string[]): boolean => Object.keys(v).length === allowed.length && Object.keys(v).every(key => allowed.includes(key));
 const integer = (v: unknown, min: number, max: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
@@ -21,7 +37,7 @@ export function validateMemoRequest(value: unknown): MemoRequest {
     || !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/.test(p.world)
     || !integer(p.actorId,0,0x7fffffff) || !integer(p.incarnation,1,0x7fffffff) || !integer(p.connectionEpoch,1,0x7fffffff)
     || !integer(p.revision,1,0x7fffffff) || !mapCode(p.map) || !integer(p.x,0,511) || !integer(p.y,0,511)) throw new Error('Memo preview is invalid or incomplete.');
-  return { type: 'memoSave', slot: value.slot as MemoSlot, preview: { world:p.world,actorId:p.actorId,incarnation:p.incarnation,connectionEpoch:p.connectionEpoch,revision:p.revision,map:p.map,x:p.x,y:p.y } };
+  return { type: 'memoSave', slot: value.slot as MemoSlot, preview: { world:worldId(p.world),actorId:actorId(p.actorId),incarnation:incarnation(p.incarnation),connectionEpoch:revisionFor('connection',p.connectionEpoch),revision:revisionFor('memo',p.revision),map:checkedMapCode(p.map),x:memoCell(p.x),y:memoCell(p.y) } };
 }
 export function memoCommand(slot: MemoSlot): Uint8Array<ArrayBuffer> {
   if (!integer(slot,0,3)) throw new Error('Choose memo slot 0–3.');

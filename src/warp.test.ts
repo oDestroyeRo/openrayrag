@@ -1,12 +1,14 @@
 import {describe,expect,it} from 'vitest';
 import {ManualWarp,WARP_SELECTION_MS,type WarpContext,type WarpGuardStore} from './warp';
-import type {WarpBinding,WarpWire} from './warp-protocol';
+import type {WarpBindingInput,WarpWire} from './warp-protocol';
+import type {MemoSlots} from './memo-protocol';
+import {quantity} from './domain-values';
 import type {GameEvent} from './protocol';
 import {actionConfirmationTimeout} from './automation';
 export function warpFixture(store?:WarpGuardStore){
  let now=1000;const sent:WarpWire[]=[];
- const binding:WarpBinding={world:'00000000-0000-4000-8000-000000000001',actorId:0,incarnation:1,connectionEpoch:1,revision:1,map:'prt_fild08',x:10,y:10,generation:0,level:4,inventoryRevision:1,equipmentRevision:1,spRevision:1,skillsRevision:1};
- const c:WarpContext={ready:true,idle:true,character:'Synthetic',connection:1,binding,slots:[{map:'prontera',x:100,y:100},null,null,null],unavailable:null,sp:100,gems:3,reserve:1,cost:26,resourcesReady:true,groundAllowed:t=>t.x!==10||t.y!==10};
+ const binding:WarpBindingInput={world:'00000000-0000-4000-8000-000000000001',actorId:0,incarnation:1,connectionEpoch:1,revision:1,map:'prt_fild08',x:10,y:10,generation:0,level:4,inventoryRevision:1,equipmentRevision:1,spRevision:1,skillsRevision:1};
+ const c:Omit<WarpContext,'slots'|'binding'>&{slots:MemoSlots|null;binding:WarpBindingInput|null}={ready:true,idle:true,character:'Synthetic',connection:1,binding,slots:[{map:'prontera',x:100,y:100},null,null,null],unavailable:null,sp:100,gems:quantity(3),reserve:quantity(1),cost:26,resourcesReady:true,groundAllowed:t=>t.x!==10||t.y!==10};
  const owner=new ManualWarp(w=>sent.push(w),()=>now,store);
  const context=()=>({...c,binding:c.binding?{...c.binding,generation:owner.revision}:null});
  const preview=()=>{owner.prepare({type:'warpGround',slot:0,target:{x:11,y:10}},context());return owner.snapshot(context()).preview!;};
@@ -38,12 +40,12 @@ describe('bounded manual Warp Portal owner',()=>{
  });
  it('never permits standing on the target, including after a preview',()=>{const t=warpFixture();expect(()=>t.owner.prepare({type:'warpGround',slot:0,target:{x:10,y:10}},t.context())).toThrow('different');const request=t.preview();t.c.binding!.x=11;expect(()=>t.owner.dispatch(request,t.context())).toThrow('stale');expect(t.sent).toEqual([]);});
  it.each([0,1,2,3])('requires nonempty learned slot %s',slot=>{const t=warpFixture();t.c.binding!.level=slot||1;if(slot===0)t.c.slots![0]=null;expect(()=>t.owner.prepare({type:'warpGround',slot:slot as 0|1|2|3,target:{x:11,y:10}},t.context())).toThrow();expect(t.sent).toEqual([]);});
- it('reserves one gemstone before both stages and does not assume a waiver',()=>{const t=warpFixture();t.c.gems=1;expect(()=>t.ground()).toThrow('reserve');t.c.gems=2;t.ground();t.ready();t.c.gems=1;expect(()=>t.activate()).toThrow();expect(t.sent).toHaveLength(1);});
+ it('reserves one gemstone before both stages and does not assume a waiver',()=>{const t=warpFixture();t.c.gems=quantity(1);expect(()=>t.ground()).toThrow('reserve');t.c.gems=quantity(2);t.ground();t.ready();t.c.gems=quantity(1);expect(()=>t.activate()).toThrow();expect(t.sent).toHaveLength(1);});
  it('charges the effective ground cost only; activation can use zero remaining SP',()=>{const t=warpFixture();t.c.sp=26;t.ground();t.event({type:'warpState',state:1});t.event(t.execution());t.sp(0);t.step(1000);t.activate();expect(t.sent.at(-1)).toEqual({stage:'activate',slot:0});});
  it.each(['before','waiting','execution','sp','activation'])('Stop at %s never reopens activation from late events',phase=>{const t=warpFixture();if(phase==='before'){const r=t.preview();t.owner.cancel('Stop');expect(()=>t.owner.dispatch(r,t.context())).toThrow();expect(t.sent).toEqual([]);return;}t.ground();if(phase!=='waiting'){t.event({type:'warpState',state:1});t.event(t.execution());}if(phase==='sp'||phase==='activation'){t.sp();t.step(1000);}if(phase==='activation')t.activate();t.owner.cancel('Stop');t.event({type:'warpState',state:1});t.event(t.execution());t.sp();t.step(1000);expect(t.snapshot().activation).toBeNull();expect(t.owner.blocked).toBe(true);expect(t.sent).toHaveLength(phase==='activation'?2:1);});
  it('bounds both observation and selection clocks without releasing queued cast uncertainty',()=>{for(const selection of [false,true]){const t=warpFixture();t.ground();if(selection)t.ready();t.step(selection?WARP_SELECTION_MS:actionConfirmationTimeout({type:'skill'}));expect(t.snapshot()).toMatchObject({blocked:true,pending:false,activation:null});t.event({type:'warpState',state:0});expect(t.snapshot().selection).toBe('cleared');expect(t.owner.blocked).toBe(true);}});
  it.each(['map','clear','spawn','none','effect','time'])('does not release activation on %s',kind=>{const t=warpFixture();t.ground();t.ready();t.activate();if(kind==='map')t.event({type:'map',map:'prontera'});if(kind==='clear')t.event({type:'clear'});if(kind==='none')t.event({type:'warpState',state:0});if(kind==='spawn'||kind==='effect')t.event({type:'spawn',entity:{id:kind==='effect'?0:1,classId:4,name:'Unattributed',kind:4,x:11,y:10,hp:1,maxHp:1,dead:false,level:1}});t.step(60000);expect(t.snapshot()).toMatchObject({state:'activationSent',blocked:true,activation:null});expect(t.sent).toHaveLength(2);});
- it.each([true,false])('resource changes or waiver absence never confirm creation (consumption %s)',consume=>{const t=warpFixture();t.ground();t.ready();t.activate();if(consume){t.c.binding!.inventoryRevision++;t.c.gems=2;t.event({type:'inventoryDelta',add:false,bagId:717,change:1,weight:1});}t.sp();t.event({type:'skillFailure',reason:1});expect(t.snapshot().state).toBe('activationSent');expect(t.owner.blocked).toBe(true);expect(t.snapshot().activation).toBeNull();expect(t.sent).toHaveLength(2);});
+ it.each([true,false])('resource changes or waiver absence never confirm creation (consumption %s)',consume=>{const t=warpFixture();t.ground();t.ready();t.activate();if(consume){t.c.binding!.inventoryRevision++;t.c.gems=quantity(2);t.event({type:'inventoryDelta',add:false,bagId:717,change:1,weight:1});}t.sp();t.event({type:'skillFailure',reason:1});expect(t.snapshot().state).toBe('activationSent');expect(t.owner.blocked).toBe(true);expect(t.snapshot().activation).toBeNull();expect(t.sent).toHaveLength(2);});
  it('persists only uncertainty before transport and restores it without intent on page replacement',()=>{let held=false;const store={read:()=>held,write:(v:boolean)=>{held=v;}},t=warpFixture(store);t.ground();expect(held).toBe(true);const replaced=warpFixture(store);expect(replaced.owner.blocked).toBe(true);expect(replaced.snapshot().activation).toBeNull();expect(()=>replaced.ground()).toThrow();expect(replaced.sent).toEqual([]);});
  it('fails closed on guard read/write/clear errors',()=>{const t=warpFixture({read:()=>false,write:()=>{throw new Error('storage');}});expect(()=>t.ground()).toThrow('stored');expect(t.sent).toEqual([]);expect(t.owner.blocked).toBe(true);const read=warpFixture({read:()=>{throw new Error();},write:()=>{}});expect(read.owner.blocked).toBe(true);});
  it('requires proved own death plus ready revival; fresh resources reconcile missing evidence but reset alone cannot',()=>{const t=warpFixture();t.ground();t.owner.cancel('Stop');t.event({type:'death',id:1});expect(t.owner.blocked).toBe(true);t.c.ready=false;t.event({type:'death',id:0});t.c.binding!.incarnation++;t.c.slots=null;t.c.ready=true;t.owner.tick(t.context());expect(t.owner.blocked).toBe(true);
@@ -60,6 +62,23 @@ describe('bounded manual Warp Portal owner',()=>{
 });
 
 describe('Warp deadlines, reset failures and external lifetimes',()=>{
+ it('retains an activation proposal at the SP revision boundary until unchanged dispatch admission',()=>{
+  const writes:boolean[]=[],t=warpFixture({read:()=>false,write:held=>{writes.push(held);}});
+  t.c.binding!.spRevision=2147483647;t.ground();t.ready();
+  expect(t.snapshot().activation?.preview.spRevision).toBe(2147483648);
+  expect(()=>t.owner.prepare({type:'warpActivate'},t.context())).not.toThrow();
+  const proposal=t.snapshot().preview;expect(proposal?.preview.spRevision).toBe(2147483648);
+  expect(()=>t.owner.dispatch(proposal,t.context())).toThrow('Invalid Warp Portal value.');
+  expect(t.snapshot().preview).toEqual(proposal);expect(t.snapshot().state).toBe('selectionObserved');
+  expect(t.sent).toHaveLength(1);expect(writes).toEqual([true]);expect(t.owner.blocked).toBe(true);
+ });
+ it.each([-0.25,0,0.125])('preserves signed motion settlement of %s seconds before activation',motion=>{
+  const t=warpFixture();t.ground();t.event({type:'warpState',state:1});
+  const execution=t.execution();if(execution.type!=='skillResult')throw new Error('Expected skill result');execution.motionSeconds=motion;
+  t.event(execution);t.sp();expect(t.snapshot().activation!==null).toBe(motion<=0);
+  if(motion>0){t.step(motion*1000-1);expect(t.snapshot().activation).toBeNull();t.step(1);expect(t.snapshot().activation).not.toBeNull();}
+  expect(t.sent).toHaveLength(1);expect(t.owner.blocked).toBe(true);
+ });
  it.each([0,1])('expires activation at its bounded deadline without replay (late by %s ms)',late=>{
   const t=warpFixture();t.ground();t.ready();t.activate();
   t.elapse(actionConfirmationTimeout({type:'skill'})+late);
@@ -68,7 +87,7 @@ describe('Warp deadlines, reset failures and external lifetimes',()=>{
   expect(t.snapshot()).toMatchObject({state:'activationSent',pending:false,blocked:true,activation:null,preview:null});
   expect(t.snapshot().reason).toContain('activation observation window ended');
   expect(t.snapshot().resourceEvidence).toContain('Late activation SP');
-  t.c.binding!.inventoryRevision++;t.c.gems=2;t.event({type:'inventoryDelta',add:false,bagId:717,change:1,weight:1});
+  t.c.binding!.inventoryRevision++;t.c.gems=quantity(2);t.event({type:'inventoryDelta',add:false,bagId:717,change:1,weight:1});
   expect(t.snapshot().resourceEvidence).toContain('Late activation inventory');
   expect(t.snapshot().reason).toContain('creation remains unconfirmed');
   const generation=t.snapshot().generation;t.step(60000);expect(t.snapshot().generation).toBe(generation);expect(t.sent).toHaveLength(2);

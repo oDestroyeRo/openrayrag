@@ -2,7 +2,8 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { mountClientShell, type BotSection, type ClientPage } from './client-shell';
 import { WarpUi } from './warp-ui';
 import { DEFAULT_AUTOMATION } from './settings';
-import type { WarpBinding, WarpRequest } from './warp-protocol';
+import { validateWarpRequest, type WarpRequest } from './warp-protocol';
+import { quantity } from './domain-values';
 import type { WarpSnapshot } from './warp';
 
 const pages: ClientPage[] = ['session', 'game', 'bot', 'manual', 'settings'];
@@ -98,9 +99,9 @@ afterEach(() => vi.unstubAllGlobals());
 
 it('retains the actual Warp UI pending and staged preview across shell pages without cancellation or sends',async()=>{
   const f=fixture();vi.stubGlobal('document',f.document);
-  const binding:WarpBinding={world:'00000000-0000-4000-8000-000000000001',actorId:0,incarnation:1,connectionEpoch:1,revision:1,map:'prt_fild08',x:10,y:10,generation:1,level:4,inventoryRevision:1,equipmentRevision:1,spRevision:1,skillsRevision:1};
-  const request:WarpRequest={type:'warpGround',slot:0,target:{x:11,y:10},preview:binding};
-  const snapshot:WarpSnapshot={generation:1,blocked:false,pending:false,state:'idle',reason:'Ready',ready:binding,activation:null,preview:null,slots:[{map:'prontera',x:100,y:100},null,null,null],cost:26,gems:3,reserve:1,selection:'unknown',resourceEvidence:'No request sent.',captured:null};
+  const binding=validateWarpRequest({type:'warpActivate',preview:{world:'00000000-0000-4000-8000-000000000001',actorId:0,incarnation:1,connectionEpoch:1,revision:1,map:'prt_fild08',x:10,y:10,generation:1,level:4,inventoryRevision:1,equipmentRevision:1,spRevision:1,skillsRevision:1}}).preview;
+  const request:WarpRequest=validateWarpRequest({type:'warpGround',slot:0,target:{x:11,y:10},preview:binding});
+  let snapshot:WarpSnapshot={generation:binding.generation,blocked:false,pending:false,state:'idle',reason:'Ready',ready:binding,activation:null,preview:null,slots:[{map:'prontera',x:100,y:100},null,null,null],cost:26,gems:quantity(3),reserve:quantity(1),selection:'unknown',resourceEvidence:'No request sent.',captured:null};
   const policy=structuredClone(DEFAULT_AUTOMATION),send=vi.fn(async()=>{}),cancel=vi.fn(async()=>{});
   let acknowledge!:()=>void;const prepare=vi.fn(()=>new Promise<void>(resolve=>{acknowledge=resolve;}));
   const ui=new WarpUi(send,vi.fn(),prepare,()=>policy,cancel),root=ui.root as unknown as NavigationNode;
@@ -114,7 +115,7 @@ it('retains the actual Warp UI pending and staged preview across shell pages wit
   expect(prepare).toHaveBeenCalledOnce();expect(submit.disabled).toBe(true);
   for(const page of pages)f.shell.showPage(page);
   expect(root.open).toBe(true);expect(x.value).toBe('11');expect(y.value).toBe('10');expect(cancel).not.toHaveBeenCalled();
-  acknowledge();await Promise.resolve();await Promise.resolve();snapshot.preview=request;ui.render(status());
+  acknowledge();await Promise.resolve();await Promise.resolve();snapshot={...snapshot,preview:request};ui.render(status());
   const preview=output.textContent;expect(preview).toContain('prontera (100, 100)');expect(submit.disabled).toBe(false);
   for(const page of pages)f.shell.showPage(page);
   const index=f.get('#client-manual-index');expect(index.children).toHaveLength(1);index.children[0]!.emit('click');

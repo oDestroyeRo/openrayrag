@@ -1,11 +1,23 @@
 import { validateAutomation, type AutomationSettingsInput as AutomationSettings } from './settings';
 import { BitReader, BitWriter } from './binary';
-import { validateMemoRequest, type MemoBinding, type MemoSlot } from './memo-protocol';
+import { validateMemoRequest, memoCell, type MemoBinding, type MemoBindingInput, type MemoCell, type MemoSlot } from './memo-protocol';
+import { revisionFor, type Revision } from './domain-values';
 
-export interface WarpBinding extends MemoBinding {
+export interface WarpBindingInput extends MemoBindingInput {
   generation:number; level:number; inventoryRevision:number; equipmentRevision:number; spRevision:number; skillsRevision:number;
 }
-export type WarpRequest = {type:'warpGround';slot:MemoSlot;target:{x:number;y:number};preview:WarpBinding} | {type:'warpActivate';preview:WarpBinding};
+export type WarpGeneration = Revision<'warp'>;
+export interface WarpBinding extends MemoBinding {
+  readonly generation:WarpGeneration; readonly level:1|2|3|4;
+  readonly inventoryRevision:Revision<'inventory'>; readonly equipmentRevision:Revision<'equipment'>;
+  readonly spRevision:Revision<'sp'>; readonly skillsRevision:Revision<'skills'>;
+}
+export type WarpRequestInput = {type:'warpGround';slot:MemoSlot;target:{x:number;y:number};preview:WarpBindingInput} | {type:'warpActivate';preview:WarpBindingInput};
+/** Current evidence proposes activation; request validation owns admission on preparation. */
+export interface WarpActivationObservation { readonly type:'warpActivate'; readonly preview:Readonly<WarpBindingInput> }
+export type WarpRequest = Readonly<{type:'warpGround';slot:MemoSlot;target:Readonly<{x:MemoCell;y:MemoCell}>;preview:WarpBinding}> | Readonly<{type:'warpActivate';preview:WarpBinding}>;
+/** Ground is admitted on prepare; activation stays observed until dispatch validation. */
+export type PreparedWarpRequest = Extract<WarpRequest,{type:'warpGround'}> | WarpActivationObservation;
 export type WarpWire = {stage:'ground';level:number;x:number;y:number} | {stage:'activate';slot:MemoSlot};
 const record=(v:unknown):Record<string,unknown>=>{if(!v||typeof v!=='object'||Array.isArray(v))throw new Error('Invalid Warp Portal request.');return v as Record<string,unknown>;};
 const keys=(v:Record<string,unknown>,allowed:string[])=>{if(Object.keys(v).length!==allowed.length||Object.keys(v).some(k=>!allowed.includes(k)))throw new Error('Invalid Warp Portal fields.');};
@@ -15,9 +27,9 @@ export function validateWarpRequest(value:unknown):WarpRequest {
   keys(v,v.type==='warpGround'?['type','slot','target','preview']:['type','preview']);
   const p=record(v.preview);keys(p,['world','actorId','incarnation','connectionEpoch','revision','map','x','y','generation','level','inventoryRevision','equipmentRevision','spRevision','skillsRevision']);
   const base=validateMemoRequest({type:'memoSave',slot:0,preview:Object.fromEntries(['world','actorId','incarnation','connectionEpoch','revision','map','x','y'].map(k=>[k,p[k]]))}).preview;
-  const preview:WarpBinding={...base,generation:integer(p.generation,0),level:integer(p.level,1,4),inventoryRevision:integer(p.inventoryRevision,1),equipmentRevision:integer(p.equipmentRevision,1),spRevision:integer(p.spRevision,1),skillsRevision:integer(p.skillsRevision,1)};
+  const preview:WarpBinding={...base,generation:revisionFor('warp',integer(p.generation,0)),level:integer(p.level,1,4) as WarpBinding['level'],inventoryRevision:revisionFor('inventory',integer(p.inventoryRevision,1)),equipmentRevision:revisionFor('equipment',integer(p.equipmentRevision,1)),spRevision:revisionFor('sp',integer(p.spRevision,1)),skillsRevision:revisionFor('skills',integer(p.skillsRevision,1))};
   if(v.type==='warpActivate')return {type:v.type,preview};
-  const t=record(v.target);keys(t,['x','y']);return {type:v.type,slot:integer(v.slot,0,3) as MemoSlot,target:{x:integer(t.x,0,511),y:integer(t.y,0,511)},preview};
+  const t=record(v.target);keys(t,['x','y']);return {type:v.type,slot:integer(v.slot,0,3) as MemoSlot,target:{x:memoCell(integer(t.x,0,511)),y:memoCell(integer(t.y,0,511))},preview};
 }
 /** Dedicated owner only: generic skill validation deliberately rejects 55. */
 export function warpCommand(wire:WarpWire):Uint8Array<ArrayBuffer> {
