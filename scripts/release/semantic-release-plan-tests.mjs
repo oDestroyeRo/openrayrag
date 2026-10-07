@@ -16,9 +16,14 @@ import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import config, { canonicalJson } from "../../release.config.mjs";
+import { isFailure, isSuccess } from "effect/Result";
 import {
   planRelease,
   validatePlan,
+  validatePlanResult,
+  parsePlan,
+  parsePlanResult,
+  parseTransportedPlanResult,
   serializePlan,
   planSha256,
   RELEASE_POLICY,
@@ -323,6 +328,63 @@ test("plan validation rejects tampered identities, policy, increments and metada
     );
   }
   assert.equal(validatePlan(valid), valid);
+});
+
+test("Result plan admission retains validation identity and detaches nested parsed values", async () => {
+  const plan = await planFor();
+  const validated = validatePlanResult(plan);
+  assert.ok(isSuccess(validated));
+  assert.equal(validated.success, plan);
+  const parsed = parsePlanResult(plan);
+  assert.ok(isSuccess(parsed));
+  assert.notEqual(parsed.success, plan);
+  assert.notEqual(parsed.success.analysisBase, plan.analysisBase);
+  assert.notEqual(parsed.success.notesBase, plan.notesBase);
+  assert.equal(serializePlan(parsed.success), serializePlan(plan));
+  assert.equal(planSha256(parsed.success), planSha256(plan));
+  plan.analysisBase.sourceSha = sha(9);
+  assert.equal(parsed.success.analysisBase.sourceSha, published.sourceSha);
+});
+
+test("Result plan admission stops at the first rejected stage and preserves thrown values", async () => {
+  const valid = await planFor();
+  let laterReads = 0;
+  const invalid = { ...valid, schemaVersion: 2 };
+  Object.defineProperty(invalid, "notes", { enumerable: true, get() {
+    laterReads++;
+    throw new Error("Later metadata must remain unread.");
+  } });
+  const rejected = validatePlanResult(invalid);
+  assert.ok(isFailure(rejected));
+  assert.equal(rejected.failure.message, "Unsupported release plan identity.");
+  assert.throws(() => validatePlan(invalid), /Unsupported release plan identity/);
+  assert.equal(laterReads, 0);
+  for (const thrown of [new Error("source field failed"), undefined]) {
+    const raw = { ...valid };
+    Object.defineProperty(raw, "sourceSha", { enumerable: true, get() { throw thrown; } });
+    const result = parsePlanResult(raw);
+    assert.ok(isFailure(result));
+    assert.equal(result.failure, thrown);
+    let caught = false;
+    try { parsePlan(raw); } catch (error) { caught = true; assert.equal(error, thrown); }
+    assert.ok(caught);
+  }
+});
+
+test("transported plan Result admission preserves size, JSON and schema failure ordering", async () => {
+  for (const [bytes, message] of [
+    [Buffer.alloc(0), "Invalid transported plan size."],
+    [Buffer.from("not JSON"), "Malformed transported plan."],
+    [Buffer.from("{}"), "Invalid release plan fields."],
+  ]) {
+    const result = parseTransportedPlanResult(bytes);
+    assert.ok(isFailure(result));
+    assert.equal(result.failure.message, message);
+  }
+  const plan = await planFor();
+  const result = parseTransportedPlanResult(Buffer.from(serializePlan(plan)));
+  assert.ok(isSuccess(result));
+  assert.equal(serializePlan(result.success), serializePlan(plan));
 });
 
 test("planner fails closed on malformed input or mismatched analysis and notes ranges", async () => {

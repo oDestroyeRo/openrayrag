@@ -45,24 +45,29 @@ export async function readMapDataResponse(response: Response, signal: AbortSigna
 }
 
 /** Both asset requests share one bounded lifetime; retire it on every exit path. */
-export async function withMapDataRequests<T>(action: (read: (file: string) => Promise<string>) => Promise<T>, fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<T> {
+export async function withMapDataRequests<T>(action: (read: (file: string) => Promise<string>, signal: AbortSignal) => Promise<T>, fetcher: typeof fetch = fetch, signal?: AbortSignal, programSignal?: AbortSignal): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort(new MapDataError({ kind: 'cancelled' }));
   signal?.addEventListener('abort', abort, { once: true });
-  if (signal?.aborted) abort();
+  programSignal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted || programSignal?.aborted) abort();
   const timer = setTimeout(() => controller.abort(new MapDataError({ kind: 'timeout' })), 12_000);
+  const failure = (error: unknown): unknown => error instanceof MapDataError ? error
+    : controller.signal.aborted ? controller.signal.reason : new MapDataError({ kind: 'network' });
   try {
     const read = async (file: string) => {
-      if (controller.signal.aborted) throw controller.signal.reason;
-      const response = await fetcher(`${MAP_DATA_URL}${file}`, { signal: controller.signal, credentials: 'omit' });
-      return readMapDataResponse(response, controller.signal);
+      try {
+        if (controller.signal.aborted) throw controller.signal.reason;
+        const response = await fetcher(`${MAP_DATA_URL}${file}`, { signal: controller.signal, credentials: 'omit' });
+        return await readMapDataResponse(response, controller.signal);
+      } catch (error) { throw failure(error); }
     };
-    return await action(read);
-  } catch (error) {
-    if (error instanceof MapDataError) throw error;
-    if (controller.signal.aborted) throw controller.signal.reason;
-    throw new MapDataError({ kind: 'network' });
-  } finally { clearTimeout(timer); controller.abort(); signal?.removeEventListener('abort', abort); }
+    return await action(read, controller.signal);
+  } catch (error) { throw failure(error); }
+  finally {
+    clearTimeout(timer); controller.abort();
+    signal?.removeEventListener('abort', abort); programSignal?.removeEventListener('abort', abort);
+  }
 }
 
 /** The native command admits only the two fixed public assets, without cookies. */

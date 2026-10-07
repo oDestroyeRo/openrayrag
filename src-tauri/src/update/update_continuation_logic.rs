@@ -455,15 +455,15 @@ fn validate_payload(payload: &Continuation, at: u64) -> Result<(), String> {
 pub(crate) fn launch_token(
     args: &[OsString],
 ) -> Option<crate::shared::domain_values::UpdateRequestId<'_>> {
-    let matching: Vec<_> = args
+    let mut matching = args
         .iter()
         .skip(1)
-        .filter_map(|arg| arg.to_str()?.strip_prefix(LAUNCH_PREFIX))
-        .collect();
-    if matching.len() != 1 {
+        .filter_map(|arg| arg.to_str()?.strip_prefix(LAUNCH_PREFIX));
+    let token = matching.next()?;
+    if matching.next().is_some() {
         return None;
     }
-    crate::shared::domain_values::UpdateRequestId::try_from(matching[0]).ok()
+    crate::shared::domain_values::UpdateRequestId::try_from(token).ok()
 }
 pub(crate) fn startup_stopped(args: &[OsString]) -> bool {
     args.iter()
@@ -548,6 +548,47 @@ pub(crate) fn eligible_checkpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_token_requires_one_checked_argument_after_the_executable() {
+        let token = "0123456789abcdef0123456789abcdef";
+        let flag = OsString::from(format!("{LAUNCH_PREFIX}{token}"));
+        for args in [
+            vec![],
+            vec![flag.clone()],
+            vec!["Companion".into()],
+            vec!["Companion".into(), format!("{LAUNCH_PREFIX}invalid").into()],
+            vec!["Companion".into(), flag.clone(), flag.clone()],
+            vec![
+                "Companion".into(),
+                flag.clone(),
+                format!("{LAUNCH_PREFIX}invalid").into(),
+            ],
+        ] {
+            assert!(launch_token(&args).is_none());
+        }
+        let args = vec!["Companion".into(), "--unrelated".into(), flag];
+        assert_eq!(
+            launch_token(&args),
+            Some(crate::shared::domain_values::UpdateRequestId::try_from(token).unwrap())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_token_ignores_non_utf8_arguments() {
+        use std::os::unix::ffi::OsStringExt;
+        let token = "0123456789abcdef0123456789abcdef";
+        let args = vec![
+            "Companion".into(),
+            OsString::from_vec(vec![0xff]),
+            format!("{LAUNCH_PREFIX}{token}").into(),
+        ];
+        assert_eq!(
+            launch_token(&args),
+            Some(crate::shared::domain_values::UpdateRequestId::try_from(token).unwrap())
+        );
+    }
 
     #[test]
     fn run_experience_retains_signed_unknown_gains_and_character_ownership() {

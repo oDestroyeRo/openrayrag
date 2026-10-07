@@ -1,6 +1,8 @@
 import { filter, map } from 'effect/Array';
+import { identity } from 'effect/Function';
+import { flatMap, getOrThrowWith, map as mapResult, match, try as tryResult } from 'effect/Result';
 import type { SettingsInput } from './settings';
-import { checkedProfile, parseProfileDocument, profileSaveAllowed, savedProfiles, encodeProfileDocument, profileImportAllowed, importedProfiles, profileForMap, exportProfile, type BotProfile } from './profiles-logic';
+import { checkedProfile, parseProfileDocumentResult, profileSaveAllowed, savedProfiles, encodeProfileDocument, profileImportAllowed, importedProfiles, profileForMap, exportProfile, type BotProfile } from './profiles-logic';
 import { readStoredText, writeStoredText, type TextStorage } from '../../shared/storage-effects';
 export { MAX_PROFILES, type BotProfile, type BotProfileInput, type ProfileId, type ProfileName, type ProfileSavedAt } from './profiles-logic';
 export const PROFILE_STORAGE_KEY = 'rayrag.companion.profiles.v1';
@@ -9,7 +11,13 @@ export const PROFILE_STORAGE_KEY = 'rayrag.companion.profiles.v1';
 export class ProfileStore {
   private profiles: readonly BotProfile[] = [];
   constructor(private readonly storage: TextStorage, private readonly id: () => string = () => crypto.randomUUID(), private readonly now = Date.now) {
-    try { const saved = readStoredText(storage, PROFILE_STORAGE_KEY); if (saved) this.profiles = parseProfileDocument(saved).profiles; }
+    try {
+      const saved = readStoredText(storage, PROFILE_STORAGE_KEY);
+      if (saved) this.profiles = match(parseProfileDocumentResult(saved), {
+        onSuccess: document => document.profiles,
+        onFailure: () => [],
+      });
+    }
     catch { /* A corrupt or incompatible document cannot change current settings. */ }
   }
   list(): readonly BotProfile[] { return map(this.profiles, checkedProfile); }
@@ -26,8 +34,8 @@ export class ProfileStore {
   remove(id: string): void { this.persist(filter(this.profiles, profile => profile.id !== id)); }
   export(id: string): string { return exportProfile(this.profiles, id); }
   import(text: string): readonly BotProfile[] {
-    const imported = parseProfileDocument(text).profiles;
-    profileImportAllowed(this.profiles, imported);
+    const imported = getOrThrowWith(flatMap(parseProfileDocumentResult(text), document =>
+      mapResult(tryResult(() => profileImportAllowed(this.profiles, document.profiles)), () => document.profiles)), identity);
     const copies = importedProfiles(this.profiles, imported, imported.map(() => ({ id: this.id(), savedAt: this.now() })));
     this.persist([...this.profiles, ...copies]);
     return map(copies, checkedProfile);

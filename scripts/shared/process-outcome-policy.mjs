@@ -1,4 +1,5 @@
 // Pure process observations. Reports and promise settlement stay in the runner.
+import { fail, match, succeed } from 'effect/Result';
 
 /** @typedef {{ kind: 'success', exitCode: 0, signal: string | null, discardedBytes: number }} ProcessSuccess */
 /** @typedef {{ kind: 'process-error', code: string }} ProcessError */
@@ -18,10 +19,21 @@ export function processErrorCode(code) {
  * @returns {ProcessOutcome}
  */
 export function classifyProcessOutcome({ failureCode, exitCode, signal, discardedBytes }) {
-  if (failureCode !== null) return { kind: 'process-error', code: processErrorCode(failureCode) };
-  if (exitCode === 0) return { kind: 'success', exitCode, signal, discardedBytes };
-  if (signal !== null) return { kind: 'signal', signal };
-  return { kind: 'exit', exitCode };
+  return match(classifyProcessResult({ failureCode, exitCode, signal, discardedBytes }), {
+    onSuccess: outcome => outcome,
+    onFailure: failure => failure,
+  });
+}
+
+/**
+ * @param {{ failureCode: string | null, exitCode: number | null, signal: string | null, discardedBytes: number }} observation
+ * @returns {import('effect/Result').Result<ProcessSuccess, ProcessFailure>}
+ */
+export function classifyProcessResult({ failureCode, exitCode, signal, discardedBytes }) {
+  if (failureCode !== null) return fail({ kind: 'process-error', code: processErrorCode(failureCode) });
+  if (exitCode === 0) return succeed({ kind: 'success', exitCode, signal, discardedBytes });
+  if (signal !== null) return fail({ kind: 'signal', signal });
+  return fail({ kind: 'exit', exitCode });
 }
 
 /** Pick only scalar failure fields, even if a caller supplies extra properties.

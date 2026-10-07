@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { isFailure, isSuccess } from 'effect/Result';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, DEFAULT_ESCAPE } from './settings';
 import { MAX_PROFILES, PROFILE_STORAGE_KEY, ProfileStore } from './profiles';
+import { checkedProfile, checkedProfileResult, parseProfileDocumentResult } from './profiles-logic';
 import { CurrentForm, formDocument } from './current-form';
 
 const settings = () => ({ ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [1002] });
@@ -10,6 +12,55 @@ function fixture() {
   return { data, storage, store: new ProfileStore(storage, () => `profile-${++id}`, () => 100) };
 }
 describe('named profiles', () => {
+  it('keeps failed metadata from reading settings and detaches admitted profiles', () => {
+    let reads = 0;
+    const rejected = { id: 'one', name: '', character: '', savedAt: 0,
+      get settings() { reads++; throw new Error('Settings should not be read.'); } };
+    const failure = checkedProfileResult(rejected);
+    expect(isFailure(failure)).toBe(true);
+    if (isFailure(failure)) expect(failure.failure).toEqual(new Error('Invalid profile name or metadata.'));
+    expect(() => checkedProfile(rejected)).toThrow('Invalid profile name or metadata.');
+    expect(reads).toBe(0);
+    const draft = settings(), admitted = checkedProfileResult({ id: 'one', name: 'One', character: '', savedAt: 0, settings: draft });
+    expect(isSuccess(admitted)).toBe(true);
+    draft.targets.push(1003);
+    if (isSuccess(admitted)) expect(admitted.success.settings.targets).toEqual([1002]);
+    expect(isFailure(checkedProfileResult({ id: 'one', name: 'One', character: '', savedAt: 0, settings: undefined }))).toBe(true);
+  });
+  it('retains document diagnostic precedence through the Result admission API', () => {
+    const profile = checkedProfile({ id: 'one', name: 'One', character: '', savedAt: 0, settings: settings() });
+    const failure = parseProfileDocumentResult(JSON.stringify({ version: 1, profiles: [profile, profile, { ...profile, savedAt: -1 }] }));
+    expect(isFailure(failure)).toBe(true);
+    if (isFailure(failure)) expect(failure.failure).toEqual(new Error('Invalid profile name or metadata.'));
+    const syntax = parseProfileDocumentResult('{');
+    expect(isFailure(syntax)).toBe(true);
+    if (isFailure(syntax)) expect(syntax.failure).toBeInstanceOf(SyntaxError);
+  });
+  it('rejects imported documents and capacity before generating identities or writing storage', () => {
+    const original = checkedProfile({ id: 'one', name: 'One', character: '', savedAt: 0, settings: settings() });
+    let identities = 0, timestamps = 0, writes = 0;
+    const document = JSON.stringify({ version: 1, profiles: [original] });
+    const storage = { getItem: () => document, setItem: () => { writes++; } };
+    const store = new ProfileStore(storage, () => `copy-${++identities}`, () => ++timestamps);
+    for (const invalid of ['{', '{"version":1,"profiles":[]}', JSON.stringify({ version: 1, profiles: [original, { ...original, id: 'bad', settings: { ...settings(), radius: 999 } }] }),
+      JSON.stringify({ version: 1, profiles: [original, original] })]) {
+      expect(() => store.import(invalid)).toThrow();
+    }
+    const full = new ProfileStore({ ...storage, getItem: () => JSON.stringify({ version: 1,
+      profiles: Array.from({ length: MAX_PROFILES }, (_, index) => ({ ...original, id: `saved-${index}` })) }) },
+    () => `copy-${++identities}`, () => ++timestamps);
+    expect(() => full.import(document)).toThrow('at most');
+    expect([identities, timestamps, writes]).toEqual([0, 0, 0]);
+    expect(store.list()).toEqual([original]);
+  });
+  it('commits imported copies only after persistence succeeds', () => {
+    const original = checkedProfile({ id: 'one', name: 'One', character: '', savedAt: 0, settings: settings() });
+    const document = JSON.stringify({ version: 1, profiles: [original] });
+    const failure = new Error('storage full');
+    const store = new ProfileStore({ getItem: () => document, setItem: () => { throw failure; } }, () => 'copy', () => 10);
+    expect(() => store.import(document)).toThrow(failure);
+    expect(store.list()).toEqual([original]);
+  });
   it('round-trips opt-in party engagement, accepts old omission and rejects imports atomically',()=>{
     const f=fixture(),a=structuredClone(DEFAULT_AUTOMATION);a.combat.partyEngagement=true;
     const profile=f.store.save('Party engagement','Test',{...settings(),automation:a}),document=JSON.parse(f.store.export(profile.id));

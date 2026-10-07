@@ -1,6 +1,7 @@
 import { mapCode } from '../../shared/domain-values';
+import { result, runPromise, runPromiseExit } from 'effect/Effect';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { currentMapInfo, loadMapCatalog, loadNativeMapCatalog, MapCatalogLoader, parseMapCatalog, validMapInfo, MAP_DATA_URL, type MapCatalog } from './map-data';
+import { currentMapInfo, loadMapCatalog, loadMapCatalogResult, loadNativeMapCatalog, mapCatalogProgram, MapCatalogLoader, parseMapCatalog, validMapInfo, MAP_DATA_URL, type MapCatalog } from './map-data';
 import { type Entity } from '../protocol/protocol';
 import { MapDataError } from './map-data-policy';
 
@@ -148,5 +149,149 @@ describe('runtime catalogue availability',()=>{
     });
     const loader=new MapCatalogLoader(signal=>loadMapCatalog(fetcher,signal),()=>{}),pending=loader.start();
     loader.dispose();await pending;expect(signals).toHaveLength(2);expect(signals.every(signal=>signal.aborted)).toBe(true);
+  });
+});
+
+describe('catalogue program interpretation', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('is lazy and creates a fresh retired request scope on each interpretation', async () => {
+    const signals: AbortSignal[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+      signals.push(init!.signal!);
+      return new Response(JSON.stringify(String(url).endsWith('/maps.json') ? maps : monsters));
+    });
+    const program = mapCatalogProgram(fetcher);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect((await runPromise(result(program)))._tag).toBe('Success');
+    expect(signals).toHaveLength(2); expect(signals.every(signal => signal.aborted)).toBe(true);
+    expect((await runPromise(result(program)))._tag).toBe('Success');
+    expect(signals).toHaveLength(4); expect(signals[0]).not.toBe(signals[2]);
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+  });
+
+  it.each(['maps.json', 'monsterdatabase.json'])('ends on the first %s parse failure and retires a stalled sibling reader', async failed => {
+    vi.useFakeTimers();
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    const signals: AbortSignal[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+      signals.push(init!.signal!);
+      return String(url).endsWith(`/${failed}`) ? new Response('{broken') : new Response(body);
+    });
+    const outcome = await loadMapCatalogResult(fetcher);
+    expect(outcome).toMatchObject({ kind: 'failure', cause: { kind: 'invalid-data' } });
+    expect(fetcher).toHaveBeenCalledTimes(2); expect(signals.every(signal => signal.aborted)).toBe(true);
+    expect(cancel).toHaveBeenCalledOnce(); expect(body.locked).toBe(false); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    { status: 404, cause: { kind: 'http', status: 404 } },
+    { headers: { 'content-length': '2000001' }, cause: { kind: 'size-limit' } },
+  ])('returns typed $cause.kind failures without waiting for a sibling transport', async ({ cause, ...init }) => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (url, options) => {
+      signals.push(options!.signal!);
+      return String(url).endsWith('/maps.json') ? new Response('', init) : new Promise<Response>(() => {});
+    });
+    expect(await loadMapCatalogResult(fetcher)).toEqual({ kind: 'failure', cause });
+    expect(fetcher).toHaveBeenCalledTimes(2); expect(signals.every(signal => signal.aborted)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps arbitrary transport rejection values in the typed failure channel', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => { throw undefined; });
+    expect(await loadMapCatalogResult(fetcher)).toEqual({ kind: 'failure', cause: { kind: 'network' } });
+    await expect(loadMapCatalog(fetcher)).rejects.toMatchObject({
+      name: 'MapDataError', cause: { kind: 'network' }, message: 'Map database unavailable',
+    });
+  });
+
+  it('preserves the shared deadline and releases both stalled response readers', async () => {
+    vi.useFakeTimers();
+    const cancel = [vi.fn(), vi.fn()];
+    const bodies = cancel.map(cancel => new ReadableStream<Uint8Array>({ cancel }));
+    let responses = 0;
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(bodies[responses++]));
+    const pending = loadMapCatalogResult(fetcher);
+    await vi.advanceTimersByTimeAsync(11_999);
+    expect(fetcher).toHaveBeenCalledTimes(2); expect(bodies.every(body => body.locked)).toBe(true);
+    expect(cancel.every(cancel => cancel.mock.calls.length === 0)).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toEqual({ kind: 'failure', cause: { kind: 'timeout' } });
+    expect(cancel.every(cancel => cancel.mock.calls.length === 1)).toBe(true);
+    expect(bodies.every(body => !body.locked)).toBe(true); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('closes the shared request scope when its Effect interpreter is interrupted', async () => {
+    vi.useFakeTimers();
+    const lifetime = new AbortController(), signals: AbortSignal[] = [];
+    const bodies = [new ReadableStream<Uint8Array>(), new ReadableStream<Uint8Array>()];
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      signals.push(init!.signal!);
+      return new Response(bodies[signals.length - 1]);
+    });
+    const pending = runPromiseExit(mapCatalogProgram(fetcher), { signal: lifetime.signal });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(2); expect(bodies.every(body => body.locked)).toBe(true);
+    lifetime.abort();
+    expect((await pending)._tag).toBe('Failure');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signals.every(signal => signal.aborted)).toBe(true); expect(bodies.every(body => !body.locked)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['caller', 'deadline', 'interpreter'] as const)('retires stalled transports and listeners on %s cancellation', async end => {
+    vi.useFakeTimers();
+    const caller = new AbortController(), interpreter = new AbortController(), signals: AbortSignal[] = [];
+    const added = vi.spyOn(caller.signal, 'addEventListener'), removed = vi.spyOn(caller.signal, 'removeEventListener');
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      signals.push(init!.signal!);
+      return new Promise<Response>(() => {});
+    });
+    const pending = end === 'interpreter'
+      ? runPromiseExit(mapCatalogProgram(fetcher, caller.signal), { signal: interpreter.signal })
+      : loadMapCatalogResult(fetcher, caller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    if (end === 'deadline') await vi.advanceTimersByTimeAsync(12_000);
+    else if (end === 'caller') caller.abort();
+    else interpreter.abort();
+    const outcome = await pending;
+    expect(outcome).toMatchObject(end === 'interpreter'
+      ? { _tag: 'Failure' } : { kind: 'failure', cause: { kind: end === 'deadline' ? 'timeout' : 'cancelled' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+    for (const [type, listener] of added.mock.calls.filter(([type]) => type === 'abort')) {
+      expect(removed.mock.calls.some(([removedType, removedListener]) => removedType === type && removedListener === listener)).toBe(true);
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['caller', 'deadline'] as const)('retains the %s cause when fetch rejects with AbortError', async end => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => reject(new DOMException('Request aborted', 'AbortError')), { once: true });
+    }));
+    const pending = loadMapCatalogResult(fetcher, caller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    if (end === 'deadline') await vi.advanceTimersByTimeAsync(12_000);
+    else caller.abort();
+    expect(await pending).toEqual({ kind: 'failure', cause: { kind: end === 'deadline' ? 'timeout' : 'cancelled' } });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('gives explicit scope cancellation precedence over an unobserved transport failure', async () => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    const fetcher = vi.fn<typeof fetch>(async () => { throw new MapDataError({ kind: 'http', status: 404 }); });
+    const pending = loadMapCatalogResult(fetcher, caller.signal);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    caller.abort();
+    expect(await pending).toEqual({ kind: 'failure', cause: { kind: 'cancelled' } });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -1,11 +1,11 @@
 import { releaseBridgeValues } from '../shared/tooling-domain-values.mjs';
+import { getOrThrow } from 'effect/Result';
 // Trusted-source orchestration. The pure engines and reservation ledger own policy;
 // callers inject Git history, commit ranges, API access and native verification.
 import {
-  validatePlan, parsePlan,
+  validatePlan, parseTransportedPlanResult,
   serializePlan,
   planSha256,
-  MAX_PLAN_BYTES,
 } from "./semantic-release-policy.mjs";
 import { planRelease } from "./semantic-release-plan.mjs";
 import {
@@ -125,19 +125,7 @@ export async function planProduction(
 }
 /** @param {import('../shared/tooling-domain-values.mjs').PlanningContext} ctx @param {Buffer} bytes */
 export async function loadProductionPlan(ctx, bytes) {
-  requireValue(
-    Buffer.isBuffer(bytes) &&
-      bytes.length > 0 &&
-      bytes.length <= MAX_PLAN_BYTES,
-    "Invalid transported plan size.",
-  );
-  let plan;
-  try {
-    plan = JSON.parse(bytes.toString("utf8"));
-  } catch {
-    throw new Error("Malformed transported plan.");
-  }
-  plan = parsePlan(plan);
+  const plan = getOrThrow(parseTransportedPlanResult(bytes));
   ctx = { ...ctx, history: [...ctx.history] };
   requireValue(
     bytes.equals(Buffer.from(serializePlan(plan))) &&

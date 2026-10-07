@@ -1,4 +1,4 @@
-import { characterSlot } from './login-logic';
+import { characterSlot, loginPacketStatus } from './login-logic';
 import { describe, expect, it, vi } from 'vitest';
 import { characterSlots, LoginController, loginDriver, loginReady, unityMessage, type LoginDriver, type UnityClient } from './login';
 
@@ -126,6 +126,24 @@ describe('Unity login interface', () => {
 });
 
 describe('automatic login and character selection', () => {
+  it('distinguishes absent packets, ignored packets, malformed approval and populated slot zero', () => {
+    const status = { phase: 'signingIn' as const, message: '' }, slot = characterSlot(0);
+    expect(loginPacketStatus(status, new Uint8Array(), slot)).toBeNull();
+    expect(loginPacketStatus(status, Uint8Array.of(56), slot)).toBeNull();
+    expect(loginPacketStatus(status, Uint8Array.of(0, 0), slot)).toEqual({ phase: 'failed', message: 'The character list format changed. Select your character manually.' });
+    expect(loginPacketStatus(status, list([0]), slot)).toEqual({ phase: 'selecting', message: 'Selecting character slot 1…' });
+    let reads = 0;
+    const ignored = new Proxy(Uint8Array.of(56), { get(target, key) {
+      reads++;
+      if (key === '0') return target[0];
+      throw new Error('Ignored packets should not be decoded.');
+    } });
+    expect(loginPacketStatus(status, ignored, slot)).toBeNull();
+    expect(reads).toBe(1);
+    reads = 0;
+    expect(loginPacketStatus({ phase: 'cancelled', message: '' }, ignored, slot)).toBeNull();
+    expect(reads).toBe(0);
+  });
   it('reads unaligned character slots and skips tokens without returning them', () => {
     expect(characterSlots(list([0, 2]))).toEqual([0, 2]);
     expect(characterSlots(list([1], true))).toEqual([1]);

@@ -1,4 +1,6 @@
 /** Validated scalar domains. Raw wire/JSON DTOs remain at their boundary owners. */
+import { fail, flatMap, map, match, succeed, type Result } from 'effect/Result';
+
 declare const domainValue: unique symbol;
 declare const revisionChannel: unique symbol;
 type Value<Name extends string> = number & { readonly [domainValue]: Name };
@@ -31,18 +33,21 @@ export class DomainValueError extends Error {
   }
 }
 
-function finite(value: unknown, domain: string, label: string): number {
-  if (typeof value !== 'number') throw new DomainValueError(domain, 'type', label);
-  if (!Number.isFinite(value)) throw new DomainValueError(domain, 'non-finite', label);
-  return value;
+function finite(value: unknown, domain: string, label: string): Result<number, DomainValueError> {
+  if (typeof value !== 'number') return fail(new DomainValueError(domain, 'type', label));
+  return Number.isFinite(value) ? succeed(value) : fail(new DomainValueError(domain, 'non-finite', label));
 }
 
 function bounded<Name extends string>(value: unknown, domain: Name, label: string, minimum: number, maximum: number, integer = true): Value<Name> {
-  const result = finite(value, domain, label);
-  if (integer && !Number.isInteger(result)) throw new DomainValueError(domain, 'integer', label);
-  if (result < minimum || result > maximum) throw new DomainValueError(domain, 'range', label);
-  // Numeric construction seam: every caller supplies its domain's bounds.
-  return result as Value<Name>;
+  const admitted = flatMap(finite(value, domain, label), result => {
+    if (integer && !Number.isInteger(result)) return fail(new DomainValueError(domain, 'integer', label));
+    return result < minimum || result > maximum
+      ? fail(new DomainValueError(domain, 'range', label)) : succeed(result);
+  });
+  return match(map(admitted, result => {
+    // Numeric construction seam: every caller supplies its domain's bounds.
+    return result as Value<Name>;
+  }), { onFailure: error => { throw error; }, onSuccess: result => result });
 }
 
 export const actorId = (value: unknown, label = 'actor ID'): ActorId => bounded(value, 'ActorId', label, 0, 0x7fffffff);
@@ -57,9 +62,12 @@ export const partyMemberId = (value: unknown, label = 'party member ID'): PartyM
 export const incarnation = (value: unknown, label = 'incarnation'): Incarnation => bounded(value, 'Incarnation', label, 1, 0x7fffffff);
 
 function textValue<Name extends string>(value: unknown, domain: Name, label: string, pattern: RegExp): TextValue<Name> {
-  if (typeof value !== 'string') throw new DomainValueError(domain, 'type', label);
-  if (!pattern.test(value)) throw new DomainValueError(domain, 'range', label);
-  return value as TextValue<Name>;
+  const text = typeof value === 'string' ? succeed(value) : fail(new DomainValueError(domain, 'type', label));
+  const admitted = flatMap(text, result => pattern.test(result)
+    ? succeed(result) : fail(new DomainValueError(domain, 'range', label)));
+  return match(map(admitted, result => result as TextValue<Name>), {
+    onFailure: error => { throw error; }, onSuccess: result => result,
+  });
 }
 /** Preserve spelling; owners requiring lowercase keep that narrower admission policy. */
 export const worldId = (value: unknown, label = 'world ID'): WorldId => textValue(value, 'WorldId', label, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);

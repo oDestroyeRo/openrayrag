@@ -83,6 +83,9 @@ test('logic permits named pure Effect composition and rejects effectful or unres
     'export { map as transform, filter } from "effect/Array";',
     'import { every } from "effect/Predicate"; export const positive = every([x => x > 0]);',
     'import { make } from "effect/Order"; import { sort } from "effect/Array"; export const sorted = xs => sort(xs, make((a, b) => a < b ? -1 : a > b ? 1 : 0));',
+    'import { flatMap, map, succeed, try as tryResult } from "effect/Result"; export const admitted = text => flatMap(tryResult(() => JSON.parse(text)), value => map(succeed(value), value => value));',
+    'import { gen, succeed } from "effect/Result"; export const admitted = value => gen(function* () { return yield* succeed(value); });',
+    'import { flatMap, fromNullishOr, getOrNull } from "effect/Option"; export const present = value => getOrNull(flatMap(fromNullishOr(value), value => fromNullishOr(value)));',
   ]) assert.deepEqual(await scriptViolations('logic.ts', source, roles), [], source);
   for (const source of [
     'import * as A from "effect/Array"; export const copy = A.map;',
@@ -96,6 +99,10 @@ test('logic permits named pure Effect composition and rejects effectful or unres
     'export * as utilities from "effect/Array";',
     'import { map } from "effect/internal/array"; export { map };',
     'import { map } from "effect/Array"; export const stamps = xs => map(xs, () => Date.now());',
+    'import { try as unchecked } from "effect/Array"; export const bypass = unchecked;',
+    'import { "assignProperty" as unchecked } from "effect/Record"; export const bypass = unchecked;',
+    'import { gen, succeed } from "effect/Result"; export const stamps = () => gen(function* () { return yield* succeed(Date.now()); });',
+    'import { try as tryResult } from "effect/Result"; export const request = () => tryResult(() => fetch("https://example.invalid"));',
     'import { map } from "remeda"; export const copy = xs => map(xs, x => x);',
   ]) assert.ok((await scriptViolations('logic.ts', source, roles)).length, source);
   assert.deepEqual(await scriptViolations('effects.ts', 'import { runSync, sync } from "effect/Effect"; export const now = () => runSync(sync(() => Date.now()));', roles), []);
