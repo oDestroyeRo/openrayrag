@@ -244,12 +244,29 @@ pub(crate) async fn saved_login(window: Webview) -> Result<Option<SavedLogin>, S
 }
 
 #[tauri::command]
-pub(crate) async fn forget_login(window: Webview) -> Result<(), String> {
+pub(crate) async fn forget_login(
+    window: Webview,
+    mcp_operation: Option<String>,
+) -> Result<(), String> {
     crate::require_view(&window, "main")?;
     let store = login_store(window.app_handle())?;
-    tauri::async_runtime::spawn_blocking(move || store.forget())
-        .await
-        .map_err(|_| "Could not remove the local saved login.")?
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if mcp_operation.is_some() {
+            let gate = crate::session::maintenance::admit(&app)?;
+            let _mcp = crate::mcp::authorize_effect(
+                &app,
+                &gate,
+                mcp_operation.as_deref(),
+                "forget_login",
+            )?;
+            store.forget()
+        } else {
+            store.forget()
+        }
+    })
+    .await
+    .map_err(|_| "Could not remove the local saved login.")?
 }
 
 fn resolve_profile(
@@ -272,9 +289,12 @@ pub(crate) fn login_game(
     app: tauri::AppHandle,
     window: Webview,
     request: LoginRequest,
+    mcp_operation: Option<String>,
 ) -> Result<(), String> {
     crate::require_view(&window, "main")?;
     let mut _permit = crate::session::maintenance::admit(&app)?;
+    let _mcp =
+        crate::mcp::authorize_effect(&app, &_permit, mcp_operation.as_deref(), "login_game")?;
     let remember = request.remember;
     let profile = resolve_profile(request, || login_store(&app)?.load())?;
     if let Some(game) = app.get_webview("game") {

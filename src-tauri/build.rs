@@ -4,6 +4,7 @@ fn main() {
             "ci_smoke_report",
             "mcp_set_enabled",
             "mcp_reply",
+            "mcp_claim",
             "update_status",
             "update_check",
             "update_open_release",

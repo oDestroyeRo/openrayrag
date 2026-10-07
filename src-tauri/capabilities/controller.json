@@ -31,6 +31,7 @@
     "allow-update-startup-stopped",
     "allow-update-restore",
     "allow-mcp-set-enabled",
-    "allow-mcp-reply"
+    "allow-mcp-reply",
+    "allow-mcp-claim"
   ]
 }
