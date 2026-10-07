@@ -1037,10 +1037,14 @@ fn recovery_item_ids(resource: Resource) -> &'static [u32] {
 
 impl RecoveryItemSettings {
     fn valid(&self, resource: Resource) -> bool {
+        let min_cooldown = match resource {
+            Resource::Hp => 0,
+            Resource::Sp => 1,
+        };
         let known_ids = recovery_item_ids(resource);
         (1..=100).contains(&self.below_percent)
             && self.min_stock <= 9999
-            && (1..=3600).contains(&self.cooldown_seconds)
+            && (min_cooldown..=3600).contains(&self.cooldown_seconds)
             && self.item_ids.len() <= known_ids.len()
             && unique_by(&self.item_ids, |id| *id)
             && self.item_ids.iter().all(|id| known_ids.contains(id))

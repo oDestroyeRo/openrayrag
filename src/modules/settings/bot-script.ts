@@ -134,7 +134,7 @@ const potion = (resource: 'hp' | 'sp'): Schema =>
       itemIds: array(id, RECOVERY_ITEM_IDS[resource].length),
       belowPercent: percent(1),
       minStock: number(0, 9999),
-      cooldownSeconds: seconds(1, 3600),
+      cooldownSeconds: seconds(resource === 'hp' ? 0 : 1, 3600),
     },
     resource === 'hp' ? DEFAULT_RECOVERY_ITEMS : DEFAULT_SP_ITEMS,
   );

@@ -32,10 +32,12 @@ export function recoveryItemCooldown(
   const shared =
     policy.hpPotions && policy.hpPotions.mode !== 'off' && isHpPotion(itemId)
       ? policy.hpPotions.cooldownSeconds
-      : 0;
+      : null;
   const spShared =
     policy.spPotions && policy.spPotions.mode !== 'off' && isRecoveryItem(itemId, 'sp')
       ? policy.spPotions.cooldownSeconds
-      : 0;
-  return seconds(Math.max(advanced?.cooldownSeconds ?? 1, shared, spShared));
+      : null;
+  return seconds(
+    Math.max(advanced?.cooldownSeconds ?? shared ?? spShared ?? 1, shared ?? 0, spShared ?? 0),
+  );
 }

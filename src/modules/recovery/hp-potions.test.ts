@@ -142,6 +142,36 @@ describe('HP potion settings contract', () => {
 });
 
 describe('automatic HP potion use', () => {
+  it.each(['any', 'selected'] as const)(
+    'uses %s HP items without delay only after confirmed consumption, retaining reserves and threshold',
+    (mode) => {
+      const f = fixture([
+          [501, 2],
+          [504, 2],
+        ]),
+        a = policy();
+      a.hpPotions = { ...a.hpPotions, mode, minStock: 1, cooldownSeconds: 0 };
+      const admitted = validateAutomation(a);
+      const first = f.scheduler.next(admitted, player, f.state, null).action!;
+      expect(first).toEqual({ type: 'useItem', itemId: 501 });
+      f.scheduler.submit(first, f.state);
+      expect(f.scheduler.next(admitted, player, f.state, null)).toEqual({});
+      expect(
+        f.scheduler.observe({ type: 'stats', level: 10, hp: 55, maxHp: 100 }, f.state, 1).state,
+      ).toBe('ignored');
+      expect(f.scheduler.next(admitted, player, f.state, null)).toEqual({});
+      expect(f.consume(501).state).toBe('confirmed');
+      const second = f.scheduler.next(admitted, player, f.state, null).action!;
+      expect(second).toEqual({ type: 'useItem', itemId: 504 });
+      expect(f.scheduler.next(admitted, { ...player, hp: 61 }, f.state, null)).toEqual({});
+      f.scheduler.submit(second, f.state);
+      expect(f.consume(504).state).toBe('confirmed');
+      expect(f.scheduler.next(admitted, player, f.state, null)).toEqual({});
+      expect(f.state.count(domainItemId(501))).toBe(1);
+      expect(f.state.count(domainItemId(504))).toBe(1);
+      expect(recoveryItemCooldown(admitted, domainItemId(504))).toBe(0);
+    },
+  );
   it('follows selected order, then falls back only after the confirmed spend and shared cooldown', () => {
     const f = fixture(),
       a = policy();
