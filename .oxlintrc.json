@@ -1,0 +1,60 @@
+{
+  "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
+  "extends": ["./node_modules/@effect/tsgo/oxlint-presets/correctness.json"],
+  "categories": {
+    "correctness": "off"
+  },
+  "plugins": ["typescript"],
+  "rules": {
+    "typescript/no-floating-promises": [
+      "error",
+      {
+        "allowForKnownSafeCalls": [
+          {
+            "from": "package",
+            "package": "@types/node",
+            "name": "test"
+          }
+        ]
+      }
+    ],
+    "eslint/no-debugger": "error",
+    "eslint/no-unsafe-finally": "error",
+    "eslint/no-constant-condition": "error",
+    "eslint/no-duplicate-case": "error",
+    "eslint/no-unreachable": "error",
+    "eslint/no-unused-vars": "error",
+    "eslint/no-unsafe-optional-chaining": "error",
+    "eslint/no-unexpected-multiline": "error",
+    "eslint/valid-typeof": "error"
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "vendor/**",
+    ".references/**",
+    "dist/**",
+    "reports/**",
+    "platform-bundles/**",
+    "release-bundle/**",
+    "src-tauri/target/**",
+    "src-tauri/gen/**",
+    "src-tauri/generated/**",
+    "src/data/**",
+    "scripts/catalogs/*.json"
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "scripts/**/*-tests.mjs"],
+      "rules": {
+        "eslint/no-constant-condition": "off",
+        "eslint/no-unused-vars": [
+          "error",
+          {
+            "argsIgnorePattern": "^_",
+            "varsIgnorePattern": "^_"
+          }
+        ]
+      }
+    }
+  ]
+}

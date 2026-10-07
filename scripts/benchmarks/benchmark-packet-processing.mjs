@@ -1,7 +1,7 @@
 import { benchmarkSourcePlugin } from './source-snapshot.mjs';
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,11 +10,12 @@ import { packetReport, validatePacketReport } from './benchmark-policy.mjs';
 // Offline synthetic replay through the real adapters. Instrumented decoder counts
 // and uninstrumented timings use separate bundles. No network or native transport.
 export async function runBenchmark(args = process.argv.slice(2)) {
-const root = resolve(import.meta.dirname, '../..');
-const baseline = args[0];
-if (!baseline) throw new Error('Usage: bun scripts/benchmarks/benchmark-packet-processing.mjs <baseline-ref>');
-const temporary = await mkdtemp(join(tmpdir(), 'rayrag-packet-benchmark-'));
-const harness = `
+  const root = resolve(import.meta.dirname, '../..');
+  const baseline = args[0];
+  if (!baseline)
+    throw new Error('Usage: bun scripts/benchmarks/benchmark-packet-processing.mjs <baseline-ref>');
+  const temporary = await mkdtemp(join(tmpdir(), 'rayrag-packet-benchmark-'));
+  const harness = `
 import { BitWriter } from ${JSON.stringify(join(root, 'src/shared/binary.ts'))};
 import { DirectRuntime } from ${JSON.stringify(join(root, 'src/modules/runtime/direct-runtime.ts'))};
 import { initializeBridge } from ${JSON.stringify(join(root, 'src/modules/runtime/bridge.ts'))};
@@ -89,34 +90,67 @@ for(const mode of ['gameClient','botOnly']){
 process.stdout.write(JSON.stringify(output));
 `;
 
-/** @param {string | null} ref @param {boolean} instrumented @returns {Promise<import("../shared/tooling-domain-values.mjs").PacketReplay>} */
-async function measure(ref, instrumented) {
-  const outputFile = join(temporary, `${ref ? 'baseline' : 'current'}-${instrumented ? 'counts' : 'time'}.mjs`);
-  await build({
-    stdin:{contents:harness,resolveDir:root,sourcefile:'packet-benchmark.ts',loader:'ts'},
-    bundle:true,platform:'node',format:'esm',target:'es2022',outfile:outputFile,
-    plugins:[benchmarkSourcePlugin(root, ref, { transform(contents, file) {
-      const name = file.slice(file.lastIndexOf('/') + 1);
-      if (name === 'map-data.ts') return 'export const currentMapInfo=()=>null;export const loadMapCatalog=async()=>null;';
-      if (name === 'bridge.ts') contents = contents.replace('const page = window as BridgeWindow;', 'export function initializeBridge(){\nconst page = window as BridgeWindow;') + '\n}';
-      if (instrumented && name === 'protocol.ts') contents = contents.replace('export function decode(data: Uint8Array): GameEvent[] {', '$&\nglobalThis.__packetCounts.general++;');
-      if (instrumented && name === 'world-protocol.ts') contents = contents.replace('export function decodeWorld(data: Uint8Array): WorldEvent[] | null {', '$&\nglobalThis.__packetCounts.world++;');
-      return contents;
-    } })],
-  });
-  return JSON.parse(execFileSync(process.execPath,[outputFile],{cwd:root,encoding:'utf8'}));
-}
-try {
-  // Count runs are separate from timing runs; all timing bundles omit counters.
-  const beforeCounts=await measure(baseline,true),afterCounts=await measure(null,true);
-  const beforeTime=await measure(baseline,false),afterTime=await measure(null,false);
-  const result = packetReport(baseline, beforeCounts, afterCounts, beforeTime, afterTime);
-  process.stdout.write(`${JSON.stringify(result,null,2)}\n`);
-  validatePacketReport(result);
-} finally {
-  await rm(temporary,{recursive:true,force:true});
-}
-
+  /** @param {string | null} ref @param {boolean} instrumented @returns {Promise<import("../shared/tooling-domain-values.mjs").PacketReplay>} */
+  async function measure(ref, instrumented) {
+    const outputFile = join(
+      temporary,
+      `${ref ? 'baseline' : 'current'}-${instrumented ? 'counts' : 'time'}.mjs`,
+    );
+    await build({
+      stdin: {
+        contents: harness,
+        resolveDir: root,
+        sourcefile: 'packet-benchmark.ts',
+        loader: 'ts',
+      },
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      target: 'es2022',
+      outfile: outputFile,
+      plugins: [
+        benchmarkSourcePlugin(root, ref, {
+          transform(contents, file) {
+            const name = file.slice(file.lastIndexOf('/') + 1);
+            if (name === 'map-data.ts')
+              return 'export const currentMapInfo=()=>null;export const loadMapCatalog=async()=>null;';
+            if (name === 'bridge.ts')
+              contents =
+                contents.replace(
+                  'const page = window as BridgeWindow;',
+                  'export function initializeBridge(){\nconst page = window as BridgeWindow;',
+                ) + '\n}';
+            if (instrumented && name === 'protocol.ts')
+              contents = contents.replace(
+                'export function decode(data: Uint8Array): GameEvent[] {',
+                '$&\nglobalThis.__packetCounts.general++;',
+              );
+            if (instrumented && name === 'world-protocol.ts')
+              contents = contents.replace(
+                'export function decodeWorld(data: Uint8Array): WorldEvent[] | null {',
+                '$&\nglobalThis.__packetCounts.world++;',
+              );
+            return contents;
+          },
+        }),
+      ],
+    });
+    return JSON.parse(
+      execFileSync(process.execPath, [outputFile], { cwd: root, encoding: 'utf8' }),
+    );
+  }
+  try {
+    // Count runs are separate from timing runs; all timing bundles omit counters.
+    const beforeCounts = await measure(baseline, true),
+      afterCounts = await measure(null, true);
+    const beforeTime = await measure(baseline, false),
+      afterTime = await measure(null, false);
+    const result = packetReport(baseline, beforeCounts, afterCounts, beforeTime, afterTime);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    validatePacketReport(result);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
