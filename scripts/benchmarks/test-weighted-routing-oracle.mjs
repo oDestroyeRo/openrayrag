@@ -1,4 +1,4 @@
-import { filter, find, map as mapArray } from 'remeda';
+import { filter, map as mapArray } from 'effect/Array';
 // Independent eager score/hop frontier through the unchanged 64-hop bound.
 // Reuses only physical local search; it does not reuse weightedPotential or the
 // optimized world frontier. Both integer/half and large fractional penalties.
@@ -32,7 +32,7 @@ function eager(planner,edges,same,fromMap,from,toMap,walls,policy){
    for(const edge of edges){if(edge.fromMap!==node.map||!same&&edge.fromMap===edge.toMap||!allowed(policy,edge.toMap))continue;
     const target=planner.mapCells(edge.toMap);if(!target||!target.tiles[target.index(edge.arrival)])continue;
     const approach=planner.search(node.map,node.p,edge,walls);if(!approach)continue;
-    const score=node.score+approach.cost+200+(find(policy.penalties,p=>p.map===node.map)?.cost??0),key=stateKey(edge.toMap,edge.arrival);
+    const score=node.score+approach.cost+200+(policy.penalties.find(p=>p.map===node.map)?.cost??0),key=stateKey(edge.toMap,edge.arrival);
     if(!next.has(key)||score<next.get(key).score)next.set(key,{map:edge.toMap,p:edge.arrival,score});
    }
   }
@@ -55,7 +55,7 @@ for(let run=0;run<250;run++){
   const from={x:1,y:1},expected=eager(planner,edges,same,'a',from,target,walls,policy),route=await planner.routeBetweenMapsAsync('a',from,target,walls,policy,{scheduler});
   assert.deepEqual(route,planner.routeBetweenMaps('a',from,target,walls,policy),'Synchronous exact route, cells, escape and ties');
   /** @type {{score: number, hops: number} | null} */
-  let actual=null;if(route){let map='a',p=from,score=0;for(const step of route){assert(allowed(policy,step.portal.toMap));const path=planner.search(map,p,step.portal,walls);assert(path);score+=path.cost+200+(find(policy.penalties,r=>r.map===map)?.cost??0);map=step.portal.toMap;p=step.portal.arrival;}
+  let actual=null;if(route){let map='a',p=from,score=0;for(const step of route){assert(allowed(policy,step.portal.toMap));const path=planner.search(map,p,step.portal,walls);assert(path);score+=path.cost+200+(policy.penalties.find(r=>r.map===map)?.cost??0);map=step.portal.toMap;p=step.portal.arrival;}
     if(route.length)score+=planner.search(map,p,null,walls).cost;actual={score,hops:route.length};reachable++;
   }
   assert.deepEqual(actual,expected,JSON.stringify({run,target,walls,policy}));comparisons++;

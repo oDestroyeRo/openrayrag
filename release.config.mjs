@@ -1,4 +1,5 @@
-import { flatMap, map, pipe, sort } from "remeda";
+import { flatMap, map, sort } from "effect/Array";
+import { pipe } from "effect/Function";
 import { createHash } from "node:crypto";
 import { policyDigest } from './scripts/shared/tooling-domain-values.mjs';
 

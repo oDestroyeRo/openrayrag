@@ -11,7 +11,7 @@
   "scripts/benchmarks/client-rendering-fixture.ts": "orchestration",
   "scripts/benchmarks/client-rendering-native.ts": "orchestration",
   "scripts/benchmarks/responsive-fixture-policy.mjs": "logic",
-  "scripts/benchmarks/source-snapshot.mjs": "effects",
+  "scripts/benchmarks/source-snapshot.mjs": "orchestration",
   "scripts/catalogs/build-cast-policy.py": "orchestration",
   "scripts/catalogs/build-emote-catalog.py": "orchestration",
   "scripts/catalogs/build-game-catalog.py": "orchestration",

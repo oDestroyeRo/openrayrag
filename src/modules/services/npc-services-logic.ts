@@ -1,4 +1,5 @@
-import { allPass, filter } from 'remeda';
+import { every } from 'effect/Predicate';
+import { filter } from 'effect/Array';
 import { isTalkNpc } from '../world/actor-interaction-logic';
 import { DEFAULT_MAP_POLICY, validateMapPolicy, type MapPolicyInput as MapPolicy } from '../navigation/map-policy-logic';
 import { type ActionIdentity } from '../world/actor-identity';
@@ -205,7 +206,7 @@ export type ServiceResolution =
 
 export function resolveServiceNpc(s: NpcServiceDefinition, map: string, actors: readonly Entity[]): ServiceResolution {
   if (map !== s.map) return { state: 'missing', reason: `Enter ${s.map} before resolving this NPC.` };
-  const matches = filter(actors, allPass([
+  const matches = filter(actors, every([
     (actor: Entity) => actor.kind === s.identity.kind && isTalkNpc(actor),
     actor => !actor.dead,
     actor => actor.name === s.identity.name,

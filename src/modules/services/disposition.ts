@@ -1,7 +1,6 @@
 import { itemId as domainItemId, bagId as domainBagId, quantity as domainQuantity, regularItemBagId,
   type ItemId, type BagId, type Quantity } from '../../shared/domain-values';
 import { inventoryItemCount, inventoryItemDraft } from '../world/character-state-logic';
-import { sort } from 'remeda';
 import type { InventoryItemInput as InventoryItem } from '../protocol/protocol-feature';
 import type { WorldAction } from '../protocol/world-protocol';
 import { saleProceeds, shopQuote, worldActionBlockers, workflowWorldFromSnapshot, workflowWorldSnapshot, type WorkflowContext, type WorkflowWorld } from './workflows-logic';
@@ -96,7 +95,7 @@ export const VALIDATED_DEFAULT_DISPOSITION = validateDispositionPolicy(DEFAULT_D
 
 const names: ContainerName[] = ['inventory', 'storage', 'cart'];
 const safeNumber = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 2_147_483_647;
-const ordered = (items: InventoryItem[]) => sort(items, (a, b) => a.itemId - b.itemId || a.bagId - b.bagId);
+const ordered = (items: InventoryItem[]) => [...items].sort((a, b) => a.itemId - b.itemId || a.bagId - b.bagId);
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
@@ -106,10 +105,10 @@ function fingerprint(policy: DispositionPolicyView, context: DispositionContext)
   const ids = new Set<number>(policy.rules.map(row => row.itemId));
   for (const name of names) for (const item of context.containers[name].items ?? []) ids.add(item.itemId);
   const metadata = Object.fromEntries([...ids].sort((a, b) => a - b).map(id => [id, context.metadata[id] ?? null]));
-  return canonical({ policy: { ...policy, rules: sort(policy.rules, (a, b) => a.itemId - b.itemId) },
+  return canonical({ policy: { ...policy, rules: [...policy.rules].sort((a, b) => a.itemId - b.itemId) },
     containers: Object.fromEntries(names.map(name => [name, { ...context.containers[name], items: context.containers[name].items === null ? null : ordered(context.containers[name].items!) }])),
-    equipment: context.equipment === null ? null : sort(context.equipment, (a, b) => a - b), ammoId: context.ammoId, metadata,
-    minimumStock: sort(context.minimumStock ?? [], (a, b) => a.itemId - b.itemId),
+    equipment: context.equipment === null ? null : [...context.equipment].sort((a, b) => a - b), ammoId: context.ammoId, metadata,
+    minimumStock: [...context.minimumStock ?? []].sort((a, b) => a.itemId - b.itemId),
     workflow: { map: context.workflow.map, playerId: context.workflow.playerId, alive: context.workflow.alive, idle: context.workflow.idle,
       zeny: context.workflow.zeny, world: workflowWorldSnapshot(context.workflow.world), protectedItemIds: context.workflow.protectedItemIds,
       pushCartLevel: context.workflow.pushCartLevel } });
@@ -169,7 +168,7 @@ export function planAdmittedDisposition(policy: ValidatedDispositionPolicy, cont
     if (item.slots?.some(id => id !== 0)) return 'Carded item';
     return null;
   };
-  const rules = sort(policy.rules, (a, b) => a.itemId - b.itemId);
+  const rules = [...policy.rules].sort((a, b) => a.itemId - b.itemId);
   for (const name of names) for (const item of ordered(containers[name].items ?? [])) {
     const reason = protection(item, name, rules.find(row => row.itemId === item.itemId));
     if (reason) plan.protections.push({ container: name, itemId: domainItemId(item.itemId), bagId: domainBagId(item.bagId), count: domainQuantity(item.count), reason });

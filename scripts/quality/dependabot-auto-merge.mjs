@@ -1,4 +1,4 @@
-import { filter } from 'remeda';
+import { filter } from 'effect/Array';
 import { sourceCommitSha } from '../shared/tooling-domain-values.mjs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

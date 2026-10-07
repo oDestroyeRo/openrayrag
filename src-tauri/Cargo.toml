@@ -21,25 +21,28 @@ tokio-tungstenite = { version = "=0.30.0", default-features = false, features = 
 tauri = { version = "2", features = ["unstable"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-libc = "=0.2.190"
-tauri-plugin-updater = { version = "=2.13.1", default-features = false, features = ["rustls-tls"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 base64 = "0.23"
 minisign-verify = "0.3"
 semver = "1"
-tempfile = "3"
-tar = "0.4"
-flate2 = "1"
-plist = "1"
 uuid = { version = "1", features = ["v4"] }
-frunk = "=0.5.0"
-frunk_core = "=0.5.0"
+
+[dev-dependencies]
+tempfile = "3"
+plist = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.190"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading", "Win32_System_SystemServices", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+tempfile = "3"
+tar = "0.4"
+flate2 = "1"
+plist = "1"
 dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 objc2 = "=0.6.4"
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSAlert", "NSButton", "NSView", "NSWindow", "NSScrollView", "NSLayoutConstraint"] }

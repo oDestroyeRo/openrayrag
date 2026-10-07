@@ -51,8 +51,6 @@ fn linked_dependencies(executable: &Path, deps: &Path) -> Vec<(&'static str, Pat
     let linked: serde_json::Value =
         serde_json::from_slice(&std::fs::read(descriptor).unwrap()).unwrap();
     [
-        "frunk",
-        "frunk_core",
         "serde",
         "serde_json",
         "semver",
@@ -105,12 +103,12 @@ fn compile(source: &str, dir: &Path, deps: &Path, linked: &[(&str, PathBuf)]) ->
 }
 
 #[test]
-fn domain_values_reject_private_unchecked_serde_and_generic_construction() {
+fn domain_values_reject_private_and_unchecked_serde_construction() {
     let dir = tempfile::tempdir().unwrap();
     let executable = std::env::current_exe().unwrap();
     let deps = executable.parent().unwrap();
     let linked = linked_dependencies(&executable, deps);
-    let control = compile("fn main() { let slot = shared::domain_values::CharacterSlot::try_from(2_u8).unwrap(); assert_eq!(slot.index(), 2); let _: frunk::HList![u8] = frunk::hlist![0_u8]; fn serde_available<T: serde::Serialize>() {} serde_available::<u8>(); let version = update::updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); assert_eq!(version.as_str(), \"1.2.3\"); let _: fn(Vec<u8>, update::updater_logic::CandidateAsset, &str) -> Result<update::update_install_logic::VerifiedArchive, String> = update::update_install_logic::VerifiedArchive::new; }", dir.path(), deps, &linked);
+    let control = compile("fn main() { let slot = shared::domain_values::CharacterSlot::try_from(2_u8).unwrap(); assert_eq!(slot.index(), 2); fn serde_available<T: serde::Serialize>() {} serde_available::<u8>(); let version = update::updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); assert_eq!(version.as_str(), \"1.2.3\"); let _: fn(Vec<u8>, update::updater_logic::CandidateAsset, &str) -> Result<update::update_install_logic::VerifiedArchive, String> = update::update_install_logic::VerifiedArchive::new; }", dir.path(), deps, &linked);
     assert!(
         control.status.success(),
         "positive control failed: {}",
@@ -122,7 +120,6 @@ fn domain_values_reject_private_unchecked_serde_and_generic_construction() {
         ("fn main() { let mut slot = shared::domain_values::CharacterSlot::try_from(0_u8).unwrap(); slot.0 = 3; }", "E0616"),
         ("fn main() { let _: shared::domain_values::FormRevision = shared::domain_values::CharacterSlot::try_from(0_u8).unwrap(); }", "E0308"),
         ("fn main() { let _: shared::domain_values::CharacterSlot = 3_u8.into(); }", "E0277"),
-        ("fn main() { let _: shared::domain_values::CharacterSlot = frunk::from_generic(frunk::hlist![3_u8]); }", "E0277"),
         ("fn main() { fn decode<T: serde::de::DeserializeOwned>() {} decode::<shared::domain_values::CharacterSlot>(); }", "E0277"),
         ("fn main() { let _: shared::domain_values::ItemId = shared::domain_values::BagId::try_from(1_i64).unwrap(); }", "E0308"),
         ("fn main() { let _: shared::domain_values::SessionId<'_> = shared::domain_values::ConnectionId::try_from(\"identity\").unwrap(); }", "E0308"),
@@ -132,7 +129,6 @@ fn domain_values_reject_private_unchecked_serde_and_generic_construction() {
         ("fn main() { let version = update::updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); let _ = update::updater_logic::CandidateAsset { version, platform: update::updater_logic::Platform { url: \"wrong\".into(), signature: \"wrong\".into() } }; }", "E0451"),
         ("fn main() { let version = update::updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); let _ = update::update_install_logic::VerifiedArchive { bytes: std::sync::Arc::new(vec![0]), version }; }", "E0451"),
         ("fn main() { fn decode<T: serde::de::DeserializeOwned>() {} decode::<update::update_install_logic::VerifiedArchive>(); }", "E0277"),
-        ("fn main() { let version = update::updater_logic::StableUpdateVersion::try_from(\"1.2.3\".to_owned()).unwrap(); let _: update::update_install_logic::VerifiedArchive = frunk::from_generic(frunk::hlist![std::sync::Arc::new(vec![0_u8]), version]); }", "E0277"),
     ] {
         let result = compile(source, dir.path(), deps, &linked);
         let errors = String::from_utf8_lossy(&result.stderr);

@@ -60,7 +60,7 @@ Keep effect ordering visible. A persistence failure must not commit a new in-mem
 
 An external number or string is evidence to validate, not a domain value merely because a type annotation names it. Keep raw wire, JSON and editable form DTOs separate from admitted domain models. At the existing admission point, the owning parser checks structure, field-specific bounds and relationships, then produces distinct validated identities, quantities, units and revision channels. Pure decisions consume those models; orchestration retains lifecycle ownership; effects serialize their values using the unchanged external representation.
 
-Use private-field Rust newtypes with typed constructor errors and no unchecked construction path. Deriving `Deserialize`, `Generic` or `LabelledGeneric` for a scalar can bypass its constructor even when its field is private. Deserialize raw DTOs and convert at the existing validation stage, or use explicitly validated deserialization. Frunk may assemble or transform already validated components. An aggregate with relationships between fields still needs a checked constructor; individually valid components do not establish those relationships.
+Use private-field Rust newtypes with typed constructor errors and no unchecked construction path. Deriving `Deserialize` for a scalar can bypass its constructor even when its field is private. Deserialize raw DTOs and convert at the existing validation stage, or use explicitly validated deserialization. Assemble already validated components with explicit native records. An aggregate with relationships between fields still needs a checked constructor; individually valid components do not establish those relationships.
 
 TypeScript and checked Bun JavaScript use opaque or branded primitives and readonly domain records. Put nominal assertions in the small owning constructors/parsers, after their runtime checks. Callers use those owners, rather than asserting that a primitive has a domain type. A readonly view over a mutable external alias is insufficient: retain owned data or detach it at admission, including nested arrays. Mutable UI drafts and state owners remain separate from readonly policy inputs.
 
@@ -89,14 +89,14 @@ Compatibility adapters also retain historical loose inputs. Engagement observati
 
 Ordinary primitives remain in binary/ELF/FFI decoding, navigation search and per-cell probes, scratch counters, uninterpreted telemetry, authoring/display values and declarative external configuration. Typed records already distinguish benchmark measurements by field; branding each local sample or loop index adds no useful boundary. Native `Instant`, `Duration`, platform handles and archive-library records retain their existing types and lifetime rules.
 
-Verification combines the normal compiler gates with negative examples at actual consumers, Rust constructor/serde/Frunk bypass checks, runtime boundary and alias tests, and existing composed regression suites. Offline packet, routing and catalog comparisons provide bounded behavior/performance evidence; they do not establish live gameplay, deployed updates or external catalog regeneration.
+Verification combines the normal compiler gates with negative examples at actual consumers, Rust constructor/serde bypass checks, runtime boundary and alias tests, and existing composed regression suites. Offline packet, routing and catalog comparisons provide bounded behavior/performance evidence; they do not establish live gameplay, deployed updates or external catalog regeneration.
 
 ## Unary functions and composition
 
 Prefer a named input record for decisions with several related arguments, especially booleans. For repeated evaluation against the same context, bind that context once and return a unary function that can be passed directly to `map`, `filter` or `every`:
 
 ```ts
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 
 const evaluate = actorPredicateEvaluator(snapshot);
 const results = map(conditions, evaluate);
@@ -106,15 +106,17 @@ The observation belongs to one synchronous decision pass. Treat it as read-only 
 
 Use currying when an earlier argument is reused or the resulting unary function fits a higher-order operation. Keep simple positional functions and language-native iterators when an extra closure adds no useful composition. Preserve short-circuiting, diagnostic precedence and effect timing: read stateful evidence in orchestration only after its admission checks pass.
 
-## Functional libraries
+## Native APIs and functional libraries
 
-Remeda is the shared composition library for first-party TypeScript and Bun tooling. Use named imports for pure transformations and reusable predicates, with data-last functions when binding configuration for a pipeline. The architecture policy records the allowed operations; randomness, timers and retained-state helpers belong to effect or orchestration modules. Namespace imports and unrestricted re-exports are rejected in logic.
+Prefer language and platform APIs when they support the deployed runtime, preserve the owning contract and make the calculation equally clear or simpler. Keep a library when it supplies a missing capability or a clear correctness, complexity or performance benefit. Do not replace a dependency with a homemade general-purpose utility library. Native bindings, established parsers, network protocols, cryptographic verification and build tools retain their existing owners.
 
-Remeda can fuse adjacent lazy transformations. Use fused pipelines for dense collections and pure unary callbacks. Preserve intermediate arrays when a callback depends on its index or array, and keep ordered validation separate when evaluating later values would change the first error. Effectful callbacks remain in explicit orchestration. Object transformations must preserve validated key constraints and output detachment.
+Effect is the shared TypeScript composition library for first-party application and Bun tooling. Import named deterministic operations from their direct owners, such as `effect/Array`, `effect/Function`, `effect/Predicate` and `effect/Order`. The architecture policy records allowed operations; Effect runtime execution, clocks, randomness and retained state belong to effects or orchestration. Namespace imports and unrestricted re-exports are rejected in logic. Synchronous collection composition does not transfer an existing controller's lifecycle to an Effect runtime.
 
-Frunk is the shared composition library for native Rust logic. Use its typed transformations and validation combinators where they remove repeated domain assembly or validation. Independent pure checks may accumulate internally; public errors and precedence remain part of the existing contract. Keep dependent admission, bounded decoding, locks, file transactions and transport lifetimes sequential. Rust closures bind context for unary evaluation without a separate currying layer.
+Effect array pipelines evaluate each stage eagerly. Preserve callback indices, intermediate-array semantics and short-circuiting at the owner; use an explicit native loop when bounded traversal or avoiding intermediate allocations matters. Sorting must detach its input. Object transformations must preserve validated key constraints and output detachment. Effect equality caches comparisons for immutable values; compare owned snapshots when observing mutable settings.
 
-These libraries apply across application and tooling domains. Data-only schemas, scalar arithmetic, byte codecs, performance-sensitive search loops and effect adapters retain their language-native implementation when no library composition is involved. A dependency import in every file is not an architectural requirement. Generated and vendored code stays with its owning generator or upstream source.
+Rust logic uses native structs, enums, `Result`, `Option` and iterators. Independent pure checks may accumulate in ordinary tuples or collections; ordered errors and public precedence remain part of the existing contract. Keep dependent admission, bounded decoding, locks, file transactions and transport lifetimes sequential. Explicit DTO projection must omit credentials and retain move ownership. Rust closures bind context for unary evaluation without a separate currying layer.
+
+The policy applies across application and tooling domains. Data-only schemas, scalar arithmetic, byte codecs, performance-sensitive search loops and effect adapters retain their language-native implementation when no library composition is involved. A dependency import in every file is not an architectural requirement. Generated and vendored code stays with its owning generator or upstream source. Historical release and benchmark sources retain their original pinned dependencies in isolated resolution; they do not add those libraries back to the current application.
 
 ## Applying the seven levels
 
@@ -123,11 +125,11 @@ Use the levels to choose an abstraction that earns its place in the domain. The 
 | Level | Application in this project |
 | --- | --- |
 | 1. Functions and immutability | Explicit observations enter pure decisions; orchestration owns state changes and effect ordering. |
-| 2. Higher-order functions | Context-bound unary evaluators and Remeda transformations compose repeated decisions. |
+| 2. Higher-order functions | Context-bound unary evaluators and Effect transformations compose repeated decisions. |
 | 3. Algebraic data types | Rust enums and TypeScript discriminated unions represent mutually exclusive lifecycle states and outcomes. |
 | 4. Typed errors and effects | Rust `Result`/`Option` and tagged failure causes retain machine-readable meaning; adapters preserve existing public errors. |
 | 5. Abstract execution | Small domain traits and capability interfaces have production and deterministic test implementations. |
-| 6. Composition | Frunk accumulates independent validation. Condition-state monoids combine bounded traces with explicit identity and priority rules. |
+| 6. Composition | Native records accumulate independent validation. Condition-state monoids combine bounded traces with explicit identity and priority rules. |
 | 7. Programs and interpreters | The native replacement program runs against its effect trait; route generators run through synchronous and cooperative interpreters. |
 
 Keep diagnostic text as a projection of a typed cause. Receipt retirement must depend on whether the server rejected an action, rather than on the spelling of its display message. Tagged outcomes distinguish successful `undefined` results from arbitrary thrown values; cleanup preserves an already established failure.

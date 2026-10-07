@@ -1,4 +1,4 @@
-import { filter, map, sort } from "remeda";
+import { filter, map, sort } from "effect/Array";
 import { BotEngine } from '../../src/modules/automation/engine';
 import { BotConsole } from '../../src/modules/client/bot-console';
 import { FeatureUi } from '../../src/modules/client/feature-ui';

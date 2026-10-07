@@ -1,4 +1,4 @@
-import { map, take } from 'remeda';
+import { map, take } from 'effect/Array';
 import type { Entity } from '../protocol/protocol';
 import { addQuantities, mapCode as admittedMapCode, quantity, speciesId, type MapCode, type Quantity, type SpeciesId } from '../../shared/domain-values';
 import { MAX_MAP_DOCUMENT_BYTES, type MapDataResult } from './map-data-policy';

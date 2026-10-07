@@ -98,8 +98,8 @@ impl StableUpdateVersion {
     }
 }
 
-// URL and signature are admitted in the context of this exact version. Neither
-// serde nor Frunk may rebuild this relational aggregate without that check.
+// URL and signature are admitted in the context of this exact version.
+// Construction and deserialization cannot bypass that admission.
 pub(crate) struct CandidateAsset {
     version: StableUpdateVersion,
     platform: Platform,

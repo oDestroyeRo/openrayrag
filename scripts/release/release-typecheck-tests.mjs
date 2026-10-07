@@ -32,7 +32,7 @@ async function compileMutation(mutate) {
     // rootDirs resolves relative source overlays, while packages resolve from
     // their own node_modules ancestry. Keep the pure library available here.
     await mkdir(join(folder, "node_modules"));
-    await symlink(join(root, "node_modules/remeda"), join(folder, "node_modules/remeda"),
+    await symlink(join(root, "node_modules/effect"), join(folder, "node_modules/effect"),
       process.platform === "win32" ? "junction" : "dir");
     const source = await readFile(join(root, "scripts/release/release.mjs"), "utf8");
     const changed = mutate(source);

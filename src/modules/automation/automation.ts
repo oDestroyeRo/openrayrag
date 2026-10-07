@@ -1,5 +1,5 @@
+import { map } from 'effect/Array';
 import { itemId as domainItemId, skillId as domainSkillId, milliseconds, quantity, seconds, secondsToMilliseconds, type Seconds } from '../../shared/domain-values';
-import { map } from 'remeda';
 import { foldConditions, unavailableFirstConditions } from '../../shared/condition-logic';
 import { sameActionIdentity, type ActionIdentity } from '../world/actor-identity';
 import { isRecoveryItem, recoveryItemIds, recoveryItemReserve } from '../recovery/recovery-items';

@@ -1,4 +1,5 @@
-import { filter, find, flatMap, map, pipe } from 'remeda';
+import { filter, flatMap, map } from 'effect/Array';
+import { pipe } from 'effect/Function';
 import { validateMacroScript, type dryRunMacro, type MacroScript } from './macros-logic';
 import { automationSettings, validateSettings, settingsDraft, automationDraft, type SettingsInput, type RunSettings } from '../settings/settings';
 import { formatBotScript, parseBotScript, type BotScriptDocument } from '../settings/bot-script';
@@ -10,7 +11,7 @@ export function macroBaseSettings(value: SettingsInput, script: MacroScript): Ru
   const settings=settingsDraft(value);
   const policy=automationDraft(automationSettings(settings));
   if(!settings.targets.length&&['selected','both'].includes(policy.combat.mode)) {
-    const field=find(flatMap(script.rules, rule=>rule.steps), step=>step.type==='farm');
+    const field=flatMap(script.rules, rule=>rule.steps).find(step=>step.type==='farm');
     if(field?.type==='farm')settings.targets=[...field.targets];
     else {policy.combat={...policy.combat,mode:'off'};settings.automation=policy;}
   }
@@ -97,6 +98,6 @@ export function addMacroExample(sourceText: string, document: BotScriptDocument,
   const start = lines.findIndex(line => line.trimStart().startsWith('rule '));
   const existingLines = source.split(/\r?\n/);
   const limits = pipe(lines.slice(0, start), filter(line => /^(duration|actions|spend)\s/.test(line)
-    && find(existingLines, existing => new RegExp(`^\\s*${line.split(' ')[0]}\\s`).test(existing)) === undefined));
+    && existingLines.find(existing => new RegExp(`^\\s*${line.split(' ')[0]}\\s`).test(existing)) === undefined));
   return { text: `${source.trimEnd()}\n\n${[...limits, ...lines.slice(start)].join('\n')}\n`, insertion: source.trimEnd().length + 2 };
 }

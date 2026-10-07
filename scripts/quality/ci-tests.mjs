@@ -3,15 +3,19 @@ import assert from 'node:assert/strict';
 import { cp, lstat, readFile, realpath, mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
-import { parse } from 'yaml';
 import { spawnSync } from 'node:child_process';
 import { platforms, packageConfig, packageSmokes, assertArchitecture, installerFiles } from './ci-platform.mjs';
 import { createReportDirectory, privateEnvironment, runReadOnly } from '../release/release-public-io.mjs';
 
-const workflow=parse(await readFile(new URL('../../.github/workflows/release.yml',import.meta.url),'utf8'));
-const release=parse(await readFile(new URL('../../.github/workflows/release-publish.yml',import.meta.url),'utf8'));
+const workflow=Bun.YAML.parse(await readFile(new URL('../../.github/workflows/release.yml',import.meta.url),'utf8'));
+const release=Bun.YAML.parse(await readFile(new URL('../../.github/workflows/release-publish.yml',import.meta.url),'utf8'));
 const planName='release-plan-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}';
 const runtimeInstall='bun install --production --frozen-lockfile --ignore-scripts';
+
+test('native YAML retains workflow event keys, expressions and multiline commands',()=>{
+  const parsed=Bun.YAML.parse('on:\n  workflow_dispatch:\nvalue: ${{ github.sha }}\nquoted: "false"\nflag: false\nrun: |\n  printf first\\n\n  printf second\\n\nfolded: >-\n  one\n  two\n');
+  assert.deepEqual(parsed,{on:{workflow_dispatch:null},value:'${{ github.sha }}',quoted:'false',flag:false,run:'printf first\\n\nprintf second\\n\n',folded:'one two'});
+});
 
 test('every release stage provisions locked runtime dependencies before root entrypoints without step credentials',()=>{
   for(const [name,{steps}] of Object.entries(release.jobs)){
@@ -47,7 +51,7 @@ test('a clean hosted checkout imports tooling with auto-install disabled and pro
     runReadOnly(process.execPath,isolated.run.split(' ').slice(1),options);
     const unavailable=spawnSync(process.execPath,['--no-install','--eval','await import("./scripts/release/release.mjs");'],{...options,encoding:'utf8',timeout:30_000});
     assert.notEqual(unavailable.status,0);
-    assert.match(unavailable.stderr,/Cannot find (?:package|module).*remeda/);
+    assert.match(unavailable.stderr,/Cannot find (?:package|module).*effect/);
 
     // Rebuild the isolated tools in the corrected hosted order as well.
     await rm(join(checkout,'tools/release/node_modules'),{recursive:true});

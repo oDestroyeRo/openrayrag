@@ -1,6 +1,5 @@
 //! Requested CSS view bounds, automatic content inset policy and native clipping.
 use crate::shared::domain_values::{ClippedViewExtent, RequestedViewExtent, ViewOrigin};
-use frunk::{hlist_pat, prelude::IntoValidated};
 use serde::Deserialize;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -62,23 +61,25 @@ impl GameViewBounds {
         if top_inset < 0.0 || self.y < 0.0 {
             return Err("Invalid game view bounds.".into());
         }
-        (ViewOrigin::try_from((self.x, width)).into_validated()
-            + ViewOrigin::try_from((self.y + top_inset, height))
-            + RequestedViewExtent::try_from(self.width)
-            + RequestedViewExtent::try_from(self.height))
-        .into_result()
-        .map_err(|_| "Invalid game view bounds.")
-        .and_then(|hlist_pat!(x, y, requested_width, requested_height)| {
-            Ok(ClippedViewBounds {
-                x,
-                y,
-                width: ClippedViewExtent::clip(requested_width, width - x.get())
-                    .map_err(|_| "Invalid game view bounds.")?,
-                height: ClippedViewExtent::clip(requested_height, height - y.get())
-                    .map_err(|_| "Invalid game view bounds.")?,
-            })
+        let (x, y, requested_width, requested_height) = match (
+            ViewOrigin::try_from((self.x, width)),
+            ViewOrigin::try_from((self.y + top_inset, height)),
+            RequestedViewExtent::try_from(self.width),
+            RequestedViewExtent::try_from(self.height),
+        ) {
+            (Ok(x), Ok(y), Ok(requested_width), Ok(requested_height)) => {
+                (x, y, requested_width, requested_height)
+            }
+            _ => return Err("Invalid game view bounds.".into()),
+        };
+        Ok(ClippedViewBounds {
+            x,
+            y,
+            width: ClippedViewExtent::clip(requested_width, width - x.get())
+                .map_err(|_| "Invalid game view bounds.")?,
+            height: ClippedViewExtent::clip(requested_height, height - y.get())
+                .map_err(|_| "Invalid game view bounds.")?,
         })
-        .map_err(|_| "Invalid game view bounds.".into())
     }
 }
 

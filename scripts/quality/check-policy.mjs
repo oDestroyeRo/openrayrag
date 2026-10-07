@@ -1,4 +1,5 @@
-import { filter, map, pipe, sort } from 'remeda';
+import { filter, map, sort } from 'effect/Array';
+import { pipe } from 'effect/Function';
 
 // Pure source-check planning. Discovery and process execution belong to check.mjs.
 /** @param {string} platform @param {readonly string[]} scriptNames @returns {readonly import('../shared/tooling-domain-values.mjs').VerificationStep[]} */

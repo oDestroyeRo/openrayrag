@@ -1,4 +1,4 @@
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_LOADOUT, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT, DEFAULT_SETTINGS, validateFormSettings, settingsDraft, type Settings, type SettingsInput } from './settings';
 import { MACRO_LIMITS, validateMacroScript, validMacroStep, type MacroRule, type MacroScript, type MacroStep } from '../automation/macros-logic';
 import { validRoutineCondition, type RoutineCondition } from '../automation/routines-logic';

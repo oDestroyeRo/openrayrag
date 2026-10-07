@@ -1,4 +1,5 @@
-import { filter, map, partition, unique } from 'remeda';
+import { filter, map, partition, dedupe } from 'effect/Array';
+import { fromPredicate } from 'effect/Filter';
 import type { EngagementIdentity } from '../combat/attack-strategy-logic';
 import type { PartyActorBinding } from './party-actors-logic';
 export const PARTY_ENGAGEMENT_LIMITS = { monsters: 150, sources: 8 } as const;
@@ -19,7 +20,7 @@ export const partyEngagementReason = (blocker: Blocker | null | undefined): stri
   `Party engagement unavailable: ${blocker ?? 'no verified current party attack source'}.`;
 
 export function partyEngagementSnapshot({ enabled, claims }: { enabled: boolean; claims: readonly Claims[] }): PartyEngagementSnapshot {
-  const [blocked, unblocked] = partition(claims, row => !!row.blocker);
+  const [blocked, unblocked] = partition(claims, fromPredicate(row => !!row.blocker));
   return { enabled, accepted: filter(unblocked, row => row.sources.size > 0).length,
-    blocked: blocked.length, reasons: unique(map(blocked, row => partyEngagementReason(row.blocker))) };
+    blocked: blocked.length, reasons: dedupe(map(blocked, row => partyEngagementReason(row.blocker))) };
 }

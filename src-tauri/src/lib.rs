@@ -446,7 +446,6 @@ fn require_game_runtime(window: &Webview) -> Result<(), String> {
 pub fn run() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(session::maintenance::SharedGate::default())
         .manage(session::mode_guard::SharedGuard::default())
         .manage(update::updater::SharedUpdate::default())

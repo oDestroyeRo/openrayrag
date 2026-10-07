@@ -1,4 +1,4 @@
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 import { PartyActorBindings } from '../party/party-actors';
 import type { ActorObservations } from './actor-observations';
 import type { InventoryItem } from '../protocol/protocol-feature';

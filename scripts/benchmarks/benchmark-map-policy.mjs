@@ -1,5 +1,5 @@
 import { benchmarkSourcePlugin } from './source-snapshot.mjs';
-import { filter, map as mapArray } from 'remeda';
+import { filter, map as mapArray } from 'effect/Array';
 // bun scripts/benchmarks/benchmark-map-policy.mjs [baseline-ref] [--incremental]
 // Exact default-policy TravelStep oracle; timings are local planning, not network latency.
 import { deepStrictEqual } from 'node:assert';

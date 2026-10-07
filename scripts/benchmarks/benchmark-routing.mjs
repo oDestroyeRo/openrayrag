@@ -1,5 +1,5 @@
 import { benchmarkSourcePlugin } from './source-snapshot.mjs';
-import { map, sort } from 'remeda';
+import { map } from 'effect/Array';
 // Run: bun scripts/benchmarks/benchmark-routing.mjs [baseline-ref]
 // Setup/map analysis is excluded. Both revisions use the same deterministic inputs.
 // Baseline source and its imports come from the same immutable tree; packages stay locked here.
@@ -41,7 +41,7 @@ function field(api,grid,origin,targets,equipment=false){
   const engine=new api.BotEngine(action=>sent.push(action),()=>now,()=>grid);
   engine.connect(true);engine.receive([{type:'enter',id:1,map:'prt_fild08'},
     {type:'spawn',entity:{id:1,classId:0,name:'Player',kind:0,level:7,hp:70,maxHp:70,dead:false,...origin}},
-    ...map(targets,(position,i)=>({type:'spawn',entity:{id:i+2,classId:4000,name:'Poring',kind:1,level:1,hp:51,maxHp:51,dead:false,...position}})),
+    ...targets.map((position,i)=>({type:'spawn',entity:{id:i+2,classId:4000,name:'Poring',kind:1,level:1,hp:51,maxHp:51,dead:false,...position}})),
     {type:'inventory',items:[],equipment:[],ammoId:-1}]);
   const settings={...api.DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],radius:20};
   if(equipment){settings.automation=structuredClone(api.DEFAULT_AUTOMATION);
@@ -87,7 +87,7 @@ function measure(api){
       const start=performance.now();fixture.run();const elapsed=performance.now()-start;
       if(i>=2)samples.push(elapsed);counts={...stats};outcome=fixture.outcome();
     }
-    const ordered=sort(samples,(a,b)=>a-b);results.push({scenario:scenario.name,medianMs:Number(ordered[2].toFixed(3)),...counts,outcome});
+    const ordered=[...samples].sort((a,b)=>a-b);results.push({scenario:scenario.name,medianMs:Number(ordered[2].toFixed(3)),...counts,outcome});
   }
   return results;
 }

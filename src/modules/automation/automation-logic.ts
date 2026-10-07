@@ -1,5 +1,5 @@
+import { map } from 'effect/Array';
 import { itemId, dropId, quantity, milliseconds, type ItemId, type SkillId, type Revision, type Milliseconds, type Quantity, type DropId } from '../../shared/domain-values';
-import { map } from 'remeda';
 import { foldConditions, unavailableFirstConditions } from '../../shared/condition-logic';
 import type { AutomationScheduler } from './automation';
 import type { ActionIdentity } from '../world/actor-identity';

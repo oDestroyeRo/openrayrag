@@ -1,4 +1,5 @@
-import { find, map, pipe } from 'remeda';
+import { map } from 'effect/Array';
+import { pipe } from 'effect/Function';
 import type { SocialContext, SocialSnapshot } from './social';
 const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 export function socialContextFromStatus(value: unknown): SocialContext {
@@ -7,7 +8,7 @@ export function socialContextFromStatus(value: unknown): SocialContext {
   const own=typeof p.id==='number'&&Number.isInteger(p.id)&&p.id>=0&&p.id<=0x7fffffff&&p.kind===0;
   return { ready: s.connected === true && s.compatible === true && own, actorId: own ? p.id as number : null,
     name: typeof p.name === 'string' ? p.name : '', job: typeof p.classId === 'number' ? p.classId : null,
-    learnedBasic: c.skillsKnown === true ? Number(find(skills, skill => skill.skillId === 1)?.level ?? 0) : null,
+    learnedBasic: c.skillsKnown === true ? Number(skills.find(skill => skill.skillId === 1)?.level ?? 0) : null,
     inParty: record(s.world).party != null, silenced: Array.isArray(c.statuses) && c.statuses.some(status => record(status).id === 6) };
 }
 export function socialHistoryText(history: unknown): string {

@@ -1,4 +1,4 @@
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 import { SOCKET_METADATA } from './socket-logic';
 import type { SocketSnapshot } from './socket';
 export function socketSlotsText(slots:readonly number[]):string {

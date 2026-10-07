@@ -1,4 +1,4 @@
-import { allPass } from 'remeda';
+import { every } from 'effect/Predicate';
 import type { WalkGrid } from '../navigation/navigation-logic';
 import type { Entity } from '../protocol/protocol';
 import type { SettingsInput } from './settings';
@@ -11,7 +11,7 @@ export interface FieldStartState {
   native:boolean;fresh:boolean;busy:boolean;stopping:boolean;loginBusy:boolean;runActive:boolean;
   connected:boolean;compatible:boolean;map:string;player:Pick<Entity,'kind'|'x'|'y'|'dead'>|null;settings:SettingsInput|null;
 }
-const fieldReady = allPass<FieldStartState>([
+const fieldReady = every<FieldStartState>([
   s => s.native, s => s.fresh, s => !s.busy, s => !s.stopping, s => !s.loginBusy,
   s => !s.runActive, s => s.connected, s => s.compatible,
 ]);

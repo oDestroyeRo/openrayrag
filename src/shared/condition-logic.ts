@@ -1,4 +1,4 @@
-import { reduce } from 'remeda';
+import { reduce } from 'effect/Array';
 
 export type ConditionState = 'matched' | 'unmatched' | 'unavailable';
 
@@ -20,5 +20,5 @@ export const unavailableFirstConditions = conditionStateMonoid('unavailable');
 export const unmatchedFirstConditions = conditionStateMonoid('unmatched');
 
 export function foldConditions(conditions: readonly { state: ConditionState }[], policy: ConditionStateMonoid): ConditionState {
-  return reduce(conditions, (state, condition) => policy.combine(state, condition.state), policy.identity);
+  return reduce(conditions, policy.identity, (state, condition) => policy.combine(state, condition.state));
 }

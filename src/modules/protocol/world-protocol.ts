@@ -1,4 +1,3 @@
-import { uniqueBy } from 'remeda';
 import { actorId } from '../world/actor-identity';
 // Source: Rebuild pin 4099e2c000c3c550516760b9c1241595aac9aceb plus deployed V8 evidence in docs/PROTOCOL.md.
 // Normal player actions only. Inventory and combat packets have separate owners.
@@ -136,7 +135,7 @@ export function decodeWorld(data: Uint8Array): WorldEvent[] | null {
       const discountLevel = kind === 0 ? bounded(r.i32(), 0, 255, 'overcharge level') : r.u8();
       const count = kind === 0 ? 0 : bounded(r.i32(), 0, 600, 'shop count');
       const entries = Array.from({ length: count }, () => ({ itemId: id(r.i32()), price: amount(r.i32()) }));
-      if (uniqueBy(entries, e => e.itemId).length !== entries.length) throw new Error('Duplicate shop item');
+      if (new Set(entries.map(e => e.itemId)).size !== entries.length) throw new Error('Duplicate shop item');
       event = { type: 'shopOpened', mode: kind === 0 ? 'sell' : 'buy', discountLevel, entries }; break;
     }
     case WORLD_OP.storage: event = { type: 'storageOpened', items: readInventory(r) }; break;
@@ -173,7 +172,7 @@ export function decodeWorld(data: Uint8Array): WorldEvent[] | null {
       // Even an offline row needs 13 bytes: two IDs, level, string length, leader.
       const count = bounded(r.i32(), 1, Math.floor(r.remainingBits / (13 * 8)), 'party count');
       const members = Array.from({ length: count }, () => member(r));
-      if (uniqueBy(members, m => m.memberId).length !== count) throw new Error('Duplicate party member');
+      if (new Set(members.map(m => m.memberId)).size !== count) throw new Error('Duplicate party member');
       // Live deployed snapshots can include eight unread bytes after the roster.
       // The official V8 reader ignores them; accept only this observed width and
       // keep their meaning opaque. Other trailers still fail in finish().
@@ -208,7 +207,7 @@ export function decodeWorld(data: Uint8Array): WorldEvent[] | null {
     case WORLD_OP.vendingStart: {
       const name = r.string(128); const count = bounded(r.i32(), 1, 32, 'vending count');
       const rows = Array.from({ length: count }, () => ({ id: id(r.i32()), count: bounded(r.i32(), 1, 32767, 'vending count'), price: bounded(r.i32(), 0, 9_999_999, 'price') }));
-      if (uniqueBy(rows, row => row.id).length !== count) throw new Error('Duplicate vending row');
+      if (new Set(rows.map(row => row.id)).size !== count) throw new Error('Duplicate vending row');
       event = { type: 'vendingStarted', name, rows }; break;
     }
     case WORLD_OP.vendingStop: event = { type: 'vendingStopped' }; break;
@@ -218,7 +217,7 @@ export function decodeWorld(data: Uint8Array): WorldEvent[] | null {
         const bagId = id(r.i32()); const item = readItem(r, itemType(r), bagId); const price = bounded(r.i32(), 0, 9_999_999, 'price');
         return { item, price };
       });
-      if (uniqueBy(entries, e => e.item.bagId).length !== count) throw new Error('Duplicate vending item');
+      if (new Set(entries.map(e => e.item.bagId)).size !== count) throw new Error('Duplicate vending item');
       event = { type: 'vendingViewed', id: vendorId, name, entries }; break;
     }
     case WORLD_OP.vendingSale: event = { type: 'vendingSale', bagId: id(r.i32()), count: bounded(r.i32(), 1, 32767, 'sale count') }; break;

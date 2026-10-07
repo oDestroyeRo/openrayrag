@@ -2,12 +2,6 @@
 use crate::shared::domain_values::{
     AccountName, CharacterSlot, OwnedAccountName, OwnedPassword, Password,
 };
-use frunk::{
-    hlist,
-    labelled::{IntoLabelledGeneric, IntoUnlabelled},
-    prelude::IntoValidated,
-    HList, Validated,
-};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -18,7 +12,7 @@ pub(crate) enum ConnectionMode {
     GameClient,
 }
 
-#[derive(Clone, Deserialize, Serialize, frunk::LabelledGeneric)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct LoginProfile {
     pub(crate) username: String,
@@ -36,19 +30,9 @@ enum LoginField {
     Password,
     CharacterSlot,
 }
-type LoginValidation<'a> =
-    Validated<HList!(AccountName<'a>, Password<'a>, CharacterSlot), LoginField>;
-
-#[derive(Debug, frunk::Generic)]
-struct Credentials<'a> {
-    username: AccountName<'a>,
-    password: Password<'a>,
-    character_slot: CharacterSlot,
-}
-
-// Frunk can assemble this product only from checked components. Password
-// ownership moves from the raw DTO; this handoff never clones credentials.
-#[derive(Debug, frunk::Generic)]
+// Password ownership moves from the raw DTO into checked components; this
+// handoff never clones credentials.
+#[derive(Debug)]
 pub(crate) struct DirectCredentials {
     username: OwnedAccountName,
     password: OwnedPassword,
@@ -57,14 +41,18 @@ pub(crate) struct DirectCredentials {
 impl TryFrom<LoginProfile> for DirectCredentials {
     type Error = String;
     fn try_from(profile: LoginProfile) -> Result<Self, Self::Error> {
-        (OwnedAccountName::try_from(profile.username)
-            .map_err(|_| LoginField::Username)
-            .into_validated()
-            + OwnedPassword::try_from(profile.password).map_err(|_| LoginField::Password)
-            + character_slot(profile.character_slot))
-        .into_result()
-        .map(frunk::from_generic)
-        .map_err(|_| "Enter a username, password and character slot 1–3.".into())
+        match (
+            OwnedAccountName::try_from(profile.username),
+            OwnedPassword::try_from(profile.password),
+            character_slot(profile.character_slot),
+        ) {
+            (Ok(username), Ok(password), Ok(character_slot)) => Ok(Self {
+                username,
+                password,
+                character_slot,
+            }),
+            _ => Err("Enter a username, password and character slot 1–3.".into()),
+        }
     }
 }
 impl DirectCredentials {
@@ -80,11 +68,26 @@ impl DirectCredentials {
 }
 
 // Each field is independently valid; account equality has no unchecked relational invariant.
-#[derive(Debug, PartialEq, Eq, frunk::Generic)]
+#[derive(Debug, PartialEq, Eq)]
 struct AccountIdentity<'a> {
     username: AccountName<'a>,
     character_slot: CharacterSlot,
     mode: ConnectionMode,
+}
+impl<'a> AccountIdentity<'a> {
+    fn new(name: &'a str, slot: u8, mode: ConnectionMode) -> Result<Self, Vec<LoginField>> {
+        match (username(name), character_slot(slot)) {
+            (Ok(username), Ok(character_slot)) => Ok(Self {
+                username,
+                character_slot,
+                mode,
+            }),
+            (username, character_slot) => Err([username.err(), character_slot.err()]
+                .into_iter()
+                .flatten()
+                .collect()),
+        }
+    }
 }
 
 fn username(value: &str) -> Result<AccountName<'_>, LoginField> {
@@ -98,23 +101,30 @@ fn character_slot(value: u8) -> Result<CharacterSlot, LoginField> {
 }
 
 impl LoginProfile {
-    fn validated_fields(&self) -> LoginValidation<'_> {
+    fn validated_fields(&self) -> Result<(), Vec<LoginField>> {
         // Independent, bounded checks may accumulate internally. IPC still
         // receives the existing single sanitized error, never credential data.
-        username(&self.username).into_validated()
-            + password(&self.password)
-            + character_slot(self.character_slot)
+        match (
+            username(&self.username),
+            password(&self.password),
+            character_slot(self.character_slot),
+        ) {
+            (Ok(_), Ok(_), Ok(_)) => Ok(()),
+            (username, password, character_slot) => {
+                Err([username.err(), password.err(), character_slot.err()]
+                    .into_iter()
+                    .flatten()
+                    .collect())
+            }
+        }
     }
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.validated_fields()
-            .into_result()
-            .map(frunk::from_generic::<Credentials<'_>, _>)
-            .map(|_| ())
             .map_err(|_| "Enter a username, password and character slot 1–3.".into())
     }
 }
 
-#[derive(Serialize, frunk::LabelledGeneric)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SavedLogin {
     pub(crate) mode: ConnectionMode,
@@ -124,9 +134,7 @@ pub(crate) struct SavedLogin {
 }
 
 /// Credential-free transport DTO; checked account identities drive policy comparisons.
-#[derive(
-    Clone, Debug, Deserialize, Serialize, PartialEq, Eq, frunk::Generic, frunk::LabelledGeneric,
-)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct UpdateAccount {
     pub username: String,
@@ -135,11 +143,7 @@ pub(crate) struct UpdateAccount {
 }
 impl UpdateAccount {
     fn identity(&self) -> Result<AccountIdentity<'_>, Vec<LoginField>> {
-        (username(&self.username).into_validated()
-            + character_slot(self.character_slot)
-            + Ok(self.mode))
-        .into_result()
-        .map(frunk::from_generic)
+        AccountIdentity::new(&self.username, self.character_slot, self.mode)
     }
     pub fn validate(&self) -> Result<(), String> {
         self.identity()
@@ -147,24 +151,16 @@ impl UpdateAccount {
             .map_err(|_| "Update account is invalid.".into())
     }
     pub(crate) fn from_profile(profile: &LoginProfile) -> Self {
-        // Sculpt the borrowed representation before copying fields. Password
-        // and auto-login are excluded by the target schema and are never cloned.
-        let (fields, _) = IntoLabelledGeneric::into(profile)
-            .sculpt::<<&UpdateAccount as IntoLabelledGeneric>::Repr, _>();
-        frunk::from_generic(fields.into_unlabelled().map(hlist![
-            String::clone,
-            |slot: &u8| *slot,
-            |mode: &ConnectionMode| *mode
-        ]))
+        Self {
+            username: profile.username.clone(),
+            character_slot: profile.character_slot,
+            mode: profile.mode,
+        }
     }
 }
 
 pub(crate) fn account_matches(profile: &LoginProfile, account: &UpdateAccount) -> bool {
-    let identity: Result<AccountIdentity<'_>, _> = (username(&profile.username).into_validated()
-        + character_slot(profile.character_slot)
-        + Ok(profile.mode))
-    .into_result()
-    .map(frunk::from_generic);
+    let identity = AccountIdentity::new(&profile.username, profile.character_slot, profile.mode);
     match (identity, account.identity()) {
         (Ok(saved), Ok(expected)) => saved == expected,
         _ => false,
@@ -173,7 +169,12 @@ pub(crate) fn account_matches(profile: &LoginProfile, account: &UpdateAccount) -
 
 impl From<LoginProfile> for SavedLogin {
     fn from(profile: LoginProfile) -> Self {
-        frunk::transform_from(profile)
+        Self {
+            mode: profile.mode,
+            username: profile.username,
+            character_slot: profile.character_slot,
+            auto_login: profile.auto_login,
+        }
     }
 }
 
@@ -301,7 +302,7 @@ mod tests {
         invalid.password = "\0".into();
         invalid.character_slot = 3;
         assert_eq!(
-            invalid.validated_fields().into_result().unwrap_err(),
+            invalid.validated_fields().unwrap_err(),
             [
                 LoginField::Username,
                 LoginField::Password,

@@ -1,4 +1,5 @@
-import { filter, find, map, pipe } from 'remeda';
+import { filter, map } from 'effect/Array';
+import { pipe } from 'effect/Function';
 import { validActorSnapshot } from '../world/actor-observations-logic';
 import { checkedEngagementIdentity } from './attack-strategy-logic';
 import type { CharacterSnapshot } from '../world/character-state-logic';
@@ -14,7 +15,7 @@ export function manualMonsterChoices(status: Record<string, unknown>): { value: 
   return pipe(Array.isArray(status.monsters) ? status.monsters : [],
     map(raw => {
       const actor = !Array.isArray(raw) ? object(raw) : {};
-      return { actor, observed: actors ? find(actors.actors, row => row.id === actor.id && row.kind === 1) : undefined };
+      return { actor, observed: actors ? actors.actors.find(row => row.id === actor.id && row.kind === 1) : undefined };
     }),
     filter(({ actor, observed }) => !!observed && actor.dead !== true && typeof actor.hp === 'number' && !(actor.hp <= 0)),
     map(({ actor, observed }) => ({ value: actorKey(actors!.world, Number(actor.id), observed!.incarnation),

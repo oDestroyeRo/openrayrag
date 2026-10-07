@@ -1,4 +1,6 @@
-import { filter, groupBy, map, mapValues, pipe, sort, sumBy, values } from 'remeda';
+import { filter, groupBy, map, reduce } from 'effect/Array';
+import { map as mapRecord, values } from 'effect/Record';
+import { pipe } from 'effect/Function';
 import { signedExperience } from '../session/run-experience-logic';
 import type { Snapshot } from '../automation/engine';
 import { validActorSnapshot } from '../world/actor-observations-logic';
@@ -35,7 +37,7 @@ export function consoleCharacterText(status: Snapshot | null): Record<string, st
 export function consoleSelectedItem(status: Snapshot | null, value: string): { itemId: number; count: number } | null {
   if (!status?.character.inventoryKnown || !/^\d+$/.test(value)) return null;
   const itemId = Number(value);
-  const count = pipe(status.character.inventory, filter(item => item.itemId === itemId), sumBy(item => item.count));
+  const count = pipe(status.character.inventory, filter(item => item.itemId === itemId), reduce(0, (total, item) => total + (item.count)));
   return count > 0 ? { itemId, count } : null;
 }
 export function consoleInventorySignature(status: Snapshot | null, world: string | null): string {
@@ -56,16 +58,16 @@ export function consoleInventory(status: Snapshot | null): { itemId: number; cou
     filter(item => item.count > 0),
     // Prefix IDs so equal display names retain first-observed order even for numeric IDs.
     groupBy(item => `item:${item.itemId}`),
-    mapValues(rows => ({ itemId: rows[0]!.itemId, count: sumBy(rows, row => row.count) })),
-    values(),
-    sort((a, b) => itemName(a.itemId).localeCompare(itemName(b.itemId))),
+    mapRecord(rows => ({ itemId: rows[0]!.itemId, count: rows.reduce((total, row) => total + (row.count), 0) })),
+    values,
+    items => [...items].sort((a, b) => itemName(a.itemId).localeCompare(itemName(b.itemId))),
     map(({ itemId, count }) => ({ itemId, count, label: `${itemName(itemId)} × ${count}` })));
 }
 export function consoleMonsters(status: Snapshot | null): { key: string; attackable: boolean; text: string; label: string }[] {
   const actors = validActorSnapshot(status?.actorObservations) ? status!.actorObservations : null;
   const distance = (p: Position) => status?.player ? Math.max(Math.abs(p.x - status.player.x), Math.abs(p.y - status.player.y)) : 0;
   return pipe(status?.monsters ?? [], filter(monster => !monster.dead && monster.hp > 0),
-    sort((a, b) => distance(a) - distance(b)), map(monster => {
+    items => [...items].sort((a, b) => distance(a) - distance(b)), map(monster => {
     const actor = actors?.actors.find(row => row.id === monster.id && row.kind === 1);
     return { key: actor ? actorKey(actors!.world, actor.id, actor.incarnation) : `unavailable:${monster.id}`, attackable: !!actor,
       text: `${monster.name} · Lv ${monster.level}\n${monster.x}, ${monster.y} · HP ${monster.hp} / ${monster.maxHp}`, label: `Attack ${monster.name} #${monster.id}` };
@@ -89,7 +91,7 @@ export function consoleNpcs(status: Snapshot | null): ConsoleNpc[] {
   }
   const distance = (p: Position) => status?.player ? Math.max(Math.abs(p.x - status.player.x), Math.abs(p.y - status.player.y)) : 0;
   return pipe(status?.actors ?? [], filter(npc => isTalkNpc(npc) && !npc.dead),
-    sort((a, b) => distance(a) - distance(b) || a.id - b.id), map(npc => {
+    items => [...items].sort((a, b) => distance(a) - distance(b) || a.id - b.id), map(npc => {
       const observed = actors?.actors.find(actor => actor.id === npc.id && actor.kind === npc.kind);
       const known = services.get(npc.id), kindLabel = known ? `NPC · ${[...known].join(' / ')}` : 'NPC';
       const name = npc.name || 'Unnamed NPC';
@@ -103,7 +105,7 @@ export function consolePlayerShops(status: Snapshot | null): ConsoleNpc[] {
   const actors = validActorSnapshot(status?.actorObservations) ? status!.actorObservations : null;
   const distance = (p: Position) => status?.player ? Math.max(Math.abs(p.x - status.player.x), Math.abs(p.y - status.player.y)) : 0;
   return pipe(status?.actors ?? [], filter(actor => isPlayerShop(actor) && !actor.dead),
-    sort((a, b) => distance(a) - distance(b) || a.id - b.id), map(shop => {
+    items => [...items].sort((a, b) => distance(a) - distance(b) || a.id - b.id), map(shop => {
       const observed = actors?.actors.find(actor => actor.id === shop.id && actor.kind === shop.kind);
       const name = shop.name || 'Unnamed player shop';
       return { family: 'shop' as const, key: observed ? actorKey(actors!.world, shop.id, observed.incarnation) : `unavailable:${shop.id}`,

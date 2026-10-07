@@ -1,5 +1,4 @@
 import { gitTagObjectSha, reservationTagValues } from '../shared/tooling-domain-values.mjs';
-import { find } from "remeda";
 // Durable, create-only release orchestration. GitHub effects use the injected API.
 import { serializePlan, validatePlan, parsePlan } from "./semantic-release-policy.mjs";
 import {
@@ -92,8 +91,7 @@ export async function reservePlan(ctx, plan) {
   validateContext(ctx);
   ctx = { ...ctx, history: [...ctx.history], bridge: { ...ctx.bridge } };
   const ledger = await readReservations(ctx);
-  const existing = find(ledger,
-    (entry) =>
+  const existing = ledger.find((entry) =>
       entry.sourceSha === frozen.sourceSha || entry.version === frozen.version,
   );
   if (existing) {

@@ -1,4 +1,5 @@
-import { flatMap, map, pipe, sort, unique } from 'remeda';
+import { flatMap, map, dedupe } from 'effect/Array';
+import { pipe } from 'effect/Function';
 import serviceCatalog from '../../data/npc-services.json';
 import { dryRunRoutine, validRoutineCondition, validateRoutineSelectorCheckpoint, type RoutineCondition, type RoutineObservation, type RoutineSelectorCheckpoint, type RoutineSpec, type RuleTrace } from './routines-logic';
 export type MacroStep =
@@ -225,5 +226,5 @@ export function dryRunMacro(input: unknown, observation: RoutineObservation): Ma
 export function macroInventoryItemIds(script: MacroScript): number[] {
   const ids = flatMap(script.rules, rule => flatMap(rule.conditions, condition =>
     condition.field === 'inventory' ? [condition.itemId] : []));
-  return pipe(ids, unique(), sort((a, b) => a - b));
+  return pipe(ids, dedupe, items => [...items].sort((a, b) => a - b));
 }

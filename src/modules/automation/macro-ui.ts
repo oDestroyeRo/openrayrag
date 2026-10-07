@@ -1,4 +1,4 @@
-import { isDeepEqual } from 'remeda';
+import { equals } from 'effect/Equal';
 import { dryRunMacro, macroInventoryItemIds, type MacroScript } from './macros';
 import type { RoutineObservation } from './routines';
 import { DEFAULT_SETTINGS, settingsDraft, type SettingsInput } from '../settings/settings';
@@ -203,12 +203,13 @@ export class MacroUi {
       const application = this.draft.prepare(document);
       this.applying = true;
       // Rule/comment edits must preserve selected profiles and native revisions.
-      if (!isDeepEqual(document.settings, this.hooks.settings())) this.hooks.apply(document.settings);
+      // Effect caches equality/hash results; mutable Form values need fresh comparison snapshots.
+      if (!equals(structuredClone(document.settings), structuredClone(this.hooks.settings()))) this.hooks.apply(document.settings);
       this.draft.commit(application);
       const retained = this.hooks.settings();
       // Form can fill default policies or retain an observed map omitted by Script.
       // Only suppress an equivalent echo; otherwise Main must rebase the source.
-      this.syncError = null; this.syncKey = isDeepEqual(document.settings, retained) ? JSON.stringify(retained) : null;
+      this.syncError = null; this.syncKey = equals(structuredClone(document.settings), structuredClone(retained)) ? JSON.stringify(retained) : null;
       if (this.editor.value !== this.draft.text) this.editor.value = this.draft.text;
       this.draft.save();
       this.result.hidden = true;

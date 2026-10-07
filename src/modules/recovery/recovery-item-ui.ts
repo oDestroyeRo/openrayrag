@@ -1,4 +1,4 @@
-import { filter, find, map } from 'remeda';
+import { filter, map } from 'effect/Array';
 import { carriedRecoveryItem, recoveryChoices, recoveryInventory, recoveryStockSummary, type RecoveryInventory } from './recovery-item-ui-logic';
 import { itemId, type ItemId } from '../../shared/domain-values';
 import { itemName } from '../catalog/game-catalog';
@@ -61,7 +61,7 @@ export class RecoveryItemUi {
     this.mode.addEventListener('change', () => {
       if (this.locked) return;
       if (this.mode.value === 'selected' && this.itemIds.length === 0) {
-        const first = find(this.ids, carriedRecoveryItem(this.stock));
+        const first = this.ids.find(carriedRecoveryItem(this.stock));
         if (first !== undefined) this.itemIds = [first];
       }
       this.syncChoices(); this.changed();

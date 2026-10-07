@@ -1,5 +1,4 @@
 import { itemId, quantity, regularItemBagId, type BagId, type ItemId, type Quantity, type Revision, type Milliseconds } from '../../shared/domain-values';
-import { sort } from 'remeda';
 import { inventoryItemDraft, type DomainInventoryItem } from '../world/character-state-logic';
 import catalog from '../../data/socket-catalog.json';
 import type { InventoryItemInput as InventoryItem } from '../protocol/protocol-feature';
@@ -79,4 +78,4 @@ export interface Receipt { prepared:Prepared; inventory:Map<BagId,DomainInventor
   character:string; identity:string; connection:Revision<'connection'>; map:string; deadline:Milliseconds; cardSeen:boolean; targetSeen:boolean; canceled:boolean; dirty:boolean;
   fresh?:{key:string;connection:Revision<'connection'>;inventoryRevision:Revision<'inventory'>;equipmentRevision:Revision<'equipment'>} }
 
-export const binding=(c:SocketContext):string=>JSON.stringify([c.character,c.identity,c.connection,c.map,c.inventoryRevision,c.equipmentRevision,sort([...c.floors], ([a],[b])=>a-b)]);
+export const binding=(c:SocketContext):string=>JSON.stringify([c.character,c.identity,c.connection,c.map,c.inventoryRevision,c.equipmentRevision,[...c.floors].sort(([a],[b])=>a-b)]);

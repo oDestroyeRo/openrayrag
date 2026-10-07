@@ -1,4 +1,4 @@
-import { filter, map } from 'remeda';
+import { filter, map } from 'effect/Array';
 import { validateServiceDefinition } from './npc-services-logic';
 import { parseServiceDocument, encodeServiceDocument, serviceSaveAllowed, savedServices, serviceImportAllowed, importedServices, exportService, checkedSavedService, type SavedServiceDefinition } from './npc-service-store-logic';
 import { readStoredText, writeStoredText, type TextStorage } from '../../shared/storage-effects';

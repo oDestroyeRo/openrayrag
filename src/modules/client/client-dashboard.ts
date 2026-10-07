@@ -1,4 +1,4 @@
-import { filter, find, map, sumBy } from 'remeda';
+import { filter, map } from 'effect/Array';
 import { clientStatus } from './client-status';
 import type { MapInfo } from '../navigation/map-data-logic';
 import type { AutomationSettingsInput, SettingsInput } from '../settings/settings';
@@ -25,7 +25,7 @@ function recoverySummary(value: unknown, automation: AutomationSettingsInput | u
     if (!choices.length) return `${label} off`;
     const ids = new Set([...recoveryItemIds(policy, resource), ...map(rules, rule => rule.itemId)]);
     const observed = resource === 'hp' ? resourceObserved(player, 'hp', 'maxHp') : resourceObserved(stats, 'sp', 'maxSp');
-    const evidence = [stock === null ? 'stock unobserved' : `${sumBy([...ids], id => stock.get(id) ?? 0)} carried`];
+    const evidence = [stock === null ? 'stock unobserved' : `${[...ids].reduce((total, id) => total + (stock.get(id) ?? 0), 0)} carried`];
     if (stock !== null && automation) {
       const usable = rules.some(rule => (stock.get(rule.itemId) ?? 0) > rule.minStock)
         || recoveryItemIds(policy, resource).some(id => {
@@ -41,7 +41,7 @@ function recoverySummary(value: unknown, automation: AutomationSettingsInput | u
   if (automation?.recovery.enabled) {
     if (!resourceObserved(player, 'hp', 'maxHp')) prerequisites.push('HP unobserved');
     if (player.classId === 0) {
-      const basic = Array.isArray(character.learned) ? find(character.learned, skill => record(skill).skillId === 1) : undefined;
+      const basic = Array.isArray(character.learned) ? character.learned.find(skill => record(skill).skillId === 1) : undefined;
       if (character.skillsKnown !== true) prerequisites.push('Basic Mastery unverified');
       else if (Number(record(basic).level ?? 0) < 2) prerequisites.push('Basic Mastery below 2');
     }
@@ -52,7 +52,7 @@ function recoverySummary(value: unknown, automation: AutomationSettingsInput | u
 }
 
 const targetName = (monsters: MapInfo['monsters']) => (id: number) =>
-  find(monsters, monster => monster.classId === id)?.name;
+  monsters.find(monster => monster.classId === id)?.name;
 
 /** An idle task label can survive a run/state transition; it is not an action. */
 export function dashboardTaskLabel(value: unknown): string {

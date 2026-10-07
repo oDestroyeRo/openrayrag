@@ -1,4 +1,4 @@
-import { filter, flatMap, map } from 'remeda';
+import { map } from 'effect/Array';
 import { foldConditions, unmatchedFirstConditions, type ConditionState } from '../../shared/condition-logic';
 import { actorPredicateEvaluator, validActorPredicate, type ActorPredicate, type ActorObservationSnapshot } from '../world/actor-observations-logic';
 export type NumericOperator = 'lt' | 'lte' | 'eq' | 'gte' | 'gt';
@@ -11,7 +11,7 @@ export type RoutineCondition =
 
 /** Retain rule order and the original predicate references for the current observation pass. */
 export function routineActorPredicates(rules: readonly { conditions: RoutineCondition[] }[]): ActorPredicate[] {
-  return flatMap(rules, rule => filter(rule.conditions, (condition): condition is ActorPredicate =>
+  return rules.flatMap(rule => rule.conditions.filter((condition): condition is ActorPredicate =>
     condition.field === 'actorStatus' || condition.field === 'actorCasting'
     || condition.field === 'actorHpPercent' || condition.field === 'actorSpPercent'));
 }

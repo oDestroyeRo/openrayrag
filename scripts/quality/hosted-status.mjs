@@ -1,5 +1,4 @@
 import { workflowRunId, workflowJobId, pullRequestNumber, hostedJobValues } from '../shared/tooling-domain-values.mjs';
-import { find } from 'remeda';
 // Read-only hosted status; one owner can watch a run without repeated full logs.
 import { execFile } from 'node:child_process';
 import { chmod, mkdtemp, writeFile } from 'node:fs/promises';
@@ -55,7 +54,7 @@ export async function snapshot(runId, read = readApi, expectedSha) {
 /** @param {import('../shared/tooling-domain-values.mjs').RunSnapshot} state @param {import('../shared/tooling-domain-values.mjs').WorkflowJobId} jobId @param {typeof readApi} [read] */
 export async function saveFailedLog(state, jobId, read = readApi) {
   jobId = workflowJobId(jobId);
-  const job = find(state.jobs, candidate => candidate.id === jobId);
+  const job = state.jobs.find(candidate => candidate.id === jobId);
   requireValue(job?.status === 'completed' && job.conclusion !== null && ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure'].includes(job.conclusion), 'Select a completed failing job from this run attempt.');
   const bytes = await read(`actions/jobs/${jobId}/logs`, true);
   requireValue(Buffer.isBuffer(bytes) && bytes.length <= 16 * 1024 * 1024, 'Unexpected or oversized job log.');

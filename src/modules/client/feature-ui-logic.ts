@@ -1,4 +1,7 @@
-import { anyPass, filter, find, groupBy, map, mapValues, pipe, sumBy, take } from 'remeda';
+import { some } from 'effect/Predicate';
+import { filter, groupBy, map, take } from 'effect/Array';
+import { map as mapRecord } from 'effect/Record';
+import { pipe } from 'effect/Function';
 import { isTalkNpc, isPlayerShop } from '../world/actor-interaction-logic';
 import { actorId } from '../world/actor-identity';
 import type { ActorId } from '../../shared/domain-values';
@@ -34,13 +37,13 @@ export function featureServiceEvidence(status: Record<string, unknown>): string 
   const character = object(status.character), stats = object(character.stats);
   const stock = Array.isArray(character.inventory) ? pipe(character.inventory, map(object), map(row => [row.itemId, row.count])) : null;
   const learned = Array.isArray(character.learned) ? map(character.learned, object) : [];
-  const mastery = Array.isArray(character.learned) ? find(learned, row => row.skillId === 1)?.level : null;
+  const mastery = Array.isArray(character.learned) ? learned.find(row => row.skillId === 1)?.level : null;
   const npcs = Array.isArray(status.actors) ? pipe(status.actors, map(object), filter(isTalkNpc),
     map(actor => [actor.id, actor.kind, actor.classId, actor.name, actor.x, actor.y, actor.dead])) : null;
   return JSON.stringify([character.inventoryKnown, stats.zeny, character.skillsKnown, mastery, stock, npcs]);
 }
 export function featureWorkflowPreviewText(spec: WorkflowSpec): string {
-  const expectedFees = sumBy(spec.steps, step => 'expectedCost' in step ? Number(step.expectedCost ?? 0) : 0);
+  const expectedFees = spec.steps.reduce((total, step) => total + ('expectedCost' in step ? Number(step.expectedCost ?? 0) : 0), 0);
   return `${spec.steps.length} validated steps · budget ${spec.maxSpend} · expected NPC fees ${expectedFees} · ${spec.minStock.length} stock guards.\nNPC fees count toward the spending cap. Live map, NPC, shop prices and stock are checked on Start.\n${map(spec.steps, (step, index) => `${index + 1}. ${JSON.stringify(step)}`).join('\n')}`;
 }
 export function featureRoutinePreviewText(trace: RoutineTrace<unknown>): string {
@@ -177,10 +180,10 @@ const operationActivity: readonly FeaturePredicate[] = [
   featureState({ feature: 'routine', states: ['running', 'waiting'] }),
   status => object(status.actionResult).status === 'pending',
 ];
-export const featureServiceBlocked = anyPass([
+export const featureServiceBlocked = some([
   ...sharedActivity, featureHas('uncertain')('supply'), pending('social'), pending('escape'), ...operationActivity,
 ]);
-export const featureActive = anyPass([
+export const featureActive = some([
   ...sharedActivity, pending('social'), ...operationActivity, pending('task'),
 ]);
 export function featureObservation(status: Record<string, unknown>, at: number): RoutineObservation {
@@ -193,8 +196,8 @@ export function featureObservation(status: Record<string, unknown>, at: number):
       result.inventory = pipe(character.inventory,
         map(entry => { const row = object(entry); return { itemId: number(row.itemId), count: number(row.count) }; }),
         filter((row): row is { itemId: number; count: number } => row.itemId !== null && row.count !== null),
-        groupBy(row => row.itemId),
-        mapValues(rows => sumBy(rows, row => row.count)));
+        groupBy(row => String(row.itemId)),
+        mapRecord(rows => rows.reduce((total, row) => total + (row.count), 0)));
     }
     return result;
   }

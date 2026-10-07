@@ -6,10 +6,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { parse } from 'yaml';
 
 const actionPath = './.github/actions/linux-dependencies';
-const readYaml = async path => parse(await readFile(new URL(path, import.meta.url), 'utf8'));
+const readYaml = async path => Bun.YAML.parse(await readFile(new URL(path, import.meta.url), 'utf8'));
 const desktop = await readYaml('../../.github/workflows/release.yml');
 const release = await readYaml('../../.github/workflows/release-publish.yml');
 const security = await readYaml('../../.github/workflows/security.yml');

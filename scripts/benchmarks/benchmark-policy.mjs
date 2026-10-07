@@ -1,10 +1,10 @@
-import { find, map, sort } from 'remeda';
+import { map } from 'effect/Array';
 
 // Pure benchmark inputs and report comparison. Measurements are effect-owned.
 import { isDeepStrictEqual } from 'node:util';
 
 /** @param {readonly number[]} values @returns {number} */
-export const median = values => sort(values, (a, b) => a - b)[Math.floor(values.length / 2)];
+export const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 
 /** @param {readonly string[]} args @returns {import("../shared/tooling-domain-values.mjs").RendererOptions} */
 export function rendererOptions(args) {
@@ -24,7 +24,7 @@ export function compareRenderingReports(report, baseline) {
   const { samples: _oldSamples, ...oldMethodology } = baseline.methodology;
   if (report.schemaVersion !== baseline.schemaVersion || !isDeepStrictEqual(report.harness, baseline.harness) || !isDeepStrictEqual(report.machine, baseline.machine) || !isDeepStrictEqual(methodology, oldMethodology) || !isDeepStrictEqual(report.workload, baseline.workload)) throw new Error('Comparison requires the same harness, dependencies, machine/browser, methodology and workload.');
   return map(report.scenarios, row => {
-    const old = find(baseline.scenarios, old => old.name === row.name);
+    const old = baseline.scenarios.find(old => old.name === row.name);
     if (!old || !isDeepStrictEqual(row.samples[0].outcome, old.samples[0].outcome)) throw new Error(`Visible outcome differs from baseline: ${row.name}`);
     return { name: row.name, elapsedRatio: row.medianElapsedMs / old.medianElapsedMs, rendererTaskRatio: row.medianRendererTaskMs / old.medianRendererTaskMs, sameVisibleOutcome: true };
   });

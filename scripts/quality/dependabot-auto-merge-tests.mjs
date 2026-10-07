@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { parse } from 'yaml';
 import { mergeDependabotUpdate } from './dependabot-auto-merge.mjs';
 
 const repo = 'oDestroyeRo/openrayrag';
@@ -187,7 +186,7 @@ test('run ID validation rejects shell or path input before making API requests',
 });
 
 test('privileged completion provisions locked runtime dependencies and executes trusted main without PR artifacts or release secrets', async () => {
-  const workflow = parse(await readFile(new URL('../../.github/workflows/dependabot-auto-merge.yml', import.meta.url), 'utf8'));
+  const workflow = Bun.YAML.parse(await readFile(new URL('../../.github/workflows/dependabot-auto-merge.yml', import.meta.url), 'utf8'));
   assert.deepEqual(workflow.on.workflow_run, { workflows: ['Desktop CI and release'], types: ['completed'] });
   assert.equal(workflow.on.workflow_dispatch.inputs.run_id.required, true);
   assert.deepEqual(workflow.permissions, { contents: 'read' });

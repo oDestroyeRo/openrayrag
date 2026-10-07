@@ -1,4 +1,5 @@
-import { allPass, map } from 'remeda';
+import { every } from 'effect/Predicate';
+import { map } from 'effect/Array';
 import { validRunExperience } from '../session/run-experience-logic';
 import { DomainValueError } from '../../shared/domain-values';
 import type { Snapshot } from '../automation/engine';
@@ -25,7 +26,7 @@ function validGameSessionId(value: unknown): value is GameSessionId {
 
 const finite = (value: unknown): boolean => typeof value === 'number' && Number.isFinite(value);
 const fieldsMatch = (fields: readonly string[], valid: (value: unknown) => boolean) =>
-  allPass(map(fields, field => (value: Record<string, unknown>) => valid(value[field])));
+  every(map(fields, field => (value: Record<string, unknown>) => valid(value[field])));
 const entityNumbers = fieldsMatch(['id','classId','kind','level','hp','maxHp','x','y'], finite);
 const statusFlags = fieldsMatch(['connected','compatible','running'], value => typeof value === 'boolean');
 const statusText = fieldsMatch(['reason','map','target'], value => typeof value === 'string' && value.length <= 1024);
