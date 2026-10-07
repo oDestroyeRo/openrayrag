@@ -223,6 +223,23 @@ function setup(runSettings: Settings = settings, map = 'prt_fild05', position = 
   };
 }
 describe('controller supply repair regressions', () => {
+  it('does not reserve low-stock supply on the departure map before configured field entry', () => {
+    const value = { ...settings, map: 'prt_fild08' };
+    const f = setup(value);
+    f.c.start(value);
+    f.advance(500);
+    expect(f.c.supply.snapshot()).toMatchObject({
+      active: false,
+      returnDestination: null,
+      remainingTrips: 2,
+      spent: 0,
+      reserved: 0,
+    });
+    expect(f.c.engine.running).toBe(false);
+    expect(f.sent.every((action) => action.type === 'walk')).toBe(true);
+    expect(f.c.snapshot().initialFieldEntryPending).toBe(true);
+  });
+
   it('does not reserve a supply trip or budget while an observed own cast is pending', () => {
     const f = setup();
     f.packet(

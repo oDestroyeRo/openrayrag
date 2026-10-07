@@ -40,6 +40,7 @@ export interface RunSession {
   map: string;
   player: { name: string; dead?: boolean } | null;
   runRequested?: boolean;
+  initialFieldEntryPending?: boolean;
   kills?: number;
   looted?: number;
   deaths?: number;

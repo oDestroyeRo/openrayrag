@@ -106,7 +106,7 @@ Movement and approach controls use these limits. Stored keys remain stable for e
 | Attack path cells | `attackRouteMaxPathDistance` | 20 | 1–200 path cells for an approach, separate from the scan radius. |
 | Approach seconds | `attackMaxRouteTime` | 4 | 1–60 seconds from the first pursuit walk or direct Attack request, excluding an inherited search leg; replanning preserves the same deadline. |
 
-Current-map search is opt-in. Inter-map travel and field boundaries use separate Companion controls and validated settings.
+Current-map search is opt-in. Starting from another map enters the saved configured field before combat begins, using the existing travel and map-policy checks. An explicit travel destination or lock area keeps its existing precedence. This initial trip does not enable return-to-start-map after later map changes. Editing or saving Setup never starts travel or combat. Inter-map travel and field boundaries use separate Companion controls and validated settings.
 
 Emergency escape is disabled by default. In **Recovery**, enable it and choose an HP trigger (1–95%), random location or save point, wings or skills, a wing stock reserve (0–9,999) and a cooldown (1–3,600 seconds; default 60). Random uses **Fly Wing 601** or learned/granted **Teleport 53** (30 SP); save point uses **Butterfly Wing 602** or **Return 54** (10 SP). It never substitutes another method. Existing profiles import with escape disabled.
 

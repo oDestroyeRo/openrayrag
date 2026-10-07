@@ -22,6 +22,7 @@ export type GameStatus = Snapshot & {
   mapInfo: MapInfo;
   connectionMode?: 'botOnly' | 'gameClient';
   runRequested?: boolean;
+  initialFieldEntryPending?: boolean;
   state?: 'running' | 'waiting' | 'idle';
   reconnectAvailable: boolean;
   escape?: EscapeSnapshot;
@@ -71,6 +72,8 @@ const dropNumbers = fieldsMatch(['id', 'x', 'y'], finite);
 export function validStatus(value: unknown): value is ValidatedGameStatus {
   if (!value || typeof value !== 'object') return false;
   const s = value as Record<string, unknown>;
+  if (s.initialFieldEntryPending !== undefined && typeof s.initialFieldEntryPending !== 'boolean')
+    return false;
   if (typeof s.reconnectAvailable !== 'boolean') return false;
   if (
     s.connectionMode !== undefined &&

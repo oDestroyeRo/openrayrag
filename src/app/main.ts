@@ -36,6 +36,7 @@ import {
 import { SettingsForm, type SettingsFormProjection } from '../modules/settings/settings-form';
 import { normalAttackProfile } from '../modules/combat/combat';
 import { canStartField } from '../modules/settings/field-controls';
+import { farmingDestination } from '../modules/recovery/death-recovery';
 import { mountClientShell } from '../modules/client/client-shell';
 import { EmbeddedGameView, gameViewBounds } from '../modules/client/game-view';
 import {
@@ -689,7 +690,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   if (dashboardSettings) features.syncSetup(dashboardSettings);
   const fresh = Date.now() - receivedAt < 7000;
   const ready = native && fresh && latest?.connected && latest.compatible && latest.player;
-  let fieldSettings: SettingsInput | null = null,
+  let startSettings: SettingsInput | null = null,
     checked: RunSettings | null = null;
   let scripted = false,
     setupReason = '';
@@ -698,10 +699,10 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
       throw formError ?? new Error('Finish valid Form settings before Start.');
     const document = features.setupDocument();
     scripted = document.script !== null;
-    fieldSettings = projection.runSettings();
+    startSettings = projection.startSettings();
     checked = document.script
       ? macroBaseSettings(document.settings, document.script)
-      : validateSettings(fieldSettings);
+      : validateSettings(startSettings);
   } catch (error) {
     setupReason =
       error instanceof Error ? error.message : 'Finish valid Form settings before Start.';
@@ -718,7 +719,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
       fresh,
       setupReason: ready && !runActive() ? setupReason : '',
     },
-    activeSettings ?? (scripted ? dashboardSettings : (fieldSettings ?? dashboardSettings)),
+    activeSettings ?? (scripted ? dashboardSettings : (startSettings ?? dashboardSettings)),
     latest?.mapInfo,
   );
   element('status').textContent = dashboard.state;
@@ -748,13 +749,22 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   for (const button of navigation)
     if (button.dataset.clientNavigation !== 'setup-step') button.disabled = false;
   if (dashboard.state === 'LIMIT') message(dashboard.reason);
+  const entryDestination = startSettings ? farmingDestination(startSettings) : '';
+  const entrySummary =
+    !activeSettings &&
+    !scripted &&
+    startSettings?.automation?.follow.mode !== 'partyLeader' &&
+    entryDestination &&
+    entryDestination !== latest?.map
+      ? `Travel to ${entryDestination} · `
+      : '';
   element('console-setup-summary').textContent =
-    `${activeSettings ? 'Active run: ' : ''}${dashboard.setup}`;
+    `${activeSettings ? 'Active run: ' : entrySummary}${dashboard.setup}`;
   const retainedDiffers =
     !!dashboardSettings &&
-    !!fieldSettings &&
-    (dashboardSettings.map !== fieldSettings.map ||
-      dashboardSettings.targets.join(',') !== fieldSettings.targets.join(','));
+    !!startSettings &&
+    (dashboardSettings.map !== startSettings.map ||
+      dashboardSettings.targets.join(',') !== startSettings.targets.join(','));
   savedDraftSummary.hidden = !activeSettings && !retainedDiffers;
   savedDraftSummary.textContent = `${activeSettings ? 'Saved draft' : `Retained choices for ${dashboardSettings?.map || 'the configured field'}`}: ${clientDashboard(latest, { fieldRequested: false, held: false, limitReason: '', loginBusy: false }, dashboardSettings, latest?.mapInfo).setup}`;
   currentTargetsNeedAttention =
@@ -762,9 +772,9 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
     !runActive() &&
     !scripted &&
     !checked &&
-    !!fieldSettings &&
-    !fieldSettings.targets.length &&
-    ['selected', 'both'].includes(fieldSettings.automation?.combat.mode ?? '');
+    !!startSettings &&
+    !startSettings.targets.length &&
+    ['selected', 'both'].includes(startSettings.automation?.combat.mode ?? '');
   editSetupButton.textContent = currentTargetsNeedAttention
     ? 'Choose current-field targets'
     : 'Edit setup';
@@ -859,7 +869,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
     ])
       element<HTMLInputElement>(id).disabled = true;
   // Rules keep the existing macro admission gate; ordinary field runs still
-  // require verified physical ground and projected eligible targets.
+  // require verified physical ground and targets for the field being entered.
   startButton.disabled = scripted
     ? !ready || !checked || busy || dispatches.stopping || loginBusy || runActive()
     : !canStartField({
@@ -1129,7 +1139,7 @@ function botStartReady(): boolean {
       compatible: true,
       map: latest.map,
       player: latest.player,
-      settings: validateSettings(form.runSettings()),
+      settings: validateSettings(form.startSettings()),
     });
   } catch {
     return false;
@@ -1149,7 +1159,7 @@ async function startBot(mcpOperation?: string): Promise<Record<string, unknown>>
         },
         mcpOperation,
       )
-    : dispatches.start(validateSettings(form.runSettings()), latest, mcpOperation);
+    : dispatches.start(validateSettings(form.startSettings()), latest, mcpOperation);
   configureReconnect();
   reconnect.observe(latest.connected, true, latest.login.phase, Date.now(), latest.login.message);
   const result = (await task).outcome;

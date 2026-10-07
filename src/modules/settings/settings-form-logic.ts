@@ -13,6 +13,7 @@ export type FormSnapshotInput = Omit<FormDocumentInput, 'version' | 'revision'>;
 
 export interface SettingsFormProjection {
   runSettings(): SettingsInput;
+  startSettings(): SettingsInput;
   snapshot(): FormSnapshot;
 }
 

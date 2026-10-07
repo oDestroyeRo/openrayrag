@@ -163,6 +163,9 @@ pub(crate) fn validate_runtime(value: &Value, at: u64) -> Result<(), String> {
         || value["status"]["connected"] != true
         || value["status"]["compatible"] != true
         || !value["status"]["runRequested"].is_boolean()
+        || value["status"]
+            .get("initialFieldEntryPending")
+            .is_some_and(|pending| !pending.is_boolean())
         || character(value).is_none()
         || runtime_identity(value).is_none()
         || !bounded(value, 0)
@@ -629,6 +632,17 @@ mod tests {
             "player":{"name":"Synthetic"}},"settings":null,"macro":null,
             "partyHeal":{"version":1,"attempts":2,"confirmed":1,"cooldownUntil":1100},
             "run":null})
+    }
+    #[test]
+    fn validates_optional_initial_field_entry_telemetry() {
+        let mut value = runtime();
+        assert!(validate_runtime(&value, 1000).is_ok());
+        value["status"]["initialFieldEntryPending"] = json!(true);
+        assert!(validate_runtime(&value, 1000).is_ok());
+        value["status"]["initialFieldEntryPending"] = json!(false);
+        assert!(validate_runtime(&value, 1000).is_ok());
+        value["status"]["initialFieldEntryPending"] = json!("pending");
+        assert!(validate_runtime(&value, 1000).is_err());
     }
     #[test]
     fn carries_only_valid_same_character_live_settings_guards() {

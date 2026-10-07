@@ -509,6 +509,35 @@ function controllerFixture(
 }
 
 describe('production shared-controller Database travel', () => {
+  it.each([false, true])('enters the configured field before combat with Stop=%s', (stopped) => {
+    const f = controllerFixture();
+    f.receive(spawn({ ...own, id: 2, classId: 4000, kind: 1, level: 1, x: 171 }, 0));
+    f.c.start({ ...f.settings, map: 'prt_fild05' });
+    f.step();
+    expect(f.teleports()).toEqual([databaseTravelCommand('prt_fild05')]);
+    expect(f.c.engine.running).toBe(false);
+    expect(f.packets.some((packet) => packet[0] === OP.attack)).toBe(false);
+    expect(f.c.snapshot().initialFieldEntryPending).toBe(true);
+    if (stopped) f.c.stop();
+    f.transition('prt_fild05');
+    f.receive(spawn({ ...own, id: 2, classId: 4000, kind: 1, level: 1, x: 101, y: 100 }, 0));
+    f.step();
+    f.step();
+    expect(f.c.engine.running).toBe(!stopped);
+    expect(f.packets.some((packet) => packet[0] === OP.attack)).toBe(!stopped);
+    expect(f.c.snapshot().initialFieldEntryPending).toBe(false);
+    expect(f.teleports()).toHaveLength(1);
+  });
+
+  it('preserves an explicit travel destination over the retained configured field', () => {
+    const f = controllerFixture();
+    f.settings.automation.travel.destinationMap = 'prt_fild06';
+    f.c.start({ ...f.settings, map: 'prt_fild05' });
+    f.step();
+    expect(f.teleports()).toEqual([databaseTravelCommand('prt_fild06')]);
+    expect(f.c.engine.running).toBe(false);
+  });
+
   it.each(['travel', 'farm', 'store'] as const)(
     'retains the same unsent %s owner on a quiet map and sends only after fresh evidence',
     (type) => {

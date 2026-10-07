@@ -264,6 +264,7 @@ describe('settings form interface', () => {
       settings: { map: map.code, targets: [4000, 4007], radius: 17 },
     });
     expect(pass.runSettings()).toMatchObject({ map: map.code, targets: [4000], radius: 17 });
+    expect(pass.startSettings()).toMatchObject({ map: map.code, targets: [4000], radius: 17 });
     f.field('radius').value = '13';
     expect(pass.runSettings().radius).toBe(17);
     expect(f.form.runSettings().radius).toBe(13);
@@ -271,6 +272,22 @@ describe('settings form interface', () => {
     expect(f.target('Poring').checked).toBe(true);
     expect(f.changed).not.toHaveBeenCalled();
     expect(f.recursiveSettings).not.toHaveBeenCalled();
+  });
+
+  it('projects retained entry targets off-map while keeping one display pass and current-field eligibility', () => {
+    const f = setup();
+    f.form.restore(document({ ...settings(), map: 'prt_fild07', targets: [4012] }));
+    f.observe({ level: 1 });
+    const pass = f.form.project();
+    expect(pass.runSettings()).toMatchObject({ map: map.code, targets: [] });
+    expect(pass.startSettings()).toMatchObject({ map: 'prt_fild07', targets: [4012] });
+    f.field('select-targets').emit('click');
+    expect(pass.startSettings()).toMatchObject({ map: 'prt_fild07', targets: [4012] });
+    expect(pass.snapshot().settings).toMatchObject({ map: 'prt_fild07', targets: [4012] });
+    expect(f.form.startSettings()).toMatchObject({ map: map.code, targets: [4000] });
+    f.form.restore(document({ ...settings(), targets: [4007] }));
+    expect(f.form.startSettings().targets).toEqual([]);
+    expect(() => validateSettings(f.form.startSettings())).toThrow('Choose selected monsters');
   });
 
   it('keeps invalid drafts editable and observes automation corrections and full restores on the next pass without events', () => {

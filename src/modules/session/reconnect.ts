@@ -152,6 +152,7 @@ export class ReconnectPolicy {
 /** Only field settings survive game-page reloads; workflows and passwords do not. */
 export class PersistentFieldRun {
   private desired: RunSettings | null = null;
+  private initialFieldEntryPending: boolean | null = false;
   private settingsApplyOwner: { id: string; session: string; character: string } | null = null;
   private resourceGuard: LiveSettingsGuard | null = null;
   private character = '';
@@ -226,6 +227,9 @@ export class PersistentFieldRun {
     const generation = Math.max(this.generation, checked.generation) + 1;
     if (!Number.isSafeInteger(generation)) throw new Error('Field run generation exhausted.');
     this.desired = checked.desired;
+    // Runtime telemetry transfers initial entry during updater claim. A field
+    // checkpoint alone has no proof that the original entry is still pending.
+    this.initialFieldEntryPending = null;
     this.character = checked.character;
     this.session = checked.session;
     this.resourceGuard = checked.liveSettingsGuard ?? null;
@@ -260,6 +264,7 @@ export class PersistentFieldRun {
       deaths: number;
       attacks?: number;
       runExperience?: RunExperience | null;
+      map?: string;
     } = { kills: 0, looted: 0, deaths: 0 },
   ): void {
     const checked = validateSettings(settings);
@@ -287,6 +292,10 @@ export class PersistentFieldRun {
     const previousDeath = this.deathGuards.get(character);
     if (previousDeath && !previousDeath.guard.uncertain) this.deathGuards.delete(character);
     this.desired = checked;
+    this.initialFieldEntryPending =
+      metrics.map !== undefined &&
+      checked.map !== metrics.map &&
+      checked.automation?.follow.mode !== 'partyLeader';
     this.settingsApplyOwner = null;
     this.resourceGuard = null;
     if (initial)
@@ -325,6 +334,7 @@ export class PersistentFieldRun {
     this.settingsApplyOwner = null;
     this.resourceGuard = null;
     this.desired = null;
+    this.initialFieldEntryPending = false;
     this.character = '';
     this.session = '';
     this.pendingSession = '';
@@ -339,6 +349,17 @@ export class PersistentFieldRun {
   observe(status: RunSession, observedAt = this.now()): void {
     if (!timestamp(observedAt) || observedAt > this.now()) return;
     this.observeExperience(status);
+    if (
+      this.desired &&
+      status.sessionId === (this.pendingSession || this.session) &&
+      status.player?.name === this.character &&
+      status.runRequested === true &&
+      typeof status.initialFieldEntryPending === 'boolean'
+    )
+      // Arrival may publish before native Start returns. Once consumed, older
+      // telemetry cannot rearm entry; restore alone waits for its frozen status.
+      this.initialFieldEntryPending =
+        (this.initialFieldEntryPending ?? true) && status.initialFieldEntryPending;
     const owner = this.settingsApplyOwner,
       receipt = status.settingsApply;
     if (
@@ -761,6 +782,7 @@ export class PersistentFieldRun {
       validateSettings({
         ...this.desired,
         map:
+          this.initialFieldEntryPending ||
           this.desired.automation?.respawn.enabled ||
           this.desired.automation?.travel.returnToLockMap ||
           this.desired.automation?.mapPolicy?.lockArea

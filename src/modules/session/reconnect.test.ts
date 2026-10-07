@@ -132,6 +132,26 @@ describe('field run across game reloads', () => {
     map: 'prontera',
     player: { name },
   });
+  it('keeps a pending configured entry across reconnect and consumes it only from the active owner', () => {
+    let now = 100_000;
+    const run = new PersistentFieldRun(() => now);
+    const value = { ...settings(), automation: structuredClone(DEFAULT_AUTOMATION) };
+    value.automation.limits.minutes = 2;
+    run.begin(value, 'Test', 'old', { kills: 0, looted: 0, deaths: 0, map: 'prontera' });
+    run.observe({ ...ready('wrong'), runRequested: true, initialFieldEntryPending: false });
+    run.observe({ ...ready('old'), runRequested: true, initialFieldEntryPending: true });
+    now += 61_000;
+    const request = run.resumeFor(ready())!;
+    expect(request.settings).toMatchObject({
+      map: 'prt_fild08',
+      automation: { limits: { minutes: 1 } },
+    });
+    run.observe({ ...ready(), runRequested: true, initialFieldEntryPending: false });
+    run.observe({ ...ready('old'), runRequested: true, initialFieldEntryPending: true });
+    run.completeResume(request, true);
+    run.observe({ ...ready(), runRequested: true, initialFieldEntryPending: true });
+    expect(run.resumeFor(ready('third'))?.settings.map).toBe('prontera');
+  });
   it('validates and captures settings while preserving target classes on a new map', () => {
     const run = new PersistentFieldRun(),
       value = settings();
