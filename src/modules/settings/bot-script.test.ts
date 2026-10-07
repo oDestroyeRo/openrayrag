@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { isFailure } from 'effect/Result';
 import cases from '../../data/macro-script-cases.json';
-import { BOT_SCRIPT_LIMITS, BotScriptError, formatBotScript, parseBotScript, replaceBotScriptSettings, updateBotScriptSettings } from './bot-script';
+import { BOT_SCRIPT_LIMITS, BotScriptError, formatBotScript, parseBotScript, parseBotScriptResult, replaceBotScriptSettings, updateBotScriptSettings } from './bot-script';
 import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_LOADOUT, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT,
   DEFAULT_SETTINGS, validateFormSettings, type Settings } from './settings';
 import { validateMacroScript, type MacroScript } from '../automation/macros';
@@ -69,6 +70,29 @@ function lineError(source: string, line: number, message?: string): void {
 const withRule = (body: string): string => `script "Test"\nrule "Run"\n${body}\nend`;
 
 describe('approachable bot scripts', () => {
+  it('retains BotScriptError line and message in total admission and the throwing adapter', () => {
+    const source = 'script "Invalid"\nset radius = 99';
+    const admitted = parseBotScriptResult(source);
+    expect(isFailure(admitted)).toBe(true);
+    if (isFailure(admitted)) {
+      expect(admitted.failure).toBeInstanceOf(BotScriptError);
+      expect(admitted.failure).toMatchObject({ line: 2, message: 'Line 2: Use a whole number from 1 to 20.' });
+      expect(() => parseBotScript(source)).toThrow((admitted.failure as Error).message);
+    }
+  });
+  it('short-circuits dependent document admission before reading rules or retained legacy settings', () => {
+    let rules = 0, retained = 0;
+    const document = { settings: { ...DEFAULT_SETTINGS, radius: 99 }, get script(): MacroScript | null {
+      rules++; throw new Error('Rules should not be read.');
+    } };
+    expect(() => formatBotScript(document)).toThrow(BotScriptError);
+    expect(rules).toBe(0);
+    const legacySettings = { ...DEFAULT_SETTINGS, get map(): string { retained++; throw new Error('Retained settings should not be read.'); } };
+    const admitted = parseBotScriptResult('{"version":2}', legacySettings);
+    expect(isFailure(admitted)).toBe(true);
+    if (isFailure(admitted)) expect(admitted.failure).toBeInstanceOf(BotScriptError);
+    expect(retained).toBe(0);
+  });
   it('compiles one settings/rules document with safe bounded defaults and readable units', () => {
     const document = parseBotScript(`# Poring field\nscript "Poring field"\nset map = prt_fild08\nset targets = [4000, 4012]\nset radius = 12\nset emergency-hp = 45%\nset route-time = 2m\nset automation.combat.mode = selected\nset automation.limits.minutes = 1.5h\nrule "Farm"\nwhen level >= 1\nfarm prt_fild08 targets [4000, 4012]\nend\nrule "First Aid"\npriority 100\ncooldown 10s\nruns unlimited\nwhen hp < 60%\nwhen sp >= 30%\nskill 2 level 1 self\nend`);
     expect(document.settings).toMatchObject({ ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [4000, 4012], route_randomWalk_maxRouteTime: 120,

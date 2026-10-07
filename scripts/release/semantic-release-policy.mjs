@@ -1,4 +1,5 @@
 import { map, sort } from "effect/Array";
+import { flatMap, gen, getOrThrow, try as tryResult } from "effect/Result";
 // Pure semantic release contracts. No plugin loading, filesystem or network effects.
 import { createHash } from "node:crypto";
 import { sourceCommitSha, stableReleaseVersion, releaseBaseValues, releaseSourceValues, releasePlanValues, releaseTagFor, planDigest } from '../shared/tooling-domain-values.mjs';
@@ -123,53 +124,70 @@ function validBases(analysisBase, notesBase) {
 
 /** @param {import('../shared/tooling-domain-values.mjs').ReleasePlanDto | undefined} plan @returns {import('../shared/tooling-domain-values.mjs').ReleasePlan} */
 export function validatePlan(plan) {
-  exactKeys(plan, planKeys, "release plan");
-  requireValue(plan, "Invalid release plan fields.");
-  requireValue(
-    plan.schemaVersion === 1 && plan.repository === RELEASE_POLICY.repository,
-    "Unsupported release plan identity.",
-  );
-  validSource(plan);
-  stableVersion(plan.version);
-  requireValue(plan.tag === `v${plan.version}`, "Invalid release plan tag.");
-  validBases(plan.analysisBase, plan.notesBase);
-  requireValue(
-    ["major", "minor", "patch"].includes(plan.releaseType) &&
-      bumpVersion(stableVersion(plan.analysisBase.version), plan.releaseType) ===
-        plan.version &&
-      plan.sourceSha !== plan.analysisBase.sourceSha,
-    "Release version does not match its analysis base and release type.",
-  );
-  requireValue(
-    Number.isSafeInteger(plan.policyVersion) &&
-      plan.policyVersion > 0 &&
-      typeof plan.policySha256 === "string" &&
-      /^[a-f0-9]{64}$/.test(plan.policySha256) &&
-      trustedPolicies.has(plan.policySha256) &&
-      trustedPolicies.get(plan.policySha256).version === plan.policyVersion,
-    "Release plan differs from the trusted policy.",
-  );
-  requireValue(
-    plan.predecessorPlanSha256 === null ||
-      (typeof plan.predecessorPlanSha256 === "string" &&
-        /^[a-f0-9]{64}$/.test(plan.predecessorPlanSha256)),
-    "Invalid predecessor plan hash.",
-  );
-  validText(plan.notes, MAX_NOTES_BYTES, "release notes");
-  requireValue(plan.notes.trim().length > 0, "Empty release notes.");
-  requireValue(
-    Buffer.byteLength(JSON.stringify(plan.notes)) <= MAX_NOTES_BYTES,
-    "Serialized release notes exceed the client metadata budget.",
-  );
-  requireValue(
-    !/rayrag-release(?:-plan)?:/i.test(plan.notes),
-    "Release notes contain a reserved provenance marker.",
-  );
-  requireValue(
-    Buffer.byteLength(canonicalJson(plan) + "\n") <= MAX_PLAN_BYTES,
-    "Release plan exceeds its size bound.",
-  );
-  return releasePlanValues(plan);
+  return getOrThrow(validatePlanResult(plan));
+}
+
+/** Ordered admission short-circuits before reading later plan fields.
+ * @param {import('../shared/tooling-domain-values.mjs').ReleasePlanDto | undefined} rawPlan
+ * @returns {import('effect/Result').Result<import('../shared/tooling-domain-values.mjs').ReleasePlan, unknown>}
+ */
+export function validatePlanResult(rawPlan) {
+  return gen(function* () {
+    const plan = yield* tryResult(() => {
+      exactKeys(rawPlan, planKeys, "release plan");
+      requireValue(rawPlan, "Invalid release plan fields.");
+      return rawPlan;
+    });
+    yield* tryResult(() => requireValue(
+      plan.schemaVersion === 1 && plan.repository === RELEASE_POLICY.repository,
+      "Unsupported release plan identity.",
+    ));
+    yield* tryResult(() => validSource(plan));
+    yield* tryResult(() => {
+      stableVersion(plan.version);
+      requireValue(plan.tag === `v${plan.version}`, "Invalid release plan tag.");
+    });
+    yield* tryResult(() => validBases(plan.analysisBase, plan.notesBase));
+    yield* tryResult(() => requireValue(
+      ["major", "minor", "patch"].includes(plan.releaseType) &&
+        bumpVersion(stableVersion(plan.analysisBase.version), plan.releaseType) ===
+          plan.version &&
+        plan.sourceSha !== plan.analysisBase.sourceSha,
+      "Release version does not match its analysis base and release type.",
+    ));
+    yield* tryResult(() => requireValue(
+      Number.isSafeInteger(plan.policyVersion) &&
+        plan.policyVersion > 0 &&
+        typeof plan.policySha256 === "string" &&
+        /^[a-f0-9]{64}$/.test(plan.policySha256) &&
+        trustedPolicies.has(plan.policySha256) &&
+        trustedPolicies.get(plan.policySha256).version === plan.policyVersion,
+      "Release plan differs from the trusted policy.",
+    ));
+    yield* tryResult(() => requireValue(
+      plan.predecessorPlanSha256 === null ||
+        (typeof plan.predecessorPlanSha256 === "string" &&
+          /^[a-f0-9]{64}$/.test(plan.predecessorPlanSha256)),
+      "Invalid predecessor plan hash.",
+    ));
+    yield* tryResult(() => {
+      validText(plan.notes, MAX_NOTES_BYTES, "release notes");
+      requireValue(plan.notes.trim().length > 0, "Empty release notes.");
+      requireValue(
+        Buffer.byteLength(JSON.stringify(plan.notes)) <= MAX_NOTES_BYTES,
+        "Serialized release notes exceed the client metadata budget.",
+      );
+      requireValue(
+        !/rayrag-release(?:-plan)?:/i.test(plan.notes),
+        "Release notes contain a reserved provenance marker.",
+      );
+      requireValue(
+        Buffer.byteLength(canonicalJson(plan) + "\n") <= MAX_PLAN_BYTES,
+        "Release plan exceeds its size bound.",
+      );
+    });
+    return yield* tryResult(() => releasePlanValues(plan));
+  });
 }
 
 /** Compatibility validation retains input identity; admission owns a detached plan.
@@ -177,7 +195,32 @@ export function validatePlan(plan) {
  * @returns {import('../shared/tooling-domain-values.mjs').ReleasePlan}
  */
 export function parsePlan(plan) {
-  return releasePlanValues(structuredClone(validatePlan(plan)));
+  return getOrThrow(parsePlanResult(plan));
+}
+
+/** Admission owns a detached plan; validation compatibility retains input identity.
+ * @param {import('../shared/tooling-domain-values.mjs').ReleasePlanDto | undefined} plan
+ * @returns {import('effect/Result').Result<import('../shared/tooling-domain-values.mjs').ReleasePlan, unknown>}
+ */
+export function parsePlanResult(plan) {
+  return flatMap(validatePlanResult(plan), validated =>
+    tryResult(() => releasePlanValues(structuredClone(validated))),
+  );
+}
+
+/** @param {Buffer} bytes @returns {import('effect/Result').Result<import('../shared/tooling-domain-values.mjs').ReleasePlan, unknown>} */
+export function parseTransportedPlanResult(bytes) {
+  return gen(function* () {
+    yield* tryResult(() => requireValue(
+      Buffer.isBuffer(bytes) && bytes.length > 0 && bytes.length <= MAX_PLAN_BYTES,
+      "Invalid transported plan size.",
+    ));
+    const rawPlan = yield* tryResult({
+      try: () => JSON.parse(bytes.toString("utf8")),
+      catch: () => new Error("Malformed transported plan."),
+    });
+    return yield* parsePlanResult(rawPlan);
+  });
 }
 
 /** @param {import('../shared/tooling-domain-values.mjs').ReleasePlan} plan */

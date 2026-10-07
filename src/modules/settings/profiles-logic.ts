@@ -1,5 +1,6 @@
-import { appendAll, filter, map, dedupe } from 'effect/Array';
-import { pipe, flow } from 'effect/Function';
+import { appendAll, filter, findFirst, map, dedupe } from 'effect/Array';
+import { pipe, flow, identity } from 'effect/Function';
+import { flatMap, fromOption, gen, getOrThrowWith, map as mapResult, try as tryResult, type Result } from 'effect/Result';
 import { DomainValueError } from '../../shared/domain-values';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateSettings, type SettingsInput, type RunSettings } from './settings';
 
@@ -72,24 +73,43 @@ function checkedSettings(value: unknown): RunSettings {
   // enter a profile; account fields and controller state are never accepted.
   return validateSettings(JSON.parse(JSON.stringify(validateSettings(value as SettingsInput))) as SettingsInput);
 }
+/** Metadata admits the settings stage; a failed stage never evaluates its successor. */
+export function checkedProfileResult(value: unknown): Result<BotProfile, unknown> {
+  return flatMap(tryResult(() => {
+    if (!record(value) || !keys(value, ['id', 'name', 'character', 'savedAt', 'settings'])
+      || typeof value.id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(value.id)
+      || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 48 || /[\u0000-\u001f\u007f]/.test(value.name)
+      || typeof value.character !== 'string' || value.character.length > 64 || /[\u0000-\u001f\u007f]/.test(value.character)
+      || typeof value.savedAt !== 'number' || !Number.isSafeInteger(value.savedAt) || value.savedAt < 0) {
+      throw new Error(INVALID_METADATA);
+    }
+    return { id: profileId(value.id), name: profileName(value.name), character: value.character,
+      savedAt: profileSavedAt(value.savedAt), settings: value.settings };
+  }), metadata => mapResult(tryResult(() => checkedSettings(metadata.settings)), settings => ({ ...metadata, settings })));
+}
 export function checkedProfile(value: unknown): BotProfile {
-  if (!record(value) || !keys(value, ['id', 'name', 'character', 'savedAt', 'settings'])
-    || typeof value.id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(value.id)
-    || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 48 || /[\u0000-\u001f\u007f]/.test(value.name)
-    || typeof value.character !== 'string' || value.character.length > 64 || /[\u0000-\u001f\u007f]/.test(value.character)
-    || typeof value.savedAt !== 'number' || !Number.isSafeInteger(value.savedAt) || value.savedAt < 0) {
-    throw new Error(INVALID_METADATA);
-  }
-  return { id: profileId(value.id), name: profileName(value.name), character: value.character, savedAt: profileSavedAt(value.savedAt), settings: checkedSettings(value.settings) };
+  return getOrThrowWith(checkedProfileResult(value), identity);
+}
+export function parseProfileDocumentResult(text: string): Result<ProfileDocument, unknown> {
+  return flatMap(tryResult(() => {
+    if (text.length > MAX_DOCUMENT_BYTES) throw new Error('Profile document is too large.');
+    const value: unknown = JSON.parse(text);
+    if (!record(value) || !keys(value, ['version', 'profiles']) || value.version !== 1
+      || !Array.isArray(value.profiles) || value.profiles.length > MAX_PROFILES) throw new Error('Unsupported profile document.');
+    return value.profiles;
+  }), values => gen(function*() {
+    const profiles: BotProfile[] = [];
+    // Bind each producer before reading the next entry. Collision diagnostics
+    // follow entry admission, preserving the original document error order.
+    for (const value of values) profiles.push(yield* checkedProfileResult(value));
+    yield* tryResult(() => {
+      if (profileIds(profiles).length !== profiles.length) throw new Error('Profile IDs must be unique.');
+    });
+    return { version: 1 as const, profiles };
+  }));
 }
 export function parseProfileDocument(text: string): ProfileDocument {
-  if (text.length > MAX_DOCUMENT_BYTES) throw new Error('Profile document is too large.');
-  const value: unknown = JSON.parse(text);
-  if (!record(value) || !keys(value, ['version', 'profiles']) || value.version !== 1
-    || !Array.isArray(value.profiles) || value.profiles.length > MAX_PROFILES) throw new Error('Unsupported profile document.');
-  const profiles = map(value.profiles, checkedProfile);
-  if (profileIds(profiles).length !== profiles.length) throw new Error('Profile IDs must be unique.');
-  return { version: 1, profiles };
+  return getOrThrowWith(parseProfileDocumentResult(text), identity);
 }
 
 export function profileSaveAllowed(profiles: readonly BotProfile[], existingId?: string): void {
@@ -115,14 +135,20 @@ export function importedProfiles(profiles: readonly BotProfile[], imported: read
   return copies;
 }
 export function profileForMap(profiles: readonly BotProfile[], id: string, map: string, character?: string): BotProfile {
-  const profile = profiles.find(saved => saved.id === id);
-  if (!profile) throw new Error('Choose a saved profile.');
-  if (!map || profile.settings.map !== map) throw new Error(`Enter ${profile.settings.map} before applying this profile.`);
-  if (character !== undefined && profile.character && profile.character !== character) throw new Error(`Select ${profile.character} before applying this profile.`);
-  return checkedProfile(profile);
+  return getOrThrowWith(pipe(
+    findFirst(profiles, saved => saved.id === id),
+    fromOption(() => new Error('Choose a saved profile.')),
+    flatMap(profile => flatMap(tryResult(() => {
+      if (!map || profile.settings.map !== map) throw new Error(`Enter ${profile.settings.map} before applying this profile.`);
+      if (character !== undefined && profile.character && profile.character !== character) throw new Error(`Select ${profile.character} before applying this profile.`);
+      return profile;
+    }), checkedProfileResult)),
+  ), identity);
 }
 export function exportProfile(profiles: readonly BotProfile[], id: string): string {
-  const profile = profiles.find(saved => saved.id === id);
-  if (!profile) throw new Error('Choose a profile to export.');
-  return JSON.stringify({ version: 1, profiles: [profile] }, null, 2);
+  return getOrThrowWith(pipe(
+    findFirst(profiles, saved => saved.id === id),
+    fromOption(() => new Error('Choose a profile to export.')),
+    mapResult(profile => JSON.stringify({ version: 1, profiles: [profile] }, null, 2)),
+  ), identity);
 }

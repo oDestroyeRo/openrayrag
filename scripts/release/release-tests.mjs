@@ -1349,6 +1349,32 @@ test("semantic publish and retry use ten original assets and exact frozen reserv
     /workflow source/,
   );
 });
+test("transported plan rejection precedes all source and reservation verification effects", async () => {
+  const api = new PlannedApi(), ctx = await semanticFixture(api);
+  const observed = [];
+  const source = {
+    api: { planRefs: async () => { observed.push("reservation"); throw new Error("Unexpected reservation read."); } },
+    history: semanticHistory,
+    sha: ctx.plan.sourceSha,
+    dateFor: async () => { observed.push("date"); return dateFor(); },
+  };
+  for (const [bytes, message] of [
+    [Buffer.alloc(0), /transported plan size/],
+    [Buffer.from("not JSON"), /Malformed transported plan/],
+    [Buffer.from("{}"), /release plan fields/],
+    [Buffer.from(JSON.stringify(ctx.plan)), /workflow source/],
+  ]) {
+    await assert.rejects(loadProductionPlan(source, bytes), message);
+    assert.deepEqual(observed, []);
+  }
+  await assert.rejects(loadProductionPlan({ ...source, sha: migrationBridge.sourceSha }, Buffer.from(serializePlan(ctx.plan))), /workflow source/);
+  assert.deepEqual(observed, []);
+  await assert.rejects(loadProductionPlan({ ...source, dateFor: async () => {
+    observed.push("date");
+    return "2026-01-01T00:00:00.000Z";
+  } }, Buffer.from(serializePlan(ctx.plan))), /workflow source/);
+  assert.deepEqual(observed, ["date"]);
+});
 test("later semantic release cannot let an older source roll latest backwards", async () => {
   const api = new PlannedApi(),
     a = await semanticFixture(api),

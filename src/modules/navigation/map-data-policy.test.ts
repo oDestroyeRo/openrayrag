@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { MapDataError, mapDataRetryDelay, type MapDataFailure } from './map-data-policy';
+import { fail, succeed } from 'effect/Result';
+import { describe, expect, it, vi } from 'vitest';
+import { MapDataError, mapDataResult, mapDataRetryDelay, type MapDataFailure } from './map-data-policy';
 import { parseMapCatalogAssetsResult, parseMapCatalogResult, parseMapDataTextResult } from './map-data-logic';
 
 describe('total catalogue admission and retry decisions', () => {
@@ -33,6 +34,20 @@ describe('total catalogue admission and retry decisions', () => {
   it('retains byte-limit meaning across the native admission pipeline', () => {
     expect(parseMapCatalogAssetsResult({ maps: ' '.repeat(2_000_001), monsters: '{}' }))
       .toEqual({ kind: 'failure', cause: { kind: 'size-limit' } });
+  });
+  it('short-circuits native text admission before later parsing and bounds checks', () => {
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      expect(parseMapCatalogAssetsResult({ maps: '{broken', monsters: ' '.repeat(2_000_001) }))
+        .toMatchObject({ kind: 'failure', cause: { kind: 'invalid-data' } });
+      expect(parse).toHaveBeenCalledExactlyOnceWith('{broken');
+    } finally { parse.mockRestore(); }
+  });
+  it('projects successful undefined separately from an admitted failure', () => {
+    expect(mapDataResult(succeed(undefined))).toEqual({ kind: 'success', value: undefined });
+    expect(mapDataResult(fail({ kind: 'network' } as const))).toEqual({ kind: 'failure', cause: { kind: 'network' } });
+    expect(parseMapCatalogResult({ get Items() { throw undefined; } }, {}))
+      .toEqual({ kind: 'failure', cause: { kind: 'invalid-data', message: 'Invalid map database' } });
   });
   it('owns the typed error cause independently of a mutable external alias', () => {
     const cause = { kind: 'http', status: 503 } as const;

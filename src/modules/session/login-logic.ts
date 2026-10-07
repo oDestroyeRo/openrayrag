@@ -1,3 +1,6 @@
+import { identity } from 'effect/Function';
+import { flatMap, fromNullishOr, getOrNull, none, some } from 'effect/Option';
+import { getOrThrowWith, match, try as tryResult, type Result } from 'effect/Result';
 import { DomainValueError, type Milliseconds } from '../../shared/domain-values';
 
 declare const characterSlotValue: unique symbol;
@@ -56,6 +59,12 @@ class LoginReader {
 }
 
 export function characterSlots(data: Uint8Array): readonly CharacterSlot[] {
+  return getOrThrowWith(characterSlotsResult(data), identity);
+}
+function characterSlotsResult(data: Uint8Array): Result<readonly CharacterSlot[], unknown> {
+  return tryResult(() => readCharacterSlots(data));
+}
+function readCharacterSlots(data: Uint8Array): readonly CharacterSlot[] {
   if (data[0] !== 0 || data.length > 16_384) throw new Error('Unknown character list');
   const reader = new LoginReader(data);
   if (reader.number(1)) {
@@ -89,14 +98,16 @@ export function validateLoginProfile(profile: LoginProfile): LoginSelection {
   return { username: profile.username, characterSlot: characterSlot(profile.characterSlot) };
 }
 export function loginPacketStatus(status: LoginStatus, data: Uint8Array, slot: CharacterSlot): LoginStatus | null {
-  if (!loginActive(status)) return null;
-  if (data[0] === 1 || data[0] === 32) return { phase: 'failed', message: 'Sign-in was rejected. Check the game window and try again explicitly.' };
-  if (data[0] !== 0 || status.phase !== 'signingIn') return null;
-  try {
-    return characterSlots(data).includes(slot)
-      ? { phase: 'selecting', message: `Selecting character slot ${slot + 1}…` }
-      : { phase: 'failed', message: `Character slot ${slot + 1} is empty. Choose an existing character.` };
-  } catch { return { phase: 'failed', message: 'The character list format changed. Select your character manually.' }; }
+  return getOrNull(flatMap(loginActive(status) ? fromNullishOr(data[0]) : none<number>(), (opcode) => {
+    if (opcode === 1 || opcode === 32) return some<LoginStatus>({ phase: 'failed', message: 'Sign-in was rejected. Check the game window and try again explicitly.' });
+    if (opcode !== 0 || status.phase !== 'signingIn') return none<LoginStatus>();
+    return some(match(characterSlotsResult(data), {
+      onSuccess: slots => slots.includes(slot)
+        ? { phase: 'selecting' as const, message: `Selecting character slot ${slot + 1}…` }
+        : { phase: 'failed' as const, message: `Character slot ${slot + 1} is empty. Choose an existing character.` },
+      onFailure: () => ({ phase: 'failed' as const, message: 'The character list format changed. Select your character manually.' }),
+    }));
+  }));
 }
 export function selectionReadiness(ready: boolean, since: Milliseconds | null, now: Milliseconds): { since: Milliseconds | null; settled: boolean } {
   const started = ready ? since ?? now : null;

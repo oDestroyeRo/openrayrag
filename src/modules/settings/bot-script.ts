@@ -1,4 +1,6 @@
 import { map } from 'effect/Array';
+import { identity } from 'effect/Function';
+import { flatMap, gen, getOrThrowWith, map as mapResult, mapError, try as tryResult, type Result } from 'effect/Result';
 import { DEFAULT_AUTOMATION, DEFAULT_ESCAPE, DEFAULT_LOADOUT, DEFAULT_PARTY_HEAL, DEFAULT_RETREAT, DEFAULT_SETTINGS, validateFormSettings, settingsDraft, type Settings, type SettingsInput } from './settings';
 import { MACRO_LIMITS, validateMacroScript, validMacroStep, type MacroRule, type MacroScript, type MacroStep } from '../automation/macros-logic';
 import { validRoutineCondition, type RoutineCondition } from '../automation/routines-logic';
@@ -348,27 +350,46 @@ function readStep(command: string, reader: LineReader): MacroStep {
   if (!validMacroStep(step)) fail('Invalid action. Check map/target IDs, supported skill mode and NPC service type.', reader.line);
   return step;
 }
+function validateDocumentResult(document: BotScriptDocumentInput, line: number): Result<BotScriptDocument, unknown> {
+  return gen(function*() {
+    const settings = yield* tryResult(() => checkedSettings(document.settings, line));
+    const script = yield* tryResult({
+      try: () => document.script === null ? null : validateMacroScript(document.script),
+      catch: error => new BotScriptError(error instanceof Error ? error.message : 'Invalid rules.', line),
+    });
+    yield* tryResult(() => {
+      if (script && utf8.encode(JSON.stringify({ script, settings })).length > BOT_SCRIPT_LIMITS.requestBytes) {
+        fail('Compiled configuration is too large.', line);
+      }
+    });
+    return { settings, script };
+  });
+}
 function validateDocument(document: BotScriptDocumentInput, line: number): BotScriptDocument {
-  const settings = checkedSettings(document.settings, line);
-  let script: MacroScript | null = null;
-  try { if (document.script !== null) script = validateMacroScript(document.script); }
-  catch (error) { fail(error instanceof Error ? error.message : 'Invalid rules.', line); }
-  if (script && utf8.encode(JSON.stringify({ script, settings })).length > BOT_SCRIPT_LIMITS.requestBytes) {
-    fail('Compiled configuration is too large.', line);
-  }
-  return { settings, script };
+  return getOrThrowWith(validateDocumentResult(document, line), identity);
 }
 
-/** Compile data into existing settings/actions. This function never executes a command. */
-export function parseBotScript(text: string, legacySettings: SettingsInput = DEFAULT_SETTINGS): BotScriptDocument {
-  if (typeof text !== 'string' || utf8.encode(text).length > BOT_SCRIPT_LIMITS.authoringBytes) fail('Script source is too large.', 1);
-  if (text.trimStart().startsWith('{')) {
-    try { return validateDocument({ settings: legacySettings, script: validateMacroScript(JSON.parse(text)) }, 1); }
-    catch (error) {
-      if (error instanceof BotScriptError) throw error;
-      fail(error instanceof SyntaxError ? 'Invalid legacy JSON. Correct it before converting.' : error instanceof Error ? error.message : 'Invalid legacy macro.', 1);
+/** Compile data into existing settings/actions. Admission never executes a command. */
+export function parseBotScriptResult(text: string, legacySettings: SettingsInput = DEFAULT_SETTINGS): Result<BotScriptDocument, unknown> {
+  return flatMap(tryResult(() => {
+    if (typeof text !== 'string' || utf8.encode(text).length > BOT_SCRIPT_LIMITS.authoringBytes) fail('Script source is too large.', 1);
+    return text;
+  }), source => {
+    if (source.trimStart().startsWith('{')) {
+      return mapError(flatMap(
+        tryResult(() => validateMacroScript(JSON.parse(source))),
+        script => validateDocumentResult({ settings: legacySettings, script }, 1),
+      ), error => error instanceof BotScriptError ? error : new BotScriptError(
+        error instanceof SyntaxError ? 'Invalid legacy JSON. Correct it before converting.' : error instanceof Error ? error.message : 'Invalid legacy macro.', 1,
+      ));
     }
-  }
+    return flatMap(tryResult(() => readBotScript(source)), parsed => validateDocumentResult(parsed.document, parsed.line));
+  });
+}
+export function parseBotScript(text: string, legacySettings: SettingsInput = DEFAULT_SETTINGS): BotScriptDocument {
+  return getOrThrowWith(parseBotScriptResult(text, legacySettings), identity);
+}
+function readBotScript(text: string): { document: BotScriptDocumentInput; line: number } {
   const lines = text.split(/\r?\n/);
   if (lines.length > BOT_SCRIPT_LIMITS.lines) fail('Script has too many lines.', 1);
   const settings: Record<string, unknown> = {}, assignments: SettingAssignment[] = [];
@@ -442,8 +463,8 @@ export function parseBotScript(text: string, legacySettings: SettingsInput = DEF
   for (const step of stepLines.keys()) {
     if ('maxSpend' in step && step.maxSpend > script.maxSpend) fail('Action spend exceeds the script spend limit.', stepLines.get(step)!);
   }
-  return validateDocument({ settings: hydrate(settings, settingsSchema, lastSettingLine) as Settings,
-    script: script.rules.length ? script : null }, lastSettingLine);
+  return { document: { settings: hydrate(settings, settingsSchema, lastSettingLine) as Settings,
+    script: script.rules.length ? script : null }, line: lastSettingLine };
 }
 
 function settingLines(settings: SettingsInput): string[] {
@@ -506,7 +527,8 @@ export function formatBotScript(input: BotScriptDocumentInput): string {
 
 /** Preserve rule/limit spelling and comments while replacing the settings view. Invalid drafts never change. */
 export function updateBotScriptSettings(text: string, settings: SettingsInput): { text: string; document: BotScriptDocument } {
-  const original = parseBotScript(text, settings), checked = checkedSettings(settings, 1);
+  const { original, checked } = getOrThrowWith(flatMap(parseBotScriptResult(text, settings), original =>
+    mapResult(tryResult(() => checkedSettings(settings, 1)), checked => ({ original, checked }))), identity);
   if (text.trimStart().startsWith('{')) {
     const document = { ...original, settings: checked };
     return { text: formatBotScript(document), document };

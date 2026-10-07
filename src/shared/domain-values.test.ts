@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   actorId, itemId, bagId, skillId, speciesId, dropId, partyId, partyMemberId,
   quantity, percentage, seconds, minutes, milliseconds, revision, revisionFor, incarnation, worldId, mapCode, regularItemBagId,
@@ -106,5 +106,24 @@ describe('validated domain values', () => {
       expect(error).toMatchObject({ domain: 'ActorId', issue: 'type', message: 'Invalid target ID' });
       expect(JSON.stringify(error)).not.toContain('sensitive-input');
     }
+  });
+
+  it.each([
+    ['1', 'type'], [Number.NaN, 'non-finite'], [Number.POSITIVE_INFINITY, 'non-finite'],
+    [-0.5, 'integer'], [-1, 'range'], [0x80000000, 'range'],
+  ])('retains dependent validation precedence for %s', (value, issue) => {
+    expect(() => itemId(value, 'selected item')).toThrow(expect.objectContaining({
+      name: 'DomainValueError', domain: 'ItemId', issue, message: 'Invalid selected item',
+    }));
+  });
+
+  it('short-circuits dependent numeric checks after the first failed admission', () => {
+    const finite = vi.spyOn(Number, 'isFinite'), integer = vi.spyOn(Number, 'isInteger');
+    try {
+      expect(() => itemId('1')).toThrow(DomainValueError);
+      expect(finite).not.toHaveBeenCalled(); expect(integer).not.toHaveBeenCalled();
+      expect(() => itemId(Number.NaN)).toThrow(DomainValueError);
+      expect(finite).toHaveBeenCalledOnce(); expect(integer).not.toHaveBeenCalled();
+    } finally { finite.mockRestore(); integer.mockRestore(); }
   });
 });

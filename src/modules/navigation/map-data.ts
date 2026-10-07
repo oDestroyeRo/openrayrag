@@ -1,6 +1,7 @@
-import { parseMapCatalogAssetsResult, parseMapCatalogResult, parseMapDataTextResult, type MapCatalog } from './map-data-logic';
+import { all, fromResult, gen, result, runPromise, tryPromise, type Effect } from 'effect/Effect';
+import { admitMapCatalog, admitMapDataText, parseMapCatalogAssetsResult, type MapCatalog } from './map-data-logic';
 import { readNativeMapData, waitForMapDataRetry, withMapDataRequests } from './map-data-effects';
-import { mapDataFailure, mapDataRetryDelay, unwrapMapData, type MapDataFailure, type MapDataResult } from './map-data-policy';
+import { mapDataFailure, mapDataResult, mapDataRetryDelay, unwrapMapData, type MapDataFailure, type MapDataResult } from './map-data-policy';
 export { currentMapInfo, parseMapCatalog, validMapInfo, type MapMonster, type MapInfo, type MapCatalog, type CatalogMonster } from './map-data-logic';
 export { MAP_DATA_URL } from './map-data-effects';
 
@@ -9,12 +10,29 @@ export async function loadMapCatalog(fetcher: typeof fetch = fetch, signal?: Abo
 }
 
 export async function loadMapCatalogResult(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<MapDataResult<MapCatalog>> {
-  try {
-    return await withMapDataRequests(async read => {
-      const [maps, monsters] = await Promise.all(['maps.json', 'monsterdatabase.json'].map(async file => unwrapMapData(parseMapDataTextResult(await read(file)))));
-      return parseMapCatalogResult(maps, monsters);
-    }, fetcher, signal);
-  } catch (error) { return { kind: 'failure', cause: mapDataFailure(error) }; }
+  return mapDataResult(await runPromise(result(mapCatalogProgram(fetcher, signal))));
+}
+
+/** A lazy read program: each interpretation creates and retires its own request scope. */
+export function mapCatalogProgram(fetcher: typeof fetch = fetch, signal?: AbortSignal): Effect<MapCatalog, MapDataFailure> {
+  return gen(function* () {
+    const admitted = yield* tryPromise({
+      try: programSignal => withMapDataRequests(async (read, scopeSignal) => {
+        // This program stays inside the request scope; it never exposes its reader.
+        const document = (file: string) => gen(function* () {
+          const text = yield* tryPromise({ try: () => read(file), catch: mapDataFailure });
+          return yield* fromResult(admitMapDataText(text));
+        });
+        const program = gen(function* () {
+          const [maps, monsters] = yield* all([document('maps.json'), document('monsterdatabase.json')], { concurrency: 2 });
+          return yield* fromResult(admitMapCatalog(maps, monsters));
+        });
+        return runPromise(result(program), { signal: scopeSignal });
+      }, fetcher, signal, programSignal),
+      catch: mapDataFailure,
+    });
+    return yield* fromResult(admitted);
+  });
 }
 
 export async function loadNativeMapCatalog(invoke: (name: string, args: unknown) => Promise<unknown>): Promise<MapCatalog> {

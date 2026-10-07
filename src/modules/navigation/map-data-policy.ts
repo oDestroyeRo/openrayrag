@@ -1,3 +1,5 @@
+import { match, type Result } from 'effect/Result';
+
 /** Failure causes drive policy; display text is only a projection. */
 export type MapDataFailure =
   | { readonly kind: 'network' | 'timeout' | 'cancelled' | 'size-limit' }
@@ -7,6 +9,14 @@ export type MapDataFailure =
 export type MapDataResult<T> =
   | { readonly kind: 'success'; readonly value: T }
   | { readonly kind: 'failure'; readonly cause: MapDataFailure };
+
+/** Project composed admission at the existing public result boundary. */
+export function mapDataResult<T>(result: Result<T, MapDataFailure>): MapDataResult<T> {
+  return match(result, {
+    onFailure: cause => ({ kind: 'failure' as const, cause }),
+    onSuccess: value => ({ kind: 'success' as const, value }),
+  });
+}
 
 export const MAX_MAP_DOCUMENT_BYTES = 2_000_000;
 

@@ -1,7 +1,8 @@
 import { map, take } from 'effect/Array';
+import { fail, gen, try as tryResult, type Result } from 'effect/Result';
 import type { Entity } from '../protocol/protocol';
 import { addQuantities, mapCode as admittedMapCode, quantity, speciesId, type MapCode, type Quantity, type SpeciesId } from '../../shared/domain-values';
-import { MAX_MAP_DOCUMENT_BYTES, type MapDataResult } from './map-data-policy';
+import { MAX_MAP_DOCUMENT_BYTES, mapDataResult, type MapDataFailure, type MapDataResult } from './map-data-policy';
 
 export interface MapMonster {
   classId: number; name: string; level: number; maxHp: number;
@@ -121,28 +122,39 @@ export function parseMapCatalogAssets(value: unknown): MapCatalog {
 }
 
 /** Total admission APIs for composition; legacy throwing parsers remain compatible. */
-function mapDataAdmission<T>(parse: () => T): MapDataResult<T> {
-  try { return { kind: 'success', value: parse() }; }
-  catch (error) {
-    return { kind: 'failure', cause: { kind: 'invalid-data', message: error instanceof Error ? error.message : 'Invalid map database' } };
-  }
+function mapDataAdmission<T>(parse: () => T): Result<T, MapDataFailure> {
+  return tryResult({
+    try: parse,
+    catch: error => ({ kind: 'invalid-data', message: error instanceof Error ? error.message : 'Invalid map database' }),
+  });
 }
 
-export function parseMapDataTextResult(data: string): MapDataResult<unknown> {
-  if (data.length > MAX_MAP_DOCUMENT_BYTES) return { kind: 'failure', cause: { kind: 'size-limit' } };
+export function admitMapDataText(data: string): Result<unknown, MapDataFailure> {
+  if (data.length > MAX_MAP_DOCUMENT_BYTES) return fail({ kind: 'size-limit' });
   return mapDataAdmission(() => parseMapDataText(data));
 }
 
-export function parseMapCatalogResult(mapData: unknown, monsterData: unknown): MapDataResult<MapCatalog> {
+export function admitMapCatalog(mapData: unknown, monsterData: unknown): Result<MapCatalog, MapDataFailure> {
   return mapDataAdmission(() => parseMapCatalog(mapData, monsterData));
 }
 
+export function admitMapCatalogAssets(value: unknown): Result<MapCatalog, MapDataFailure> {
+  return gen(function* () {
+    const assets = yield* mapDataAdmission(() => mapCatalogAssetTexts(value));
+    const maps = yield* admitMapDataText(assets.maps);
+    const monsters = yield* admitMapDataText(assets.monsters);
+    return yield* admitMapCatalog(maps, monsters);
+  });
+}
+
+export function parseMapDataTextResult(data: string): MapDataResult<unknown> {
+  return mapDataResult(admitMapDataText(data));
+}
+
+export function parseMapCatalogResult(mapData: unknown, monsterData: unknown): MapDataResult<MapCatalog> {
+  return mapDataResult(admitMapCatalog(mapData, monsterData));
+}
+
 export function parseMapCatalogAssetsResult(value: unknown): MapDataResult<MapCatalog> {
-  const assets = mapDataAdmission(() => mapCatalogAssetTexts(value));
-  if (assets.kind === 'failure') return assets;
-  const maps = parseMapDataTextResult(assets.value.maps);
-  if (maps.kind === 'failure') return maps;
-  const monsters = parseMapDataTextResult(assets.value.monsters);
-  if (monsters.kind === 'failure') return monsters;
-  return parseMapCatalogResult(maps.value, monsters.value);
+  return mapDataResult(admitMapCatalogAssets(value));
 }

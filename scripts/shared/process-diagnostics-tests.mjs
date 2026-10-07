@@ -5,11 +5,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { Writable } from 'node:stream';
+import { EventEmitter } from 'node:events';
+import { isFailure, isSuccess } from 'effect/Result';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { ProcessExecutionError, runLoggedProcess, smokePackagingEnvironment } from './process-diagnostics.mjs';
-import { classifyProcessOutcome, processErrorCode } from './process-outcome-policy.mjs';
+import { classifyProcessOutcome, classifyProcessResult, processErrorCode } from './process-outcome-policy.mjs';
 
 function collectedOutput() {
   const chunks = [];
@@ -50,6 +52,14 @@ test('pure process outcomes preserve error precedence and distinguish signals, e
     Object.freeze(observation);
     assert.deepEqual(classifyProcessOutcome(observation), expected);
     assert.deepEqual(classifyProcessOutcome(observation), expected);
+    const result = classifyProcessResult(observation);
+    if (expected.kind === 'success') {
+      assert.ok(isSuccess(result));
+      assert.deepEqual(result.success, expected);
+    } else {
+      assert.ok(isFailure(result));
+      assert.deepEqual(result.failure, expected);
+    }
   }
   assert.equal(processErrorCode({ toString() { throw new Error('Must not coerce raw errors.'); } }), 'unknown');
   assert.equal(processErrorCode(7), '7');
@@ -248,14 +258,79 @@ test('the first observed console error survives later stream failures and child 
   assert.match(await readFile(report, 'utf8'), new RegExp(`process error: ${observed[0]}`));
 });
 
+test('a console throwing undefined remains a failed observation after child cancellation', async t => {
+  const { report, options } = await fixture(t);
+  for (const failure of [undefined, { get code() { throw new Error('synthetic-sensitive-code-accessor'); } }]) {
+    const stdout = new EventEmitter();
+    stdout.write = () => { throw failure; };
+    await assert.rejects(runLoggedProcess(process.execPath, ['-e', 'console.log("starting build"); setInterval(() => {}, 1000);'], {
+      ...options, stdout,
+    }), error => {
+      processFailure({ kind: 'process-error', code: 'unknown' }, `Process launch or diagnostic output failed (unknown). See ${report}.`)(error);
+      assert.doesNotMatch(`${error.stack}\n${JSON.stringify(error)}`, /synthetic-sensitive-code-accessor/);
+      return true;
+    });
+    assert.match(await readFile(report, 'utf8'), /starting build[\s\S]*process error: unknown/);
+    assert.equal(stdout.listenerCount('error'), 0);
+  }
+});
+
+test('an undefined console failure keeps priority over a later coded failure', async t => {
+  const { report, options } = await fixture(t);
+  const stdout = new EventEmitter(), stderr = new EventEmitter(), failures = [];
+  const coded = new Error('synthetic-private-later-failure');
+  coded.code = 'EIO';
+  stdout.write = () => {
+    failures[0] = () => stdout.emit('error', undefined);
+    if (failures[1]) { failures[0](); failures[1](); }
+  };
+  stderr.write = () => {
+    failures[1] = () => stderr.emit('error', coded);
+    if (failures[0]) { failures[0](); failures[1](); }
+  };
+  await assert.rejects(runLoggedProcess(process.execPath, ['-e', 'console.log("out"); console.error("err"); setInterval(() => {}, 1000);'], {
+    ...options, stdout, stderr,
+  }), processFailure({ kind: 'process-error', code: 'unknown' }, `Process launch or diagnostic output failed (unknown). See ${report}.`));
+  assert.match(await readFile(report, 'utf8'), /process error: unknown/);
+});
+
+test('a thrown Proxy cannot disrupt stream settlement through prototype inspection', async t => {
+  const { folder, report, options } = await fixture(t);
+  let prototypeReads = 0;
+  const failure = new Proxy({ code: 'EIO' }, { getPrototypeOf() {
+    prototypeReads++;
+    throw new Error('synthetic-sensitive-prototype-error');
+  } });
+  const stdout = new EventEmitter();
+  stdout.write = () => { throw failure; };
+  await assert.rejects(runLoggedProcess(process.execPath, ['-e', 'console.log("starting build"); setInterval(() => {}, 1000);'], {
+    ...options, stdout,
+  }), error => {
+    processFailure({ kind: 'process-error', code: 'EIO' }, `Process launch or diagnostic output failed (EIO). See ${report}.`)(error);
+    assert.doesNotMatch(`${error.stack}\n${JSON.stringify(error)}`, /synthetic-sensitive-prototype-error/);
+    return true;
+  });
+  assert.equal(prototypeReads, 0);
+  assert.equal(stdout.listenerCount('error'), 0);
+  assert.match(await readFile(report, 'utf8'), /starting build[\s\S]*process error: EIO/);
+  assert.deepEqual(await readdir(join(folder, 'reports')), ['package.log']);
+});
+
 test('report publication failure takes precedence over process outcome and removes its temporary file', async t => {
   const { folder, report, options } = await fixture(t);
   await mkdir(report, { recursive: true });
-  await assert.rejects(runLoggedProcess(process.execPath, ['-e', 'process.exitCode = 7;'], options), error => {
-    assert.ok(!(error instanceof ProcessExecutionError));
-    assert.ok(['EISDIR', 'EEXIST', 'EPERM', 'EACCES'].includes(error.code));
-    return true;
-  });
+  const stdout = new EventEmitter();
+  stdout.write = () => { throw undefined; };
+  for (const [script, console] of [
+    ['process.exitCode = 7;', options.stdout],
+    ['console.log("starting build"); setInterval(() => {}, 1000);', stdout],
+  ]) {
+    await assert.rejects(runLoggedProcess(process.execPath, ['-e', script], { ...options, stdout: console }), error => {
+      assert.ok(!(error instanceof ProcessExecutionError));
+      assert.ok(['EISDIR', 'EEXIST', 'EPERM', 'EACCES'].includes(error.code));
+      return true;
+    });
+  }
   assert.deepEqual(await readdir(join(folder, 'reports')), ['package.log']);
   assert.deepEqual(await readdir(report), []);
 });

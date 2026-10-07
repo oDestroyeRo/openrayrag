@@ -1,11 +1,12 @@
 import { filter } from 'effect/Array';
+import { fail, getOrThrowWith, isFailure, isSuccess, succeed } from 'effect/Result';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { classifyProcessOutcome, processErrorCode, processFailureDetails, processFailureMessage } from './process-outcome-policy.mjs';
+import { classifyProcessResult, processErrorCode, processFailureDetails, processFailureMessage } from './process-outcome-policy.mjs';
 
 export class ProcessExecutionError extends Error {
   /** @param {import('./process-outcome-policy.mjs').ProcessFailure} failure @param {string} report */
@@ -61,7 +62,17 @@ export async function runLoggedProcess(file, args, {
   let tail = Buffer.alloc(0);
   let pending = Promise.resolve();
   let child;
-  let failure;
+  /** @type {import('effect/Result').Result<undefined, import('./process-outcome-policy.mjs').ProcessError>} */
+  let diagnostics = succeed(undefined);
+  const recordFailure = error => {
+    if (isSuccess(diagnostics)) {
+      // Arbitrary thrown values may expose a throwing accessor. Diagnostic
+      // projection must retain a safe failure even when its code is unreadable.
+      let code;
+      try { code = error?.code; } catch { /* Use the unknown code below. */ }
+      diagnostics = fail({ kind: 'process-error', code: processErrorCode(code) });
+    }
+  };
   let exitCode = null, signal = null;
   const capture = (chunk, consoleStream) => {
     // Serialize the two pipes' file writes. Each pipe applies backpressure,
@@ -83,28 +94,32 @@ export async function runLoggedProcess(file, args, {
     child = spawn(file, args, { cwd, env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
     /** @type {Promise<void>} */
     const completed = new Promise(resolve => {
-      child.once('error', error => { failure ??= error; });
+      child.once('error', recordFailure);
       child.once('close', (code, stoppedBy) => { exitCode = code; signal = stoppedBy; resolve(); });
     });
     const pump = (source, target) => pipeline(source, new Writable({
       write(chunk, _encoding, callback) {
-        capture(chunk, target).then(() => callback(), callback);
+        capture(chunk, target).then(() => callback(), error => {
+          // Writable callbacks treat undefined as success. Keep the rejected
+          // observation before adapting it to the stream's Error-only channel.
+          recordFailure(error);
+          callback(new Error('Diagnostic output failed.'));
+        });
       },
     })).catch(error => {
-      failure ??= error;
+      recordFailure(error);
       child.kill();
     });
     await Promise.all([completed, pump(child.stdout, stdout), pump(child.stderr, stderr)]);
     await pending;
   } catch (error) {
-    failure ??= error;
+    recordFailure(error);
   } finally {
     try {
       if (discardedBytes) await log.writeFile(`\n[diagnostic output truncated: ${discardedBytes} bytes omitted; final output follows]\n`);
       if (tail.length) await log.writeFile(tail);
-      const launchCode = processErrorCode(failure?.code);
-      await log.writeFile(failure
-        ? `\n[process error: ${launchCode}]\n`
+      await log.writeFile(isFailure(diagnostics)
+        ? `\n[process error: ${diagnostics.failure.code}]\n`
         : `\n[process status: exit=${exitCode}; signal=${signal ?? 'none'}]\n`);
     } finally {
       await log.close();
@@ -114,9 +129,10 @@ export async function runLoggedProcess(file, args, {
       finally { await rm(temporary, { force: true }); }
     }
   }
-  const outcome = classifyProcessOutcome({
-    failureCode: failure ? processErrorCode(failure.code) : null, exitCode, signal, discardedBytes,
-  });
-  if (outcome.kind !== 'success') throw new ProcessExecutionError(outcome, report);
+  // Interpret only after publishing the report. A publication failure has the
+  // established priority over a child or console failure.
+  const outcome = getOrThrowWith(classifyProcessResult({
+    failureCode: isFailure(diagnostics) ? diagnostics.failure.code : null, exitCode, signal, discardedBytes,
+  }), failure => new ProcessExecutionError(failure, report));
   return { exitCode: outcome.exitCode, signal: outcome.signal, discardedBytes: outcome.discardedBytes };
 }

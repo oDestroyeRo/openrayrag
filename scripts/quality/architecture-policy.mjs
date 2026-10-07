@@ -40,8 +40,8 @@ const PACKAGE_OPERATIONS = new Map([
   ['effect/Filter', new Set(['fromPredicate'])],
   ['effect/Order', new Set(['make', 'mapInput', 'combine', 'combineAll', 'Number', 'String'])],
   ['effect/Number', new Set(['sum', 'sumAll'])],
-  ['effect/Option', new Set(['getOrUndefined', 'isNone', 'isSome', 'match', 'none', 'some'])],
-  ['effect/Result', new Set(['fail', 'succeed'])],
+  ['effect/Option', new Set(['flatMap', 'fromNullishOr', 'getOrNull', 'getOrUndefined', 'isNone', 'isSome', 'map', 'match', 'none', 'some'])],
+  ['effect/Result', new Set(['fail', 'flatMap', 'fromOption', 'gen', 'getOrThrow', 'getOrThrowWith', 'isFailure', 'isSuccess', 'map', 'mapError', 'match', 'succeed', 'try'])],
 ]);
 const AMBIENT = ['window', 'document', 'globalThis', 'self', 'localStorage', 'sessionStorage',
   'fetch', 'XMLHttpRequest', 'WebSocket', 'console', 'process', 'Bun', 'Deno',
@@ -114,7 +114,11 @@ export function scriptEffectViolations(file, code, markedGlobals = false) {
     if (!operations) continue;
     if (tokens[i + 1]?.text !== '{') { failures.add(`unrestricted ${library} import`); continue; }
     for (let j = i + 2; j < end && tokens[j].text !== '}'; j++) {
-      if (tokens[j].kind === SyntaxKind.Identifier && tokens[j - 1]?.text !== 'as' && !operations.has(tokens[j].text)) failures.add(`effect-capable ${library} operation ${tokens[j].text}`);
+      if (!['{', ','].includes(tokens[j - 1]?.text)) continue;
+      // Export names may be keywords (Result.try) or quoted names. Check the
+      // imported operation, rather than its local alias or token category.
+      const operation = tokens[j].kind === SyntaxKind.StringLiteral ? tokens[j].value : tokens[j].text;
+      if (!operations.has(operation)) failures.add(`effect-capable ${library} operation ${operation}`);
     }
   }
   return [...failures].map(failure => `${file}: logic references ${failure}`);

@@ -118,6 +118,29 @@ Rust logic uses native structs, enums, `Result`, `Option` and iterators. Indepen
 
 The policy applies across application and tooling domains. Data-only schemas, scalar arithmetic, byte codecs, performance-sensitive search loops and effect adapters retain their language-native implementation when no library composition is involved. A dependency import in every file is not an architectural requirement. Generated and vendored code stays with its owning generator or upstream source. Historical release and benchmark sources retain their original pinned dependencies in isolated resolution; they do not add those libraries back to the current application.
 
+## Monadic composition
+
+Use `map` to transform a successful value and `flatMap` to run the next dependent computation in the same context. A constructor such as `succeed` or `some` admits a value into that context. Effect's `gen` with `yield*` expresses the same sequencing when several admitted values are needed together. Produce each dependent computation inside its continuation: building an array of validations before binding evaluates them eagerly and can change the first error or perform work after failed admission.
+
+| Context | Owner and representation |
+| --- | --- |
+| Optional value | Effect `Option` at TypeScript lookup/admission seams; native Rust `Option`. `None` means absence, while zero and an explicitly present `undefined` retain the owner's existing meaning. |
+| Typed failure | Effect `Result` for dependent TypeScript and Bun admission/outcomes; native Rust `Result` with `?` or `and_then`. Error values retain their domain meaning and precedence. |
+| Alternatives | Existing array/iterator `flatMap` operations combine bounded alternatives. Native sparse-array semantics and traversal order remain part of the owner contract. |
+| Asynchronous effects | Lazy Effect programs at typed transport/admission boundaries, interpreted by their Promise adapters. Existing native Promise/`async` programs retain their controller, queue and cleanup ownership. |
+| Environment and state | Injected capability interfaces supply observations and effect interpreters; pure transition functions return explicit next state or effect requests. The domain coordinator owns pending transitions and commits confirmed state after the required effect succeeds. |
+| Suspended domain programs | Existing routing generators and the native replacement program retain their interpreters and bounded execution. Add a general Reader, State, transformer or Free encoding only when dependent composition across real consumers becomes simpler. |
+
+Option is for absence without a diagnostic; Result is for failure with a diagnostic. Do not use truthiness to decide either case. A successful `undefined` and a failed computation that throws `undefined` are different outcomes. Convert a missing optional value to a failure only where that owner actually requires it.
+
+Keep Result composition in the owning admission path, then unwrap at an existing throwing compatibility boundary or project the existing public tagged result. Public JSON, IPC, error classes and messages retain their contracts. Do not export unused total wrappers around every function. Bounded byte/line parsers can retain explicit loops; checked dependent stages compose through Result.
+
+Monadic bind stops at the first failure or absence. Independent validation that intentionally collects ordered errors is applicative and keeps that accumulation. A branch, retry, cleanup or state-machine transition is a domain decision; it does not become a bind merely by receiving a functional name.
+
+An Effect program describes work lazily. Construct it without acquiring a reader, starting a timer or retaining a live resource. Each interpretation creates its own bounded scope, and interruption retires that scope. Execute it in effects or orchestration; logic imports only the allowlisted deterministic Result/Option operations. Preserve concurrency where independent reads already start together, and retain the first observed failure, sibling cancellation, deadlines and cleanup precedence. Explicit scope cancellation ends pending continuations before consuming later transport outcomes. Reinterpreting a program must follow its domain's replay rules; gameplay sends and authentication remain under their existing coordinators.
+
+The composition laws are left identity (binding an admitted value to a function is equivalent to calling that function), right identity (binding to the constructor preserves the result), and associativity (regrouping dependent binds preserves the outcome and order). These laws assume pure continuations and the same domain context. Tests cover actual admission and interpreter contracts: failed stages skip later work, absence differs from valid zero, errors and input ownership remain stable, and interpretation/interruption closes resources. Library combinators keep their upstream law tests; first-party code needs proof for its own callbacks and boundaries.
+
 ## Applying the seven levels
 
 Use the levels to choose an abstraction that earns its place in the domain. The existing architecture supplies functions, immutable calculations and higher-order composition; further refactors should make valid states and execution contracts clearer.
@@ -127,12 +150,12 @@ Use the levels to choose an abstraction that earns its place in the domain. The 
 | 1. Functions and immutability | Explicit observations enter pure decisions; orchestration owns state changes and effect ordering. |
 | 2. Higher-order functions | Context-bound unary evaluators and Effect transformations compose repeated decisions. |
 | 3. Algebraic data types | Rust enums and TypeScript discriminated unions represent mutually exclusive lifecycle states and outcomes. |
-| 4. Typed errors and effects | Rust `Result`/`Option` and tagged failure causes retain machine-readable meaning; adapters preserve existing public errors. |
+| 4. Typed errors and effects | Effect and Rust `Result`/`Option` compose dependent admission; lazy Effect transport programs retain typed failures and compatible Promise boundaries. |
 | 5. Abstract execution | Small domain traits and capability interfaces have production and deterministic test implementations. |
 | 6. Composition | Native records accumulate independent validation. Condition-state monoids combine bounded traces with explicit identity and priority rules. |
 | 7. Programs and interpreters | The native replacement program runs against its effect trait; route generators run through synchronous and cooperative interpreters. |
 
-Keep diagnostic text as a projection of a typed cause. Receipt retirement must depend on whether the server rejected an action, rather than on the spelling of its display message. Tagged outcomes distinguish successful `undefined` results from arbitrary thrown values; cleanup preserves an already established failure.
+Keep diagnostic text as a projection of a typed cause. Receipt retirement must depend on whether the server rejected an action, rather than on the spelling of its display message. Tagged outcomes distinguish successful `undefined` results from arbitrary thrown values. Cleanup follows the owning contract: release-download cleanup preserves an established failure, while process-report publication failure takes precedence over the child outcome.
 
 An effect interface describes the operations available to a domain program. Its interpreter performs those operations; the program still belongs to orchestration. Pure transition functions return the next state or a request for an effect, with generated tokens supplied by the caller. Keep locks and resource lifetime with their existing owner across the entire operation, including rollback and cleanup.
 
