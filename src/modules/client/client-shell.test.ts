@@ -79,6 +79,7 @@ function fixture() {
     panel.append(register(`#client-bot-${section}-title`, 'h3'));
     pagePanels.bot.append(register(`#client-bot-tab-${section}`, 'button'));
   }
+  pagePanels.bot.append(register('#setup-back', 'button'), register('#setup-next', 'button'), register('#setup-review', 'button'), register('#setup-step-progress', 'p'));
   pagePanels.settings.append(register('#client-profiles'));
   const manualTools = register('#client-manual-tools'); pagePanels.manual.append(manualTools);
   manualTools.append(register('#client-manual-index', 'nav'));
@@ -126,6 +127,49 @@ it('retains the actual Warp UI pending and staged preview across shell pages wit
 });
 
 describe('client shell navigation', () => {
+  it('guides all five retained steps and reviews on Bot without edits or commands', () => {
+    const f = fixture(), changed = vi.fn(), command = vi.fn();
+    const drafts = sections.map(section => {
+      const input = f.document.createElement('input'); input.value = `draft ${section}`; input.disabled = true;
+      input.addEventListener('input', changed); input.addEventListener('change', changed);
+      (f.shell.sections[section] as unknown as NavigationNode).append(input);
+      return input;
+    });
+    f.stop.addEventListener('click', command);
+    f.shell.showPage('bot');
+    expect(f.get('#setup-back').disabled).toBe(true);
+    for (let index = 0; index < sections.length; index++) {
+      expect(sections.filter(section => !f.shell.sections[section].hidden)).toEqual([sections[index]]);
+      expect(f.get('#setup-step-progress').textContent).toBe(`Step ${index + 1} of 5`);
+      expect(f.get('#setup-next').hidden).toBe(index === 4);
+      expect(f.get('#setup-review').hidden).toBe(index !== 4);
+      if (index < 4) f.get('#setup-next').emit('click');
+    }
+    f.get('#setup-back').emit('click');
+    expect(f.shell.sections.inventory.hidden).toBe(false); expect(f.get('#setup-review').hidden).toBe(true);
+    f.get('#client-bot-tab-workflows').emit('click'); f.get('#setup-review').emit('click');
+    expect(f.shell.page).toBe('session'); expect(f.document.activeElement).toBe(f.get('#client-page-session-title'));
+    f.shell.showPage('bot'); expect(f.shell.sections.workflows.hidden).toBe(false);
+    for (const [index, input] of drafts.entries()) {
+      expect(input.parentElement).toBe(f.shell.sections[sections[index]!]);
+      expect(input.value).toBe(`draft ${sections[index]}`); expect(input.disabled).toBe(true);
+    }
+    expect(changed).not.toHaveBeenCalled(); expect(command).not.toHaveBeenCalled();
+  });
+
+  it('keeps map and run results before the bounded log, with collapsed Advanced sections', () => {
+    const html = fixture().root.innerHTML;
+    const dashboard = html.split('id="client-page-session"')[1]!.split('id="client-page-bot"')[0]!;
+    expect(dashboard.indexOf('id="console-attention"')).toBeLessThan(dashboard.indexOf('class="bot-console-grid"'));
+    expect(dashboard.indexOf('id="radar"')).toBeLessThan(dashboard.indexOf('id="session-details"'));
+    expect(dashboard.indexOf('id="session-details"')).toBeLessThan(dashboard.indexOf('id="log"'));
+    const setup = html.split('id="setup-form"')[1]!.split('id="setup-script"')[0]!;
+    const advanced = [...setup.matchAll(/<details\b[^>]*\bclass="setup-advanced"[^>]*>/g)].map(match => match[0]);
+    expect(advanced).toHaveLength(5);
+    for (const details of advanced) expect(details).not.toMatch(/\sopen(?:\s|=|>)/);
+    expect([...setup.matchAll(/class="form-grid setup-basic-fields"/g)]).toHaveLength(5);
+    for (const id of ['setup-back', 'setup-next', 'setup-review']) expect(setup).toContain(`id="${id}" type="button"`);
+  });
   it('retains inventory and coordinate drafts and locks through inspector tabs and pure Edit setup', () => {
     const f = fixture(), inventory = f.get('#console-panel-inventory');
     const item = f.document.createElement('select'); item.value = '501'; item.disabled = true;

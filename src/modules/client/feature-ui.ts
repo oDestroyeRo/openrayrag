@@ -124,6 +124,12 @@ const fields: Record<Section, Field[]> = {
     { path:'schedule.endHour',label:'End hour · local time',min:0,max:23 },
   ], profiles: [],
 };
+const basicFields = new Set([
+  'combat.mode', 'combat.levelDifference', 'loot.ownership',
+  'recovery.enabled', 'recovery.hpStart', 'recovery.hpEnd', 'recovery.spStart', 'recovery.spEnd', 'recovery.timeoutSeconds',
+  'travel.destinationMap', 'loot.defaultAction',
+  'limits.minutes', 'limits.kills', 'limits.pickups', 'limits.weightPercent',
+]);
 function fieldElement(field: Field): HTMLLabelElement {
   const label = document.createElement('label'); label.className = field.kind === 'checkbox' ? 'toggle-row' : 'form-field';
   const title = document.createElement('span'); title.textContent = field.label; label.append(title);
@@ -276,12 +282,16 @@ export class FeatureUi {
       this.spPotions.root.hidden = this.recoveryResource.value !== 'sp';
     });
     resourceLabel.append(resourceTitle, this.recoveryResource);
-    this.panel('recovery').append(resourceLabel, this.hpPotions.root, this.spPotions.root);
+    const recovery = this.panels.get('recovery')!;
+    (recovery.querySelector<HTMLElement>('.setup-potions') ?? recovery).append(resourceLabel, this.hpPotions.root, this.spPotions.root);
     const combat = this.panel('combat');
     for (const [section, definitions] of Object.entries(fields) as Array<[Section,Field[]]>) {
-      const grid = document.createElement('div'); grid.className = 'form-grid'; for (const field of definitions) grid.append(fieldElement(field)); this.panels.get(section)!.append(grid);
+      const grid = document.createElement('div'); grid.className = 'form-grid';
+      const basics = this.panels.get(section)!.querySelector<HTMLElement>('.setup-basic-fields');
+      for (const field of definitions) (basicFields.has(field.path) && basics ? basics : grid).append(fieldElement(field));
+      if (grid.children.length) this.panel(section).append(grid);
     }
-    const travel = this.panels.get('travel')!;
+    const travel = this.panel('travel');
     const followProgress=document.createElement('p');followProgress.id='party-follow-state';followProgress.className='hint';travel.append(followProgress);
     this.host.querySelector<HTMLSelectElement>('[data-setting="follow.mode"]')!.addEventListener('change',()=>{
       const mode=this.host.querySelector<HTMLSelectElement>('[data-setting="follow.mode"]')!.value as 'name'|'partyLeader';
@@ -314,7 +324,10 @@ export class FeatureUi {
     this.settingInputs.set('disposition.maxSpend', this.host.querySelector<HTMLInputElement>('[data-setting="disposition.maxSpend"]')!);
     this.write(DEFAULT_AUTOMATION);
   }
-  private panel(section: Section): HTMLElement { return this.panels.get(section)!; }
+  private panel(section: Section): HTMLElement {
+    const panel = this.panels.get(section)!;
+    return panel.querySelector<HTMLElement>('.setup-advanced') ?? panel;
+  }
   private dispositionPanel(): void {
     const panel = this.panel('inventory');
     const binary: Array<[string,string]> = [['0','Preserve'],['1','Allow']];

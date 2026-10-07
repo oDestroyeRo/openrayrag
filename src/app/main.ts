@@ -4,6 +4,8 @@ import { SettingsClose } from '../modules/settings/settings-close';
 import { BotConsole } from '../modules/client/bot-console';
 import { consoleNpcs, consolePlayerShops } from '../modules/client/bot-console-logic';
 import { ActivityLog } from '../modules/client/activity-log';
+import { ClientAttention } from '../modules/client/client-attention';
+import { clientAttention } from '../modules/client/client-attention-logic';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { validateSettings, type SettingsInput, type RunSettings } from '../modules/settings/settings';
@@ -34,12 +36,16 @@ element('update-download').addEventListener('click',event=>{
 const openButton = element<HTMLButtonElement>('open');
 const startButton = element<HTMLButtonElement>('start');
 const stopButton = element<HTMLButtonElement>('stop');
-const liveSettingsPanel=document.createElement('section');liveSettingsPanel.className='panel';
+const liveSettingsPanel=document.createElement('section');liveSettingsPanel.className='panel live-settings-panel';
+const liveSettingsTitle=document.createElement('h3');liveSettingsTitle.textContent='Saved draft & active run';
 const applySettingsButton=document.createElement('button');applySettingsButton.id='apply-run-settings';applySettingsButton.type='button';applySettingsButton.className='secondary compact';applySettingsButton.textContent='Apply to current run';
 const liveSettingsStatus=document.createElement('p');liveSettingsStatus.id='live-settings-status';liveSettingsStatus.className='hint';liveSettingsStatus.setAttribute('role','status');liveSettingsStatus.setAttribute('aria-live','polite');
 const liveSettingsHelp=document.createElement('p');liveSettingsHelp.className='hint';
 liveSettingsHelp.textContent='Form edits save as a separate draft. Live Apply supports combat targets, scan radius, loot and HP/SP recovery. Lower reserves or cooldowns, limits/schedules, map/travel, supply spending, equipment/allocation, macro/service rules and whole profiles are Next run.';
-liveSettingsPanel.append(applySettingsButton,liveSettingsStatus,liveSettingsHelp);
+const liveSettingsDetails=document.createElement('details');
+const liveSettingsSummary=document.createElement('summary');liveSettingsSummary.textContent='What can apply during a run?';
+liveSettingsDetails.append(liveSettingsSummary,liveSettingsHelp);
+liveSettingsPanel.append(liveSettingsTitle,liveSettingsStatus,applySettingsButton,liveSettingsDetails);
 element('client-page-bot').prepend(liveSettingsPanel);
 const savedDraftSummary=element('console-saved-draft-summary');
 const editSetupButton=element<HTMLButtonElement>('console-edit-setup');
@@ -50,6 +56,24 @@ editSetupButton.addEventListener('click',()=>{
   shell.showBotSection('combat');
 });
 const activityLog = new ActivityLog(element('log'));
+const attention = new ClientAttention(element('console-attention'), element('console-attention-list'), action => {
+  if (action === 'account') {
+    shell.showPage('settings'); element<HTMLDetailsElement>('signin-panel').open = true;
+    element<HTMLInputElement>('username').focus();
+  } else if (action === 'tools') shell.showPage('manual');
+  else {
+    shell.showPage('bot');
+    if (action === 'recovery' || action === 'limits' || action === 'supply') {
+      element<HTMLButtonElement>('setup-tab-form').click();
+      shell.showBotSection(action === 'recovery' ? 'recovery' : action === 'supply' ? 'travel' : 'workflows');
+      if (action === 'supply') {
+        element<HTMLDetailsElement>('setup-travel-advanced').open = true;
+        const output = element('supply-preview'); output.tabIndex = -1;
+        output.focus(); output.scrollIntoView({ block: 'nearest' });
+      }
+    }
+  }
+});
 const native = isTauri();
 let closeRegistered=!native;
 let closeBusy=false;
@@ -283,8 +307,6 @@ function message(text: string, error = false): void {
 }
 function updateButtons(projection: SettingsFormProjection = form.project()): void {
   syncGameView();
-  const navigation = new Set(shell.main.querySelectorAll<HTMLButtonElement>('button[data-client-page-nav], button[data-client-bot-nav], button[data-client-inspector-nav], button[data-client-navigation], #client-manual-index > button'));
-  for (const button of navigation) button.disabled = false;
   let dashboardSettings: SettingsInput | null = null;
   let formError: unknown = null;
   try { dashboardSettings = projection.snapshot().settings; } catch (error) { formError = error; /* Keep invalid drafts editable on Setup. */ }
@@ -307,6 +329,11 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   element('status').classList.toggle('active',dashboard.state==='RUNNING');
   element('status').dataset.state=dashboard.state;
   element('client-run-title').textContent = dashboard.headline;
+  attention.render(clientAttention(latest, { fresh, fieldRequested: fieldRun.requested, held: features.active(), limitReason: fieldRun.limitReason,
+    loginBusy, setupReason: !runActive() && (ready || !dashboardSettings) ? setupReason : '' }, activeSettings ?? dashboardSettings));
+  const navigation = new Set(shell.main.querySelectorAll<HTMLButtonElement>('button[data-client-page-nav], button[data-client-bot-nav], button[data-client-inspector-nav], button[data-client-navigation], #client-manual-index > button'));
+  // Step boundaries are owned by the retained Setup navigation.
+  for (const button of navigation) if (button.dataset.clientNavigation !== 'setup-step') button.disabled = false;
   if(dashboard.state==='LIMIT')message(dashboard.reason);
   element('console-setup-summary').textContent = `${activeSettings?'Active run: ':''}${dashboard.setup}`;
   const retainedDiffers=!!dashboardSettings&&!!fieldSettings&&(dashboardSettings.map!==fieldSettings.map||dashboardSettings.targets.join(',')!==fieldSettings.targets.join(','));
@@ -332,6 +359,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   else lines.push('Saved draft. Start uses these settings.');
   if(runActive()&&!fieldRun.requested)lines.push('Macro/service settings are Next run.');
   liveSettingsStatus.textContent=lines.join('\n');liveSettingsStatus.style.whiteSpace='pre-line';
+  applySettingsButton.hidden=!fieldRun.requested;
   applySettingsButton.disabled=!native||!fieldRun.requested||!latest?.runRequested||!liveValid||!fresh||busy||dispatches.stopping||loginBusy||fieldRun.settingsApplyPending||receipt?.state==='pending'||features.setupDraftDirty();
   element('client-account-label').textContent = latest?.connected && latest.compatible && latest.player ? 'Account' : 'Connect account';
   startButton.hidden = dashboard.state === 'RUNNING';
