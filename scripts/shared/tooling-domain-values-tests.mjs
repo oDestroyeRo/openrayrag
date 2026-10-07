@@ -189,7 +189,7 @@ test('smoke admission owns nested settings while validation retains document ide
   raw.document.settings.radius = 99;
   raw.checks.length = 0;
   assert.equal(admitted.document.settings.radius, 17);
-  assert.equal(admitted.checks.length, 5);
+  assert.equal(admitted.checks.length, 6);
   assert.equal(Object.isFrozen(raw.document.settings), false);
 });
 
