@@ -34,7 +34,7 @@ export class CurrentForm {
     }
     this.initialized = true;
   }
-  flush(): Promise<FormDocument> {
+  flush(save: (d: FormDocument) => Promise<number> = this.save): Promise<FormDocument> {
     let proposal: ReturnType<typeof nextFormSave>;
     try {
       const d = formDocument({ version: 1, revision: this.revision, ...this.read() });
@@ -52,11 +52,14 @@ export class CurrentForm {
     const task = this.chain
       .catch(() => {})
       .then(async () => {
-        if ((await this.save(requested)) !== requested.revision)
+        if ((await save(requested)) !== requested.revision)
           throw new Error('Current settings save was not confirmed.');
         return requested;
       });
-    this.chain = task.then(() => {});
+    this.chain = task.then(
+      () => {},
+      () => {},
+    );
     return task;
   }
 }

@@ -98,6 +98,7 @@ interface Hooks {
   macroSettings?(): SettingsInput;
   applySetup?(settings: SettingsInput): void;
   setupChanged?(): void;
+  definitionsChanged?(): void;
   command(action: Record<string, unknown>): Promise<unknown>;
   workflow(spec: unknown): Promise<unknown>;
   routine(spec: unknown): Promise<unknown>;
@@ -569,6 +570,8 @@ export class FeatureUi {
   private readonly spPotions: RecoveryItemUi;
   private readonly recoveryResource = document.createElement('select');
   private macroUi!: MacroUi;
+  private refreshProfiles: (selected?: string) => void = () => {};
+  private refreshServices: (selected?: string) => void = () => {};
   private displaySettings: (() => SettingsInput) | undefined;
   /** Display and lock consumers share a synchronous SettingsForm projection.
    * Action callbacks outside this scope always read current DOM settings.
@@ -2428,6 +2431,10 @@ export class FeatureUi {
       if (service) editor.value = JSON.stringify(service, null, 2);
       preview.textContent = 'Choose Preview to inspect this visit.';
     };
+    this.refreshServices = (selected) => {
+      refresh(selected);
+      show();
+    };
     const button = (name: string, action: () => unknown, manual = false) => {
       const b = document.createElement('button');
       b.type = 'button';
@@ -2517,16 +2524,16 @@ export class FeatureUi {
     );
     button('Save / update', () => {
       const existing = select.value.startsWith('saved:') ? select.value.slice(6) : undefined;
-      const saved = this.services.save(JSON.parse(editor.value), existing);
-      refresh('saved:' + saved.id);
-      show();
+      this.serviceOperation({
+        operation: 'save',
+        definition: JSON.parse(editor.value),
+        id: existing,
+      });
       return 'NPC service saved on this computer.';
     });
     button('Delete saved', () => {
       if (!select.value.startsWith('saved:')) throw new Error('Choose a saved service.');
-      this.services.remove(select.value.slice(6));
-      refresh();
-      show();
+      this.serviceOperation({ operation: 'remove', id: select.value.slice(6) });
       return 'Saved NPC service deleted.';
     });
     button('Export saved', () => {
@@ -2535,9 +2542,7 @@ export class FeatureUi {
       details.open = true;
     });
     button('Import document', () => {
-      const imported = this.services.import(documents.value);
-      refresh('saved:' + imported[0]!.id);
-      show();
+      this.serviceOperation({ operation: 'import', document: documents.value });
       return 'NPC services imported on this computer.';
     });
     button(
@@ -2549,7 +2554,13 @@ export class FeatureUi {
         }),
       true,
     );
-    select.addEventListener('change', show);
+    const changed = () => this.hooks.definitionsChanged?.();
+    select.addEventListener('change', () => {
+      show();
+      changed();
+    });
+    editor.addEventListener('input', changed);
+    documents.addEventListener('input', changed);
     refresh();
     show();
   }
@@ -2557,6 +2568,72 @@ export class FeatureUi {
   /** Detached validated read; MCP never enters profile application or persistence. */
   readProfiles(): ReturnType<ProfileStore['list']> {
     return this.profiles.list();
+  }
+  exportProfile(id: string): string {
+    return this.profiles.export(id);
+  }
+  profileOperation(input: {
+    operation: 'save' | 'remove' | 'import' | 'apply' | 'select';
+    id?: string;
+    name?: string;
+    document?: string;
+  }): void {
+    if (this.locked) throw new Error('Wait for the current request before editing profiles.');
+    if (input.operation === 'save') {
+      const saved = this.profiles.save(
+        input.name ?? '',
+        this.hooks.character(),
+        this.hooks.settings(),
+        input.id,
+      );
+      this.refreshProfiles(saved.id);
+    } else if (input.operation === 'import') {
+      const imported = this.profiles.import(input.document ?? '');
+      this.refreshProfiles(imported[0]?.id);
+    } else {
+      const selected = this.profiles.list().find((profile) => profile.id === input.id);
+      if (!selected) throw new Error('Choose an existing profile.');
+      if (input.operation === 'remove') {
+        this.profiles.remove(selected.id);
+        this.refreshProfiles();
+      } else if (input.operation === 'apply') {
+        const profile = this.profiles.forMap(selected.id, this.hooks.map(), this.hooks.character());
+        this.hooks.apply(profile.settings);
+        this.restoreProfileSelection(selected.id);
+      } else this.restoreProfileSelection(selected.id);
+    }
+    this.hooks.changed();
+  }
+  readServices(): {
+    saved: ReturnType<NpcServiceStore['list']>;
+    builtins: typeof BUILTIN_SERVICES;
+  } {
+    return { saved: this.services.list(), builtins: structuredClone(BUILTIN_SERVICES) };
+  }
+  exportService(id: string): string {
+    return this.services.export(id);
+  }
+  serviceOperation(input: {
+    operation: 'save' | 'remove' | 'import';
+    id?: string;
+    definition?: unknown;
+    document?: string;
+  }): void {
+    if (this.locked) throw new Error('Wait for the current request before editing services.');
+    if (input.operation === 'save') {
+      const saved = this.services.save(input.definition, input.id);
+      this.refreshServices('saved:' + saved.id);
+    } else if (input.operation === 'import') {
+      const imported = this.services.import(input.document ?? '');
+      this.refreshServices('saved:' + imported[0]!.id);
+    } else {
+      if (!this.services.list().some((service) => service.id === input.id))
+        throw new Error('Choose an existing saved service.');
+      this.services.remove(input.id!);
+      this.refreshServices();
+    }
+    if (this.hooks.definitionsChanged) this.hooks.definitionsChanged();
+    else this.hooks.changed();
   }
   selectedProfileId(): string | null {
     return this.host.querySelector<HTMLSelectElement>('#profile-select')?.value || null;
@@ -2640,6 +2717,7 @@ export class FeatureUi {
       });
       container.append(button);
     };
+    this.refreshProfiles = refresh;
     action('Save new', () => {
       const profile = this.profiles.save(name.value, this.hooks.character(), this.hooks.settings());
       refresh(profile.id);
@@ -2863,6 +2941,12 @@ export class FeatureUi {
   }
   setupDocument(): BotScriptDocument {
     return this.macroUi.configured();
+  }
+  readScript(): ReturnType<MacroUi['readScript']> {
+    return this.macroUi.readScript();
+  }
+  setScript(script: string): ReturnType<MacroUi['setScript']> {
+    return this.macroUi.setScript(script);
   }
   syncSetup(settings: SettingsInput): void {
     this.macroUi.syncSettings(settings);

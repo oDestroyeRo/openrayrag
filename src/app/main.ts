@@ -47,7 +47,16 @@ import {
 import { clientDashboard } from '../modules/client/client-dashboard';
 import { liveSettingLabel, planLiveSettings } from '../modules/settings/live-settings-logic';
 import { mountMcp } from '../modules/mcp/mcp-client';
-import { retainedMcpObservation, type McpObservation } from '../modules/mcp/mcp-logic';
+import {
+  mcpReadResult,
+  mcpWriteTool,
+  retainedMcpObservation,
+  type McpQuery,
+  type McpObservation,
+} from '../modules/mcp/mcp-logic';
+import { McpControl } from '../modules/mcp/mcp-control';
+import { mcpPreview } from '../modules/mcp/mcp-preview';
+import { validateLoginProfile } from '../modules/session/login-logic';
 import type { FormSnapshot } from '../modules/settings/settings-form-logic';
 import '../modules/client/client-shell.css';
 
@@ -173,6 +182,10 @@ let gameOpen = false;
 let latest: ValidatedGameStatus | null = null;
 let receivedAt = 0;
 let mcpObservation: McpObservation | null = null;
+let mcpDraftRevision = 0;
+function touchMcpDraft(): void {
+  mcpDraftRevision++;
+}
 let busy = false;
 let heartbeatPending = false;
 let previousSession: string | undefined;
@@ -301,7 +314,14 @@ const features = new FeatureUi(
     character: () => latest?.player?.name ?? '',
     macroSettings: () => form.snapshot().settings,
     applySetup: (value) => form.applySettings(value),
-    setupChanged: () => updateButtons(),
+    setupChanged: () => {
+      touchMcpDraft();
+      updateButtons();
+    },
+    definitionsChanged: () => {
+      touchMcpDraft();
+      updateButtons();
+    },
     command: (request) => featureRequest('command', request),
     workflow: (request) => featureRequest('workflow', request),
     routine: (request) => featureRequest('routine', request),
@@ -318,7 +338,9 @@ const features = new FeatureUi(
     refine: (request) => featureRequest('refine', request),
     refineAdvance: (promptToken) => featureRequest('refineAdvance', { promptToken }),
     notify: message,
-    stop: () => stopButton.click(),
+    stop: () => {
+      void stopBot();
+    },
     changed: () => {
       formChanged();
       updateButtons();
@@ -395,6 +417,7 @@ const settingsClose = new SettingsClose({
   },
 });
 function formChanged(): void {
+  touchMcpDraft();
   currentForm.touch();
   if (!closeBusy) closeStatus = null;
   if (!native || !currentForm.initialized || closeBusy || updateBusy) return;
@@ -514,22 +537,42 @@ async function pollUpdate(requested = false): Promise<void> {
   }
 }
 const configHelp = element('config-help');
+async function applyCurrentSettings(mcpOperation?: string): Promise<Record<string, unknown>> {
+  if (
+    !latest ||
+    !fieldRun.requested ||
+    !latest.runRequested ||
+    dispatches.stopping ||
+    features.setupDraftDirty() ||
+    fieldRun.settingsApplyPending ||
+    latest.settingsApply?.state === 'pending' ||
+    Date.now() - receivedAt >= 7000
+  )
+    throw new Error('Current run settings are not ready for Apply.');
+  const proposal = form.snapshot().settings;
+  const active = latest.activeSettings ?? fieldRun.activeSettings;
+  if (!active) throw new Error('Active run settings are unavailable.');
+  planLiveSettings(
+    active,
+    proposal,
+    active,
+    latest.liveSettingsGuard ?? fieldRun.liveSettingsGuard,
+  );
+  const id = crypto.randomUUID().replaceAll('-', '');
+  const result = (await dispatches.applySettings(proposal, latest, id, mcpOperation)).outcome;
+  if (result.status === 'failed') throw result.error;
+  return {
+    dispatch: result.status,
+    applyId: id,
+    confirmation: 'Read get_status.receipts.settingsApply for game confirmation.',
+  };
+}
 applySettingsButton.addEventListener(
   'click',
   () =>
     void perform(async () => {
-      if (!latest || !fieldRun.requested || dispatches.stopping) return;
-      const proposal = form.snapshot().settings;
-      const id = crypto.randomUUID().replaceAll('-', '');
-      const result = (await dispatches.applySettings(proposal, latest, id)).outcome;
-      if (result.status === 'failed')
-        message(
-          typeof result.error === 'string'
-            ? result.error
-            : 'Could not send the settings Apply request.',
-          true,
-        );
-      else if (result.status === 'accepted')
+      const result = await applyCurrentSettings();
+      if (result.dispatch === 'accepted')
         message('Settings Apply requested. Waiting for the current action confirmation.');
     }),
 );
@@ -578,11 +621,18 @@ function disconnectReady(): boolean {
   });
 }
 
-async function featureRequest(action: string, request: unknown): Promise<unknown> {
+async function featureRequest(
+  action: string,
+  request: unknown,
+  mcpOperation?: string,
+): Promise<unknown> {
   if (
     !native ||
+    !closeRegistered ||
+    closeBusy ||
     updateBusy ||
     busy ||
+    (mcpControls.busy && !mcpOperation) ||
     dispatches.stopping ||
     loginBusy ||
     !latest?.connected ||
@@ -602,7 +652,7 @@ async function featureRequest(action: string, request: unknown): Promise<unknown
   busy = true;
   updateButtons();
   try {
-    const result = (await dispatches.feature(action, request)).outcome;
+    const result = (await dispatches.feature(action, request, mcpOperation)).outcome;
     if (result.status === 'failed') throw result.error;
     if (result.status === 'retired')
       throw new Error(
@@ -877,39 +927,69 @@ function showSavedLogin(profile: SavedLogin | null): void {
   configureReconnect();
 }
 
-async function signIn(): Promise<void> {
+interface SignInInput {
+  username?: string;
+  password?: string;
+  characterSlot?: number;
+  remember?: boolean;
+  autoLogin?: boolean;
+  mode?: 'botOnly' | 'gameClient';
+}
+async function signIn(
+  mcpOperation?: string,
+  input?: SignInInput,
+): Promise<Record<string, unknown>> {
   if (
     !native ||
+    !closeRegistered ||
+    closeBusy ||
     !accountReady ||
     updateBusy ||
     busy ||
+    (mcpControls.busy && !mcpOperation) ||
     dispatches.stopping ||
     loginBusy ||
     (latest?.connected && latest.player)
   )
-    return;
-  const username = element<HTMLInputElement>('username').value.trim();
+    throw new Error('The client is not ready to sign in.');
+  const username = (input?.username ?? element<HTMLInputElement>('username').value).trim();
   const password = element<HTMLInputElement>('password');
-  const characterSlot = Number(element<HTMLSelectElement>('character-slot').value);
-  const remember = element<HTMLInputElement>('remember-login').checked;
-  const autoLogin = element<HTMLInputElement>('auto-login').checked;
-  const mode = element<HTMLSelectElement>('connection-mode').value as 'botOnly' | 'gameClient';
-  const reuse = savedLogin?.username === username && !password.value;
+  const suppliedPassword = input ? (input.password ?? '') : password.value;
+  const characterSlot =
+    input?.characterSlot ?? Number(element<HTMLSelectElement>('character-slot').value);
+  const remember = input?.remember ?? element<HTMLInputElement>('remember-login').checked;
+  const autoLogin = input?.autoLogin ?? element<HTMLInputElement>('auto-login').checked;
+  const mode =
+    input?.mode ??
+    (element<HTMLSelectElement>('connection-mode').value as 'botOnly' | 'gameClient');
+  const reuse = savedLogin?.username === username && !suppliedPassword;
+  validateLoginProfile({
+    username,
+    password: reuse ? 'saved-password' : suppliedPassword,
+    characterSlot,
+  });
+  const accountRevision = mcpDraftRevision;
   previousSession = latest?.sessionId;
   loginBusy = true;
   loginStartedAt = Date.now();
   updateButtons();
   try {
-    const task = dispatches.login({
-      credentials: reuse ? null : { username, password: password.value, characterSlot },
-      characterSlot,
-      remember,
-      autoLogin,
-      mode,
-    });
-    password.value = '';
+    const task = dispatches.login(
+      {
+        credentials: reuse ? null : { username, password: suppliedPassword, characterSlot },
+        characterSlot,
+        remember,
+        autoLogin,
+        mode,
+      },
+      mcpOperation,
+    );
+    if (!input) {
+      password.value = '';
+      touchMcpDraft();
+    }
     const result = (await task).outcome;
-    if (result.status === 'retired') return;
+    if (result.status === 'retired') return { dispatch: 'retired' };
     if (result.status === 'failed') {
       previousSession = undefined;
       loginBusy = false;
@@ -917,9 +997,20 @@ async function signIn(): Promise<void> {
         typeof result.error === 'string' ? result.error : 'Could not start automatic sign-in.',
         true,
       );
-      return;
+      return {
+        dispatch: 'failed',
+        error: 'Sign-in could not start. Credentials are not included in operation outcomes.',
+      };
     }
     gameOpen = true;
+    if (input && mcpDraftRevision === accountRevision) {
+      element<HTMLInputElement>('username').value = username;
+      element<HTMLSelectElement>('character-slot').value = String(characterSlot);
+      element<HTMLSelectElement>('connection-mode').value = mode;
+      element<HTMLInputElement>('remember-login').checked = remember;
+      element<HTMLInputElement>('auto-login').checked = autoLogin;
+      touchMcpDraft();
+    }
     accountBaseline = accountFields();
     if (mode === 'gameClient') shell.showPage('game');
     if (remember) showSavedLogin({ username, characterSlot, autoLogin, mode });
@@ -928,6 +1019,10 @@ async function signIn(): Promise<void> {
         ? 'Opening bot connection for sign-in…'
         : 'Loading the game client for sign-in…',
     );
+    return {
+      dispatch: 'accepted',
+      confirmation: 'Wait for a fresh connected character observation.',
+    };
   } finally {
     updateButtons();
   }
@@ -950,83 +1045,150 @@ element('forget-login').addEventListener(
   'click',
   () =>
     void perform(async () => {
-      await invoke('forget_login');
-      showSavedLogin(null);
-      element<HTMLInputElement>('remember-login').checked = false;
-      element<HTMLInputElement>('auto-login').checked = false;
-      accountBaseline = accountFields();
+      await forgetLogin();
       message('Local saved login and app-open sign-in preference removed.');
     }),
 );
+async function forgetLogin(mcpOperation?: string): Promise<Record<string, unknown>> {
+  const revision = mcpDraftRevision;
+  await (mcpOperation ? invoke('forget_login', { mcpOperation }) : invoke('forget_login'));
+  showSavedLogin(null);
+  if (revision === mcpDraftRevision) {
+    element<HTMLInputElement>('remember-login').checked = false;
+    element<HTMLInputElement>('auto-login').checked = false;
+    accountBaseline = accountFields();
+    touchMcpDraft();
+  }
+  return { persisted: true, forgotten: true, draftRevision: mcpDraftRevision };
+}
 
-async function perform(action: () => Promise<unknown>): Promise<void> {
-  if (busy) return;
+async function mainOperation(
+  action: () => Promise<unknown>,
+  mcpOperation?: string,
+): Promise<unknown> {
+  if (busy || (mcpControls.busy && !mcpOperation))
+    throw new Error('Another client operation is in progress.');
   busy = true;
   updateButtons();
   try {
-    await action();
-  } catch (error) {
-    message(typeof error === 'string' ? error : 'Unable to contact the game.', true);
+    return await action();
   } finally {
     busy = false;
     updateButtons();
   }
 }
+async function perform(action: () => Promise<unknown>): Promise<void> {
+  try {
+    await mainOperation(action);
+  } catch (error) {
+    message(typeof error === 'string' ? error : 'Unable to contact the game.', true);
+  }
+}
+async function disconnect(mcpOperation?: string): Promise<Record<string, unknown>> {
+  if (!disconnectReady()) throw new Error('The current connection is not ready to disconnect.');
+  return (await mainOperation(async () => {
+    await (mcpOperation ? invoke('close_game', { mcpOperation }) : invoke('close_game'));
+    return { dispatch: 'accepted', confirmation: 'Wait for the game-closed observation.' };
+  }, mcpOperation)) as Record<string, unknown>;
+}
 for (const id of ['disconnect', 'account-disconnect'])
   element(id).addEventListener('click', () => {
     if (!disconnectReady()) return;
-    void perform(async () => {
-      await invoke('close_game');
-    });
+    void disconnect().catch(() => message('Unable to disconnect the current game.', true));
   });
-startButton.addEventListener(
-  'click',
-  () =>
-    void perform(async () => {
-      if (!latest?.player || dispatches.stopping) return;
-      features.syncSetup(form.snapshot().settings);
-      const document = features.setupDocument();
-      const task = document.script
-        ? dispatches.feature('macro', {
-            script: document.script,
-            settings: macroBaseSettings(document.settings, document.script),
-          })
-        : dispatches.start(validateSettings(form.runSettings()), latest);
-      configureReconnect();
-      reconnect.observe(
-        latest.connected,
-        true,
-        latest.login.phase,
-        Date.now(),
-        latest.login.message,
-      );
-      const result = (await task).outcome;
-      if (result.status === 'failed') {
-        configureReconnect();
-        message(
-          typeof result.error === 'string' ? result.error : 'Unable to contact the game.',
-          true,
-        );
-      }
-    }),
-);
-stopButton.addEventListener('click', () => {
-  if (dispatches.stopping) return;
+function botStartReady(): boolean {
+  if (
+    !native ||
+    !closeRegistered ||
+    closeBusy ||
+    updateBusy ||
+    dispatches.stopping ||
+    loginBusy ||
+    runActive() ||
+    !latest?.connected ||
+    !latest.compatible ||
+    !latest.player ||
+    Date.now() - receivedAt >= 7000 ||
+    features.setupDraftDirty()
+  )
+    return false;
+  try {
+    const document = features.setupDocument();
+    if (document.script) {
+      macroBaseSettings(document.settings, document.script);
+      return true;
+    }
+    return canStartField({
+      native,
+      fresh: true,
+      busy: false,
+      stopping: false,
+      loginBusy: false,
+      runActive: false,
+      connected: true,
+      compatible: true,
+      map: latest.map,
+      player: latest.player,
+      settings: validateSettings(form.runSettings()),
+    });
+  } catch {
+    return false;
+  }
+}
+async function startBot(mcpOperation?: string): Promise<Record<string, unknown>> {
+  if (!botStartReady() || !latest)
+    throw new Error('Connect a verified character and finish a valid Setup before Start.');
+  features.syncSetup(form.snapshot().settings);
+  const document = features.setupDocument();
+  const task = document.script
+    ? dispatches.feature(
+        'macro',
+        {
+          script: document.script,
+          settings: macroBaseSettings(document.settings, document.script),
+        },
+        mcpOperation,
+      )
+    : dispatches.start(validateSettings(form.runSettings()), latest, mcpOperation);
+  configureReconnect();
+  reconnect.observe(latest.connected, true, latest.login.phase, Date.now(), latest.login.message);
+  const result = (await task).outcome;
+  if (result.status === 'failed') {
+    configureReconnect();
+    message(typeof result.error === 'string' ? result.error : 'Unable to contact the game.', true);
+  }
+  return {
+    dispatch: result.status,
+    confirmation: 'Read get_status for observed run intent and game action receipts.',
+  };
+}
+startButton.addEventListener('click', () => void perform(() => startBot()));
+async function stopBot(mcpOperation?: string): Promise<Record<string, unknown>> {
+  mcpControls.retireActivations();
   // Cancel native restart authority before dispatching Stop through admission.
   // Local ownership retires immediately, even if replacement already started.
-  const cancel = updateContinuation.cancel(true).catch(() => {});
-  const task = dispatches.stop(cancel);
+  const cancel = updateContinuation.cancel(true, mcpOperation).catch(() => {});
+  const task = dispatches.stop(cancel, mcpOperation);
   loginBusy = false;
   previousSession = undefined;
   updateButtons();
-  void task
+  return task
     .then((receipt) => {
       const result = receipt.outcome;
       if (result.status === 'accepted') message('Bot stopped.');
       else if (result.status === 'failed')
         message('Run cancelled. The game controller is unavailable.');
+      return {
+        dispatch: result.status,
+        retainedRunCancelled: true,
+        confirmation:
+          'Stop retires local intent; previously sent game actions still require receipt reconciliation.',
+      };
     })
     .finally(updateButtons);
+}
+stopButton.addEventListener('click', () => {
+  void stopBot();
 });
 function render(s: ValidatedGameStatus): void {
   // Navigation is asynchronous: the previous page may still publish its terminal
@@ -1118,6 +1280,178 @@ function render(s: ValidatedGameStatus): void {
   updateButtons(projection);
   resumeFieldRun(s);
 }
+function readMcp(query: McpQuery, executing = false) {
+  let snapshot: FormSnapshot | null = null;
+  if (currentForm.initialized) {
+    try {
+      snapshot = form.snapshot();
+    } catch {
+      /* Invalid editable drafts remain intact. */
+    }
+  }
+  return {
+    now: Date.now(),
+    runtimeGeneration: query.runtimeGeneration,
+    status: latest,
+    observation: mcpObservation,
+    gameOpen,
+    runRequested: fieldRun.requested,
+    limitReason: fieldRun.limitReason,
+    updateBusy,
+    updateContinuationPending: updateContinuation.pending,
+    form: snapshot,
+    formInitialized: currentForm.initialized,
+    profiles: query.tool === 'list_profiles' ? features.readProfiles() : [],
+    draftRevision: mcpDraftRevision,
+    script: query.tool === 'get_script' ? features.readScript() : null,
+    services: query.tool === 'list_services' ? features.readServices() : null,
+    account: {
+      username: element<HTMLInputElement>('username').value,
+      characterSlot: Number(element<HTMLSelectElement>('character-slot').value),
+      mode: element<HTMLSelectElement>('connection-mode').value,
+      remember: element<HTMLInputElement>('remember-login').checked,
+      autoLogin: element<HTMLInputElement>('auto-login').checked,
+      reconnect: element<HTMLInputElement>('auto-reconnect').checked,
+      savedPasswordAvailable: savedLogin !== null,
+    },
+    controls: {
+      busy:
+        busy ||
+        (!executing && mcpControls.busy) ||
+        loginBusy ||
+        dispatches.stopping ||
+        closeBusy ||
+        !closeRegistered ||
+        !currentForm.initialized ||
+        !accountReady,
+      ready: !!(
+        latest?.connected &&
+        latest.compatible &&
+        latest.player &&
+        Date.now() - receivedAt < 7000
+      ),
+      startReady: !busy && (executing || !mcpControls.busy) && botStartReady(),
+      applyReady: !applySettingsButton.disabled,
+      disconnectReady: disconnectReady(),
+    },
+  };
+}
+async function flushMcpDraft(operation: string): Promise<Record<string, unknown>> {
+  // Replace only the autosave scheduled by the synchronous assistant edit.
+  // Later human edits schedule their own ordinary save and retain their ownership.
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = undefined;
+  }
+  const draftRevision = mcpDraftRevision;
+  try {
+    const document = await currentForm.flush((document) =>
+      invoke<number>('save_current_form', { document, mcpOperation: operation }),
+    );
+    return {
+      draftChanged: true,
+      draftRevision,
+      persisted: true,
+      persistedRevision: document.revision,
+    };
+  } catch {
+    return {
+      draftChanged: true,
+      draftRevision,
+      persisted: false,
+      error:
+        'The draft changed but Form persistence was not confirmed. Newer human edits remain intact.',
+    };
+  }
+}
+const mcpControls = new McpControl({
+  claim: (query) =>
+    invoke('mcp_claim', { id: query.id, runtimeGeneration: query.runtimeGeneration }),
+  read: (query) => readMcp(query, true),
+  perform: async (tool, args, operation) => {
+    if (tool === 'stop_bot') return stopBot(operation);
+    if (tool === 'set_settings') {
+      if (features.setupDraftDirty())
+        throw new Error('Finish or discard the Script draft before editing Form.');
+      form.applySettings(args.settings as SettingsInput);
+      return flushMcpDraft(operation);
+    }
+    if (tool === 'set_script') {
+      const script = features.setScript(args.script as string);
+      const formResult = await flushMcpDraft(operation);
+      return {
+        ...formResult,
+        scriptPersisted: script.persisted,
+        draftChanged: script.draftChanged,
+        ...(script.persisted
+          ? {}
+          : {
+              error:
+                'The Script draft changed but script persistence was not confirmed. Copy the draft or retry Save script.',
+            }),
+      };
+    }
+    if (tool === 'profile') {
+      if (args.operation === 'apply' && features.setupDraftDirty())
+        throw new Error('Finish or discard the Script draft before applying a profile.');
+      features.profileOperation(args as Parameters<FeatureUi['profileOperation']>[0]);
+      return {
+        ...(await flushMcpDraft(operation)),
+        profilesPersisted: ['save', 'remove', 'import'].includes(args.operation as string),
+      };
+    }
+    if (tool === 'service_definition') {
+      features.serviceOperation(args as Parameters<FeatureUi['serviceOperation']>[0]);
+      // Service collections own their private local-storage transaction; no Form save is needed.
+      return { draftChanged: true, draftRevision: mcpDraftRevision, persisted: true };
+    }
+    if (tool === 'connect') return signIn(operation, args as SignInInput);
+    if (tool === 'disconnect') return disconnect(operation);
+    if (tool === 'start_bot')
+      return (await mainOperation(() => startBot(operation), operation)) as Record<string, unknown>;
+    if (tool === 'apply_settings')
+      return (await mainOperation(() => applyCurrentSettings(operation), operation)) as Record<
+        string,
+        unknown
+      >;
+    if (tool === 'forget_login')
+      return (await mainOperation(() => forgetLogin(operation), operation)) as Record<
+        string,
+        unknown
+      >;
+    if (tool === 'set_reconnect') {
+      element<HTMLInputElement>('auto-reconnect').checked = args.enabled as boolean;
+      touchMcpDraft();
+      configureReconnect();
+      updateButtons();
+      return { draftRevision: mcpDraftRevision, enabled: args.enabled, sessionOnly: true };
+    }
+    if (tool === 'client_action') {
+      if (args.action === 'warpCancel') {
+        await invoke('control_bot', {
+          action: 'warpCancel',
+          request: args.request,
+          mcpOperation: operation,
+        });
+      } else await featureRequest(args.action as string, args.request, operation);
+      return {
+        dispatch: 'accepted',
+        confirmation:
+          'Read get_client_state and get_status for the owner preview or eventual game receipt. A dispatch is not game confirmation.',
+      };
+    }
+    throw new Error('Unsupported assistant operation.');
+  },
+});
+async function executeMcp(query: McpQuery): Promise<Record<string, unknown>> {
+  if (mcpWriteTool(query.tool)) return mcpControls.execute(query);
+  if (query.tool === 'preview_bot') return mcpPreview(query, readMcp(query));
+  if (query.tool === 'export_profile')
+    return { document: features.exportProfile(query.arguments.id as string) };
+  if (query.tool === 'export_service')
+    return { document: features.exportService(query.arguments.id as string) };
+  return mcpReadResult(query, readMcp(query));
+}
 if (!native) message('Browser preview · Launch the desktop app with bun run app:dev to connect.');
 if (native) {
   void (async () => {
@@ -1135,30 +1469,7 @@ if (native) {
         'Settings could not be initialized. Reopen the app to edit them safely.';
       return;
     }
-    await mountMcp(element('client-mcp'), (query) => {
-      let snapshot: FormSnapshot | null = null;
-      if (query.tool === 'get_settings' || query.tool === 'validate_script') {
-        try {
-          if (currentForm.initialized) snapshot = form.snapshot();
-        } catch {
-          /* Invalid editable inputs remain untouched. */
-        }
-      }
-      return {
-        now: Date.now(),
-        runtimeGeneration: query.runtimeGeneration,
-        status: latest,
-        observation: mcpObservation,
-        gameOpen,
-        runRequested: fieldRun.requested,
-        limitReason: fieldRun.limitReason,
-        updateBusy,
-        updateContinuationPending: updateContinuation.pending,
-        form: snapshot,
-        formInitialized: currentForm.initialized,
-        profiles: query.tool === 'list_profiles' ? features.readProfiles() : [],
-      };
-    });
+    await mountMcp(element('client-mcp'), readMcp, executeMcp);
     await listen<unknown>('game-status', (event) => {
       if (validStatus(event.payload)) render(event.payload);
     });
@@ -1346,6 +1657,8 @@ if (native) {
 // Only the explicit settings projection enters persistence; account inputs are excluded.
 document.querySelector('main')!.addEventListener('input', (event) => {
   const target = event.target as HTMLElement;
+  if (target.closest('#client-mcp')) return;
+  if (target.closest('#signin-panel')) touchMcpDraft();
   if (!target.closest('#signin-panel') && target.closest('.settings,.feature-panel,.rule-editor')) {
     formChanged();
     updateButtons();
@@ -1353,6 +1666,8 @@ document.querySelector('main')!.addEventListener('input', (event) => {
 });
 document.querySelector('main')!.addEventListener('change', (event) => {
   const target = event.target as HTMLElement;
+  if (target.closest('#client-mcp')) return;
+  if (target.closest('#signin-panel')) touchMcpDraft();
   if (target.id === 'profile-select') formChanged();
 });
 updateButtons();

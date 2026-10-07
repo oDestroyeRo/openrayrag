@@ -127,6 +127,21 @@ vi.mock('../client/feature-ui', async () => {
       }
       clearSocial(): void {}
       clearMemo(): void {}
+      readProfiles() {
+        return [];
+      }
+      readServices() {
+        return { saved: [], builtins: [] };
+      }
+      readScript() {
+        return ipc.editor?.readScript() ?? { script: '', dirty: false, unsaved: false };
+      }
+      setScript(script: string) {
+        return ipc.editor?.setScript(script) ?? { draftChanged: false, persisted: false };
+      }
+      serviceOperation(): void {
+        this.hooks.setupChanged();
+      }
       read() {
         const value = structuredClone(DEFAULT_AUTOMATION);
         value.limits.minutes = ipc.limitMinutes;
@@ -293,6 +308,19 @@ class Element {
     void this.emit('click');
   }
   closest(selector: string): Element | null {
+    if (selector === '#client-mcp') return this.id.startsWith('mcp-') ? this : null;
+    if (selector === '#signin-panel')
+      return [
+        'username',
+        'password',
+        'character-slot',
+        'connection-mode',
+        'remember-login',
+        'auto-login',
+        'auto-reconnect',
+      ].includes(this.id)
+        ? this
+        : null;
     return selector.includes('.settings') ? this : null;
   }
   async emit(type: string, target?: Element): Promise<void> {
@@ -2193,4 +2221,169 @@ it('keeps item/skill macro Start available without collision data while ordinary
   expect(
     f.calls('control_bot').find((call) => call[1]?.action === 'macro')?.[1]?.request.script,
   ).toEqual(ipc.setupScript);
+});
+
+let mcpQueryId = 0;
+function mainMcpQuery(tool: string, arguments_: Record<string, unknown> = {}) {
+  const id = `synthetic-mcp-${++mcpQueryId}`;
+  ipc.listen.mock.calls.find((call) => call[0] === 'mcp-query')![1]({
+    payload: { id, tool, arguments: arguments_, runtimeGeneration: 2 },
+  });
+  return id;
+}
+async function mainMcpResult(id: string): Promise<Record<string, unknown> | undefined> {
+  await settleMain();
+  return ipc.invoke.mock.calls.find((call) => call[0] === 'mcp_reply' && call[1]?.id === id)?.[1]
+    ?.result;
+}
+async function mcpDraftRevision() {
+  return (await mainMcpResult(mainMcpQuery('get_settings')))!.draftRevision as number;
+}
+const mcpForm = () => ({
+  version: 1,
+  revision: 1,
+  selectedProfileId: null,
+  settings: { ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [4000] },
+});
+async function publishMcpStatus(mode: 'botOnly' | 'gameClient' = 'botOnly') {
+  await publishStatus(
+    Object.assign(readyStatus(), {
+      connectionMode: mode,
+      mcpObservation: { generation: 2, sequence: 1, observedAt: Date.now() },
+    }),
+  );
+}
+
+it('local Stop retires an MCP Start awaiting native claim through the real Main bridge', async () => {
+  const f = await fixture(null, false, mcpForm());
+  await publishMcpStatus();
+  const revision = await mcpDraftRevision(),
+    claimed = pendingNative(),
+    original = ipc.invoke.getMockImplementation()!;
+  ipc.invoke.mockImplementation((command: string, arguments_: Record<string, unknown>) =>
+    command === 'mcp_claim' ? claimed.promise : original(command, arguments_),
+  );
+  const id = mainMcpQuery('start_bot', {
+    requestId: 'start-local-stop',
+    expectedDraftRevision: revision,
+    expectedGeneration: 2,
+  });
+  await settleMain();
+  expect(f.calls('mcp_claim')).toHaveLength(1);
+  await f.get('stop').emit('click');
+  await settleMain();
+  expect(f.calls('control_bot').map((call) => call[1]?.action)).toEqual(['stop']);
+  claimed.resolve();
+  expect(await mainMcpResult(id)).toMatchObject({
+    error: expect.stringContaining('cancelled by Stop'),
+  });
+  expect(f.calls('control_bot').map((call) => call[1]?.action)).toEqual(['stop']);
+});
+
+it.each(['botOnly', 'gameClient'] as const)(
+  'dispatches MCP Start and Stop through the same Main owners in %s',
+  async (mode) => {
+    const f = await fixture(null, false, mcpForm());
+    await publishMcpStatus(mode);
+    const started = mainMcpQuery('start_bot', {
+      requestId: 'start',
+      expectedDraftRevision: await mcpDraftRevision(),
+      expectedGeneration: 2,
+    });
+    expect(await mainMcpResult(started)).toMatchObject({ dispatch: 'accepted' });
+    expect(f.calls('control_bot')[0]?.[1]).toMatchObject({
+      action: 'start',
+      mcpOperation: started,
+    });
+    const stopped = mainMcpQuery('stop_bot', { requestId: 'stop' });
+    expect(await mainMcpResult(stopped)).toMatchObject({
+      dispatch: 'accepted',
+      retainedRunCancelled: true,
+    });
+    expect(f.calls('update_cancel').at(-1)?.[1]).toMatchObject({
+      stop: true,
+      mcpOperation: stopped,
+    });
+    expect(f.calls('control_bot').at(-1)?.[1]).toMatchObject({
+      action: 'stop',
+      mcpOperation: stopped,
+    });
+  },
+);
+
+it('records a busy MCP competitor immediately after claim and protects human edits during a deferred claim', async () => {
+  const f = await fixture(null, false, mcpForm());
+  const revision = await mcpDraftRevision(),
+    claimed = pendingNative(),
+    original = ipc.invoke.getMockImplementation()!;
+  let first = '';
+  ipc.invoke.mockImplementation((command: string, arguments_: Record<string, unknown>) =>
+    command === 'mcp_claim' && arguments_.id === first
+      ? claimed.promise
+      : original(command, arguments_),
+  );
+  first = mainMcpQuery('set_settings', {
+    requestId: 'first',
+    expectedDraftRevision: revision,
+    settings: { ...mcpForm().settings, radius: 16 },
+  });
+  await settleMain();
+  const competitor = mainMcpQuery('set_settings', {
+    requestId: 'second',
+    expectedDraftRevision: revision,
+    settings: { ...mcpForm().settings, radius: 18 },
+  });
+  expect(await mainMcpResult(competitor)).toMatchObject({
+    error: expect.stringContaining('operation is in progress'),
+  });
+  f.get('radius').value = '14';
+  await f.main.emit('input', f.get('radius'));
+  claimed.resolve();
+  expect(await mainMcpResult(first)).toMatchObject({
+    error: expect.stringContaining('draft changed'),
+  });
+  expect(f.get('radius').value).toBe('14');
+});
+
+it('saves an MCP Script through Main without starting and reports persistence failure while retaining the draft', async () => {
+  const f = await fixture(null, false, mcpForm(), null, false, true);
+  const revision = await mcpDraftRevision(),
+    original = ipc.invoke.getMockImplementation()!;
+  ipc.invoke.mockImplementation((command: string, arguments_: Record<string, unknown>) => {
+    if (command === 'save_current_form' && arguments_.mcpOperation)
+      return Promise.reject('synthetic persistence failure');
+    return original(command, arguments_);
+  });
+  const id = mainMcpQuery('set_script', {
+    requestId: 'script',
+    expectedDraftRevision: revision,
+    script: 'script "Updated"\nset radius = 16',
+  });
+  expect(await mainMcpResult(id)).toMatchObject({
+    draftChanged: true,
+    persisted: false,
+    scriptPersisted: true,
+  });
+  expect(f.get('radius').value).toBe('16');
+  expect(f.calls('control_bot')).toEqual([]);
+  expect(f.calls('login_game')).toEqual([]);
+  expect(f.calls('save_current_form').at(-1)?.[1]).toMatchObject({ mcpOperation: id });
+});
+
+it('keeps a human Form autosave when an MCP service collection operation succeeds', async () => {
+  const f = await fixture(null, false, mcpForm());
+  const saves = f.calls('save_current_form').length;
+  f.get('radius').value = '14';
+  await f.main.emit('input', f.get('radius'));
+  const id = mainMcpQuery('service_definition', {
+    requestId: 'services',
+    expectedDraftRevision: await mcpDraftRevision(),
+    operation: 'save',
+    definition: {},
+  });
+  expect(await mainMcpResult(id)).toMatchObject({ persisted: true });
+  await vi.advanceTimersByTimeAsync(300);
+  expect(f.calls('save_current_form').length).toBeGreaterThan(saves);
+  expect(f.calls('save_current_form').at(-1)?.[1]?.document.settings.radius).toBe(14);
+  expect(f.calls('control_bot')).toEqual([]);
 });

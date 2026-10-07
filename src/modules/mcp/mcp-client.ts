@@ -5,34 +5,37 @@ import { mcpReadResult, type McpQuery, type McpReadContext } from './mcp-logic';
 interface Connection {
   endpoint: string;
   token: string;
+  control: boolean;
 }
-/** Main-view query owner. Reads never enter form projection, saves or command dispatch. */
+/** Main-view bridge. Native grant and claimed operation ownership precede control effects. */
 export async function mountMcp(
   host: HTMLElement,
   read: (query: McpQuery) => McpReadContext,
+  execute?: (query: McpQuery) => Promise<Record<string, unknown>>,
 ): Promise<void> {
   const toggle = host.querySelector<HTMLButtonElement>('#mcp-toggle')!;
   const details = host.querySelector<HTMLElement>('#mcp-connection')!;
   const endpoint = host.querySelector<HTMLInputElement>('#mcp-endpoint')!;
   const token = host.querySelector<HTMLInputElement>('#mcp-token')!;
   const status = host.querySelector<HTMLElement>('#mcp-status')!;
+  const control = host.querySelector<HTMLInputElement>('#mcp-control');
   let enabled = false;
   const unlisten = await listen<McpQuery>('mcp-query', (event) => {
     const query = event.payload;
-    let result: Record<string, unknown>;
-    try {
-      result = mcpReadResult(query, read(query));
-    } catch {
-      result = {
+    void Promise.resolve()
+      .then(() => (execute ? execute(query) : mcpReadResult(query, read(query))))
+      .catch(() => ({
         error:
           'The requested configuration is unavailable. Correct invalid Form inputs or retry after initialization.',
-      };
-    }
-    void invoke('mcp_reply', {
-      id: query.id,
-      runtimeGeneration: query.runtimeGeneration,
-      result,
-    }).catch(() => {});
+      }))
+      .then((result) =>
+        invoke('mcp_reply', {
+          id: query.id,
+          runtimeGeneration: query.runtimeGeneration,
+          result,
+        }),
+      )
+      .catch(() => {});
   }).catch(() => null);
   if (!unlisten) {
     status.textContent = 'MCP could not initialize. Reopen the app to enable assistant access.';
@@ -41,15 +44,21 @@ export async function mountMcp(
   toggle.disabled = false;
   toggle.addEventListener('click', () => {
     toggle.disabled = true;
-    void invoke<Connection | null>('mcp_set_enabled', { enabled: !enabled })
+    void invoke<Connection | null>('mcp_set_enabled', {
+      enabled: !enabled,
+      control: control?.checked ?? false,
+    })
       .then((connection) => {
         enabled = connection !== null;
         endpoint.value = connection?.endpoint ?? '';
         token.value = connection?.token ?? '';
         details.hidden = !enabled;
+        if (control) control.disabled = enabled;
         toggle.textContent = enabled ? 'Disable MCP server' : 'Enable MCP server';
         status.textContent = enabled
-          ? 'Read-only access enabled for this app launch.'
+          ? connection?.control
+            ? 'Bot controls enabled for this app launch. This token can change configuration and send existing client actions.'
+            : 'Read-only access enabled for this app launch.'
           : 'Disabled. Previous access tokens are revoked.';
       })
       .catch(() => {

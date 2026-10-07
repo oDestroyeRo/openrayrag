@@ -175,6 +175,7 @@ test('smoke admission owns nested settings while validation retains document ide
       'native-settings-ipc',
       'window-close-save',
       'mcp-loopback-read-only',
+      'mcp-loopback-control',
     ],
     document: {
       version: 1,

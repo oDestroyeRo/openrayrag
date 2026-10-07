@@ -18,6 +18,7 @@ const result = () => ({
     'native-settings-ipc',
     'window-close-save',
     'mcp-loopback-read-only',
+    'mcp-loopback-control',
   ],
   document: {
     version: 1,

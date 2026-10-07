@@ -264,6 +264,16 @@ export class MacroUi {
   get unsaved(): boolean {
     return this.draft.unsaved;
   }
+  readScript(): { script: string; dirty: boolean; unsaved: boolean } {
+    return { script: this.draft.text, dirty: this.draft.dirty, unsaved: this.draft.unsaved };
+  }
+  /** The same admitted Form/Script transaction used by the editor; never activates a run. */
+  setScript(script: string): { draftChanged: boolean; persisted: boolean } {
+    if (this.locked) throw new Error('Wait for the current request before editing Script.');
+    parseBotScript(script, this.hooks.settings());
+    this.editor.value = script;
+    return this.apply(false);
+  }
   configured(): BotScriptDocument {
     if (this.applying) throw new Error('Wait for Script settings to synchronize.');
     if (this.syncError) throw new Error(this.syncError);
@@ -360,8 +370,10 @@ export class MacroUi {
       this.error(error);
     }
   }
-  private apply(explicit = true): void {
-    if (this.locked) return;
+  private apply(explicit = true): { draftChanged: boolean; persisted: boolean } {
+    if (this.locked) return { draftChanged: false, persisted: false };
+    let draftChanged = false;
+    let persisted = false;
     try {
       this.draft.text = this.editor.value;
       const document = this.draft.read(this.hooks.settings()); // Validate every setting and rule before any mutation.
@@ -372,6 +384,7 @@ export class MacroUi {
       if (!equals(structuredClone(document.settings), structuredClone(this.hooks.settings())))
         this.hooks.apply(document.settings);
       this.draft.commit(application);
+      draftChanged = true;
       const retained = this.hooks.settings();
       // Form can fill default policies or retain an observed map omitted by Script.
       // Only suppress an equivalent echo; otherwise Main must rebase the source.
@@ -381,6 +394,7 @@ export class MacroUi {
         : null;
       if (this.editor.value !== this.draft.text) this.editor.value = this.draft.text;
       this.draft.save();
+      persisted = true;
       this.result.hidden = true;
       if (explicit)
         this.hooks.notify('Shared setup saved on this computer. Start bot remains explicit.');
@@ -397,6 +411,7 @@ export class MacroUi {
       this.savedState();
       this.hooks.changed();
     }
+    return { draftChanged, persisted };
   }
   private discard(): void {
     this.draft.discard();

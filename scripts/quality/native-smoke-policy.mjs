@@ -9,6 +9,7 @@ const EXPECTED_CHECKS = [
   'native-settings-ipc',
   'window-close-save',
   'mcp-loopback-read-only',
+  'mcp-loopback-control',
 ];
 
 /** @param {string} binary @param {string} root @param {string} platform @param {NodeJS.ProcessEnv} env */

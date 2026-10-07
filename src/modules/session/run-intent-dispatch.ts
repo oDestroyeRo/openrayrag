@@ -52,7 +52,11 @@ export class RunIntentDispatch {
     return this.held;
   }
 
-  start(settings: SettingsInput, status: RunSession): Promise<DispatchReceipt> {
+  start(
+    settings: SettingsInput,
+    status: RunSession,
+    mcpOperation?: string,
+  ): Promise<DispatchReceipt> {
     if (this.stopping || !status.player)
       return Promise.resolve(this.receipt({ status: 'retired' }, () => false));
     const owner = (this.runOwner = incrementRevision(this.runOwner));
@@ -73,6 +77,7 @@ export class RunIntentDispatch {
       async () => {
         try {
           const value = await this.dispatch('control_bot', {
+            ...(mcpOperation ? { mcpOperation } : {}),
             action: 'start',
             settings,
             escapeGuard: this.field.guardForStart(settings, character, session),
@@ -122,7 +127,12 @@ export class RunIntentDispatch {
       () => owner === this.runOwner,
     );
   }
-  applySettings(settings: SettingsInput, status: RunSession, id: string): Promise<DispatchReceipt> {
+  applySettings(
+    settings: SettingsInput,
+    status: RunSession,
+    id: string,
+    mcpOperation?: string,
+  ): Promise<DispatchReceipt> {
     if (this.stopping || !this.field.registerSettingsApply(id, status))
       return Promise.resolve(this.receipt({ status: 'retired' }, () => false));
     const owner = this.runOwner;
@@ -131,6 +141,7 @@ export class RunIntentDispatch {
       async () => {
         try {
           const value = await this.dispatch('control_bot', {
+            ...(mcpOperation ? { mcpOperation } : {}),
             action: 'apply',
             settings,
             applyId: id,
@@ -145,10 +156,10 @@ export class RunIntentDispatch {
     );
   }
 
-  login(request: unknown): Promise<DispatchReceipt> {
+  login(request: unknown, mcpOperation?: string): Promise<DispatchReceipt> {
     if (this.stopping) return Promise.resolve(this.receipt({ status: 'retired' }, () => false));
     this.reconnectPolicy.signIn();
-    return this.signIn('login_game', { request });
+    return this.signIn('login_game', { request, ...(mcpOperation ? { mcpOperation } : {}) });
   }
 
   reconnect(): Promise<DispatchReceipt> {
@@ -187,7 +198,7 @@ export class RunIntentDispatch {
     );
   }
 
-  feature(action: string, request: unknown): Promise<DispatchReceipt> {
+  feature(action: string, request: unknown, mcpOperation?: string): Promise<DispatchReceipt> {
     if (this.stopping) return Promise.resolve(this.receipt({ status: 'retired' }, () => false));
     const replacesField = action === 'service' || action === 'macro';
     const manualTarget =
@@ -210,7 +221,11 @@ export class RunIntentDispatch {
         try {
           if (pendingResume.length) await Promise.allSettled(pendingResume);
           if (owner !== this.runOwner || this.stopping) return { status: 'retired' };
-          const value = await this.dispatch('control_bot', { action, request });
+          const value = await this.dispatch('control_bot', {
+            action,
+            request,
+            ...(mcpOperation ? { mcpOperation } : {}),
+          });
           // Macro execution can activate farming after its caller has been retired.
           // Manual targeting only needs this fence while an explicit Stop is draining.
           if (
@@ -228,7 +243,7 @@ export class RunIntentDispatch {
     );
   }
 
-  stop(beforeDispatch?: Promise<unknown>): Promise<DispatchReceipt> {
+  stop(beforeDispatch?: Promise<unknown>, mcpOperation?: string): Promise<DispatchReceipt> {
     if (this.stopTask) return this.stopTask;
     const owner = (this.runOwner = incrementRevision(this.runOwner));
     this.loginOwner = incrementRevision(this.loginOwner);
@@ -238,8 +253,10 @@ export class RunIntentDispatch {
     const pending = Object.values(this.work).flatMap((tasks) => [...tasks]);
     const current = () => owner === this.runOwner;
     const barrier = beforeDispatch
-      ? beforeDispatch.catch(() => {}).then(() => this.stopFence(pending, current))
-      : this.stopFence(pending, current);
+      ? beforeDispatch
+          .catch(() => {})
+          .then(() => this.stopFence(pending, current, undefined, mcpOperation))
+      : this.stopFence(pending, current, undefined, mcpOperation);
     const task = barrier
       .then((outcome) => this.receipt(outcome, current))
       .finally(() => {
@@ -287,9 +304,14 @@ export class RunIntentDispatch {
     pending: Promise<unknown>[],
     current: () => boolean,
     runLimit?: RunLimitCause,
+    mcpOperation?: string,
   ): Promise<DispatchOutcome> {
     let result: DispatchOutcome;
-    const request = runLimit ? { action: 'stop', runLimit } : { action: 'stop' };
+    const request = {
+      action: 'stop',
+      ...(runLimit ? { runLimit } : {}),
+      ...(mcpOperation ? { mcpOperation } : {}),
+    };
     try {
       result = { status: 'accepted', value: await this.dispatch('control_bot', request) };
     } catch (error) {

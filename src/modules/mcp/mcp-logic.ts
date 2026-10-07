@@ -5,8 +5,39 @@ import { validateFormSettings, validateSettings, type SettingsInput } from '../s
 import type { FormSnapshot } from '../settings/settings-form-logic';
 import type { BotProfile } from '../settings/profiles-logic';
 import type { GameStatus } from '../client/game-status';
+import { itemName, skillName } from '../catalog/game-catalog';
 
-export type McpTool = 'get_status' | 'get_settings' | 'list_profiles' | 'validate_script';
+export const MCP_WRITE_TOOLS = [
+  'set_settings',
+  'set_script',
+  'profile',
+  'service_definition',
+  'connect',
+  'disconnect',
+  'start_bot',
+  'stop_bot',
+  'apply_settings',
+  'set_reconnect',
+  'forget_login',
+  'client_action',
+] as const;
+export type McpWriteTool = (typeof MCP_WRITE_TOOLS)[number];
+export type McpTool =
+  | 'get_status'
+  | 'get_settings'
+  | 'list_profiles'
+  | 'validate_script'
+  | 'get_client_state'
+  | 'get_script'
+  | 'list_services'
+  | 'export_profile'
+  | 'export_service'
+  | 'get_operation'
+  | 'preview_bot'
+  | McpWriteTool;
+export function mcpWriteTool(tool: McpTool): tool is McpWriteTool {
+  return MCP_WRITE_TOOLS.some((candidate) => candidate === tool);
+}
 export interface McpQuery {
   id: string;
   tool: McpTool;
@@ -31,6 +62,25 @@ export interface McpReadContext {
   form: FormSnapshot | null;
   formInitialized: boolean;
   profiles: readonly BotProfile[];
+  draftRevision?: number;
+  script?: { script: string; dirty: boolean; unsaved: boolean } | null;
+  services?: unknown;
+  account?: {
+    username: string;
+    characterSlot: number;
+    mode: string;
+    remember: boolean;
+    autoLogin: boolean;
+    reconnect: boolean;
+    savedPasswordAvailable: boolean;
+  };
+  controls?: {
+    busy: boolean;
+    ready: boolean;
+    startReady: boolean;
+    applyReady: boolean;
+    disconnectReady: boolean;
+  };
 }
 
 /** A tool query is fresh work; it does not refresh the underlying game observation. */
@@ -128,13 +178,15 @@ export function mcpReadResult(query: McpQuery, context: McpReadContext): Record<
   if (query.tool === 'get_settings')
     return {
       observation,
+      draftRevision: context.draftRevision ?? null,
       settingsForm: context.form
         ? {
             settings: settings(context.form.settings),
             selectedProfileId: context.form.selectedProfileId,
-            revision: null,
+            revision: context.draftRevision ?? null,
             initialized: context.formInitialized,
-            revisionMeaning: 'DOM draft; persisted revision unavailable',
+            revisionMeaning:
+              'Monotonic editable draft token; separate from persisted Form revision',
           }
         : null,
       activeRun: current?.activeSettings
@@ -158,6 +210,20 @@ export function mcpReadResult(query: McpQuery, context: McpReadContext): Record<
         savedAt: profile.savedAt,
         settings: settings(profile.settings),
       })),
+    };
+  if (query.tool === 'get_script')
+    return { draftRevision: context.draftRevision ?? null, ...context.script };
+  if (query.tool === 'list_services') return { services: context.services ?? null };
+  if (query.tool === 'get_client_state')
+    return {
+      observation,
+      draftRevision: context.draftRevision ?? null,
+      account: context.account ?? null,
+      controls: context.controls ?? null,
+      gameplay: current ? mcpGameplay(current) : null,
+      unavailable: current
+        ? ['characterResourceRevisions']
+        : ['gameplay', 'characterResourceRevisions'],
     };
   const text = query.arguments.script;
   if (
@@ -210,6 +276,279 @@ export function mcpReadResult(query: McpQuery, context: McpReadContext): Record<
       ],
     }),
   });
+}
+
+type PublicShape = true | { readonly [key: string]: PublicShape } | readonly [PublicShape];
+/** Each nested record is explicitly projected. Unknown extensions never become assistant data. */
+function publicValue(value: unknown, shape: PublicShape): unknown {
+  if (shape === true)
+    return typeof value === 'string' ||
+      typeof value === 'boolean' ||
+      (typeof value === 'number' && Number.isFinite(value))
+      ? value
+      : null;
+  if (Array.isArray(shape))
+    return Array.isArray(value) ? value.map((item) => publicValue(item, shape[0]!)) : null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return Object.fromEntries(
+    Object.entries(shape).map(([key, child]) => [
+      key,
+      publicValue((value as Record<string, unknown>)[key], child),
+    ]),
+  );
+}
+const point = { x: true, y: true } as const;
+const actor = {
+  ...point,
+  id: true,
+  name: true,
+  kind: true,
+  classId: true,
+  level: true,
+  hp: true,
+  maxHp: true,
+  dead: true,
+} as const;
+const item = {
+  bagId: true,
+  itemId: true,
+  count: true,
+  flags: true,
+  refine: true,
+  slots: [true],
+  type: true,
+} as const;
+const phase = { state: true, reason: true, pending: true } as const;
+const location = { ...point, map: true } as const;
+const memoBinding = {
+  ...location,
+  world: true,
+  actorId: true,
+  incarnation: true,
+  connectionEpoch: true,
+  revision: true,
+} as const;
+const warpBinding = {
+  ...memoBinding,
+  generation: true,
+  level: true,
+  inventoryRevision: true,
+  equipmentRevision: true,
+  spRevision: true,
+  skillsRevision: true,
+} as const;
+const socketTarget = {
+  bagId: true,
+  itemId: true,
+  name: true,
+  refine: true,
+  slots: [true],
+  capacity: true,
+} as const;
+const socketCard = { bagId: true, itemId: true, name: true, count: true, reserve: true } as const;
+const gameplayShape: PublicShape = {
+  sessionId: true,
+  connectionId: true,
+  connectionMode: true,
+  connected: true,
+  compatible: true,
+  map: true,
+  mapInfo: {
+    code: true,
+    name: true,
+    source: true,
+    monsters: [
+      { classId: true, name: true, level: true, maxHp: true, spawnCount: true, visibleCount: true },
+    ],
+  },
+  player: actor,
+  actors: [actor],
+  monsters: [actor],
+  drops: [{ ...point, id: true, itemId: true, count: true }],
+  actorObservations: {
+    world: true,
+    at: true,
+    lastFrameAt: true,
+    connected: true,
+    selfId: true,
+    targetId: true,
+    candidateId: true,
+    truncated: true,
+    actors: [
+      {
+        id: true,
+        incarnation: true,
+        name: true,
+        kind: true,
+        observedAt: true,
+        statusesKnown: true,
+        statuses: [{ id: true, known: true, present: true, observedAt: true, expiresAt: true }],
+        cast: { state: true, observedAt: true, deadline: true, skillId: true },
+        hp: { value: true, max: true, at: true, source: true, reason: true },
+        sp: { value: true, max: true, at: true, source: true, reason: true },
+      },
+    ],
+  },
+  character: {
+    inventoryKnown: true,
+    skillsKnown: true,
+    inventory: [item],
+    cart: [item],
+    equipment: [true],
+    ammoId: true,
+    learned: [{ skillId: true, level: true }],
+    granted: [{ skillId: true, level: true }],
+    sitting: true,
+    statuses: [{ id: true, seconds: true }],
+    stats: {
+      hp: true,
+      maxHp: true,
+      sp: true,
+      maxSp: true,
+      zeny: true,
+      weight: true,
+      maxWeight: true,
+      cartWeight: true,
+      level: true,
+      jobLevel: true,
+      statPoints: true,
+      skillPoints: true,
+      attributes: [true],
+      attackDelay: true,
+      combatStats: [true],
+    },
+  },
+  world: {
+    generation: true,
+    revision: true,
+    map: true,
+    npc: { id: true, mode: true, dialog: { name: true, text: true, big: true }, options: [true] },
+    shop: { mode: true, discountLevel: true, entries: [{ itemId: true, price: true }] },
+    storage: [item],
+    storageReady: true,
+    cart: [item],
+    hasCart: true,
+    cartReady: true,
+    barter: [{ item, count: true, zenyCost: true, required: [{ itemId: true, count: true }] }],
+    party: {
+      id: true,
+      name: true,
+      members: [
+        {
+          memberId: true,
+          entityId: true,
+          name: true,
+          map: true,
+          level: true,
+          leader: true,
+          hp: true,
+          maxHp: true,
+          sp: true,
+          maxSp: true,
+        },
+      ],
+    },
+    invite: { partyId: true, name: true, sender: true },
+    vending: { name: true, rows: [{ id: true, count: true, price: true }] },
+    viewedVending: { id: true, name: true, entries: [{ item, price: true }] },
+  },
+  task: { kind: true, pending: true, reason: true },
+  actionResult: { sequence: true, status: true, reason: true },
+  navigation: { ready: true, mode: true, goal: point, routeLength: true },
+  service: phase,
+  workflow: { ...phase, step: true },
+  routine: { ...phase, rule: true },
+  macro: { ...phase, rule: true, step: true },
+  social: {
+    ...phase,
+    generation: true,
+    shoutWaitMs: true,
+    emoteWaitMs: true,
+    history: [
+      {
+        sequence: true,
+        at: true,
+        kind: true,
+        direction: true,
+        actorId: true,
+        name: true,
+        text: true,
+        channel: true,
+        emoteId: true,
+        state: true,
+      },
+    ],
+  },
+  memo: {
+    ...phase,
+    blocked: true,
+    generation: true,
+    slots: [location],
+    revision: true,
+    ready: memoBinding,
+    learnedWarp: true,
+    unavailable: true,
+  },
+  socket: {
+    ...phase,
+    targets: [socketTarget],
+    cards: [socketCard],
+    preview: {
+      targetBagId: true,
+      cardBagId: true,
+      previewToken: true,
+      target: socketTarget,
+      card: socketCard,
+      slot: true,
+      cost: true,
+    },
+  },
+  warp: {
+    ...phase,
+    blocked: true,
+    generation: true,
+    ready: warpBinding,
+    activation: { type: true, preview: warpBinding },
+    preview: { type: true, slot: true, target: point, preview: warpBinding },
+    slots: [location],
+    cost: true,
+    gems: true,
+    reserve: true,
+    selection: true,
+    resourceEvidence: true,
+    captured: { slot: true, ground: point, destination: location },
+  },
+  refine: {
+    state: true,
+    reason: true,
+    blocked: true,
+    dialogueToken: true,
+    candidates: [{ bagId: true, itemId: true, name: true, refine: true }],
+    preview: {
+      token: true,
+      targetBagId: true,
+      itemId: true,
+      name: true,
+      startingRefine: true,
+      oreItemId: true,
+      zenyCost: true,
+      failurePossible: true,
+      npcId: true,
+    },
+  },
+};
+export function mcpGameplay(status: GameStatus): unknown {
+  return publicNames(publicValue(status, gameplayShape));
+}
+function publicNames(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(publicNames);
+  if (!value || typeof value !== 'object') return value;
+  const fields = value as Record<string, unknown>;
+  return Object.fromEntries([
+    ...Object.entries(fields).map(([key, child]) => [key, publicNames(child)]),
+    ...(typeof fields.itemId === 'number' ? [['name', itemName(fields.itemId)]] : []),
+    ...(typeof fields.skillId === 'number' ? [['name', skillName(fields.skillId)]] : []),
+  ]);
 }
 
 export function mcpObserved(value: unknown): McpObservation | null {
