@@ -41,9 +41,24 @@ pub(crate) struct UpdateState {
 }
 pub(crate) type SharedUpdate = Mutex<UpdateState>;
 impl UpdateState {
+    fn begin_check(&mut self, now: Instant, requested: bool) -> bool {
+        if !check_deadline(CheckAdmission {
+            busy: self.busy,
+            candidate_available: self.candidate.is_some(),
+            due_at: self.schedule.next,
+        })
+        .is_some_and(|due_at| requested || check_due(due_at, now))
+        {
+            return false;
+        }
+        self.busy = true;
+        self.status.phase = "checking".into();
+        self.status.message = "Checking for signed client updates.".into();
+        true
+    }
     pub(crate) fn wait_for_official(&mut self, waiting: bool) {
         if self.status.phase == "waiting" {
-            self.status.message=if waiting { "Update waits for a new fully initialized connection after an official gameplay action. Nothing will be replayed." } else { "Update is downloaded. Waiting for all game and login actions to stop." }.into();
+            self.status.message=if waiting { "Update waits for a new fully initialized connection after an official gameplay action. Nothing will be replayed." } else { "Update is downloaded. Preparing to pause and continue any active bot run." }.into();
         }
     }
 }
@@ -204,7 +219,7 @@ async fn check(app: tauri::AppHandle) {
             Ok(Some(c)) => {
                 u.status.phase = "waiting".into();
                 u.status.message =
-                    "Update verified. Waiting for all game and login actions to stop.".into();
+                    "Update verified. Preparing to pause and continue any active bot run.".into();
                 u.candidate = Some(c);
                 ScheduleOutcome::CheckSucceeded
             }
@@ -223,6 +238,9 @@ async fn check(app: tauri::AppHandle) {
     }
 }
 pub(crate) fn schedule(app: &tauri::AppHandle) {
+    schedule_check(app, false);
+}
+fn schedule_check(app: &tauri::AppHandle, requested: bool) {
     if crate::shell::ci_smoke::active() {
         return;
     }
@@ -231,17 +249,9 @@ pub(crate) fn schedule(app: &tauri::AppHandle) {
     }
     let shared = app.state::<SharedUpdate>();
     let Ok(mut u) = shared.lock() else { return };
-    if !check_deadline(CheckAdmission {
-        busy: u.busy,
-        candidate_available: u.candidate.is_some(),
-        due_at: u.schedule.next,
-    })
-    .is_some_and(|due_at| check_due(due_at, Instant::now()))
-    {
+    if !u.begin_check(Instant::now(), requested) {
         return;
     }
-    u.busy = true;
-    u.status.phase = "checking".into();
     let app = app.clone();
     tauri::async_runtime::spawn(check(app));
 }
@@ -249,6 +259,15 @@ pub(crate) fn schedule(app: &tauri::AppHandle) {
 pub(crate) fn update_status(app: tauri::AppHandle, window: Webview) -> Result<Status, String> {
     crate::require_view(&window, "main")?;
     schedule(&app);
+    status(&app)
+}
+#[tauri::command]
+pub(crate) fn update_check(app: tauri::AppHandle, window: Webview) -> Result<Status, String> {
+    crate::require_view(&window, "main")?;
+    schedule_check(&app, true);
+    status(&app)
+}
+fn status(app: &tauri::AppHandle) -> Result<Status, String> {
     let mut status = app
         .state::<SharedUpdate>()
         .lock()
@@ -706,6 +725,54 @@ mod tests {
         (result, thread.join().unwrap())
     }
 
+    #[test]
+    fn requested_check_bypasses_the_timer_without_starting_a_second_download() {
+        let now = Instant::now();
+        let mut state = UpdateState {
+            schedule: UpdateSchedule {
+                next: now + Duration::from_secs(3600),
+                failures: 0,
+            },
+            ..UpdateState::default()
+        };
+        state.status.phase = "current".into();
+        state.status.message = "Client is up to date.".into();
+        assert!(!state.begin_check(now, false));
+        assert_eq!(state.status.phase, "current");
+        assert!(state.begin_check(now, true));
+        assert_eq!(state.status.phase, "checking");
+        assert_eq!(state.status.message, "Checking for signed client updates.");
+        assert!(!state.begin_check(now, true));
+        assert!(!state.begin_check(now + Duration::from_secs(7200), false));
+    }
+    #[test]
+    fn requested_check_reuses_a_verified_candidate() {
+        use base64::Engine;
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("update-signature-test.json")).unwrap();
+        let mut metadata: serde_json::Value = serde_json::from_slice(&feed("0.2.27")).unwrap();
+        metadata["platforms"]["darwin-aarch64"]["signature"] = fixture["signature"].clone();
+        let asset = parse_feed(&serde_json::to_vec(&metadata).unwrap(), "0.1.0")
+            .unwrap()
+            .unwrap();
+        let candidate = Candidate::new(
+            base64::engine::general_purpose::STANDARD
+                .decode(fixture["payloadBase64"].as_str().unwrap())
+                .unwrap(),
+            asset,
+            fixture["publicKey"].as_str().unwrap(),
+        )
+        .unwrap();
+        let mut state = UpdateState {
+            candidate: Some(candidate),
+            ..UpdateState::default()
+        };
+        state.status.phase = "waiting".into();
+        assert!(!state.begin_check(Instant::now(), true));
+        assert!(!state.busy);
+        assert_eq!(state.status.phase, "waiting");
+        assert_eq!(state.candidate.as_ref().unwrap().version(), "0.2.27");
+    }
     #[test]
     fn automatic_updates_are_admitted_only_on_apple_silicon_macos() {
         let state = UpdateState::default();

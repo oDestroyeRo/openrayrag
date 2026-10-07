@@ -200,10 +200,13 @@ function mainUpdateWaitReason():string|null {
     unsavedMacro:features.hasUnsavedMacro(),continuationPending:updateContinuation.pending,
     featuresSettled:features.settledForMaintenance(true),reconnectScheduled:!!reconnect.waitingUntil});
 }
-async function pollUpdate():Promise<void>{
-  if(!native||!closeRegistered||closeBusy||closeStatus||updatePolling||updateBusy)return;updatePolling=true;
+element('update-check').addEventListener('click',()=>{void pollUpdate(true);});
+async function pollUpdate(requested=false):Promise<void>{
+  if(!native||!closeRegistered||closeBusy||closeStatus&&!requested||updatePolling||updateBusy)return;
+  if(requested)closeStatus=null;
+  updatePolling=true;updateButtons();
   try{
-    const state=await invoke<{version:string;platform?:string;phase:string;message:string;availableVersion:string|null}>('update_status');
+    const state=await invoke<{version:string;platform?:string;phase:string;message:string;availableVersion:string|null}>(requested?'update_check':'update_status');
     element('client-version').textContent=`${({macos:'macOS',windows:'Windows',linux:'Linux'} as Record<string,string>)[state.platform??'']??'Desktop'} · v${state.version}`;if(closeBusy||closeStatus)return;element('update-status').textContent=state.message;
     if(state.phase!=='waiting')return;
     const waiting=mainUpdateWaitReason();if(waiting){element('update-status').textContent=waiting;return;}
@@ -223,7 +226,7 @@ async function pollUpdate():Promise<void>{
       if(updateContinuation.pending&&updateContinuation.automaticLogin(savedLogin?{...savedLogin,mode:savedLogin.mode??'gameClient'}:null))void signIn();
     }
   }catch{element('update-status').textContent='Update check unavailable. It will retry automatically.';}
-  finally{updatePolling=false;}
+  finally{updatePolling=false;updateButtons();}
 }
 const configHelp = element('config-help');
 applySettingsButton.addEventListener('click',()=>void perform(async()=>{
@@ -342,6 +345,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
     : !canStartField({native,fresh,busy,stopping:dispatches.stopping,loginBusy,runActive:runActive(),connected:latest?.connected===true,compatible:latest?.compatible===true,
       map:latest?.map??'',player:latest?.player??null,settings:checked});
   stopButton.disabled = dispatches.stopping || !gameOpen && !fieldRun.requested && !loginBusy && !updateContinuation.pending;
+  element<HTMLButtonElement>('update-check').disabled = !native || updatePolling;
   openButton.disabled = false;
   for (const id of ['disconnect', 'account-disconnect']) element<HTMLButtonElement>(id).disabled = !disconnectReady();
   const controls=panelControls({native,ready:!!ready,accountReady,connectedCharacter:!!(latest?.connected&&latest.player),

@@ -477,6 +477,7 @@ pub fn run() {
             settings::settings_close::settings_close_cancel,
             settings::settings_close::settings_close_complete,
             update::updater::update_status,
+            update::updater::update_check,
             update::updater::current_form,
             update::updater::save_current_form,
             update::updater::update_initialized,

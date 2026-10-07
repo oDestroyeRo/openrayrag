@@ -166,7 +166,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
             </form>
           </details>
           <section id="client-profiles" class="panel settings feature-panel" data-section="profiles" aria-labelledby="client-profiles-title"><div class="panel-title"><h3 id="client-profiles-title">Profiles</h3></div></section>
-          <section class="panel" aria-labelledby="client-updates-title"><div class="panel-title"><h3 id="client-updates-title">Client updates</h3></div><p id="update-status" class="hint">Signed updates install automatically when every game and login action is stopped.</p><a id="update-download" href="https://github.com/oDestroyeRo/openrayrag/releases/latest" target="_blank" rel="noreferrer">Download release manually</a></section>
+          <section class="panel" aria-labelledby="client-updates-title"><div class="panel-title"><h3 id="client-updates-title">Client updates</h3></div><p class="hint">Check anytime, including while the bot runs. Signed updates pause the bot at a confirmed action boundary and continue the same run after restart. Save your login for automatic sign-in.</p><p id="update-status" class="hint" role="status" aria-live="polite">Checking for signed client updates.</p><button id="update-check" type="button" class="secondary">Check for updates</button> <a id="update-download" href="https://github.com/oDestroyeRo/openrayrag/releases/latest" target="_blank" rel="noreferrer">Download release manually</a></section>
         </section>
       </div>
       <footer><span>Session stays on this computer</span><span>Passwords stay in memory unless you save locally</span></footer>
