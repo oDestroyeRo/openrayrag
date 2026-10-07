@@ -13,6 +13,8 @@ Copy the displayed endpoint and use **Copy access token**. Configure a Streamabl
 
 Every enable binds an ephemeral loopback port and generates a new random bearer token. Disable revokes the token and pending authority. Neither setting nor token is stored on disk. With bot controls granted, possession of the token permits configuration changes, sign-in, spending through existing guarded actions and Start/Stop. Keep it private. The server does not expose saved passwords or auth tokens in tool results, operation receipts or logs. Sign-in can reuse a matching locally saved password without revealing it.
 
+Clicking Disable or closing the main view immediately blocks local assistant writes, including writes awaiting native claim. If disabling fails, writes remain blocked until a new control enable succeeds. A later grant cannot revive a request from the previous grant.
+
 Every HTTP method authenticates before reading its body. `Host` must equal the displayed `127.0.0.1:<port>` authority. A non-browser client may omit `Origin`; a supplied Origin must exactly equal `http://127.0.0.1:<port>`. Other hosts/origins are rejected. No cross-origin browser or network hosting is enabled; loopback uses HTTP.
 
 ## Tools

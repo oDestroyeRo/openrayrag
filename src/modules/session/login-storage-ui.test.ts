@@ -2280,6 +2280,67 @@ it('local Stop retires an MCP Start awaiting native claim through the real Main 
   expect(f.calls('control_bot').map((call) => call[1]?.action)).toEqual(['stop']);
 });
 
+it('blocks Main draft writes after a failed UI disable until a new control grant succeeds', async () => {
+  const f = await fixture(null, false, mcpForm()),
+    claimed = pendingNative(),
+    original = ipc.invoke.getMockImplementation()!;
+  let first = '',
+    disableFails = true;
+  ipc.invoke.mockImplementation((command: string, arguments_: Record<string, unknown>) => {
+    if (command === 'mcp_claim' && arguments_.id === first) return claimed.promise;
+    if (command === 'mcp_set_enabled') {
+      if (!arguments_.enabled && disableFails)
+        return Promise.reject(new Error('synthetic disable failure'));
+      return Promise.resolve(
+        arguments_.enabled
+          ? { endpoint: 'http://127.0.0.1:123/mcp', token: 'private-fixture', control: true }
+          : null,
+      );
+    }
+    return original(command, arguments_);
+  });
+  f.get('mcp-control').checked = true;
+  await f.get('mcp-toggle').emit('click');
+  await settleMain();
+  const revision = await mcpDraftRevision(),
+    saves = f.calls('save_current_form').length;
+  first = mainMcpQuery('set_settings', {
+    requestId: 'delayed-before-disable',
+    expectedDraftRevision: revision,
+    settings: { ...mcpForm().settings, radius: 16 },
+  });
+  await settleMain();
+  expect(f.calls('mcp_claim')).toHaveLength(1);
+  await f.get('mcp-toggle').emit('click');
+  await settleMain();
+  expect(f.get('mcp-status').textContent).toContain('remain blocked');
+  claimed.resolve();
+  expect(await mainMcpResult(first)).toMatchObject({ error: expect.stringContaining('revoked') });
+  const blocked = mainMcpQuery('set_settings', {
+    requestId: 'after-failed-disable',
+    expectedDraftRevision: revision,
+    settings: { ...mcpForm().settings, radius: 18 },
+  });
+  expect(await mainMcpResult(blocked)).toMatchObject({ error: expect.stringContaining('revoked') });
+  expect(f.get('radius').value).toBe(String(mcpForm().settings.radius));
+  expect(f.calls('save_current_form')).toHaveLength(saves);
+  expect(f.calls('control_bot')).toEqual([]);
+  disableFails = false;
+  await f.get('mcp-toggle').emit('click');
+  await settleMain();
+  await f.get('mcp-toggle').emit('click');
+  await settleMain();
+  const renewed = mainMcpQuery('set_settings', {
+    requestId: 'new-control-grant',
+    expectedDraftRevision: await mcpDraftRevision(),
+    settings: { ...mcpForm().settings, radius: 16 },
+  });
+  expect(await mainMcpResult(renewed)).toMatchObject({ persisted: true });
+  expect(f.get('radius').value).toBe('16');
+  expect(f.calls('save_current_form').at(-1)?.[1]).toMatchObject({ mcpOperation: renewed });
+  expect(f.calls('control_bot')).toEqual([]);
+});
+
 it.each(['botOnly', 'gameClient'] as const)(
   'dispatches MCP Start and Stop through the same Main owners in %s',
   async (mode) => {

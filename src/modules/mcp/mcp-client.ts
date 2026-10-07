@@ -12,6 +12,7 @@ export async function mountMcp(
   host: HTMLElement,
   read: (query: McpQuery) => McpReadContext,
   execute?: (query: McpQuery) => Promise<Record<string, unknown>>,
+  lifecycle?: { revoke(): void; renew(): void },
 ): Promise<void> {
   const toggle = host.querySelector<HTMLButtonElement>('#mcp-toggle')!;
   const details = host.querySelector<HTMLElement>('#mcp-connection')!;
@@ -20,6 +21,8 @@ export async function mountMcp(
   const status = host.querySelector<HTMLElement>('#mcp-status')!;
   const control = host.querySelector<HTMLInputElement>('#mcp-control');
   let enabled = false;
+  let mounted = true;
+  let transition = 0;
   const unlisten = await listen<McpQuery>('mcp-query', (event) => {
     const query = event.payload;
     void Promise.resolve()
@@ -43,13 +46,21 @@ export async function mountMcp(
   }
   toggle.disabled = false;
   toggle.addEventListener('click', () => {
+    if (!mounted || toggle.disabled) return;
+    const changing = ++transition;
+    const enabling = !enabled;
+    // Close local draft/store authority synchronously before the native IPC can
+    // yield. A failed disable remains closed until a new control-enable succeeds.
+    lifecycle?.revoke();
     toggle.disabled = true;
     void invoke<Connection | null>('mcp_set_enabled', {
-      enabled: !enabled,
+      enabled: enabling,
       control: control?.checked ?? false,
     })
       .then((connection) => {
+        if (!mounted || changing !== transition) return;
         enabled = connection !== null;
+        if (enabling && connection?.control) lifecycle?.renew();
         endpoint.value = connection?.endpoint ?? '';
         token.value = connection?.token ?? '';
         details.hidden = !enabled;
@@ -62,10 +73,12 @@ export async function mountMcp(
           : 'Disabled. Previous access tokens are revoked.';
       })
       .catch(() => {
-        status.textContent = 'Could not change the local MCP server. Retry or reopen the app.';
+        if (!mounted || changing !== transition) return;
+        status.textContent =
+          'Could not change the local MCP server. Bot controls remain blocked. Retry or reopen the app.';
       })
       .finally(() => {
-        toggle.disabled = false;
+        if (mounted && changing === transition) toggle.disabled = false;
       });
   });
   host.querySelector<HTMLButtonElement>('#mcp-copy-token')!.addEventListener('click', () => {
@@ -83,9 +96,15 @@ export async function mountMcp(
   globalThis.addEventListener(
     'pagehide',
     () => {
+      mounted = false;
+      transition++;
+      lifecycle?.revoke();
       unlisten();
+      enabled = false;
       token.value = '';
       endpoint.value = '';
+      details.hidden = true;
+      toggle.disabled = true;
       void invoke('mcp_set_enabled', { enabled: false }).catch(() => {});
     },
     { once: true },

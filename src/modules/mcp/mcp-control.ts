@@ -21,6 +21,10 @@ export interface McpControlAdapter {
 export class McpControl {
   private writing = false;
   private stopEpoch = 0;
+  // Native-only CI admission starts without a UI lifecycle transition. Native
+  // authorization is still mandatory; an explicit local revoke closes this gate.
+  private grantRevoked = false;
+  private grantEpoch = 0;
   constructor(private readonly adapter: McpControlAdapter) {}
   get busy(): boolean {
     return this.writing;
@@ -28,6 +32,14 @@ export class McpControl {
   /** Shared by local and assistant Stop before asynchronous cancellation begins. */
   retireActivations(): void {
     this.stopEpoch++;
+  }
+  revoke(): void {
+    this.grantRevoked = true;
+    this.grantEpoch++;
+  }
+  renew(): void {
+    this.grantRevoked = false;
+    this.grantEpoch++;
   }
   async execute(query: McpQuery): Promise<Record<string, unknown>> {
     if (!mcpWriteTool(query.tool)) return { error: 'Unknown control operation.' };
@@ -40,8 +52,11 @@ export class McpControl {
         reserved = true;
       }
       const epoch = this.stopEpoch;
+      const grant = this.grantEpoch;
       // Native checks current grant, request lifetime, generation and duplicate claim.
       await this.adapter.claim(query);
+      if (this.grantRevoked || grant !== this.grantEpoch)
+        return { error: 'Bot controls were revoked. Enable a new control grant before retrying.' };
       mcpWriteArguments(query);
       if (competing)
         return {

@@ -98,6 +98,36 @@ function deferred() {
 }
 
 describe('claimed MCP controls', () => {
+  it('rejects a delayed claim after local revoke and keeps every later write closed until renewal', async () => {
+    const f = fixture(),
+      claimed = deferred();
+    f.claim.mockImplementationOnce(() => claimed.promise);
+    const pending = f.control.execute(query('set_settings'));
+    f.control.revoke();
+    claimed.resolve();
+    expect(await pending).toMatchObject({ error: expect.stringContaining('revoked') });
+    for (const tool of MCP_WRITE_TOOLS)
+      expect(await f.control.execute(query(tool))).toMatchObject({
+        error: expect.stringContaining('revoked'),
+      });
+    expect(f.perform).not.toHaveBeenCalled();
+    f.control.renew();
+    expect(await f.control.execute(query('set_settings'))).toEqual({ dispatch: 'accepted' });
+    expect(f.perform).toHaveBeenCalledOnce();
+  });
+  it('does not revive an old claimed write when a new control grant is enabled', async () => {
+    const f = fixture(),
+      claimed = deferred();
+    f.claim.mockImplementationOnce(() => claimed.promise);
+    const pending = f.control.execute(query('profile'));
+    f.control.revoke();
+    f.control.renew();
+    claimed.resolve();
+    expect(await pending).toMatchObject({ error: expect.stringContaining('revoked') });
+    expect(f.perform).not.toHaveBeenCalled();
+    expect(await f.control.execute(query('profile'))).toEqual({ dispatch: 'accepted' });
+    expect(f.perform).toHaveBeenCalledOnce();
+  });
   for (const mode of ['botOnly', 'gameClient'] as const)
     it.each(MCP_WRITE_TOOLS)(
       `routes admitted %s through the same owner seam in ${mode}`,

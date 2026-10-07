@@ -1469,7 +1469,10 @@ if (native) {
         'Settings could not be initialized. Reopen the app to edit them safely.';
       return;
     }
-    await mountMcp(element('client-mcp'), readMcp, executeMcp);
+    await mountMcp(element('client-mcp'), readMcp, executeMcp, {
+      revoke: () => mcpControls.revoke(),
+      renew: () => mcpControls.renew(),
+    });
     await listen<unknown>('game-status', (event) => {
       if (validStatus(event.payload)) render(event.payload);
     });
