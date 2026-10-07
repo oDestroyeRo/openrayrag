@@ -305,6 +305,32 @@ afterEach(() => {
 });
 
 describe('HP potion selection', () => {
+  it('allows zero HP cooldown in the form and explains its meaning', () => {
+    const f = widget();
+    const value = {
+      ...DEFAULT_HP_POTIONS,
+      mode: 'selected' as const,
+      itemIds: [501],
+      cooldownSeconds: 0,
+    };
+    f.ui.write(value);
+    expect(f.ui.read()).toEqual(value);
+    expect(validateHpPotions(f.ui.read())).toEqual(value);
+    expect(f.field('cooldownSeconds')).toMatchObject({
+      min: '0',
+      max: '3600',
+      step: '1',
+      ariaLabel: 'Shared cooldown, seconds (0 = no cooldown)',
+    });
+    expect(widget('sp').field('cooldownSeconds')).toMatchObject({ min: '1' });
+    f.field('cooldownSeconds').value = '5';
+    f.field('cooldownSeconds').emit('input');
+    expect(f.ui.read().cooldownSeconds).toBe(5);
+    f.field('cooldownSeconds').value = '0';
+    f.field('cooldownSeconds').emit('input');
+    expect(f.ui.read().cooldownSeconds).toBe(0);
+    expect(f.changed).toHaveBeenCalledTimes(2);
+  });
   it('filters each resource by current carried stock and preserves depleted selections for restocking', () => {
     const f = widget();
     f.ui.write({ ...DEFAULT_HP_POTIONS, mode: 'selected', itemIds: [512, 501] });

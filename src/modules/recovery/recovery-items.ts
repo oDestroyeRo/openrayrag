@@ -60,7 +60,7 @@ export function validateRecoveryItems(
     (row.mode === 'selected' && row.itemIds.length === 0) ||
     !integer(row.belowPercent, 1, 100) ||
     !integer(row.minStock, 0, 9999) ||
-    !integer(row.cooldownSeconds, 1, 3600)
+    !integer(row.cooldownSeconds, resource === 'hp' ? 0 : 1, 3600)
   ) {
     throw new Error(
       `Choose known ${label} recovery items and valid threshold, reserve and cooldown values.`,

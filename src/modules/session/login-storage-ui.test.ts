@@ -330,6 +330,7 @@ async function fixture(
   });
   vi.stubGlobal('innerWidth', 1100);
   vi.stubGlobal('innerHeight', 880);
+  vi.stubGlobal('addEventListener', vi.fn());
   ipc.featureSettled = true;
   ipc.macroDirty = false;
   ipc.useEditor = useEditor;

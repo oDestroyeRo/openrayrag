@@ -1,6 +1,8 @@
 [
   {"name":"legacy SP absence","resource":"sp","absent":true,"valid":true},
   {"name":"HP food and herbs","resource":"hp","valid":true,"policy":{"mode":"selected","itemIds":[512,507,515],"belowPercent":60,"minStock":0,"cooldownSeconds":5}},
+  {"name":"HP any without cooldown","resource":"hp","valid":true,"policy":{"mode":"any","itemIds":[],"belowPercent":60,"minStock":0,"cooldownSeconds":0}},
+  {"name":"HP off retains zero cooldown","resource":"hp","valid":true,"policy":{"mode":"off","itemIds":[512],"belowPercent":60,"minStock":0,"cooldownSeconds":0}},
   {"name":"SP food and potion order","resource":"sp","valid":true,"policy":{"mode":"selected","itemIds":[514,505],"belowPercent":30,"minStock":2,"cooldownSeconds":10}},
   {"name":"SP any retains preference","resource":"sp","valid":true,"policy":{"mode":"any","itemIds":[505,514],"belowPercent":30,"minStock":0,"cooldownSeconds":5}},
   {"name":"SP off retains preference","resource":"sp","valid":true,"policy":{"mode":"off","itemIds":[514],"belowPercent":30,"minStock":0,"cooldownSeconds":5}},

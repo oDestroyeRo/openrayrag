@@ -2382,6 +2382,45 @@ describe('persistent recovery and transaction regressions', () => {
       ]);
     },
   );
+  it('continues zero-cooldown HP recovery immediately after a late consumption confirmation', () => {
+    const { controller, receive, sent, packet, step, advance } = setup();
+    const automation = policy();
+    automation.hpPotions = {
+      mode: 'selected',
+      itemIds: [501, 504],
+      belowPercent: 60,
+      minStock: 0,
+      cooldownSeconds: 0,
+    };
+    receive(
+      { type: 'stats', level: 7, hp: 55, maxHp: 100 },
+      {
+        type: 'inventory',
+        items: [
+          { bagId: 501, itemId: 501, type: 1, count: 1 },
+          { bagId: 504, itemId: 504, type: 1, count: 4 },
+        ],
+        equipment: [],
+        ammoId: -1,
+      },
+    );
+    controller.start({ ...settings, automation });
+    step();
+    controller.pause('Manual input', 2000);
+    advance(7000);
+    expect(sent.filter((action) => action.type === 'useItem')).toEqual([
+      { type: 'useItem', itemId: 501 },
+    ]);
+    packet(
+      new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(10).bool(false),
+    );
+    step();
+    expect(sent.filter((action) => action.type === 'useItem')).toEqual([
+      { type: 'useItem', itemId: 501 },
+      { type: 'useItem', itemId: 504 },
+    ]);
+    expect(controller.runRequested).toBe(true);
+  });
   it.each(['hp', 'sp'].flatMap((short) => [false, true].map((advanced) => ({ short, advanced }))))(
     'holds every field action after mixed HP/SP late readback with short=$short and advanced=$advanced',
     ({ short, advanced }) => {

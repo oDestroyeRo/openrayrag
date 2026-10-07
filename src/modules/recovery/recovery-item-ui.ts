@@ -58,7 +58,12 @@ export class RecoveryItemUi {
     this.ids = map(RECOVERY_ITEM_IDS[resource], (id) => itemId(id));
     this.belowPercent = this.numberInput('belowPercent', `Use below ${name} %`, 1, 100);
     this.minStock = this.numberInput('minStock', 'Keep quantity of each item', 0, 9999);
-    this.cooldownSeconds = this.numberInput('cooldownSeconds', 'Shared cooldown, seconds', 1, 3600);
+    this.cooldownSeconds = this.numberInput(
+      'cooldownSeconds',
+      resource === 'hp' ? 'Shared cooldown, seconds (0 = no cooldown)' : 'Shared cooldown, seconds',
+      resource === 'hp' ? 0 : 1,
+      3600,
+    );
     this.root.className = 'hp-potion-panel manual-group';
     this.root.id = `${resource}-potions`;
     const title = document.createElement('h2');

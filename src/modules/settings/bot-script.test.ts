@@ -242,6 +242,23 @@ function lineError(source: string, line: number, message?: string): void {
 const withRule = (body: string): string => `script "Test"\nrule "Run"\n${body}\nend`;
 
 describe('approachable bot scripts', () => {
+  it('round-trips zero HP cooldown and retains it when importing legacy JSON macros', () => {
+    const document = parseBotScript(
+      'script "HP recovery"\nset automation.hpPotions.mode = selected\nset automation.hpPotions.itemIds = [501]\nset automation.hpPotions.cooldownSeconds = 0s',
+    );
+    expect(document.settings.automation?.hpPotions).toMatchObject({
+      mode: 'selected',
+      itemIds: [501],
+      cooldownSeconds: 0,
+    });
+    expect(parseBotScript(formatBotScript(document))).toEqual(document);
+    expect(parseBotScript(JSON.stringify(macro()), document.settings).settings).toEqual(
+      document.settings,
+    );
+    for (const cooldown of ['-1s', '0.5s', '3601s'])
+      lineError(`script "HP recovery"\nset automation.hpPotions.cooldownSeconds = ${cooldown}`, 2);
+    lineError('script "SP recovery"\nset automation.spPotions.cooldownSeconds = 0s', 2);
+  });
   it('retains BotScriptError line and message in total admission and the throwing adapter', () => {
     const source = 'script "Invalid"\nset radius = 99';
     const admitted = parseBotScriptResult(source);

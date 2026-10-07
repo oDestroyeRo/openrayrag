@@ -271,6 +271,56 @@ describe('carried HP and SP recovery items', () => {
       expect(recoveryItemCooldown(validateAutomation(f.automation), domainItemId(518))).toBe(30);
     },
   );
+  it('honors the SP cooldown on a mixed item with zero HP cooldown and permits an HP-only fallback', () => {
+    const f = fixture([
+      [518, 20],
+      [512, 2],
+    ]);
+    f.automation.hpPotions = {
+      ...DEFAULT_RECOVERY_ITEMS,
+      mode: 'selected',
+      itemIds: [518],
+      cooldownSeconds: 0,
+    };
+    f.automation.spPotions = {
+      ...DEFAULT_SP_ITEMS,
+      mode: 'selected',
+      itemIds: [514],
+      cooldownSeconds: 5,
+    };
+    const action = f.scheduler.next(
+      validateAutomation(f.automation),
+      player,
+      f.state,
+      null,
+    ).action!;
+    expect(action).toEqual({ type: 'useItem', itemId: 518 });
+    f.scheduler.submit(action, f.state);
+    expect(f.consume(518).state).toBe('confirmed');
+    expect(f.scheduler.next(validateAutomation(f.automation), player, f.state, null)).toEqual({});
+    expect(recoveryItemCooldown(validateAutomation(f.automation), domainItemId(518))).toBe(5);
+    f.automation.hpPotions.itemIds.push(512);
+    expect(
+      f.scheduler.next(validateAutomation(f.automation), player, f.state, null).action,
+    ).toEqual({
+      type: 'useItem',
+      itemId: 512,
+    });
+    f.advance(4999);
+    expect(
+      f.scheduler.next(validateAutomation(f.automation), player, f.state, null).action,
+    ).toEqual({
+      type: 'useItem',
+      itemId: 512,
+    });
+    f.advance(1);
+    expect(
+      f.scheduler.next(validateAutomation(f.automation), player, f.state, null).action,
+    ).toEqual({
+      type: 'useItem',
+      itemId: 518,
+    });
+  });
   it('keeps advanced conditions authoritative for SP items and protects SP stock in workflows', () => {
     const f = fixture([
         [514, 20],
