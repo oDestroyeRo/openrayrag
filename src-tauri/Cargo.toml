@@ -15,7 +15,7 @@ ci-smoke = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tokio = { version = "=1.53.1", features = ["rt", "net", "sync", "time", "macros"] }
+tokio = { version = "=1.53.2", features = ["rt", "net", "sync", "time", "macros"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 tauri = { version = "2", features = ["unstable"] }
