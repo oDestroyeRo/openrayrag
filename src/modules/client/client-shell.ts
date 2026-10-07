@@ -59,14 +59,11 @@ export function mountClientShell(root: HTMLElement): ClientShell {
         </section>
         <section id="client-page-session" class="client-page" role="tabpanel" aria-labelledby="client-tab-session">
           <h2 id="client-page-session-title" class="client-visually-hidden" tabindex="-1">Bot console</h2>
+          <div class="console-setup-summary"><span class="console-setup-copy">${UI_ICONS.settings}<span id="console-setup-summary">Review your bot setup</span></span><button id="console-edit-setup" type="button" class="text-button" data-client-navigation="setup">${UI_ICONS.pencil}Edit setup</button></div>
+          <p id="console-saved-draft-summary" class="hint" hidden></p>
+          <section id="console-attention" class="panel console-attention" aria-labelledby="console-attention-title" hidden><div class="panel-title"><h3 id="console-attention-title">Needs attention</h3></div><ul id="console-attention-list"></ul></section>
           <div class="bot-console-grid">
             <div class="console-primary">
-              <div class="console-setup-summary"><span class="console-setup-copy">${UI_ICONS.settings}<span id="console-setup-summary">Review your bot setup</span></span><button id="console-edit-setup" type="button" class="text-button" data-client-navigation="setup">${UI_ICONS.pencil}Edit setup</button></div>
-              <p id="console-saved-draft-summary" class="hint" hidden></p>
-              <section class="panel console-activity" aria-labelledby="client-activity-title"><div class="panel-title"><h3 id="client-activity-title">Activity</h3><span id="target-label">No active target</span></div><div class="console-log-heading" aria-hidden="true"><span>Time</span><span>Event</span></div><ol id="log" class="log"><li class="empty">No activity observed yet.</li></ol><div class="console-run-metrics"><div><strong id="attacks">0</strong><span>Engaged</span></div><div><strong id="kills">0</strong><span>Defeated</span></div><div><strong id="looted">0</strong><span>Pickups confirmed</span></div></div><p id="session-details" class="session-details">Session time and task state appear after connection.</p></section>
-              <details class="console-connection"><summary>Connection & session</summary><div class="console-connection-copy"><span id="client-version">Desktop · preview</span><button id="disconnect" type="button" class="secondary" title="Closes the connection; cannot undo server actions" disabled>Disconnect</button></div><div id="client-session-details" class="client-session-details"></div></details>
-            </div>
-            <div class="console-secondary">
               <section class="panel activity console-map" aria-labelledby="client-field-title">
                 <div class="panel-title"><h3 id="client-field-title">Live map</h3><span id="map-label">WAITING</span></div>
                 <div class="console-map-layout"><div class="radar-wrap"><canvas id="radar" width="400" height="400" aria-label="Collision map. Click an NPC to talk, a player shop to view stock, or verified walkable ground to walk once; nearby action buttons and keyboard coordinates are below."></canvas></div><div class="console-map-keys"><div class="radar-label"><span><i class="legend-dot you"></i>You</span><span><i class="legend-dot mob"></i>Monster</span><span><i class="legend-dot npc"></i>NPC · click to talk</span><span><i class="legend-dot player-shop"></i>Player shop · click to view</span><span><i class="legend-dot drop"></i>Loot</span></div><div class="map-legend"><span><i class="walkable-key"></i>Walkable</span><span><i class="terrain-key"></i>Blocked</span><span><i class="portal-key"></i>Portal exclusion</span><span><i class="route-key"></i>Route</span></div></div></div>
@@ -79,25 +76,32 @@ export function mountClientShell(root: HTMLElement): ClientShell {
                 <section id="console-panel-inventory" class="console-inventory" role="tabpanel" aria-labelledby="console-tab-inventory" hidden><div class="panel-title"><h3 id="console-inventory-title" class="client-visually-hidden" tabindex="-1">Inventory</h3><span id="console-stock-count">Not observed</span></div><label for="console-item">Observed item<select id="console-item" disabled><option value="">Choose an item</option></select></label><p id="console-item-info" class="hint">Inventory appears after a verified character connects.</p><button id="console-use-item" type="button" class="secondary" disabled>Use one item</button><button id="console-item-tools" type="button" class="text-button" data-client-navigation="tools">Skills, equipment & targeted items</button><p id="console-item-result" class="hint" role="status" aria-live="polite">No item request sent.</p><p id="console-latest-action" class="hint">No controller action receipt observed.</p></section>
               </section>
             </div>
+            <div class="console-secondary">
+              <section class="panel console-results" aria-labelledby="client-results-title"><div class="panel-title"><h3 id="client-results-title">Run results</h3><span id="target-label">No active target</span></div><div class="console-run-metrics"><div><strong id="attacks">0</strong><span>Engaged</span></div><div><strong id="kills">0</strong><span>Defeated</span></div><div><strong id="looted">0</strong><span>Pickups confirmed</span></div></div><p id="session-details" class="session-details">Session time and task state appear after connection.</p></section>
+              <section class="panel console-activity" aria-labelledby="client-activity-title"><div class="panel-title"><h3 id="client-activity-title">Activity log</h3></div><div class="console-log-heading" aria-hidden="true"><span>Time</span><span>Event</span></div><ol id="log" class="log"><li class="empty">No activity observed yet.</li></ol></section>
+              <details class="console-connection"><summary>Connection & session</summary><div class="console-connection-copy"><span id="client-version">Desktop · preview</span><button id="disconnect" type="button" class="secondary" title="Closes the connection; cannot undo server actions" disabled>Disconnect</button></div><div id="client-session-details" class="client-session-details"></div></details>
+            </div>
           </div>
         </section>
 
         <section id="client-page-bot" class="client-page" role="tabpanel" aria-labelledby="client-tab-bot" hidden>
-          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Setup</h2><p>Form and Script edit the same settings. Valid changes save automatically in both views. Start bot uses this shared setup.</p></div>
+          <div class="client-page-heading"><h2 id="client-page-bot-title" tabindex="-1">Setup</h2><p>Choose your farming settings in five steps. Form and Script share your automatically saved setup.</p></div>
           <nav class="setup-view-tabs" role="tablist" aria-label="Setup view">
             <button id="setup-tab-form" type="button" role="tab" data-client-navigation="setup-view" aria-controls="setup-form" aria-selected="true">Form</button>
             <button id="setup-tab-script" type="button" role="tab" data-client-navigation="setup-view" aria-controls="setup-script" aria-selected="false" tabindex="-1">Script</button>
           </nav>
           <div id="setup-form" role="tabpanel" aria-labelledby="setup-tab-form">
-          <nav class="client-bot-nav" role="tablist" aria-label="Bot sections">
-            <button id="client-bot-tab-combat" type="button" role="tab" data-client-bot-nav="combat" aria-controls="client-bot-combat" aria-selected="true">Combat</button>
-            <button id="client-bot-tab-recovery" type="button" role="tab" data-client-bot-nav="recovery" aria-controls="client-bot-recovery" aria-selected="false" tabindex="-1">Recovery</button>
-            <button id="client-bot-tab-travel" type="button" role="tab" data-client-bot-nav="travel" aria-controls="client-bot-travel" aria-selected="false" tabindex="-1">Travel</button>
-            <button id="client-bot-tab-inventory" type="button" role="tab" data-client-bot-nav="inventory" aria-controls="client-bot-inventory" aria-selected="false" tabindex="-1">Inventory & skills</button>
-            <button id="client-bot-tab-workflows" type="button" role="tab" data-client-bot-nav="workflows" aria-controls="client-bot-workflows" aria-selected="false" tabindex="-1">Run limits</button>
+          <nav class="client-bot-nav" role="tablist" aria-label="Setup steps">
+            <button id="client-bot-tab-combat" type="button" role="tab" data-client-bot-nav="combat" aria-controls="client-bot-combat" aria-selected="true"><span class="setup-step-number">1</span>Targets</button>
+            <button id="client-bot-tab-recovery" type="button" role="tab" data-client-bot-nav="recovery" aria-controls="client-bot-recovery" aria-selected="false" tabindex="-1"><span class="setup-step-number">2</span>Recovery</button>
+            <button id="client-bot-tab-travel" type="button" role="tab" data-client-bot-nav="travel" aria-controls="client-bot-travel" aria-selected="false" tabindex="-1"><span class="setup-step-number">3</span>Map & travel</button>
+            <button id="client-bot-tab-inventory" type="button" role="tab" data-client-bot-nav="inventory" aria-controls="client-bot-inventory" aria-selected="false" tabindex="-1"><span class="setup-step-number">4</span>Loot & supplies</button>
+            <button id="client-bot-tab-workflows" type="button" role="tab" data-client-bot-nav="workflows" aria-controls="client-bot-workflows" aria-selected="false" tabindex="-1"><span class="setup-step-number">5</span>Run limits</button>
           </nav>
           <section id="client-bot-combat" class="panel settings feature-panel" data-section="combat" role="tabpanel" aria-labelledby="client-bot-tab-combat">
             <div class="panel-title"><h3 id="client-bot-combat-title" tabindex="-1">Combat</h3></div>
+            <p class="setup-guidance">Choose which monsters to attack and whose drops to collect.</p>
+            <div class="form-grid setup-basic-fields"></div>
             <fieldset class="map-targets"><legend>Target monsters</legend>
               <div id="target-map" class="target-map">Enter a map to choose monsters</div>
               <div class="target-tools"><span id="target-count">0 selected</span><div><button id="select-targets" type="button" class="text-button" disabled>Select eligible</button><button id="clear-targets" type="button" class="text-button" disabled>Clear</button></div></div>
@@ -105,18 +109,25 @@ export function mountClientShell(root: HTMLElement): ClientShell {
               <p id="target-source" class="hint">Choose what to attack. Up to one level above you.</p>
             </fieldset>
             <div class="field-row"><label for="radius">Monster scan radius</label><output id="radius-value">12 cells</output></div><input id="radius" type="range" min="1" max="20" value="12" />
-            <label class="toggle-row" for="loot"><div>Collect loot<small>Use Pickup scope below to choose own drops or all nearby drops</small></div><input id="loot" type="checkbox" checked role="switch" /></label>
-            <p class="footnote">The bot waits through low HP, map changes and connection loss. Stop cancels the run; manual console actions require a stopped bot.</p>
+            <label class="toggle-row" for="loot"><div>Collect loot<small>Choose own drops or all nearby drops with Pickup scope</small></div><input id="loot" type="checkbox" checked role="switch" /></label>
+            <details class="setup-advanced"><summary>Advanced combat options & rules</summary><p class="footnote">The bot waits through low HP, map changes and connection loss. Stop cancels the run; manual console actions require a stopped bot.</p></details>
           </section>
           <section id="client-bot-recovery" class="panel settings feature-panel" data-section="recovery" role="tabpanel" aria-labelledby="client-bot-tab-recovery" hidden>
             <div class="panel-title"><h3 id="client-bot-recovery-title" tabindex="-1">Recovery</h3></div>
+            <p class="setup-guidance">Choose recovery items and when to rest. Keep the emergency stop below your rest threshold.</p>
             <div class="field-row"><label for="min-hp">Emergency HP stop</label><output id="hp-value">45%</output></div><input id="min-hp" type="range" min="20" max="95" value="45" />
-            <p class="hint">When Sit to recover HP and SP is enabled, keep Emergency HP stop below Rest below HP %, and Rest below HP % below Resume above HP %. Rest below HP % can be at most 95%.</p>
+            <div class="form-grid setup-basic-fields"></div>
+            <p class="hint">When rest is enabled: Emergency HP stop &lt; Rest below HP % &lt; Resume above HP %. Rest below HP % can be at most 95%.</p>
+            <div class="setup-potions"></div>
+            <details class="setup-advanced"><summary>Advanced recovery, escape & revival</summary></details>
           </section>
           <section id="client-bot-travel" class="panel settings feature-panel" data-section="travel" role="tabpanel" aria-labelledby="client-bot-tab-travel" hidden>
             <div class="panel-title"><h3 id="client-bot-travel-title" tabindex="-1">Travel</h3></div>
-            <p class="hint">Supported map changes use Database teleport and wait automatically through its 30-second cooldown. Local walking and NPC approaches follow walkable ground. Party leader rendezvous follows verified portals.</p>
+            <p class="setup-guidance">Search your current map, or enter a destination map code. A blank destination keeps your current field.</p>
+            <div class="form-grid setup-basic-fields"></div>
             <div class="routing-field"><label for="random-walk">Find monsters</label><select id="random-walk"><option value="0">Off · approach visible targets only</option><option value="2">Search the current map</option></select><p class="hint">Search connected walkable ground and avoid portal areas.</p></div>
+            <details id="setup-travel-advanced" class="setup-advanced"><summary>Advanced travel, map boundaries & supply trips</summary>
+            <p class="hint">Supported map changes use Database teleport and wait automatically through its 30-second cooldown. Local walking and NPC approaches follow walkable ground. Party leader rendezvous follows verified portals.</p>
             <details class="routing-settings"><summary>Movement & approach limits</summary>
               <div class="routing-grid">
                 <label>Steps per walk<input id="route-step" type="number" min="1" max="20" value="10" /></label>
@@ -127,9 +138,11 @@ export function mountClientShell(root: HTMLElement): ClientShell {
               <label class="toggle-row">Avoid walls<input id="avoid-walls" type="checkbox" checked /></label>
               <p id="attack-range" class="hint">Normal attack: conservative 1 cell until equipment is verified.</p>
             </details>
+            </details>
           </section>
-          <section id="client-bot-inventory" class="panel settings feature-panel" data-section="inventory" role="tabpanel" aria-labelledby="client-bot-tab-inventory" hidden><div class="panel-title"><h3 id="client-bot-inventory-title" tabindex="-1">Inventory & skills</h3></div></section>
-          <section id="client-bot-workflows" class="panel settings feature-panel" data-section="workflows" role="tabpanel" aria-labelledby="client-bot-tab-workflows" hidden><div class="panel-title"><h3 id="client-bot-workflows-title" tabindex="-1">Run limits</h3></div></section>
+          <section id="client-bot-inventory" class="panel settings feature-panel" data-section="inventory" role="tabpanel" aria-labelledby="client-bot-tab-inventory" hidden><div class="panel-title"><h3 id="client-bot-inventory-title" tabindex="-1">Loot & supplies</h3></div><p class="setup-guidance">Choose what happens to unlisted drops. Add protected stock and item rules under Advanced; supply trips are configured in Map & travel.</p><div class="form-grid setup-basic-fields"></div><details class="setup-advanced"><summary>Advanced item rules, protected stock & skills</summary></details></section>
+          <section id="client-bot-workflows" class="panel settings feature-panel" data-section="workflows" role="tabpanel" aria-labelledby="client-bot-tab-workflows" hidden><div class="panel-title"><h3 id="client-bot-workflows-title" tabindex="-1">Run limits</h3></div><p class="setup-guidance">Set a time, kill, pickup or weight limit. Zero leaves that limit off. Review your setup on Bot before choosing Start.</p><div class="form-grid setup-basic-fields"></div><details class="setup-advanced"><summary>Advanced running hours</summary></details></section>
+          <div class="setup-step-controls" aria-label="Step navigation"><p id="setup-step-progress" class="hint" role="status" aria-live="polite">Step 1 of 5</p><div><button id="setup-back" type="button" class="secondary" data-client-navigation="setup-step" disabled>Back</button><button id="setup-next" type="button" class="primary" data-client-navigation="setup-step">Next</button><button id="setup-review" type="button" class="primary" data-client-navigation="setup-review" hidden>Review run</button></div></div>
           </div>
           <div id="setup-script" role="tabpanel" aria-labelledby="setup-tab-script" hidden></div>
         </section>
@@ -185,6 +198,10 @@ export function mountClientShell(root: HTMLElement): ClientShell {
   const sections = Object.fromEntries(botSections.map(section => [section, required<HTMLElement>(`#client-bot-${section}`)])) as Record<BotSection | 'profiles', HTMLElement>;
   sections.profiles = required<HTMLElement>('#client-profiles');
   const sectionButtons = Object.fromEntries(botSections.map(section => [section, required<HTMLButtonElement>(`#client-bot-tab-${section}`)])) as Record<BotSection, HTMLButtonElement>;
+  const setupBack = required<HTMLButtonElement>('#setup-back');
+  const setupNext = required<HTMLButtonElement>('#setup-next');
+  const setupReview = required<HTMLButtonElement>('#setup-review');
+  const setupProgress = required<HTMLElement>('#setup-step-progress');
   const skipLink = required<HTMLAnchorElement>('.client-skip-link');
   const manualTools = required<HTMLElement>('#client-manual-tools');
   const manualIndex = required<HTMLElement>('#client-manual-index');
@@ -192,6 +209,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
   const inspectorPanels = Object.fromEntries(inspectors.map(key => [key, required<HTMLElement>(`#console-panel-${key}`)])) as Record<ConsoleInspector, HTMLElement>;
   const inspectorButtons = Object.fromEntries(inspectors.map(key => [key, required<HTMLButtonElement>(`#console-tab-${key}`)])) as Record<ConsoleInspector, HTMLButtonElement>;
   let selectedPage: ClientPage = 'session';
+  let selectedBotSection: BotSection = 'combat';
   const pageListeners = new Set<(page: ClientPage) => void>();
 
   function syncToolbarOffset(): void {
@@ -226,6 +244,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
   }
 
   function selectBotSection(section: BotSection, focus: boolean): void {
+    selectedBotSection = section;
     for (const key of botSections) {
       const selected = key === section;
       sections[key].hidden = !selected;
@@ -233,6 +252,11 @@ export function mountClientShell(root: HTMLElement): ClientShell {
       sectionButtons[key].tabIndex = selected ? 0 : -1;
       sectionButtons[key].classList.toggle('selected', selected);
     }
+    const index = botSections.indexOf(section);
+    setupBack.disabled = index === 0;
+    setupNext.hidden = index === botSections.length - 1;
+    setupReview.hidden = !setupNext.hidden;
+    setupProgress.textContent = `Step ${index + 1} of ${botSections.length}`;
     if (focus && !pagePanels.bot.hidden) focusContent(required<HTMLElement>(`#client-bot-${section}-title`));
   }
 
@@ -269,6 +293,15 @@ export function mountClientShell(root: HTMLElement): ClientShell {
   bindTabs(pages, pageButtons, selectPage);
   bindTabs(botSections, sectionButtons, selectBotSection);
   bindTabs(inspectors, inspectorButtons, selectInspector);
+  setupBack.addEventListener('click', () => {
+    const previous = botSections[botSections.indexOf(selectedBotSection) - 1];
+    if (previous) selectBotSection(previous, true);
+  });
+  setupNext.addEventListener('click', () => {
+    const next = botSections[botSections.indexOf(selectedBotSection) + 1];
+    if (next) selectBotSection(next, true);
+  });
+  setupReview.addEventListener('click', () => selectPage('session', true));
   required<HTMLButtonElement>('#console-edit-setup').addEventListener('click', () => selectPage('bot', true));
   selectInspector('nearby', false);
   selectPage('session', false);

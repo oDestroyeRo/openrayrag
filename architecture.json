@@ -123,6 +123,8 @@
   "src/modules/client/bot-console-logic.ts": "logic",
   "src/modules/client/bot-console.ts": "orchestration",
   "src/modules/client/client-dashboard.ts": "logic",
+  "src/modules/client/client-attention-logic.ts": "logic",
+  "src/modules/client/client-attention.ts": "orchestration",
   "src/modules/client/client-shell.ts": "orchestration",
   "src/modules/client/client-status.ts": "logic",
   "src/modules/client/feature-ui-logic.ts": "logic",

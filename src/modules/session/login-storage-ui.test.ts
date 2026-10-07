@@ -9,6 +9,7 @@ import type { UpdateContinuationInput } from '../update/update-continuation';
 import type { GameStatus } from '../client/game-status';
 import { searchGrid } from '../navigation/navigation';
 import { liveSettingsGuard } from '../settings/live-settings-logic';
+import type { SupplySnapshot } from '../services/supply-trip-logic';
 
 const ipc = vi.hoisted(() => ({ featureSettled: true, macroDirty: false, scriptStorageFails: false, useEditor: false, limitMinutes:0, editor: null as MacroUi | null, setupScript: null as BotScriptDocument['script'], setupSettings: null as SettingsInput | null, syncSetup: vi.fn(), clearMacro: vi.fn(), invoke: vi.fn(), listen: vi.fn(async (_name:string,_callback:(event:{payload:unknown})=>void) => () => {}) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke, isTauri: () => true }));
@@ -25,6 +26,7 @@ vi.mock('../client/feature-ui', async () => {
       const group=document.createElement('details');group.className='manual-group';group.id='synthetic-manual-group';
       const title=document.createElement('summary');title.textContent='Synthetic manual tool';
       const action=document.createElement('button');action.id='synthetic-manual-action';group.append(title,action);mounts.manualTools.append(group);
+      const supply=document.createElement('div');supply.id='supply-preview';_host.append(supply);
     }
 
     selectedProfileId(){return this.profile;}
@@ -52,7 +54,7 @@ vi.mock('../client/feature-ui', async () => {
 // Exercise the actual main-window form callbacks with native IPC replaced.
 // No browser, app data, real account or persistent frontend store is involved.
 class Element {
-  value = ''; checked = false; disabled = false; hidden = false; textContent = ''; placeholder = '';
+  value = ''; checked = false; disabled = false; hidden = false; open = false; tabIndex = 0; textContent = ''; placeholder = '';
   id = ''; className = ''; title = ''; dataset:Record<string,string>={}; style = { width: '', setProperty() {} }; width = 400; height = 400;
   attributes = new Map<string,string>(); children: Element[] = []; parentElement:Element|null=null;
   ownerDocument = { createElement: (tag:string) => new Element(this.elements,tag) };
@@ -657,9 +659,12 @@ it('keeps shell navigation usable through a deferred installation without unlock
  const botTabs=['combat','recovery','travel','inventory','workflows'].map(section=>f.get(`client-bot-tab-${section}`));
  const consoleNavigation=['console-tab-nearby','console-tab-inventory','console-edit-setup','console-loot-settings','console-item-tools','open'].map(id=>f.get(id));
  expect([...tabs,...botTabs,...consoleNavigation,...f.index()].every(button=>!button.disabled)).toBe(true);
+ expect(f.get('setup-back').disabled).toBe(true);expect(f.get('setup-next').disabled).toBe(false);
+ expect(f.get('console-attention-connection').disabled).toBe(false);
  expect(f.get('start').disabled).toBe(true);expect(f.get('open').disabled).toBe(false);expect(f.get('synthetic-manual-action').disabled).toBe(true);
  expect(f.get('console-walk').disabled).toBe(true);expect(f.get('console-use-item').disabled).toBe(true);expect(f.get('disconnect').disabled).toBe(true);
  const saves=f.calls('save_current_form').length;
+ await f.get('console-attention-connection').emit('click');expect(f.get('client-page-settings').hidden).toBe(false);
  f.get('console-item').value='501';f.get('console-walk-x').value='123';
  await f.get('console-tab-inventory').emit('click');expect(f.get('console-panel-inventory').hidden).toBe(false);
  await f.get('console-tab-nearby').emit('click');await f.get('console-edit-setup').emit('click');expect(f.get('client-page-bot').hidden).toBe(false);
@@ -668,10 +673,38 @@ it('keeps shell navigation usable through a deferred installation without unlock
  await f.get('client-tab-settings').emit('click');expect(f.get('client-page-settings').hidden).toBe(false);
  await f.index()[0]!.emit('click');expect(f.get('client-page-manual').hidden).toBe(false);
  expect(f.calls('control_bot')).toEqual([]);expect(f.calls('save_current_form')).toHaveLength(saves);
+ expect(f.calls('login_game')).toEqual([]);expect(f.calls('open_game')).toEqual([]);
  rejectInstall!(new Error('Synthetic install interruption'));for(let i=0;i<20;i++)await Promise.resolve();
  expect(f.calls('update_release')).toHaveLength(1);
  expect([...tabs,...botTabs,...f.index()].every(button=>!button.disabled)).toBe(true);
  expect(f.get('start').disabled).toBe(true);expect(f.get('synthetic-manual-action').disabled).toBe(true);
+});
+
+it('retains step boundaries across status ticks and navigates attention without saving or starting',async()=>{
+ const f=await fixture(), saves=f.calls('save_current_form').length;
+ expect(f.get('setup-back').disabled).toBe(true);
+ await publishStatus(readyStatus());expect(f.get('setup-back').disabled).toBe(true);
+ await f.get('console-attention-setup').emit('click');expect(f.get('client-page-bot').hidden).toBe(false);
+ await f.get('setup-next').emit('click');expect(f.get('setup-back').disabled).toBe(false);
+ expect(f.get('setup-step-progress').textContent).toBe('Step 2 of 5');
+ await publishStatus(readyStatus());expect(f.get('setup-back').disabled).toBe(false);
+ await f.get('setup-back').emit('click');expect(f.get('setup-back').disabled).toBe(true);
+ await publishStatus(readyStatus());expect(f.get('setup-back').disabled).toBe(true);
+ expect(f.calls('save_current_form')).toHaveLength(saves);expect(f.calls('control_bot')).toEqual([]);
+ expect(f.calls('login_game')).toEqual([]);expect(f.calls('command_game')).toEqual([]);
+});
+
+it('reveals the supply owner status from attention without requesting another transaction',async()=>{
+ const f=await fixture(), saves=f.calls('save_current_form').length;
+ await f.get('setup-tab-script').emit('click');
+ const status={...readyStatus(), supply:{state:'waiting',active:true,uncertain:true,reason:'Waiting for resource reconciliation.',latched:true,remainingTrips:1,actions:0,spent:0,reserved:0,deadline:0,nextTripAt:0,goals:[],returnDestination:null} satisfies SupplySnapshot};
+ await publishStatus(status);
+ await f.get('console-attention-supply').emit('click');
+ expect(f.get('client-page-bot').hidden).toBe(false);expect(f.get('setup-form').hidden).toBe(false);
+ expect(f.get('client-bot-travel').hidden).toBe(false);expect(f.get('setup-travel-advanced').open).toBe(true);
+ expect(f.get('supply-preview').tabIndex).toBe(-1);
+ expect(f.calls('save_current_form')).toHaveLength(saves);expect(f.calls('control_bot')).toEqual([]);
+ expect(f.calls('command_game')).toEqual([]);expect(f.calls('supply_game')).toEqual([]);
 });
 
 it('renders the fresh held owner before toolbar status and binds observed session readouts',async()=>{
@@ -685,6 +718,7 @@ it('renders the fresh held owner before toolbar status and binds observed sessio
  publish({payload:status});
  expect(f.get('status').textContent).toBe('WAITING');expect(f.get('notice').textContent).toBe(status.refine.reason);
  expect(f.get('client-run-title').textContent).toBe('Waiting to continue');
+ await f.get('console-attention-refine').emit('click');expect(f.get('client-page-manual').hidden).toBe(false);
  expect(f.get('sp-text').textContent).toBe('75 / 200');expect(f.get('sp-bar').style.width).toBe('37.5%');expect(f.get('death-count').textContent).toBe('2');
  await f.get('client-tab-settings').emit('click');expect(f.get('notice').textContent).toBe(status.refine.reason);
  expect(f.calls('save_current_form')).toHaveLength(saves);expect(f.calls('control_bot')).toEqual([]);
