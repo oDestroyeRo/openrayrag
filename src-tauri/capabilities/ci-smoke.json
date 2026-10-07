@@ -18,6 +18,9 @@
     "allow-update-continuation",
     "allow-update-startup-stopped",
     "allow-mcp-set-enabled",
-    "allow-mcp-reply"
+    "allow-mcp-reply",
+    "allow-mcp-claim",
+    "allow-control-bot",
+    "allow-update-cancel"
   ]
 }

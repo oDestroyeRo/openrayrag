@@ -234,3 +234,80 @@ it('shows server-confirmed player shop rows with sale IDs, stock, prices and dis
   expect(summary).toContain('10 zeny each');
   expect(featureVendingText({ id: 0, name: '', entries: [] })).toContain('0 sale entries');
 });
+
+import { ProfileStore } from '../settings/profiles';
+import { NpcServiceStore } from '../services/npc-service-store';
+import { BUILTIN_SERVICES } from '../services/npc-services-logic';
+import { DEFAULT_SETTINGS } from '../settings/settings';
+
+it('uses admitted profile and service stores for public assistant operations and persists before committing', () => {
+  let fail = false,
+    sequence = 0;
+  const storage = {
+    getItem: () => null,
+    setItem: () => {
+      if (fail) throw new Error('quota');
+    },
+  };
+  const profiles = new ProfileStore(
+    storage,
+    () => `profile-${++sequence}`,
+    () => 1,
+  );
+  const services = new NpcServiceStore(storage, () => `service-${++sequence}`);
+  let settings = { ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [4000] },
+    changed = 0;
+  const selected = { value: '' };
+  const view = Object.assign(Object.create(FeatureUi.prototype), {
+    locked: false,
+    profiles,
+    services,
+    refreshProfiles: (id = '') => {
+      selected.value = id;
+    },
+    refreshServices: () => {},
+    hydrateProfileSelection: () => {},
+    host: { querySelector: () => selected },
+    hooks: {
+      settings: () => settings,
+      map: () => 'prt_fild08',
+      character: () => 'Fixture',
+      changed: () => {
+        changed++;
+      },
+      apply: (value: typeof settings) => {
+        settings = structuredClone(value);
+      },
+    },
+  }) as FeatureUi;
+  view.profileOperation({ operation: 'save', name: 'Field' });
+  const profileId = view.readProfiles()[0]!.id;
+  expect(selected.value).toBe(profileId);
+  expect(() => view.profileOperation({ operation: 'apply', id: 'missing' })).toThrow();
+  view.profileOperation({ operation: 'apply', id: profileId });
+  expect(selected.value).toBe(profileId);
+  const exported = view.exportProfile(profileId);
+  view.profileOperation({ operation: 'import', document: exported });
+  expect(view.readProfiles()).toHaveLength(2);
+  view.profileOperation({ operation: 'select', id: profileId });
+  view.profileOperation({ operation: 'remove', id: profileId });
+  expect(view.readProfiles()).toHaveLength(1);
+  view.serviceOperation({ operation: 'save', definition: BUILTIN_SERVICES[0] });
+  const serviceId = view.readServices().saved[0]!.id;
+  expect(view.readServices().builtins.length).toBe(BUILTIN_SERVICES.length);
+  view.serviceOperation({ operation: 'import', document: view.exportService(serviceId) });
+  expect(view.readServices().saved).toHaveLength(2);
+  view.serviceOperation({ operation: 'remove', id: serviceId });
+  expect(view.readServices().saved).toHaveLength(1);
+  const beforeProfiles = view.readProfiles(),
+    beforeServices = view.readServices(),
+    beforeChanged = changed;
+  fail = true;
+  expect(() => view.profileOperation({ operation: 'save', name: 'Rejected' })).toThrow('quota');
+  expect(() =>
+    view.serviceOperation({ operation: 'save', definition: BUILTIN_SERVICES[0] }),
+  ).toThrow('quota');
+  expect(view.readProfiles()).toEqual(beforeProfiles);
+  expect(view.readServices()).toEqual(beforeServices);
+  expect(changed).toBe(beforeChanged);
+});

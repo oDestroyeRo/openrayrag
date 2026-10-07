@@ -98,3 +98,33 @@ it('unknown secret/intent fields and invalid dirty input reject without writing'
       }),
     ).toThrow();
 });
+it('an assistant save has an explicit callback without tagging later human saves or replacing newer drafts', async () => {
+  let radius = 14;
+  const uiSave = vi.fn(async (document) => document.revision);
+  const form = new CurrentForm(
+    () => ({ settings: { ...DEFAULT_SETTINGS, radius }, selectedProfileId: null }),
+    uiSave,
+  );
+  form.restore(null, () => {});
+  let release!: () => void;
+  const saved: number[] = [];
+  const assistant = form.flush(async (document) => {
+    saved.push(document.settings.radius);
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return document.revision;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  radius = 18;
+  form.touch();
+  const human = form.flush();
+  release();
+  await assistant;
+  await human;
+  expect(saved).toEqual([14]);
+  expect(uiSave).toHaveBeenCalledOnce();
+  expect(uiSave.mock.calls[0]?.[0].settings.radius).toBe(18);
+  expect(radius).toBe(18);
+});

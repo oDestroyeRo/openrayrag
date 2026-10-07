@@ -594,6 +594,7 @@ pub(crate) fn update_cancel(
     window: Webview,
     request_id: Option<String>,
     stop: Option<bool>,
+    mcp_operation: Option<String>,
 ) -> Result<bool, String> {
     crate::require_view(&window, "main")?;
     if request_id.as_ref().is_some_and(|id| !self::request_id(id)) {
@@ -604,6 +605,8 @@ pub(crate) fn update_cancel(
         .inner()
         .lock()
         .map_err(|_| ERROR)?;
+    let _mcp =
+        crate::mcp::authorize_effect(&app, &gate, mcp_operation.as_deref(), "update_cancel")?;
     let mut state = app
         .state::<SharedContinuation>()
         .inner()
@@ -636,7 +639,10 @@ pub(crate) fn update_cancel(
 
 /// Stop is cancellation, so it may revoke intent while the normal admission
 /// gate is held. It never disconnects or erases the lease's transport owner.
-pub(crate) fn stop_while_settling(app: &tauri::AppHandle) -> Result<bool, String> {
+pub(crate) fn stop_while_settling(
+    app: &tauri::AppHandle,
+    mcp_operation: Option<&str>,
+) -> Result<bool, String> {
     let mut gate = app
         .state::<SharedGate>()
         .inner()
@@ -645,6 +651,7 @@ pub(crate) fn stop_while_settling(app: &tauri::AppHandle) -> Result<bool, String
     if gate.lease.is_none() {
         return Ok(false);
     }
+    let _mcp = crate::mcp::authorize_effect(app, &gate, mcp_operation, "control_bot:stop")?;
     let mut state = app
         .state::<SharedContinuation>()
         .inner()
@@ -903,7 +910,7 @@ mod tests {
         );
     }
     #[test]
-    fn smoke_capability_has_harmless_startup_queries_without_update_or_gameplay_authority() {
+    fn smoke_capability_has_startup_queries_and_isolated_offline_stop_authority() {
         let capability: Value =
             serde_json::from_str(include_str!("../../capabilities/ci-smoke.json")).unwrap();
         assert!(capability.get("windows").is_none());
@@ -931,6 +938,9 @@ mod tests {
                     | "allow-update-status"
                     | "allow-mcp-set-enabled"
                     | "allow-mcp-reply"
+                    | "allow-mcp-claim"
+                    | "allow-control-bot"
+                    | "allow-update-cancel"
             ));
         }
     }

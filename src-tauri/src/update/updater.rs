@@ -338,9 +338,12 @@ pub(crate) fn save_current_form(
     app: tauri::AppHandle,
     window: Webview,
     document: FormDocument,
+    mcp_operation: Option<String>,
 ) -> Result<u64, String> {
     crate::require_view(&window, "main")?;
     let mut gate = crate::session::maintenance::admit(&app)?;
+    let _mcp =
+        crate::mcp::authorize_effect(&app, &gate, mcp_operation.as_deref(), "save_current_form")?;
     current_form::save(
         crate::app_data(&app).map_err(|_| "Settings storage unavailable.")?,
         &document,

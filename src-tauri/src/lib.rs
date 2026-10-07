@@ -48,9 +48,14 @@ fn open_game(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn close_game(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
+fn close_game(
+    app: tauri::AppHandle,
+    window: Webview,
+    mcp_operation: Option<String>,
+) -> Result<(), String> {
     require_view(&window, "main")?;
     let mut _permit = session::maintenance::admit(&app)?;
+    let _mcp = mcp::authorize_effect(&app, &_permit, mcp_operation.as_deref(), "close_game")?;
     session::direct::cancel_admitted(&app, &mut _permit);
     close_game_runtime(&app, &mut _permit)
 }
@@ -163,6 +168,7 @@ fn control_bot(
     apply_id: Option<String>,
     live_settings_guard: Option<settings::automation::LiveSettingsGuard>,
     run_limit: Option<game::control::RunLimitCause>,
+    mcp_operation: Option<String>,
 ) -> Result<(), String> {
     require_view(&window, "main")?;
     game::control::validate_run_limit(&action, run_limit)?;
@@ -262,10 +268,18 @@ fn control_bot(
     {
         return Err("Use start to apply automation settings.".into());
     }
-    if action == "stop" && update::update_continuation::stop_while_settling(&app)? {
+    if action == "stop"
+        && update::update_continuation::stop_while_settling(&app, mcp_operation.as_deref())?
+    {
         return Ok(());
     }
     let mut _permit = session::maintenance::admit(&app)?;
+    let _mcp = mcp::authorize_effect(
+        &app,
+        &_permit,
+        mcp_operation.as_deref(),
+        &format!("control_bot:{action}"),
+    )?;
     if action == "stop" {
         let mut in_world = false;
         if let Ok(mut state) = app.state::<session::login::SharedLogin>().lock() {
@@ -476,6 +490,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             mcp::mcp_set_enabled,
             mcp::mcp_reply,
+            mcp::mcp_claim,
             #[cfg(feature = "ci-smoke")]
             shell::ci_smoke::ci_smoke_report,
             settings::settings_close::settings_close_ready,

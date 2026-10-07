@@ -3,6 +3,10 @@ import { CompanionController } from '../runtime/controller';
 import { DEFAULT_SETTINGS, validateFormSettings } from '../settings/settings';
 import { formatBotScript } from '../settings/bot-script';
 import { ProfileStore } from '../settings/profiles';
+import { validMemoSnapshot } from '../memo/memo-ui-logic';
+import { validWarpSnapshot } from '../warp/warp-ui-logic';
+import { validSocketSnapshot } from '../socket/socket-ui-logic';
+import { validRefineSnapshot } from '../refine/refine-ui-logic';
 import {
   mcpObserved,
   mcpReadResult,
@@ -77,6 +81,33 @@ function fixture(mode: 'botOnly' | 'gameClient') {
 }
 
 describe('MCP read-only projection', () => {
+  it('projects real public resource and preview snapshots with exact owner evidence and drops unknown nested secrets', () => {
+    const { context } = fixture('botOnly');
+    const status = context.status! as unknown as Record<string, unknown>;
+    const character = status.character as Record<string, unknown>;
+    Object.assign(character, {
+      password: 'hidden-fixture',
+      extension: { token: 'hidden-fixture' },
+    });
+    Object.assign(status.world as object, { credentials: { password: 'hidden-fixture' } });
+    const actor = context.status!.actorObservations.actors[0]!;
+    Object.assign(actor, { credentials: { token: 'hidden-fixture' } });
+    const result = mcpReadResult(query('get_client_state'), context) as {
+      gameplay: Record<string, any>;
+    };
+    expect(JSON.stringify(result)).not.toContain('hidden-fixture');
+    expect(result.gameplay.actorObservations.actors[0].hp).toEqual(actor.hp);
+    expect(result.gameplay.actorObservations.actors[0].sp).toEqual(actor.sp ?? null);
+    expect(result.gameplay.actorObservations.actors[0].incarnation).toBe(actor.incarnation);
+    expect(result.gameplay.mapInfo).toEqual(context.status!.mapInfo);
+    expect(validMemoSnapshot(result.gameplay.memo)).toBe(true);
+    expect(validWarpSnapshot(result.gameplay.warp)).toBe(true);
+    expect(validSocketSnapshot(result.gameplay.socket)).toBe(true);
+    expect(validRefineSnapshot(result.gameplay.refine)).toBe(true);
+    const before = JSON.stringify(context);
+    result.gameplay.actorObservations.actors[0].incarnation = 900;
+    expect(JSON.stringify(context)).toBe(before);
+  });
   for (const mode of ['botOnly', 'gameClient'] as const)
     it(`identifies ${mode} observations and retires stale/replaced gameplay`, () => {
       const { context } = fixture(mode);

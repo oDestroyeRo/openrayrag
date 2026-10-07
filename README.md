@@ -30,7 +30,7 @@ The release profile leaves build dependencies unstripped to work around a macOS 
 
 [Bot console behavior and limits](docs/BOT_CONSOLE.md) explain manual controls, observed receipts and transport verification. [Connection modes](docs/CONNECTION_MODES.md) explain native authentication, lifecycle and update settlement.
 
-[Optional local MCP access](docs/MCP.md) lets an external AI assistant read status/settings/profiles and validate Bot scripts. Enable it explicitly in Settings; it cannot execute or save changes.
+[Optional local MCP access](docs/MCP.md) lets an external AI assistant read client state, manage configuration and use the existing bot/client actions. Enable it explicitly in Settings and choose **Allow bot controls** for writes and gameplay; read-only access remains the default.
 
 [Feature-local verification](docs/LOCAL_FEATURE_VERIFICATION.md) records current local test results, supported feature coverage and remaining live-game checks.
 

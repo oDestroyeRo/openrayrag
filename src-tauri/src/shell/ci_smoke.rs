@@ -267,6 +267,7 @@ mod enabled {
         ];
         if run.mcp_verified.load(Ordering::SeqCst) {
             checks.push("mcp-loopback-read-only");
+            checks.push("mcp-loopback-control");
         }
         if run.stage == Stage::Reopen {
             checks.push("settings-restore");

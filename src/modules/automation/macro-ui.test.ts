@@ -459,6 +459,32 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe('unified Setup editor', () => {
+  it('admits assistant source through the editor transaction and reports partial persistence accurately', () => {
+    const store = new Store(),
+      f = editor(store);
+    const before = f.ui.readScript();
+    expect(() => f.ui.setScript('script "Bad"\nset radius = invalid')).toThrow();
+    expect(f.ui.readScript()).toEqual(before);
+    expect(f.hooks.apply).not.toHaveBeenCalled();
+    expect(f.ui.setScript('script "Updated"\nset radius = 14')).toEqual({
+      draftChanged: true,
+      persisted: true,
+    });
+    expect(f.settings().radius).toBe(14);
+    expect(f.ui.readScript()).toMatchObject({ dirty: false, unsaved: false });
+    store.setItem = () => {
+      throw new Error('quota');
+    };
+    expect(f.ui.setScript('script "Updated"\nset radius = 16')).toEqual({
+      draftChanged: true,
+      persisted: false,
+    });
+    expect(f.settings().radius).toBe(16);
+    expect(f.ui.readScript()).toMatchObject({ dirty: false, unsaved: true });
+    f.ui.lock(true);
+    expect(() => f.ui.setScript('script "Locked"')).toThrow();
+    expect(f.settings().radius).toBe(16);
+  });
   it('preserves a selected profile when only settings property order and comments differ', () => {
     const f = editor(),
       retained = f.settings(),

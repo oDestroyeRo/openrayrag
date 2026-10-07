@@ -289,7 +289,7 @@ export class UpdateContinuationOwner {
       this.restoring = false;
     }
   }
-  cancel(stop = false): Promise<unknown> {
+  cancel(stop = false, mcpOperation?: string): Promise<unknown> {
     if (stop) this.stoppedByUser = true;
     this.epoch++;
     this.continuation = null;
@@ -299,7 +299,7 @@ export class UpdateContinuationOwner {
       this.reply.reject(new Error('Update continuation cancelled by Stop.'));
       this.reply = null;
     }
-    return this.invoke('update_cancel', { stop });
+    return this.invoke('update_cancel', { stop, ...(mcpOperation ? { mcpOperation } : {}) });
   }
 }
 

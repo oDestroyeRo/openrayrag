@@ -59,6 +59,7 @@ function setup(executionPolicy = structuredClone(DEFAULT_MAP_POLICY)) {
   const status: Record<string, unknown> = {};
   const hooks = {
     notify: vi.fn(),
+    definitionsChanged: vi.fn(),
     service: vi.fn(async (_spec: unknown) => 'Service requested.'),
     map: () => (typeof status.map === 'string' ? status.map : 'prontera'),
     settings: () => DEFAULT_SETTINGS,
@@ -149,14 +150,17 @@ describe('NPC service UI ownership gates', () => {
     );
     await s.button('Save / update').click();
     expect(s.store.list()).toHaveLength(1);
+    expect(s.hooks.definitionsChanged).toHaveBeenCalledTimes(1);
     expect(s.hooks.notify).toHaveBeenLastCalledWith('NPC service saved on this computer.');
     await s.button('Export saved').click();
     expect(JSON.parse(s.field('Import or export service document').value).services).toHaveLength(1);
     await s.button('Import document').click();
     expect(s.store.list()).toHaveLength(2);
+    expect(s.hooks.definitionsChanged).toHaveBeenCalledTimes(2);
     expect(s.store.list()[0]!.id).not.toBe(s.store.list()[1]!.id);
     await s.button('Delete saved').click();
     expect(s.store.list()).toHaveLength(1);
+    expect(s.hooks.definitionsChanged).toHaveBeenCalledTimes(3);
     await s.button('Run service').click();
     expect(s.hooks.service).not.toHaveBeenCalled();
     expect(s.hooks.notify.mock.calls.flat().join(' ')).not.toContain('Waiting for the game');
