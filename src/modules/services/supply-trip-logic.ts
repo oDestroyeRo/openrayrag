@@ -2,7 +2,12 @@ import type { Revision, ItemId, Quantity } from '../../shared/domain-values';
 import { inventoryItemCount } from '../world/character-state-logic';
 import type { Position } from '../protocol/protocol';
 import type { SettingsInput as Settings, AutomationSettingsInput } from '../settings/settings';
-import type { DispositionAction, DispositionContext, DispositionPolicyView, ValidatedDispositionPolicy } from './disposition';
+import type {
+  DispositionAction,
+  DispositionContext,
+  DispositionPolicyView,
+  ValidatedDispositionPolicy,
+} from './disposition';
 export interface SupplySettings {
   enabled: boolean;
   stockEnabled: boolean;
@@ -30,9 +35,9 @@ export const DEFAULT_SUPPLY: SupplySettings = {
   maxActions: 100,
   maxDurationSeconds: 600,
   maxSpend: 0,
-  storageService: "",
-  buyService: "",
-  sellService: "",
+  storageService: '',
+  buyService: '',
+  sellService: '',
 };
 
 export interface SupplyGoal {
@@ -40,8 +45,11 @@ export interface SupplyGoal {
   readonly desired: Quantity;
 }
 /** Supply validates its own limits; disposition has already passed settings admission. */
-export type SupplyPolicySettings = Omit<Settings,'automation'> & {readonly automation?:
-  Omit<AutomationSettingsInput,'disposition'> & {readonly disposition?:ValidatedDispositionPolicy}};
+export type SupplyPolicySettings = Omit<Settings, 'automation'> & {
+  readonly automation?: Omit<AutomationSettingsInput, 'disposition'> & {
+    readonly disposition?: ValidatedDispositionPolicy;
+  };
+};
 
 export interface SupplyContext {
   character: string;
@@ -62,11 +70,11 @@ export interface SupplyContext {
 }
 
 export type SupplyNext =
-  | { type: "service"; contractId: string; fee: number }
-  | { type: "action"; action: DispositionAction }
-  | { type: "ready" }
-  | { type: "close" }
-  | { type: "blocked"; reasons: string[] };
+  | { type: 'service'; contractId: string; fee: number }
+  | { type: 'action'; action: DispositionAction }
+  | { type: 'ready' }
+  | { type: 'close' }
+  | { type: 'blocked'; reasons: string[] };
 
 export interface SupplyPorts<Receipt> {
   next(
@@ -79,25 +87,25 @@ export interface SupplyPorts<Receipt> {
 }
 
 export type SupplyIntent =
-  | { id: number; type: "prepare" }
-  | { id: number; type: "service"; contractId: string; reserved: number }
-  | { id: number; type: "action"; action: DispositionAction }
-  | { id: number; type: "close" }
-  | { id: number; type: "return"; map: string; position: Position }
-  | { id: number; type: "resume"; settings: Settings };
+  | { id: number; type: 'prepare' }
+  | { id: number; type: 'service'; contractId: string; reserved: number }
+  | { id: number; type: 'action'; action: DispositionAction }
+  | { id: number; type: 'close' }
+  | { id: number; type: 'return'; map: string; position: Position }
+  | { id: number; type: 'resume'; settings: Settings };
 
 export type SupplyPhase =
-  | "idle"
-  | "armed"
-  | "preparing"
-  | "service"
-  | "planning"
-  | "confirming"
-  | "closing"
-  | "returning"
-  | "complete"
-  | "waiting"
-  | "cancelled";
+  | 'idle'
+  | 'armed'
+  | 'preparing'
+  | 'service'
+  | 'planning'
+  | 'confirming'
+  | 'closing'
+  | 'returning'
+  | 'complete'
+  | 'waiting'
+  | 'cancelled';
 
 export interface SupplySnapshot {
   state: SupplyPhase;
@@ -133,29 +141,24 @@ export interface SupplyResumeGuard {
 }
 
 export const integer = (value: unknown, min: number, max: number): value is number =>
-  typeof value === "number" &&
-  Number.isInteger(value) &&
-  value >= min &&
-  value <= max;
+  typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
 
 function record(value: unknown, keys: string[]): Record<string, unknown> {
   if (
     !value ||
-    typeof value !== "object" ||
+    typeof value !== 'object' ||
     Array.isArray(value) ||
     Object.keys(value).some((key) => !keys.includes(key)) ||
     keys.some((key) => !Object.hasOwn(value, key))
   )
-    throw new Error("Invalid supply fields.");
+    throw new Error('Invalid supply fields.');
   return value as Record<string, unknown>;
 }
 
 export function validateSupplySettings(input: unknown): SupplySettings {
   const value = record(input, Object.keys(DEFAULT_SUPPLY));
   if (
-    ["enabled", "stockEnabled", "weightEnabled"].some(
-      (key) => typeof value[key] !== "boolean",
-    ) ||
+    ['enabled', 'stockEnabled', 'weightEnabled'].some((key) => typeof value[key] !== 'boolean') ||
     !integer(value.weightStartPercent, 1, 100) ||
     !integer(value.weightEndPercent, 1, 99) ||
     value.weightEndPercent >= value.weightStartPercent ||
@@ -164,41 +167,39 @@ export function validateSupplySettings(input: unknown): SupplySettings {
     !integer(value.maxActions, 1, 100) ||
     !integer(value.maxDurationSeconds, 30, 3600) ||
     !integer(value.maxSpend, 0, 2_000_000_000) ||
-    ["storageService", "buyService", "sellService"].some(
+    ['storageService', 'buyService', 'sellService'].some(
       (key) =>
-        typeof value[key] !== "string" ||
+        typeof value[key] !== 'string' ||
         !/^(?:[a-zA-Z0-9_.-]{1,128})?$/.test(value[key] as string),
     ) ||
     (value.enabled && !value.stockEnabled && !value.weightEnabled)
   )
-    throw new Error("Invalid supply triggers, limits or service IDs.");
+    throw new Error('Invalid supply triggers, limits or service IDs.');
   return structuredClone(value) as unknown as SupplySettings;
 }
 
 export function validateSupplyResumeGuard(input: unknown): SupplyResumeGuard {
   const value = record(input, [
-    "version",
-    "character",
-    "latched",
-    "remainingTrips",
-    "actions",
-    "spent",
-    "reserved",
-    "intervalSeconds",
-    "deadlineSeconds",
-    "interrupted",
-    "uncertain",
-    "returnDestination",
+    'version',
+    'character',
+    'latched',
+    'remainingTrips',
+    'actions',
+    'spent',
+    'reserved',
+    'intervalSeconds',
+    'deadlineSeconds',
+    'interrupted',
+    'uncertain',
+    'returnDestination',
   ]);
   if (
     value.version !== 1 ||
-    typeof value.character !== "string" ||
+    typeof value.character !== 'string' ||
     !value.character.trim() ||
     value.character.length > 64 ||
     /[\u0000-\u001f\u007f]/.test(value.character) ||
-    ["latched", "interrupted", "uncertain"].some(
-      (key) => typeof value[key] !== "boolean",
-    ) ||
+    ['latched', 'interrupted', 'uncertain'].some((key) => typeof value[key] !== 'boolean') ||
     !integer(value.remainingTrips, 0, 100) ||
     !integer(value.actions, 0, 100) ||
     !integer(value.spent, 0, 2_000_000_000) ||
@@ -206,21 +207,22 @@ export function validateSupplyResumeGuard(input: unknown): SupplyResumeGuard {
     !integer(value.intervalSeconds, 0, 86400) ||
     !integer(value.deadlineSeconds, 0, 3600)
   )
-    throw new Error("Invalid supply resume state.");
+    throw new Error('Invalid supply resume state.');
   if (value.returnDestination !== null) {
-    const destination = record(value.returnDestination, ["map", "position"]);
-    const position = record(destination.position, ["x", "y"]);
+    const destination = record(value.returnDestination, ['map', 'position']);
+    const position = record(destination.position, ['x', 'y']);
     if (
-      typeof destination.map !== "string" ||
+      typeof destination.map !== 'string' ||
       !/^[a-zA-Z0-9_-]{1,64}$/.test(destination.map) ||
       !integer(position.x, 0, 511) ||
       !integer(position.y, 0, 511)
     )
-      throw new Error("Invalid supply return destination.");
+      throw new Error('Invalid supply return destination.');
   }
   return structuredClone(value) as unknown as SupplyResumeGuard;
 }
 
 export const count = (context: SupplyContext, id: ItemId) =>
-  context.disposition.containers.inventory.items == null ? null
+  context.disposition.containers.inventory.items == null
+    ? null
     : inventoryItemCount(id)(context.disposition.containers.inventory.items);

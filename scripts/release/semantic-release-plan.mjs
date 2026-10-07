@@ -1,22 +1,29 @@
 // Semantic release orchestration. Plugin resolution is an effect performed only
 // when planning needs the pinned engines; pure contracts remain importable alone.
-import { createRequire } from "node:module";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { planningInputValues, releaseTypeValue, releaseTagFor } from '../shared/tooling-domain-values.mjs';
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  RELEASE_POLICY, validatePlanningInput, analyzerVersion, finalizePlan,
-} from "./semantic-release-policy.mjs";
-export * from "./semantic-release-policy.mjs";
+  planningInputValues,
+  releaseTypeValue,
+  releaseTagFor,
+} from '../shared/tooling-domain-values.mjs';
+import {
+  RELEASE_POLICY,
+  validatePlanningInput,
+  analyzerVersion,
+  finalizePlan,
+} from './semantic-release-policy.mjs';
+export * from './semantic-release-policy.mjs';
 
 const logger = Object.freeze({ log() {} });
 
 /** @returns {Promise<{analyzer: Analyzer, notesGenerator: NotesGenerator}>} */
 async function loadReleaseEngines() {
   // Use the isolated locked tools install and the plugins' public exports.
-  const toolRequire = createRequire(new URL("../../tools/release/package.json", import.meta.url));
+  const toolRequire = createRequire(new URL('../../tools/release/package.json', import.meta.url));
   const [analyzerModule, notesModule] = await Promise.all([
-    import(pathToFileURL(toolRequire.resolve("@semantic-release/commit-analyzer")).href),
-    import(pathToFileURL(toolRequire.resolve("@semantic-release/release-notes-generator")).href),
+    import(pathToFileURL(toolRequire.resolve('@semantic-release/commit-analyzer')).href),
+    import(pathToFileURL(toolRequire.resolve('@semantic-release/release-notes-generator')).href),
   ]);
   return { analyzer: analyzerModule.analyzeCommits, notesGenerator: notesModule.generateNotes };
 }
@@ -29,13 +36,25 @@ async function loadReleaseEngines() {
  */
 export async function planRelease(
   rawInput,
-  { cwd = fileURLToPath(new URL("../../tools/release", import.meta.url)), analyzer, notesGenerator } = {},
+  {
+    cwd = fileURLToPath(new URL('../../tools/release', import.meta.url)),
+    analyzer,
+    notesGenerator,
+  } = {},
 ) {
   validatePlanningInput(rawInput, cwd);
   const input = planningInputValues(rawInput);
   const sourceBase = input.reservation ?? input.published;
-  const analysisBase = { sourceSha: sourceBase.sourceSha, version: sourceBase.version, tag: sourceBase.tag };
-  const notesBase = { sourceSha: input.published.sourceSha, version: input.published.version, tag: input.published.tag };
+  const analysisBase = {
+    sourceSha: sourceBase.sourceSha,
+    version: sourceBase.version,
+    tag: sourceBase.tag,
+  };
+  const notesBase = {
+    sourceSha: input.published.sourceSha,
+    version: input.published.version,
+    tag: input.published.tag,
+  };
   if (analyzer === undefined || notesGenerator === undefined) {
     const engines = await loadReleaseEngines();
     if (analyzer === undefined) analyzer = engines.analyzer;
@@ -46,12 +65,8 @@ export async function planRelease(
     logger,
     commits: structuredClone(input.analysisCommits),
   };
-  const analyzed = await analyzer(
-    structuredClone(RELEASE_POLICY.analyzer),
-    context,
-  );
-  if (analyzed === null)
-    return { state: "skip", reason: "No releasable changes." };
+  const analyzed = await analyzer(structuredClone(RELEASE_POLICY.analyzer), context);
+  if (analyzed === null) return { state: 'skip', reason: 'No releasable changes.' };
   const releaseType = releaseTypeValue(analyzed, 'Invalid analyzer release type.');
   const version = analyzerVersion(analysisBase, releaseType);
   const tag = releaseTagFor(version);
@@ -76,5 +91,8 @@ export async function planRelease(
       nextRelease: { gitHead: input.source.sourceSha, gitTag: tag, version },
     },
   );
-  return { state: "release", plan: finalizePlan(input, { analysisBase, notesBase, releaseType, version }, notes) };
+  return {
+    state: 'release',
+    plan: finalizePlan(input, { analysisBase, notesBase, releaseType, version }, notes),
+  };
 }

@@ -6,7 +6,12 @@ import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { classifyProcessResult, processErrorCode, processFailureDetails, processFailureMessage } from './process-outcome-policy.mjs';
+import {
+  classifyProcessResult,
+  processErrorCode,
+  processFailureDetails,
+  processFailureMessage,
+} from './process-outcome-policy.mjs';
 
 export class ProcessExecutionError extends Error {
   /** @param {import('./process-outcome-policy.mjs').ProcessFailure} failure @param {string} report */
@@ -19,8 +24,10 @@ export class ProcessExecutionError extends Error {
 }
 
 const FOOTER_RESERVE = 512;
-const SIGNING_CREDENTIAL = /^(TAURI_SIGNING_PRIVATE_KEY(?:_PASSWORD)?|APPLE_(?:CERTIFICATE(?:_PASSWORD)?|ID|PASSWORD|API_KEY(?:_PATH)?|API_ISSUER)|WINDOWS_CERTIFICATE(?:_PASSWORD)?)$/i;
-const CREDENTIAL_NAME = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|CERTIFICATE|API_KEY|AUTHORIZATION|CREDENTIALS?)(?:_|$)/i;
+const SIGNING_CREDENTIAL =
+  /^(TAURI_SIGNING_PRIVATE_KEY(?:_PASSWORD)?|APPLE_(?:CERTIFICATE(?:_PASSWORD)?|ID|PASSWORD|API_KEY(?:_PATH)?|API_ISSUER)|WINDOWS_CERTIFICATE(?:_PASSWORD)?)$/i;
+const CREDENTIAL_NAME =
+  /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|CERTIFICATE|API_KEY|AUTHORIZATION|CREDENTIALS?)(?:_|$)/i;
 
 export function smokePackagingEnvironment(environment) {
   // Debug output is allowed only for unsigned builds. Do not forward unrelated
@@ -28,58 +35,87 @@ export function smokePackagingEnvironment(environment) {
   if (Object.entries(environment).some(([key, value]) => SIGNING_CREDENTIAL.test(key) && value)) {
     throw new Error('Smoke packaging refuses signing credentials.');
   }
-  const safe = Object.fromEntries(filter(Object.entries(environment), ([key]) => !CREDENTIAL_NAME.test(key)));
+  const safe = Object.fromEntries(
+    filter(Object.entries(environment), ([key]) => !CREDENTIAL_NAME.test(key)),
+  );
   return { ...safe, TAURI_CLI_VERBOSITY: '1' };
 }
 
 async function writeConsole(stream, chunk) {
   /** @type {Promise<void>} */
   const written = new Promise((resolve, reject) => {
-    const failed = error => { stream.off('error', failed); reject(error); };
+    const failed = (error) => {
+      stream.off('error', failed);
+      reject(error);
+    };
     stream.once('error', failed);
     try {
-      stream.write(chunk, error => {
+      stream.write(chunk, (error) => {
         if (error) reject(error); // The following error event removes its listener.
-        else { stream.off('error', failed); resolve(); }
+        else {
+          stream.off('error', failed);
+          resolve();
+        }
       });
-    } catch (error) { stream.off('error', failed); reject(error); }
+    } catch (error) {
+      stream.off('error', failed);
+      reject(error);
+    }
   });
   await written;
 }
 
 /** Stream a child without a shell; retain a bounded report even when it fails. */
-export async function runLoggedProcess(file, args, {
-  cwd, env = process.env, report, stdout = process.stdout, stderr = process.stderr,
-  maxBytes = 8 * 1024 * 1024,
-}) {
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1024) throw new Error('Diagnostic log limit must be at least 1024 bytes.');
+export async function runLoggedProcess(
+  file,
+  args,
+  {
+    cwd,
+    env = process.env,
+    report,
+    stdout = process.stdout,
+    stderr = process.stderr,
+    maxBytes = 8 * 1024 * 1024,
+  },
+) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1024)
+    throw new Error('Diagnostic log limit must be at least 1024 bytes.');
   await mkdir(dirname(report), { recursive: true });
   const temporary = `${report}.${randomUUID()}.tmp`;
   const log = await open(temporary, 'wx', 0o600);
   const tailLimit = Math.min(64 * 1024, Math.floor((maxBytes - FOOTER_RESERVE) / 4));
   const prefixLimit = maxBytes - FOOTER_RESERVE - tailLimit;
-  let prefixBytes = 0, discardedBytes = 0;
+  let prefixBytes = 0,
+    discardedBytes = 0;
   let tail = Buffer.alloc(0);
   let pending = Promise.resolve();
   let child;
   /** @type {import('effect/Result').Result<undefined, import('./process-outcome-policy.mjs').ProcessError>} */
   let diagnostics = succeed(undefined);
-  const recordFailure = error => {
+  const recordFailure = (error) => {
     if (isSuccess(diagnostics)) {
       // Arbitrary thrown values may expose a throwing accessor. Diagnostic
       // projection must retain a safe failure even when its code is unreadable.
       let code;
-      try { code = error?.code; } catch { /* Use the unknown code below. */ }
+      try {
+        code = error?.code;
+      } catch {
+        /* Use the unknown code below. */
+      }
       diagnostics = fail({ kind: 'process-error', code: processErrorCode(code) });
     }
   };
-  let exitCode = null, signal = null;
+  let exitCode = null,
+    signal = null;
   const capture = (chunk, consoleStream) => {
     // Serialize the two pipes' file writes. Each pipe applies backpressure,
     // keeping queued chunks bounded even if the terminal or disk is slow.
     const saved = pending.then(async () => {
       const count = Math.min(chunk.length, prefixLimit - prefixBytes);
-      if (count) { await log.writeFile(chunk.subarray(0, count)); prefixBytes += count; }
+      if (count) {
+        await log.writeFile(chunk.subarray(0, count));
+        prefixBytes += count;
+      }
       if (count < chunk.length) {
         const rest = chunk.subarray(count);
         const combined = Buffer.concat([tail, rest]);
@@ -93,46 +129,75 @@ export async function runLoggedProcess(file, args, {
   try {
     child = spawn(file, args, { cwd, env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
     /** @type {Promise<void>} */
-    const completed = new Promise(resolve => {
+    const completed = new Promise((resolve) => {
       child.once('error', recordFailure);
-      child.once('close', (code, stoppedBy) => { exitCode = code; signal = stoppedBy; resolve(); });
+      child.once('close', (code, stoppedBy) => {
+        exitCode = code;
+        signal = stoppedBy;
+        resolve();
+      });
     });
-    const pump = (source, target) => pipeline(source, new Writable({
-      write(chunk, _encoding, callback) {
-        capture(chunk, target).then(() => callback(), error => {
-          // Writable callbacks treat undefined as success. Keep the rejected
-          // observation before adapting it to the stream's Error-only channel.
-          recordFailure(error);
-          callback(new Error('Diagnostic output failed.'));
-        });
-      },
-    })).catch(error => {
-      recordFailure(error);
-      child.kill();
-    });
+    const pump = (source, target) =>
+      pipeline(
+        source,
+        new Writable({
+          write(chunk, _encoding, callback) {
+            capture(chunk, target).then(
+              () => callback(),
+              (error) => {
+                // Writable callbacks treat undefined as success. Keep the rejected
+                // observation before adapting it to the stream's Error-only channel.
+                recordFailure(error);
+                callback(new Error('Diagnostic output failed.'));
+              },
+            );
+          },
+        }),
+      ).catch((error) => {
+        recordFailure(error);
+        child.kill();
+      });
     await Promise.all([completed, pump(child.stdout, stdout), pump(child.stderr, stderr)]);
     await pending;
   } catch (error) {
     recordFailure(error);
   } finally {
     try {
-      if (discardedBytes) await log.writeFile(`\n[diagnostic output truncated: ${discardedBytes} bytes omitted; final output follows]\n`);
+      if (discardedBytes)
+        await log.writeFile(
+          `\n[diagnostic output truncated: ${discardedBytes} bytes omitted; final output follows]\n`,
+        );
       if (tail.length) await log.writeFile(tail);
-      await log.writeFile(isFailure(diagnostics)
-        ? `\n[process error: ${diagnostics.failure.code}]\n`
-        : `\n[process status: exit=${exitCode}; signal=${signal ?? 'none'}]\n`);
+      await log.writeFile(
+        isFailure(diagnostics)
+          ? `\n[process error: ${diagnostics.failure.code}]\n`
+          : `\n[process status: exit=${exitCode}; signal=${signal ?? 'none'}]\n`,
+      );
     } finally {
       await log.close();
       // Replace the report entry itself, never follow an existing symlink. Only
       // the exclusive temporary file created by this invocation is cleaned up.
-      try { await rename(temporary, report); }
-      finally { await rm(temporary, { force: true }); }
+      try {
+        await rename(temporary, report);
+      } finally {
+        await rm(temporary, { force: true });
+      }
     }
   }
   // Interpret only after publishing the report. A publication failure has the
   // established priority over a child or console failure.
-  const outcome = getOrThrowWith(classifyProcessResult({
-    failureCode: isFailure(diagnostics) ? diagnostics.failure.code : null, exitCode, signal, discardedBytes,
-  }), failure => new ProcessExecutionError(failure, report));
-  return { exitCode: outcome.exitCode, signal: outcome.signal, discardedBytes: outcome.discardedBytes };
+  const outcome = getOrThrowWith(
+    classifyProcessResult({
+      failureCode: isFailure(diagnostics) ? diagnostics.failure.code : null,
+      exitCode,
+      signal,
+      discardedBytes,
+    }),
+    (failure) => new ProcessExecutionError(failure, report),
+  );
+  return {
+    exitCode: outcome.exitCode,
+    signal: outcome.signal,
+    discardedBytes: outcome.discardedBytes,
+  };
 }

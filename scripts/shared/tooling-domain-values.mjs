@@ -116,135 +116,280 @@
 /** @typedef {{schemaVersion: number, harness: Readonly<{files: readonly string[], hash: string}>, createdAt: string, source: Readonly<{commit: string, mode: string, loadedSourceHash: string, dirty: string}>, machine: Readonly<Record<string, unknown>>, methodology: Readonly<Record<string, unknown>> & {samples: number}, workload: unknown, scenarios: RenderingScenario[], probes: {passed: readonly string[]} | null, comparison?: readonly RenderingComparison[]}} RenderingReport */
 
 /** @param {unknown} value @param {string} message @returns {asserts value} */
-function requireValue(value, message) { if (!value) throw new Error(message); }
+function requireValue(value, message) {
+  if (!value) throw new Error(message);
+}
 /** @param {unknown} value @param {string} message @returns {asserts value is string} */
-function sha(value, message) { requireValue(typeof value === 'string' && /^[a-f0-9]{40}$/.test(value), message); }
+function sha(value, message) {
+  requireValue(typeof value === 'string' && /^[a-f0-9]{40}$/.test(value), message);
+}
 /** @param {unknown} value @param {string} message @returns {asserts value is string} */
-function digest(value, message) { requireValue(typeof value === 'string' && /^[a-f0-9]{64}$/.test(value), message); }
+function digest(value, message) {
+  requireValue(typeof value === 'string' && /^[a-f0-9]{64}$/.test(value), message);
+}
 /** @param {unknown} value @param {string} message @returns {string} */
-function decimal(value, message) { requireValue(/^[1-9]\d*$/.test(String(value)), message); return String(value); }
+function decimal(value, message) {
+  requireValue(/^[1-9]\d*$/.test(String(value)), message);
+  return String(value);
+}
 
 /** @param {unknown} value @param {string} [message] @returns {SourceCommitSha} */
-export function sourceCommitSha(value, message = 'Invalid source SHA.') { sha(value, message); return /** @type {SourceCommitSha} */ (value); }
+export function sourceCommitSha(value, message = 'Invalid source SHA.') {
+  sha(value, message);
+  return /** @type {SourceCommitSha} */ (value);
+}
 /** @param {unknown} value @param {string} [message] @returns {GitTagObjectSha} */
-export function gitTagObjectSha(value, message = 'Invalid annotated tag SHA.') { sha(value, message); return /** @type {GitTagObjectSha} */ (value); }
+export function gitTagObjectSha(value, message = 'Invalid annotated tag SHA.') {
+  sha(value, message);
+  return /** @type {GitTagObjectSha} */ (value);
+}
 /** @param {unknown} value @returns {FileDigest} */
-export function fileDigest(value) { digest(value, 'Invalid file digest.'); return /** @type {FileDigest} */ (value); }
+export function fileDigest(value) {
+  digest(value, 'Invalid file digest.');
+  return /** @type {FileDigest} */ (value);
+}
 /** @param {unknown} value @returns {PlanDigest} */
-export function planDigest(value) { digest(value, 'Invalid plan digest.'); return /** @type {PlanDigest} */ (value); }
+export function planDigest(value) {
+  digest(value, 'Invalid plan digest.');
+  return /** @type {PlanDigest} */ (value);
+}
 /** @param {unknown} value @returns {PolicyDigest} */
-export function policyDigest(value) { digest(value, 'Invalid policy digest.'); return /** @type {PolicyDigest} */ (value); }
+export function policyDigest(value) {
+  digest(value, 'Invalid policy digest.');
+  return /** @type {PolicyDigest} */ (value);
+}
 /** @param {unknown} value @returns {ArtifactDigest} */
-export function artifactDigest(value) { requireValue(typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value), 'Invalid artifact digest.'); return /** @type {ArtifactDigest} */ (value); }
+export function artifactDigest(value) {
+  requireValue(
+    typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value),
+    'Invalid artifact digest.',
+  );
+  return /** @type {ArtifactDigest} */ (value);
+}
 /** @param {unknown} value @param {string} [message] @returns {WorkflowRunId} */
-export function workflowRunId(value, message = 'Expected a positive numeric GitHub ID.') { return /** @type {WorkflowRunId} */ (decimal(value, message)); }
+export function workflowRunId(value, message = 'Expected a positive numeric GitHub ID.') {
+  return /** @type {WorkflowRunId} */ (decimal(value, message));
+}
 /** @param {unknown} value @param {string} [message] @returns {WorkflowJobId} */
-export function workflowJobId(value, message = 'Expected a positive numeric GitHub ID.') { return /** @type {WorkflowJobId} */ (decimal(value, message)); }
+export function workflowJobId(value, message = 'Expected a positive numeric GitHub ID.') {
+  return /** @type {WorkflowJobId} */ (decimal(value, message));
+}
 /** @param {unknown} value @param {string} [message] @returns {ActionsArtifactId} */
-export function actionsArtifactId(value, message = 'Expected a positive numeric GitHub ID.') { return /** @type {ActionsArtifactId} */ (decimal(value, message)); }
+export function actionsArtifactId(value, message = 'Expected a positive numeric GitHub ID.') {
+  return /** @type {ActionsArtifactId} */ (decimal(value, message));
+}
 /** @param {unknown} value @param {string} [message] @returns {PullRequestNumber} */
-export function pullRequestNumber(value, message = 'Expected a positive numeric GitHub ID.') { return /** @type {PullRequestNumber} */ (decimal(value, message)); }
+export function pullRequestNumber(value, message = 'Expected a positive numeric GitHub ID.') {
+  return /** @type {PullRequestNumber} */ (decimal(value, message));
+}
 /** @param {unknown} value @param {string} [message] @returns {WorkflowAttemptText} */
-export function workflowAttemptText(value, message = 'Invalid workflow attempt.') { return /** @type {WorkflowAttemptText} */ (decimal(value, message)); }
+export function workflowAttemptText(value, message = 'Invalid workflow attempt.') {
+  return /** @type {WorkflowAttemptText} */ (decimal(value, message));
+}
 /** @param {unknown} value @returns {WorkflowAttempt} */
-export function workflowAttempt(value) { requireValue(typeof value === 'number' && Number.isSafeInteger(value) && value > 0, 'Missing workflow attempt.'); return /** @type {WorkflowAttempt} */ (value); }
+export function workflowAttempt(value) {
+  requireValue(
+    typeof value === 'number' && Number.isSafeInteger(value) && value > 0,
+    'Missing workflow attempt.',
+  );
+  return /** @type {WorkflowAttempt} */ (value);
+}
 /** @param {unknown} value @returns {ReleaseId} */
-export function releaseId(value) { requireValue(typeof value === 'number' && Number.isSafeInteger(value) && value > 0, 'Invalid release record.'); return /** @type {ReleaseId} */ (value); }
+export function releaseId(value) {
+  requireValue(
+    typeof value === 'number' && Number.isSafeInteger(value) && value > 0,
+    'Invalid release record.',
+  );
+  return /** @type {ReleaseId} */ (value);
+}
 /** @param {unknown} value @param {string} [message] @returns {FirstParentCount} */
-export function firstParentCount(value, message = 'Invalid first-parent count.') { requireValue(typeof value === 'number' && Number.isSafeInteger(value) && value > 0, message); return /** @type {FirstParentCount} */ (value); }
+export function firstParentCount(value, message = 'Invalid first-parent count.') {
+  requireValue(typeof value === 'number' && Number.isSafeInteger(value) && value > 0, message);
+  return /** @type {FirstParentCount} */ (value);
+}
 
 const MAX_STABLE_VERSION_LENGTH = 3 * String(Number.MAX_SAFE_INTEGER).length + 2;
 /** @param {unknown} value @returns {StableReleaseVersion} */
 export function stableReleaseVersion(value) {
-  requireValue(typeof value === 'string' && value.length <= MAX_STABLE_VERSION_LENGTH &&
-    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value) &&
-    value.split('.').every(part => Number.isSafeInteger(Number(part)) && String(Number(part)) === part), 'Invalid stable release version.');
+  requireValue(
+    typeof value === 'string' &&
+      value.length <= MAX_STABLE_VERSION_LENGTH &&
+      /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value) &&
+      value
+        .split('.')
+        .every((part) => Number.isSafeInteger(Number(part)) && String(Number(part)) === part),
+    'Invalid stable release version.',
+  );
   return /** @type {StableReleaseVersion} */ (value);
 }
 /** @param {unknown} value @returns {ReleaseTag} */
-export function releaseTag(value) { requireValue(typeof value === 'string' && /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(value), 'Expected a canonical stable release tag.'); return /** @type {ReleaseTag} */ (value); }
+export function releaseTag(value) {
+  requireValue(
+    typeof value === 'string' && /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(value),
+    'Expected a canonical stable release tag.',
+  );
+  return /** @type {ReleaseTag} */ (value);
+}
 /** @param {StableReleaseVersion} version @returns {ReleaseTag} */
-export function releaseTagFor(version) { return releaseTag(`v${version}`); }
+export function releaseTagFor(version) {
+  return releaseTag(`v${version}`);
+}
 /** @param {unknown} value @param {string} [message] @returns {ReleaseType} */
-export function releaseTypeValue(value, message = 'Invalid release type.') { requireValue(value === 'major' || value === 'minor' || value === 'patch', message); return value; }
+export function releaseTypeValue(value, message = 'Invalid release type.') {
+  requireValue(value === 'major' || value === 'minor' || value === 'patch', message);
+  return value;
+}
 
 /** @param {ReleaseBaseDto} value @returns {ReleaseBase} */
-export function releaseBaseValues(value) { sourceCommitSha(value.sourceSha); stableReleaseVersion(value.version); releaseTag(value.tag); return /** @type {ReleaseBase} */ (value); }
+export function releaseBaseValues(value) {
+  sourceCommitSha(value.sourceSha);
+  stableReleaseVersion(value.version);
+  releaseTag(value.tag);
+  return /** @type {ReleaseBase} */ (value);
+}
 /** @param {ReleaseBridgeDto} value @returns {ReleaseBridge} */
-export function releaseBridgeValues(value) { releaseBaseValues(value); firstParentCount(value.firstParentCount); return /** @type {ReleaseBridge} */ (value); }
+export function releaseBridgeValues(value) {
+  releaseBaseValues(value);
+  firstParentCount(value.firstParentCount);
+  return /** @type {ReleaseBridge} */ (value);
+}
 /** @param {ReleaseSourceDto} value @returns {ReleaseSource} */
-export function releaseSourceValues(value) { sourceCommitSha(value.sourceSha); firstParentCount(value.firstParentCount); return /** @type {ReleaseSource} */ (value); }
+export function releaseSourceValues(value) {
+  sourceCommitSha(value.sourceSha);
+  firstParentCount(value.firstParentCount);
+  return /** @type {ReleaseSource} */ (value);
+}
 /** @param {ReleasePlanDto} value @returns {ReleasePlan} */
 export function releasePlanValues(value) {
-  releaseSourceValues(value); releaseBaseValues(value); releaseBaseValues(value.analysisBase); releaseBaseValues(value.notesBase);
-  policyDigest(value.policySha256); if (value.predecessorPlanSha256 !== null) planDigest(value.predecessorPlanSha256);
+  releaseSourceValues(value);
+  releaseBaseValues(value);
+  releaseBaseValues(value.analysisBase);
+  releaseBaseValues(value.notesBase);
+  policyDigest(value.policySha256);
+  if (value.predecessorPlanSha256 !== null) planDigest(value.predecessorPlanSha256);
   return /** @type {ReleasePlan} */ (value);
 }
 /** @param {PlanningInputDto} value @returns {PlanningInput} */
 export function planningInputValues(value) {
   const owned = structuredClone(value);
-  releaseSourceValues(owned.source); releaseBaseValues(owned.published); if (owned.reservation !== null) releasePlanValues(owned.reservation);
-  for (const commit of [...owned.analysisCommits, ...owned.notesCommits]) sourceCommitSha(commit.hash);
+  releaseSourceValues(owned.source);
+  releaseBaseValues(owned.published);
+  if (owned.reservation !== null) releasePlanValues(owned.reservation);
+  for (const commit of [...owned.analysisCommits, ...owned.notesCommits])
+    sourceCommitSha(commit.hash);
   return /** @type {PlanningInput} */ (owned);
 }
 /** @param {ArtifactIdentityDto} value @returns {ArtifactIdentity} */
-export function artifactIdentityValues(value) { actionsArtifactId(value.id); workflowRunId(value.runId); artifactDigest(value.digest); return /** @type {ArtifactIdentity} */ (value); }
+export function artifactIdentityValues(value) {
+  actionsArtifactId(value.id);
+  workflowRunId(value.runId);
+  artifactDigest(value.digest);
+  return /** @type {ArtifactIdentity} */ (value);
+}
 /** @param {ReservationRefDto} value @returns {ReservationRef} */
-export function reservationRefValues(value) { gitTagObjectSha(value.object.sha); return /** @type {ReservationRef} */ (value); }
+export function reservationRefValues(value) {
+  gitTagObjectSha(value.object.sha);
+  return /** @type {ReservationRef} */ (value);
+}
 /** @param {TagObjectDto} value @returns {ReservationTagObject} */
-export function reservationTagValues(value) { gitTagObjectSha(value.sha); sourceCommitSha(value.object.sha); return /** @type {ReservationTagObject} */ (value); }
+export function reservationTagValues(value) {
+  gitTagObjectSha(value.sha);
+  sourceCommitSha(value.object.sha);
+  return /** @type {ReservationTagObject} */ (value);
+}
 /** @param {PlatformReceiptDto} value @returns {PlatformReceipt} */
 export function platformReceiptValues(value) {
-  sourceCommitSha(value.sourceSha); stableReleaseVersion(value.version); workflowRunId(value.runId); workflowAttemptText(value.runAttempt);
+  sourceCommitSha(value.sourceSha);
+  stableReleaseVersion(value.version);
+  workflowRunId(value.runId);
+  workflowAttemptText(value.runAttempt);
   for (const file of value.files) fileDigest(file.sha256);
   return /** @type {PlatformReceipt} */ (value);
 }
 /** @param {ProvenanceDto} value @returns {Provenance} */
 export function provenanceValues(value) {
-  sourceCommitSha(value.sourceSha); firstParentCount(value.firstParentCount); stableReleaseVersion(value.version);
-  workflowRunId(value.runId); workflowAttemptText(value.runAttempt); for (const file of value.files) fileDigest(file.sha256);
+  sourceCommitSha(value.sourceSha);
+  firstParentCount(value.firstParentCount);
+  stableReleaseVersion(value.version);
+  workflowRunId(value.runId);
+  workflowAttemptText(value.runAttempt);
+  for (const file of value.files) fileDigest(file.sha256);
   if (value.platforms) for (const receipt of value.platforms) platformReceiptValues(receipt);
   if (value.schemaVersion === 3 && value.releasePlan) releasePlanValues(value.releasePlan);
   return /** @type {Provenance} */ (value);
 }
 /** @param {ReleaseMetadataDto} value @returns {ReleaseMetadata} */
 export function releaseMetadataValues(value) {
-  sourceCommitSha(value.sourceSha); stableReleaseVersion(value.version); artifactIdentityValues(value.artifact);
-  if (value.schemaVersion === 3) { firstParentCount(value.firstParentCount); planDigest(value.planSha256); }
+  sourceCommitSha(value.sourceSha);
+  stableReleaseVersion(value.version);
+  artifactIdentityValues(value.artifact);
+  if (value.schemaVersion === 3) {
+    firstParentCount(value.firstParentCount);
+    planDigest(value.planSha256);
+  }
   return /** @type {ReleaseMetadata} */ (value);
 }
 /** @param {HostedRunDto} value @returns {HostedRun} */
-export function hostedRunValues(value) { sourceCommitSha(value.head_sha); workflowAttempt(value.run_attempt); return /** @type {HostedRun} */ (value); }
+export function hostedRunValues(value) {
+  sourceCommitSha(value.head_sha);
+  workflowAttempt(value.run_attempt);
+  return /** @type {HostedRun} */ (value);
+}
 /** @param {{id: string, name: string, status: string, conclusion: string | null}} value @returns {HostedJob} */
-export function hostedJobValues(value) { workflowJobId(value.id); return /** @type {HostedJob} */ (value); }
+export function hostedJobValues(value) {
+  workflowJobId(value.id);
+  return /** @type {HostedJob} */ (value);
+}
 /** @param {NonNullable<SmokeResultDto['document']>} value @returns {SmokeDocument} */
 export function smokeDocumentValues(value) {
-  requireValue(value.version === 1 && typeof value.revision === 'number' && Number.isSafeInteger(value.revision) && value.revision > 0
-    && value.selectedProfileId === null && value.settings?.radius === 17 && value.settings.loot === false && value.settings.route_step === 7,
-  'Invalid smoke settings document.');
+  requireValue(
+    value.version === 1 &&
+      typeof value.revision === 'number' &&
+      Number.isSafeInteger(value.revision) &&
+      value.revision > 0 &&
+      value.selectedProfileId === null &&
+      value.settings?.radius === 17 &&
+      value.settings.loot === false &&
+      value.settings.route_step === 7,
+    'Invalid smoke settings document.',
+  );
   return /** @type {SmokeDocument} */ (value);
 }
 /** @param {SmokeResultDto} value @returns {SmokeResult} */
 export function smokeResultValues(value) {
-  requireValue(value.protocol === 1 && (value.stage === 'save' || value.stage === 'reopen') && typeof value.token === 'string'
-    && value.passed === true && Array.isArray(value.checks) && value.document, 'Invalid smoke result.');
+  requireValue(
+    value.protocol === 1 &&
+      (value.stage === 'save' || value.stage === 'reopen') &&
+      typeof value.token === 'string' &&
+      value.passed === true &&
+      Array.isArray(value.checks) &&
+      value.document,
+    'Invalid smoke result.',
+  );
   smokeDocumentValues(value.document);
   return /** @type {SmokeResult} */ (structuredClone(value));
 }
 /** @param {PublicOptionsDto} value @returns {PublicOptions} */
 export function publicOptionsValues(value) {
-  sourceCommitSha(value.sourceSha); releaseTag(value.tag);
+  sourceCommitSha(value.sourceSha);
+  releaseTag(value.tag);
   if (value.runId !== undefined) workflowRunId(value.runId);
   if (value.runAttempt !== undefined) workflowAttemptText(value.runAttempt);
-  return /** @type {PublicOptions} */ ({...value});
+  return /** @type {PublicOptions} */ ({ ...value });
 }
 /** Own the release and nested asset DTOs before starting download effects.
  * @param {ReleaseDto} value @returns {PublicRelease}
  */
 export function publicReleaseValues(value) {
-  releaseId(value.id); releaseTag(value.tag_name);
-  requireValue(typeof value.body === 'string' && typeof value.draft === 'boolean' && typeof value.prerelease === 'boolean'
-    && Array.isArray(value.assets), 'Invalid public release.');
+  releaseId(value.id);
+  releaseTag(value.tag_name);
+  requireValue(
+    typeof value.body === 'string' &&
+      typeof value.draft === 'boolean' &&
+      typeof value.prerelease === 'boolean' &&
+      Array.isArray(value.assets),
+    'Invalid public release.',
+  );
   return /** @type {PublicRelease} */ (structuredClone(value));
 }
 
@@ -281,4 +426,6 @@ export function publicReleaseValues(value) {
 /** Snapshot JSON metadata without moving its ordered admission checks.
  * @param {ReleaseDto} value @returns {ReleaseDto}
  */
-export function ownedReleaseDto(value) { return structuredClone(value); }
+export function ownedReleaseDto(value) {
+  return structuredClone(value);
+}

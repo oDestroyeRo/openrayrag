@@ -1,5 +1,11 @@
-import { itemId, bagId, quantity, revisionFor, incrementRevision } from '../../shared/domain-values';
-import { describe, expect, it } from "vitest";
+import {
+  itemId,
+  bagId,
+  quantity,
+  revisionFor,
+  incrementRevision,
+} from '../../shared/domain-values';
+import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SUPPLY,
   SupplyTripRuntime,
@@ -7,22 +13,19 @@ import {
   validateSupplyResumeGuard,
   type SupplyContext,
   type SupplyIntent,
-} from "./supply-trip";
-import { nextSupplyAction } from "./supply-plan";
+} from './supply-trip';
+import { nextSupplyAction } from './supply-plan';
+import { createSupplyReceipt, observeSupplyReceipt, confirmSupplyReceipt } from './supply-receipt';
+import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from '../settings/settings';
+import { publishedDispositionMetadata } from './disposition-ui';
+import { WorldState } from '../world/world-state';
 import {
-  createSupplyReceipt,
-  observeSupplyReceipt,
-  confirmSupplyReceipt,
-} from "./supply-receipt";
-import {
-  DEFAULT_AUTOMATION,
-  DEFAULT_SETTINGS,
-} from "../settings/settings";
-import { publishedDispositionMetadata } from "./disposition-ui";
-import { WorldState } from "../world/world-state";
-import { validateDispositionPolicy, type DispositionAction, type DispositionPolicyView } from "./disposition";
-import type { SupplyPolicySettings } from "./supply-trip-logic";
-import type { WorkflowReceipt } from "./workflows";
+  validateDispositionPolicy,
+  type DispositionAction,
+  type DispositionPolicyView,
+} from './disposition';
+import type { SupplyPolicySettings } from './supply-trip-logic';
+import type { WorkflowReceipt } from './workflows';
 const rule = {
   itemId: 501,
   keep: 0,
@@ -32,13 +35,13 @@ const rule = {
   store: false,
   cart: false,
   sell: false,
-  restock: "buy" as const,
+  restock: 'buy' as const,
   allowUnique: false,
 };
 const policy = validateDispositionPolicy({ maxSpend: 1000, rules: [rule] });
 const configured: SupplyPolicySettings = {
   ...DEFAULT_SETTINGS,
-  map: "prt_fild05",
+  map: 'prt_fild05',
   targets: [4000],
   automation: {
     ...structuredClone(DEFAULT_AUTOMATION),
@@ -48,29 +51,31 @@ const configured: SupplyPolicySettings = {
       enabled: true,
       maxTrips: 2,
       maxSpend: 1000,
-      buyService: "trader.prt-fild05.tool-dealer.buy.v1",
-      sellService: "trader.prt-fild05.tool-dealer.sell.v1",
-      storageService: "kafra.prontera-south.storage.v1",
+      buyService: 'trader.prt-fild05.tool-dealer.buy.v1',
+      sellService: 'trader.prt-fild05.tool-dealer.sell.v1',
+      storageService: 'kafra.prontera-south.storage.v1',
     },
   },
 };
-function context(stock = 4): SupplyContext & { disposition: SupplyContext['disposition'] & { workflow: SupplyContext['disposition']['workflow'] & { world: WorldState } } } {
+function context(stock = 4): SupplyContext & {
+  disposition: SupplyContext['disposition'] & {
+    workflow: SupplyContext['disposition']['workflow'] & { world: WorldState };
+  };
+} {
   const world = new WorldState();
-  world.reset("prt_fild05");
+  world.reset('prt_fild05');
   world.replaceCart([]);
-  world.npc = { id: 20, mode: "shop", dialog: null, options: [] };
+  world.npc = { id: 20, mode: 'shop', dialog: null, options: [] };
   world.shop = {
-    mode: "buy",
+    mode: 'buy',
     discountLevel: 0,
     entries: [{ itemId: 501, price: 50 }],
   };
-  const items = stock
-    ? [{ bagId: 501, itemId: 501, count: stock, type: 1 as const }]
-    : [];
+  const items = stock ? [{ bagId: 501, itemId: 501, count: stock, type: 1 as const }] : [];
   return {
-    character: "Tester",
-    epoch: "1",
-    map: "prt_fild05",
+    character: 'Tester',
+    epoch: '1',
+    map: 'prt_fild05',
     position: { x: 289, y: 220 },
     connected: true,
     alive: true,
@@ -82,14 +87,14 @@ function context(stock = 4): SupplyContext & { disposition: SupplyContext['dispo
     currencyRevision: revisionFor('currency', 1),
     economicUncertain: false,
     disposition: {
-      revision: "1",
+      revision: '1',
       containers: {
         inventory: { items, slots: 200, weight: stock * 70, maxWeight: 10000 },
         storage: {
           items: null,
           slots: 600,
           weight: null,
-          maxWeight: "unlimited",
+          maxWeight: 'unlimited',
         },
         cart: { items: [], slots: 100, weight: 0, maxWeight: 80000 },
       },
@@ -97,7 +102,7 @@ function context(stock = 4): SupplyContext & { disposition: SupplyContext['dispo
       ammoId: -1,
       metadata: publishedDispositionMetadata(),
       workflow: {
-        map: "prt_fild05",
+        map: 'prt_fild05',
         playerId: 1,
         alive: true,
         idle: true,
@@ -112,12 +117,10 @@ function context(stock = 4): SupplyContext & { disposition: SupplyContext['dispo
   };
 }
 function setStock(c: SupplyContext, n: number) {
-  const items = n
-    ? [{ bagId: 501, itemId: 501, count: n, type: 1 as const }]
-    : [];
+  const items = n ? [{ bagId: 501, itemId: 501, count: n, type: 1 as const }] : [];
   c.disposition.containers.inventory.items = items;
   c.disposition.workflow.inventory = items;
-  c.inventoryRevision=incrementRevision(c.inventoryRevision);
+  c.inventoryRevision = incrementRevision(c.inventoryRevision);
 }
 function setup(settings = configured) {
   let now = 100_000;
@@ -125,12 +128,12 @@ function setup(settings = configured) {
   let confirmed = false;
   let plannedPolicy: DispositionPolicyView | undefined;
   const action: DispositionAction = {
-    kind: "buy",
+    kind: 'buy',
     itemId: itemId(501),
     count: quantity(2),
-    from: "shop",
-    to: "inventory",
-    command: { type: "shop", mode: "buy", rows: [{ id: 501, count: 2 }] },
+    from: 'shop',
+    to: 'inventory',
+    command: { type: 'shop', mode: 'buy', rows: [{ id: 501, count: 2 }] },
     estimatedCost: 100,
     reservedSpend: 100,
     estimatedProceeds: 0,
@@ -139,10 +142,9 @@ function setup(settings = configured) {
     {
       next: (ctx, _goals, p) => {
         plannedPolicy = p;
-        return (ctx.disposition.containers.inventory.items?.[0]?.count ?? 0) <
-          10
-          ? { type: "action", action }
-          : { type: "ready" };
+        return (ctx.disposition.containers.inventory.items?.[0]?.count ?? 0) < 10
+          ? { type: 'action', action }
+          : { type: 'ready' };
       },
       confirm: (_r: { exact: boolean }) => confirmed,
     },
@@ -152,18 +154,18 @@ function setup(settings = configured) {
   const next = () => runtime.next(c)!;
   const prepare = () => {
     const i = next();
-    expect(i.type).toBe("prepare");
-    runtime.acknowledge(i.id, "confirmed", c);
+    expect(i.type).toBe('prepare');
+    runtime.acknowledge(i.id, 'confirmed', c);
   };
   const send = () => {
     const i = next();
-    expect(i.type).toBe("action");
+    expect(i.type).toBe('action');
     runtime.attachReceipt(i.id, { exact: true }, c);
     expect(runtime.commandAllowed()).toBe(true);
     runtime.markSent(i.id);
     return i;
   };
-  const ack = (i: SupplyIntent) => runtime.acknowledge(i.id, "confirmed", c);
+  const ack = (i: SupplyIntent) => runtime.acknowledge(i.id, 'confirmed', c);
   return {
     runtime,
     c,
@@ -183,12 +185,10 @@ function setup(settings = configured) {
     getPolicy: () => plannedPolicy,
   };
 }
-describe("bounded supply runtime", () => {
-  it("defaults off and strictly validates limits/IDs and config-free guards", () => {
+describe('bounded supply runtime', () => {
+  it('defaults off and strictly validates limits/IDs and config-free guards', () => {
     expect(validateSupplySettings(DEFAULT_SUPPLY).enabled).toBe(false);
-    expect(
-      validateSupplySettings(configured.automation!.supply!).buyService,
-    ).toContain(".v1");
+    expect(validateSupplySettings(configured.automation!.supply!).buyService).toContain('.v1');
     for (const patch of [
       { enabled: 1 },
       { maxTrips: 0 },
@@ -196,33 +196,31 @@ describe("bounded supply runtime", () => {
       { maxSpend: 2000000001 },
       { weightEndPercent: 80 },
       { unknown: true },
-      { buyService: "x".repeat(129) },
+      { buyService: 'x'.repeat(129) },
     ])
-      expect(() =>
-        validateSupplySettings({ ...DEFAULT_SUPPLY, ...patch }),
-      ).toThrow();
+      expect(() => validateSupplySettings({ ...DEFAULT_SUPPLY, ...patch })).toThrow();
     const f = setup();
     const guard = f.runtime.guard()!;
     expect(validateSupplyResumeGuard(guard)).toEqual(guard);
     for (const patch of [
-      { character: "" },
+      { character: '' },
       { remainingTrips: 101 },
       { actorId: 20 },
-      { returnDestination: { map: "prt_fild05", position: { x: 512, y: 0 } } },
+      { returnDestination: { map: 'prt_fild05', position: { x: 512, y: 0 } } },
     ])
       expect(() => validateSupplyResumeGuard({ ...guard, ...patch })).toThrow();
   });
-  it("captures desired targets and continues after partial refill crosses minimum", () => {
+  it('captures desired targets and continues after partial refill crosses minimum', () => {
     const f = setup();
     f.prepare();
     f.send();
     setStock(f.c, 6);
     f.confirm();
-    f.c.disposition.workflow.world.apply({ type: "npcEnd" });
+    f.c.disposition.workflow.world.apply({ type: 'npcEnd' });
     const close = f.next();
-    expect(close.type).toBe("close");
+    expect(close.type).toBe('close');
     f.ack(close);
-    expect(f.next().type).toBe("action");
+    expect(f.next().type).toBe('action');
     expect(f.getPolicy()?.rules[0]?.minimum).toBe(10);
     expect(f.runtime.snapshot().goals).toEqual([{ itemId: 501, desired: 10 }]);
     expect(f.runtime.snapshot()).toMatchObject({
@@ -231,58 +229,58 @@ describe("bounded supply runtime", () => {
       remainingTrips: 1,
     });
   });
-  it.each(["same", "cross"] as const)(
-    "returns to the captured %s map and exact work cell before one resume",
+  it.each(['same', 'cross'] as const)(
+    'returns to the captured %s map and exact work cell before one resume',
     (kind) => {
       const f = setup();
       f.prepare();
       f.send();
       setStock(f.c, 10);
       f.confirm();
-      f.c.disposition.workflow.world.apply({ type: "npcEnd" });
+      f.c.disposition.workflow.world.apply({ type: 'npcEnd' });
       const close = f.next();
       f.ack(close);
-      expect(f.runtime.snapshot().reason).toBe("Returning to the captured map and work cell.");
+      expect(f.runtime.snapshot().reason).toBe('Returning to the captured map and work cell.');
       const ret = f.next();
       expect(ret).toMatchObject({
-        type: "return",
-        map: "prt_fild05",
+        type: 'return',
+        map: 'prt_fild05',
         position: { x: 289, y: 220 },
       });
-      if (kind === "cross") f.c.map = "prontera";
+      if (kind === 'cross') f.c.map = 'prontera';
       f.c.position = { x: 288, y: 220 };
       f.ack(ret);
       expect(f.runtime.resumeIntent(f.c)).toBeNull();
-      f.c.map = "prt_fild05";
+      f.c.map = 'prt_fild05';
       f.ack(ret);
       expect(f.runtime.resumeIntent(f.c)).toBeNull();
       f.c.position = { x: 289, y: 220 };
       f.ack(ret);
       const resume = f.runtime.resumeIntent(f.c)!;
-      expect(resume).toMatchObject({ type: "resume", settings: configured });
+      expect(resume).toMatchObject({ type: 'resume', settings: configured });
       f.ack(resume);
       expect(f.runtime.resumeIntent(f.c)).toBeNull();
       expect(f.runtime.next(f.c)).toBeNull();
     },
   );
-  it.each(["prepare", "before-send", "after-send", "close", "return"] as const)(
-    "Stop invalidates %s continuation and preserves only sent uncertainty",
+  it.each(['prepare', 'before-send', 'after-send', 'close', 'return'] as const)(
+    'Stop invalidates %s continuation and preserves only sent uncertainty',
     (stage) => {
       const f = setup();
-      if (stage === "prepare") f.next();
+      if (stage === 'prepare') f.next();
       else {
         f.prepare();
-        if (stage === "before-send") {
+        if (stage === 'before-send') {
           const i = f.next();
           f.runtime.attachReceipt(i.id, { exact: true }, f.c);
         } else {
           f.send();
-          if (stage === "close" || stage === "return") {
+          if (stage === 'close' || stage === 'return') {
             setStock(f.c, 10);
             f.confirm();
-            f.c.disposition.workflow.world.apply({ type: "npcEnd" });
+            f.c.disposition.workflow.world.apply({ type: 'npcEnd' });
             const close = f.next();
-            if (stage === "return") {
+            if (stage === 'return') {
               f.ack(close);
               f.next();
             }
@@ -292,28 +290,21 @@ describe("bounded supply runtime", () => {
       f.runtime.stop();
       expect(f.runtime.next(f.c)).toBeNull();
       expect(f.runtime.resumeIntent(f.c)).toBeNull();
-      expect(f.runtime.uncertain).toBe(stage === "after-send");
-      if (stage === "after-send") {
+      expect(f.runtime.uncertain).toBe(stage === 'after-send');
+      if (stage === 'after-send') {
         f.confirm();
         expect(f.runtime.uncertain).toBe(false);
-        expect(f.runtime.snapshot().state).toBe("cancelled");
+        expect(f.runtime.snapshot().state).toBe('cancelled');
       }
     },
   );
-  it.each([
-    "timeout",
-    "manual",
-    "death",
-    "map",
-    "disconnect",
-    "send-throw",
-  ] as const)(
-    "retains exact economics after %s without another intention",
+  it.each(['timeout', 'manual', 'death', 'map', 'disconnect', 'send-throw'] as const)(
+    'retains exact economics after %s without another intention',
     (event) => {
       const f = setup();
       f.prepare();
       f.send();
-      if (event === "timeout") f.advance(10001);
+      if (event === 'timeout') f.advance(10001);
       else f.runtime.interrupt(event);
       expect(f.runtime.uncertain).toBe(true);
       expect(f.runtime.next(f.c)).toBeNull();
@@ -323,25 +314,25 @@ describe("bounded supply runtime", () => {
       expect(f.runtime.resumeIntent(f.c)).toBeNull();
     },
   );
-  it("requires fresh inventory AND currency after connection reset; never repeats the old action", () => {
+  it('requires fresh inventory AND currency after connection reset; never repeats the old action', () => {
     const f = setup();
     f.prepare();
     f.send();
-    f.c.epoch = "2";
+    f.c.epoch = '2';
     f.c.fresh = false;
     f.runtime.observe(f.c);
     expect(f.runtime.uncertain).toBe(true);
     f.c.fresh = true;
-    f.c.inventoryRevision=incrementRevision(f.c.inventoryRevision);
+    f.c.inventoryRevision = incrementRevision(f.c.inventoryRevision);
     f.runtime.observe(f.c);
     expect(f.runtime.uncertain).toBe(true);
-    f.c.currencyRevision=incrementRevision(f.c.currencyRevision);
+    f.c.currencyRevision = incrementRevision(f.c.currencyRevision);
     f.runtime.observe(f.c);
     expect(f.runtime.uncertain).toBe(false);
     expect(f.runtime.next(f.c)).toBeNull();
-    expect(f.runtime.snapshot().reason).toContain("outcome remains unknown");
+    expect(f.runtime.snapshot().reason).toContain('outcome remains unknown');
   });
-  it("retains latch, allowance, budget and interrupted return across reload", () => {
+  it('retains latch, allowance, budget and interrupted return across reload', () => {
     const f = setup();
     f.prepare();
     f.send();
@@ -353,14 +344,14 @@ describe("bounded supply runtime", () => {
       remainingTrips: 1,
       reserved: 100,
       uncertain: true,
-      state: "waiting",
+      state: 'waiting',
     });
     expect(resumed.runtime.next(resumed.c)).toBeNull();
-    expect(Object.keys(guard)).not.toContain("action");
-    expect(Object.keys(guard)).not.toContain("settings");
-    expect(Object.keys(guard)).not.toContain("npcId");
+    expect(Object.keys(guard)).not.toContain('action');
+    expect(Object.keys(guard)).not.toContain('settings');
+    expect(Object.keys(guard)).not.toContain('npcId');
   });
-  it("does not treat an empty plan as success or replenish its cap from sale proceeds", () => {
+  it('does not treat an empty plan as success or replenish its cap from sale proceeds', () => {
     const f = setup({
       ...configured,
       automation: {
@@ -373,13 +364,13 @@ describe("bounded supply runtime", () => {
     setStock(f.c, 6);
     f.c.disposition.workflow.zeny = 100000;
     f.confirm();
-    f.c.disposition.workflow.world.apply({ type: "npcEnd" });
+    f.c.disposition.workflow.world.apply({ type: 'npcEnd' });
     const close = f.next();
     f.ack(close);
     expect(f.runtime.next(f.c)).toBeNull();
-    expect(f.runtime.snapshot().reason).toContain("budget");
+    expect(f.runtime.snapshot().reason).toContain('budget');
   });
-  it("waits for resource/cast settlement before prepare and counts finite commands", () => {
+  it('waits for resource/cast settlement before prepare and counts finite commands', () => {
     const f = setup({
       ...configured,
       automation: {
@@ -389,34 +380,26 @@ describe("bounded supply runtime", () => {
     });
     f.c.canPrepare = false;
     expect(f.runtime.next(f.c)).toBeNull();
-    expect(f.runtime.snapshot().reason).toContain("casts");
+    expect(f.runtime.snapshot().reason).toContain('casts');
     f.c.canPrepare = true;
     f.prepare();
     expect(f.runtime.commandAllowed()).toBe(true);
     expect(f.runtime.commandAllowed()).toBe(false);
     expect(f.runtime.next(f.c)).toBeNull();
   });
-  it("blocks unknown inventory, weight, capacity, equipment and uncertain external economics", () => {
-    for (const field of [
-      "stock",
-      "weight",
-      "capacity",
-      "equipment",
-      "uncertain",
-    ] as const) {
+  it('blocks unknown inventory, weight, capacity, equipment and uncertain external economics', () => {
+    for (const field of ['stock', 'weight', 'capacity', 'equipment', 'uncertain'] as const) {
       const f = setup();
-      if (field === "stock") f.c.disposition.containers.inventory.items = null;
-      if (field === "weight")
-        f.c.disposition.containers.inventory.weight = null;
-      if (field === "capacity")
-        f.c.disposition.containers.inventory.slots = null;
-      if (field === "equipment") f.c.disposition.equipment = null;
-      if (field === "uncertain") f.c.economicUncertain = true;
+      if (field === 'stock') f.c.disposition.containers.inventory.items = null;
+      if (field === 'weight') f.c.disposition.containers.inventory.weight = null;
+      if (field === 'capacity') f.c.disposition.containers.inventory.slots = null;
+      if (field === 'equipment') f.c.disposition.equipment = null;
+      if (field === 'uncertain') f.c.economicUncertain = true;
       expect(f.runtime.next(f.c)).toBeNull();
       expect(f.runtime.snapshot().remainingTrips).toBe(2);
     }
   });
-  it("suppresses stable triggers and enforces interval after recovery, including a guard restore", () => {
+  it('suppresses stable triggers and enforces interval after recovery, including a guard restore', () => {
     const f = setup();
     f.prepare();
     f.send();
@@ -435,12 +418,12 @@ describe("bounded supply runtime", () => {
     setStock(g.c, 10);
     g.advance(300001);
     setStock(g.c, 4);
-    expect(g.runtime.next(g.c)?.type).toBe("prepare");
+    expect(g.runtime.next(g.c)?.type).toBe('prepare');
     expect(g.runtime.snapshot().remainingTrips).toBe(0);
   });
 });
-describe("supply direct configuration allowance", () => {
-  it("keeps consumed allowance when a disabled runtime is configured without window telemetry", () => {
+describe('supply direct configuration allowance', () => {
+  it('keeps consumed allowance when a disabled runtime is configured without window telemetry', () => {
     const f = setup();
     f.prepare();
     f.runtime.stop();
@@ -459,22 +442,22 @@ describe("supply direct configuration allowance", () => {
     expect(f.runtime.guard()?.remainingTrips).toBe(1);
   });
 });
-describe("supply configuration atomicity", () => {
-  it.each(["foreign", "unknown", "settings"] as const)(
-    "preserves the configured runtime after rejecting %s input",
+describe('supply configuration atomicity', () => {
+  it.each(['foreign', 'unknown', 'settings'] as const)(
+    'preserves the configured runtime after rejecting %s input',
     (kind) => {
       const f = setup();
       f.prepare();
       const before = f.runtime.snapshot(),
         guard = f.runtime.guard()!;
       const request =
-        kind === "foreign"
-          ? { ...guard, character: "Other" }
-          : kind === "unknown"
+        kind === 'foreign'
+          ? { ...guard, character: 'Other' }
+          : kind === 'unknown'
             ? { ...guard, injected: true }
             : guard;
       const input =
-        kind === "settings"
+        kind === 'settings'
           ? {
               ...configured,
               automation: {
@@ -489,14 +472,14 @@ describe("supply configuration atomicity", () => {
     },
   );
 });
-describe("supply repair regressions", () => {
-  it("records achieved stock recovery before the minimum interval expires", () => {
+describe('supply repair regressions', () => {
+  it('records achieved stock recovery before the minimum interval expires', () => {
     const f = setup();
     f.prepare();
     f.send();
     setStock(f.c, 10);
     f.confirm();
-    f.c.disposition.workflow.world.apply({ type: "npcEnd" });
+    f.c.disposition.workflow.world.apply({ type: 'npcEnd' });
     const close = f.next();
     f.ack(close);
     const ret = f.next();
@@ -508,30 +491,27 @@ describe("supply repair regressions", () => {
     expect(f.runtime.next(f.c)).toBeNull();
     expect(f.runtime.snapshot().latched).toBe(false);
     f.advance(300000);
-    expect(f.runtime.next(f.c)?.type).toBe("prepare");
+    expect(f.runtime.next(f.c)?.type).toBe('prepare');
     expect(f.runtime.snapshot().remainingTrips).toBe(0);
   });
-  it("closes confirmed full storage before cart fallback and keeps unknown preference blocked", () => {
+  it('closes confirmed full storage before cart fallback and keeps unknown preference blocked', () => {
     const c = context(12);
-    c.disposition.workflow.world.npc.mode = "storage";
+    c.disposition.workflow.world.npc.mode = 'storage';
     c.disposition.workflow.world.storageReady = true;
-    c.disposition.containers.storage.items = Array.from(
-      { length: 600 },
-      (_, i) => ({
-        bagId: i + 10000,
-        itemId: i + 10000,
-        count: 1,
-        type: 1 as const,
-      }),
-    );
+    c.disposition.containers.storage.items = Array.from({ length: 600 }, (_, i) => ({
+      bagId: i + 10000,
+      itemId: i + 10000,
+      count: 1,
+      type: 1 as const,
+    }));
     const p = validateDispositionPolicy({
       maxSpend: 0,
-      rules: [{ ...rule, store: true, cart: true, restock: "off" as const }],
+      rules: [{ ...rule, store: true, cart: true, restock: 'off' as const }],
     });
     expect(nextSupplyAction(c, [], p, configured.automation!.supply!)).toEqual({
-      type: "close",
+      type: 'close',
     });
-    c.disposition.workflow.world.apply({ type: "npcEnd" });
+    c.disposition.workflow.world.apply({ type: 'npcEnd' });
     c.disposition.containers.storage.items = null;
     expect(
       nextSupplyAction(c, [], p, configured.automation!.supply!, {
@@ -541,21 +521,19 @@ describe("supply repair regressions", () => {
           revision: c.disposition.revision,
         },
       }),
-    ).toMatchObject({ type: "action", action: { kind: "cart", count: 2 } });
-    expect(
-      nextSupplyAction(c, [], p, configured.automation!.supply!),
-    ).toMatchObject({
-      type: "service",
-      contractId: "kafra.prontera-south.storage.v1",
+    ).toMatchObject({ type: 'action', action: { kind: 'cart', count: 2 } });
+    expect(nextSupplyAction(c, [], p, configured.automation!.supply!)).toMatchObject({
+      type: 'service',
+      contractId: 'kafra.prontera-south.storage.v1',
     });
   });
-  it("does not reuse full storage evidence after character, connection or observed capacity changes", () => {
+  it('does not reuse full storage evidence after character, connection or observed capacity changes', () => {
     const c = context(12),
       p = validateDispositionPolicy({
         maxSpend: 0,
-        rules: [{ ...rule, store: true, sell: true, restock: "off" as const }],
+        rules: [{ ...rule, store: true, sell: true, restock: 'off' as const }],
       });
-    c.disposition.workflow.world.apply({ type: "npcEnd" });
+    c.disposition.workflow.world.apply({ type: 'npcEnd' });
     const evidence = {
       storageFull: {
         character: c.character,
@@ -563,34 +541,26 @@ describe("supply repair regressions", () => {
         revision: c.disposition.revision,
       },
     };
-    for (const changed of [{ character: "Other" }, { epoch: "2" }])
+    for (const changed of [{ character: 'Other' }, { epoch: '2' }])
       expect(
-        nextSupplyAction(
-          { ...c, ...changed },
-          [],
-          p,
-          configured.automation!.supply!,
-          evidence,
-        ),
+        nextSupplyAction({ ...c, ...changed }, [], p, configured.automation!.supply!, evidence),
       ).toMatchObject({
-        type: "service",
-        contractId: "kafra.prontera-south.storage.v1",
+        type: 'service',
+        contractId: 'kafra.prontera-south.storage.v1',
       });
     c.disposition.containers.storage.items = [];
-    expect(
-      nextSupplyAction(c, [], p, configured.automation!.supply!, evidence),
-    ).toMatchObject({
-      type: "service",
-      contractId: "kafra.prontera-south.storage.v1",
+    expect(nextSupplyAction(c, [], p, configured.automation!.supply!, evidence)).toMatchObject({
+      type: 'service',
+      contractId: 'kafra.prontera-south.storage.v1',
     });
   });
-  it("retains a proven-full preferred storage phase when visiting the explicitly configured sell service", () => {
+  it('retains a proven-full preferred storage phase when visiting the explicitly configured sell service', () => {
     const c = context(12);
     const p = validateDispositionPolicy({
       maxSpend: 0,
-      rules: [{ ...rule, store: true, sell: true, restock: "off" as const }],
+      rules: [{ ...rule, store: true, sell: true, restock: 'off' as const }],
     });
-    c.disposition.workflow.world.apply({ type: "npcEnd" });
+    c.disposition.workflow.world.apply({ type: 'npcEnd' });
     expect(
       nextSupplyAction(c, [], p, configured.automation!.supply!, {
         storageFull: {
@@ -600,17 +570,17 @@ describe("supply repair regressions", () => {
         },
       }),
     ).toMatchObject({
-      type: "service",
-      contractId: "trader.prt-fild05.tool-dealer.sell.v1",
+      type: 'service',
+      contractId: 'trader.prt-fild05.tool-dealer.sell.v1',
     });
     c.disposition.workflow.world.npc = {
       id: 20,
-      mode: "shop",
+      mode: 'shop',
       options: [],
       dialog: null,
     };
     c.disposition.workflow.world.shop = {
-      mode: "sell",
+      mode: 'sell',
       discountLevel: 0,
       entries: [],
     };
@@ -622,9 +592,9 @@ describe("supply repair regressions", () => {
           revision: c.disposition.revision,
         },
       }),
-    ).toMatchObject({ type: "action", action: { kind: "sell", count: 2 } });
+    ).toMatchObject({ type: 'action', action: { kind: 'sell', count: 2 } });
   });
-  it("preserves unpermitted excess while planning an unrelated safe refill", () => {
+  it('preserves unpermitted excess while planning an unrelated safe refill', () => {
     const c = context();
     c.disposition.containers.inventory.items!.push({
       bagId: 512,
@@ -632,8 +602,7 @@ describe("supply repair regressions", () => {
       count: 10,
       type: 1,
     });
-    c.disposition.workflow.inventory =
-      c.disposition.containers.inventory.items!;
+    c.disposition.workflow.inventory = c.disposition.containers.inventory.items!;
     const p = validateDispositionPolicy({
       ...policy,
       rules: [
@@ -643,7 +612,7 @@ describe("supply repair regressions", () => {
           minimum: 0,
           desired: 0,
           maximum: 0,
-          restock: "off" as const,
+          restock: 'off' as const,
         },
         rule,
       ],
@@ -656,15 +625,15 @@ describe("supply repair regressions", () => {
         configured.automation!.supply!,
       ),
     ).toMatchObject({
-      type: "action",
-      action: { kind: "buy", itemId: 501, count: 6 },
+      type: 'action',
+      action: { kind: 'buy', itemId: 501, count: 6 },
     });
   });
 });
-describe("phase planning and exact receipts", () => {
-  it("opens the source-backed dealer and revalidates changed prices from current state", () => {
+describe('phase planning and exact receipts', () => {
+  it('opens the source-backed dealer and revalidates changed prices from current state', () => {
     const c = context();
-    c.disposition.workflow.world.apply({ type: "npcEnd" });
+    c.disposition.workflow.world.apply({ type: 'npcEnd' });
     expect(
       nextSupplyAction(
         c,
@@ -673,18 +642,18 @@ describe("phase planning and exact receipts", () => {
         configured.automation!.supply!,
       ),
     ).toMatchObject({
-      type: "service",
-      contractId: "trader.prt-fild05.tool-dealer.buy.v1",
+      type: 'service',
+      contractId: 'trader.prt-fild05.tool-dealer.buy.v1',
       fee: 0,
     });
     c.disposition.workflow.world.npc = {
       id: 20,
-      mode: "shop",
+      mode: 'shop',
       dialog: null,
       options: [],
     };
     c.disposition.workflow.world.shop = {
-      mode: "buy",
+      mode: 'buy',
       discountLevel: 0,
       entries: [{ itemId: 501, price: 200 }],
     };
@@ -696,45 +665,46 @@ describe("phase planning and exact receipts", () => {
         configured.automation!.supply!,
       ),
     ).toMatchObject({
-      type: "action",
+      type: 'action',
       action: { count: 5, reservedSpend: 1000 },
     });
   });
-  it("unknown preferred storage cannot authorize a fallback sale", () => {
+  it('unknown preferred storage cannot authorize a fallback sale', () => {
     const c = context(12);
     const p = validateDispositionPolicy({
       maxSpend: 1000,
-      rules: [{ ...rule, store: true, sell: true, restock: "off" as const }],
+      rules: [{ ...rule, store: true, sell: true, restock: 'off' as const }],
     });
     expect(
       nextSupplyAction(c, [], p, {
         ...configured.automation!.supply!,
-        storageService: "",
+        storageService: '',
       }),
-    ).toMatchObject({ type: "blocked" });
+    ).toMatchObject({ type: 'blocked' });
   });
-  it("disposes excess first and preserves source stock, equipped and selected ammo", () => {
+  it('disposes excess first and preserves source stock, equipped and selected ammo', () => {
     const c = context(12);
-    c.disposition.workflow.world.shop!.mode = "sell";
+    c.disposition.workflow.world.shop!.mode = 'sell';
     const p = validateDispositionPolicy({
       maxSpend: 1000,
-      rules: [{ ...rule, sell: true, restock: "off" as const }],
+      rules: [{ ...rule, sell: true, restock: 'off' as const }],
     });
     c.disposition.minimumStock = [{ itemId: 501, count: 11 }];
-    expect(
-      nextSupplyAction(c, [], p, configured.automation!.supply!),
-    ).toMatchObject({ type: "action", action: { kind: "sell", count: 1 } });
+    expect(nextSupplyAction(c, [], p, configured.automation!.supply!)).toMatchObject({
+      type: 'action',
+      action: { kind: 'sell', count: 1 },
+    });
     c.disposition.ammoId = 501;
-    expect(
-      nextSupplyAction(c, [], p, configured.automation!.supply!),
-    ).toMatchObject({ type: "blocked" });
+    expect(nextSupplyAction(c, [], p, configured.automation!.supply!)).toMatchObject({
+      type: 'blocked',
+    });
     c.disposition.ammoId = -1;
     c.disposition.equipment = [501];
-    expect(
-      nextSupplyAction(c, [], p, configured.automation!.supply!),
-    ).toMatchObject({ type: "blocked" });
+    expect(nextSupplyAction(c, [], p, configured.automation!.supply!)).toMatchObject({
+      type: 'blocked',
+    });
   });
-  it("requires exact stock and money even after NPC end; later excess gains do not confirm", () => {
+  it('requires exact stock and money even after NPC end; later excess gains do not confirm', () => {
     const c = context();
     const action = nextSupplyAction(
       c,
@@ -742,7 +712,7 @@ describe("phase planning and exact receipts", () => {
       policy,
       configured.automation!.supply!,
     );
-    if (action.type !== "action") throw Error();
+    if (action.type !== 'action') throw Error();
     const economic: WorkflowReceipt = {
       zeny: 1000,
       cost: 300,
@@ -754,30 +724,30 @@ describe("phase planning and exact receipts", () => {
       strictStock: false,
     };
     const r = createSupplyReceipt(action.action, economic, c);
-    c.disposition.workflow.world.apply({ type: "npcEnd" });
+    c.disposition.workflow.world.apply({ type: 'npcEnd' });
     setStock(c, 10);
     expect(confirmSupplyReceipt(r, c)).toBe(false);
     c.disposition.workflow.zeny = 700;
-    c.currencyRevision=incrementRevision(c.currencyRevision);
+    c.currencyRevision = incrementRevision(c.currencyRevision);
     expect(confirmSupplyReceipt(r, c)).toBe(true);
     setStock(c, 11);
     expect(confirmSupplyReceipt(r, c)).toBe(false);
-    c.map = "prontera";
+    c.map = 'prontera';
     expect(confirmSupplyReceipt(r, c)).toBe(false);
   });
-  it("retains exact container gain from transfer receipt when NPC closes before inventory", () => {
+  it('retains exact container gain from transfer receipt when NPC closes before inventory', () => {
     const c = context(12);
-    c.disposition.workflow.world.npc.mode = "storage";
+    c.disposition.workflow.world.npc.mode = 'storage';
     c.disposition.workflow.world.storageReady = true;
     c.disposition.containers.storage.items = [];
     const action: DispositionAction = {
-      kind: "store",
+      kind: 'store',
       itemId: itemId(501),
       count: quantity(2),
-      from: "inventory",
-      to: "storage",
+      from: 'inventory',
+      to: 'storage',
       bagId: bagId(501),
-      command: { type: "storage", operation: "deposit", bagId: 501, count: 2 },
+      command: { type: 'storage', operation: 'deposit', bagId: 501, count: 2 },
       estimatedCost: 0,
       reservedSpend: 0,
       estimatedProceeds: 0,
@@ -797,7 +767,7 @@ describe("phase planning and exact receipts", () => {
       r,
       [
         {
-          type: "storageMoved",
+          type: 'storageMoved',
           deposit: true,
           currentWeight: 700,
           storageCount: 1,
@@ -807,7 +777,7 @@ describe("phase planning and exact receipts", () => {
       ],
       c,
     );
-    c.disposition.workflow.world.apply({ type: "npcEnd" });
+    c.disposition.workflow.world.apply({ type: 'npcEnd' });
     setStock(c, 10);
     expect(confirmSupplyReceipt(r, c)).toBe(true);
     const wrong = createSupplyReceipt(action, economic, context(12));

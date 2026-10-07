@@ -1,12 +1,21 @@
 import { every } from 'effect/Predicate';
 import { filter } from 'effect/Array';
 import { isTalkNpc } from '../world/actor-interaction-logic';
-import { DEFAULT_MAP_POLICY, validateMapPolicy, type MapPolicyInput as MapPolicy } from '../navigation/map-policy-logic';
+import {
+  DEFAULT_MAP_POLICY,
+  validateMapPolicy,
+  type MapPolicyInput as MapPolicy,
+} from '../navigation/map-policy-logic';
 import { type ActionIdentity } from '../world/actor-identity';
 import catalog from '../../data/npc-services.json';
 import { distance, publishedGrid } from '../navigation/navigation-logic';
 import type { Entity, Position } from '../protocol/protocol';
-import { validateWorkflowSpec, type WorkflowContext, type WorkflowReceipt, type WorkflowStep } from './workflows-logic';
+import {
+  validateWorkflowSpec,
+  type WorkflowContext,
+  type WorkflowReceipt,
+  type WorkflowStep,
+} from './workflows-logic';
 export type ServiceOutcome =
   | { type: 'storageOpened'; timeoutMs: number }
   | { type: 'arrival'; map: string; position: Position; timeoutMs: number }
@@ -45,7 +54,8 @@ const object = (v: unknown, keys: string[]): Record<string, unknown> => {
 };
 
 const integer = (v: unknown, min: number, max: number): number => {
-  if (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max) throw new Error('Invalid service number.');
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max)
+    throw new Error('Invalid service number.');
   return v;
 };
 
@@ -108,9 +118,13 @@ export function validateServiceDefinition(input: unknown): NpcServiceDefinition 
       if (
         !grid.walkable({ x, y }) ||
         distance({ x, y }, anchor) + maxDisplacement > approach.interactionRange ||
-        grid.portals?.some((p) => Math.abs(x - p.x) <= p.halfWidth && Math.abs(y - p.y) <= p.halfHeight)
+        grid.portals?.some(
+          (p) => Math.abs(x - p.x) <= p.halfWidth && Math.abs(y - p.y) <= p.halfHeight,
+        )
       )
-        throw new Error('Service approach must be walkable, outside portals and in interaction range.');
+        throw new Error(
+          'Service approach must be walkable, outside portals and in interaction range.',
+        );
     }
   const w = object(s.workflow, ['maxSpend', 'minStock', 'timeoutMs', 'steps']);
   const workflow = validateWorkflowSpec({ name: text(s.name, 64), map, npcId: 1, ...w });
@@ -160,7 +174,8 @@ export function validateServiceDefinition(input: unknown): NpcServiceDefinition 
   };
 }
 
-export const BUILTIN_SERVICES: readonly NpcServiceDefinition[] = catalog.contracts.map(validateServiceDefinition);
+export const BUILTIN_SERVICES: readonly NpcServiceDefinition[] =
+  catalog.contracts.map(validateServiceDefinition);
 
 export const SERVICE_SOURCE = catalog.source;
 
@@ -204,19 +219,33 @@ export type ServiceResolution =
   | { state: 'missing' | 'ambiguous'; reason: string }
   | { state: 'resolved'; actor: Entity; reason: string };
 
-export function resolveServiceNpc(s: NpcServiceDefinition, map: string, actors: readonly Entity[]): ServiceResolution {
-  if (map !== s.map) return { state: 'missing', reason: `Enter ${s.map} before resolving this NPC.` };
-  const matches = filter(actors, every([
-    (actor: Entity) => actor.kind === s.identity.kind && isTalkNpc(actor),
-    actor => !actor.dead,
-    actor => actor.name === s.identity.name,
-    actor => distance(actor, s.identity.anchor) <= s.identity.maxDisplacement,
-  ]));
+export function resolveServiceNpc(
+  s: NpcServiceDefinition,
+  map: string,
+  actors: readonly Entity[],
+): ServiceResolution {
+  if (map !== s.map)
+    return { state: 'missing', reason: `Enter ${s.map} before resolving this NPC.` };
+  const matches = filter(
+    actors,
+    every([
+      (actor: Entity) => actor.kind === s.identity.kind && isTalkNpc(actor),
+      (actor) => !actor.dead,
+      (actor) => actor.name === s.identity.name,
+      (actor) => distance(actor, s.identity.anchor) <= s.identity.maxDisplacement,
+    ]),
+  );
   if (matches.length > 1)
-    return { state: 'ambiguous', reason: 'More than one visible NPC matches the service identity.' };
+    return {
+      state: 'ambiguous',
+      reason: 'More than one visible NPC matches the service identity.',
+    };
   return matches[0]
     ? { state: 'resolved', actor: { ...matches[0] }, reason: 'Fresh NPC identity resolved.' }
-    : { state: 'missing', reason: 'Waiting for the exact NPC to become visible at its verified anchor.' };
+    : {
+        state: 'missing',
+        reason: 'Waiting for the exact NPC to become visible at its verified anchor.',
+      };
 }
 
 export interface ServiceContext extends WorkflowContext {
@@ -249,7 +278,7 @@ export interface ServiceSnapshot {
 }
 
 export interface ServiceReceipt {
-  actorIdentity?:ActionIdentity;
+  actorIdentity?: ActionIdentity;
   economic: WorkflowReceipt;
   map: string;
   generation: number;
@@ -264,12 +293,26 @@ export interface ServiceReceipt {
 }
 
 /** Execution policy is deliberately outside the source-matched portable definition. */
-export function validateServiceExecution(input:unknown):{service:NpcServiceDefinition;executionPolicy:MapPolicy} {
-  if(input&&typeof input==='object'&&!Array.isArray(input)&&Object.hasOwn(input,'service')){
-    const request=object(input,['service','executionPolicy']);
-    return {service:validateServiceRequest(request.service),executionPolicy:validateMapPolicy(request.executionPolicy)};
+export function validateServiceExecution(input: unknown): {
+  service: NpcServiceDefinition;
+  executionPolicy: MapPolicy;
+} {
+  if (
+    input &&
+    typeof input === 'object' &&
+    !Array.isArray(input) &&
+    Object.hasOwn(input, 'service')
+  ) {
+    const request = object(input, ['service', 'executionPolicy']);
+    return {
+      service: validateServiceRequest(request.service),
+      executionPolicy: validateMapPolicy(request.executionPolicy),
+    };
   }
-  return {service:validateServiceRequest(input),executionPolicy:structuredClone(DEFAULT_MAP_POLICY)};
+  return {
+    service: validateServiceRequest(input),
+    executionPolicy: structuredClone(DEFAULT_MAP_POLICY),
+  };
 }
 
 export interface ServicePreviewContext {

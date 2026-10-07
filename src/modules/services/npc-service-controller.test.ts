@@ -49,8 +49,42 @@ function spawn(entity: Entity, entryType = 0): Uint8Array {
 }
 function stats(hp = 100, zeny = 500): Uint8Array {
   const w = new BitWriter().u8(FEATURE_OP.stats);
-  for (const n of [10, 1, zeny, 1, 1, 1, 1, 1, 1, 0, 0, 0, hp, 100, 100, 100, ...Array(16).fill(0), 1000]) w.i32(n);
-  w.f32(0.4).i32(20).i32(0).bool(true).i16(1).i16(1).u8(5).i16(0).bool(true).u8(1).i32(1).i32(601).i16(5).i32(0).u8(0);
+  for (const n of [
+    10,
+    1,
+    zeny,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0,
+    hp,
+    100,
+    100,
+    100,
+    ...Array(16).fill(0),
+    1000,
+  ])
+    w.i32(n);
+  w.f32(0.4)
+    .i32(20)
+    .i32(0)
+    .bool(true)
+    .i16(1)
+    .i16(1)
+    .u8(5)
+    .i16(0)
+    .bool(true)
+    .u8(1)
+    .i32(1)
+    .i32(601)
+    .i16(5)
+    .i32(0)
+    .u8(0);
   for (let i = 0; i < 10; i++) w.i32(0);
   return w.i32(-1).finish();
 }
@@ -148,9 +182,14 @@ describe('controller NPC service ownership and cancellation', () => {
     f.controller.start({ ...DEFAULT_SETTINGS, map: 'prontera', targets: [4000] });
     expect(f.controller.runRequested).toBe(true);
     f.begin();
-    expect(f.controller.snapshot()).toMatchObject({ runRequested: false, service: { active: true } });
+    expect(f.controller.snapshot()).toMatchObject({
+      runRequested: false,
+      service: { active: true },
+    });
     expect(() => f.controller.perform('command', { type: 'npcTalk', id: 20 })).toThrow();
-    expect(() => f.controller.start({ ...DEFAULT_SETTINGS, map: 'prontera', targets: [4000] })).toThrow();
+    expect(() =>
+      f.controller.start({ ...DEFAULT_SETTINGS, map: 'prontera', targets: [4000] }),
+    ).toThrow();
   });
   it('uses intermap travel then a confirmed final approach before resolving or talking', () => {
     const f = setup('prt_fild08', { x: 156, y: 376 });
@@ -166,14 +205,18 @@ describe('controller NPC service ownership and cancellation', () => {
       else f.step();
     }
     f.packet(new BitWriter().u8(OP.map).string('prontera').finish());
-    expect(f.controller.travel.snapshot().state, f.controller.travel.snapshot().reason).toBe('transition');
+    expect(f.controller.travel.snapshot().state, f.controller.travel.snapshot().reason).toBe(
+      'transition',
+    );
     f.packet(spawn({ ...player, x: 156, y: 26 }, 2));
     f.packet(spawn(npc));
     for (let i = 0; i < 12 && f.controller.service.snapshot().state !== 'conversation'; i++) {
       f.step();
       if (f.controller.travel.snapshot().leg.length) f.settleWalk();
     }
-    expect(f.controller.service.snapshot().state, f.controller.service.snapshot().reason).toBe('conversation');
+    expect(f.controller.service.snapshot().state, f.controller.service.snapshot().reason).toBe(
+      'conversation',
+    );
     expect(f.sent.at(-1)).toEqual({ type: 'npcTalk', id: 20 });
     expect(f.sent.filter((a) => a.type === 'walk').length).toBeGreaterThan(0);
   });
@@ -233,7 +276,9 @@ describe('controller NPC service ownership and cancellation', () => {
     expect(f.controller.service.snapshot().active).toBe(true);
     f.controller.stop();
     const count = f.sent.length;
-    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(1).string('Kafra').string('Late').bool(false).finish());
+    f.packet(
+      new BitWriter().u8(WORLD_OP.npc).u8(1).string('Kafra').string('Late').bool(false).finish(),
+    );
     f.step();
     expect(f.sent).toHaveLength(count);
     expect(f.controller.service.snapshot().state).toBe('cancelled');

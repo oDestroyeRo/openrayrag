@@ -8,15 +8,21 @@ import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { responsiveFixtureBuildOptions, FIXTURE_HTML } from './responsive-fixture-policy.mjs';
 
-const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 export async function buildResponsiveFixture(requestedOutput) {
-  const output = requestedOutput ? resolve(requestedOutput) : await mkdtemp(join(tmpdir(), 'rayrag-responsive-fixture-'));
-  if (requestedOutput) { await mkdir(dirname(output), { recursive: true }); await mkdir(output, { mode: 0o700 }); }
+  const output = requestedOutput
+    ? resolve(requestedOutput)
+    : await mkdtemp(join(tmpdir(), 'rayrag-responsive-fixture-'));
+  if (requestedOutput) {
+    await mkdir(dirname(output), { recursive: true });
+    await mkdir(output, { mode: 0o700 });
+  }
   const result = await build(responsiveFixtureBuildOptions(root, output));
   if (!result.outputFiles) throw new Error('Fixture build did not return output files.');
-  for (const file of result.outputFiles) await writeFile(file.path, file.contents, { flag:'wx', mode:0o600 });
-  await writeFile(join(output,'index.html'), FIXTURE_HTML, { flag:'wx', mode:0o600 });
+  for (const file of result.outputFiles)
+    await writeFile(file.path, file.contents, { flag: 'wx', mode: 0o600 });
+  await writeFile(join(output, 'index.html'), FIXTURE_HTML, { flag: 'wx', mode: 0o600 });
   return output;
 }
 

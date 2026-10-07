@@ -9,8 +9,11 @@ export interface ConditionStateMonoid {
 }
 
 function conditionStateMonoid(first: 'unavailable' | 'unmatched'): ConditionStateMonoid {
-  return { identity: 'matched', combine: (left, right) =>
-    left === first || right === first ? first : left === 'matched' ? right : left };
+  return {
+    identity: 'matched',
+    combine: (left, right) =>
+      left === first || right === first ? first : left === 'matched' ? right : left,
+  };
 }
 
 /** Automation and strategy admission fail closed when any observation is missing. */
@@ -19,6 +22,11 @@ export const unavailableFirstConditions = conditionStateMonoid('unavailable');
 /** Routine diagnostics retain a known false condition ahead of missing observations. */
 export const unmatchedFirstConditions = conditionStateMonoid('unmatched');
 
-export function foldConditions(conditions: readonly { state: ConditionState }[], policy: ConditionStateMonoid): ConditionState {
-  return reduce(conditions, policy.identity, (state, condition) => policy.combine(state, condition.state));
+export function foldConditions(
+  conditions: readonly { state: ConditionState }[],
+  policy: ConditionStateMonoid,
+): ConditionState {
+  return reduce(conditions, policy.identity, (state, condition) =>
+    policy.combine(state, condition.state),
+  );
 }

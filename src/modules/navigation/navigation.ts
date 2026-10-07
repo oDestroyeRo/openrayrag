@@ -1,10 +1,33 @@
 import { findNavigationRoute, navigationDirections } from './navigation-search-logic';
 import type { Position } from '../protocol/protocol';
 import { attackDistance, projectileLineOfSight } from '../combat/combat';
-import { createMapGrid, distance, MAX_MAP_DIMENSION, type WalkGrid, type NavigationSummary, type PortalArea, type RouteOptions } from './navigation-logic';
-export { NAVIGATION_MAPS, MAX_MAP_DIMENSION, distance, minimumRouteCost, routeSegment, type PortalArea, type WalkGrid, type NavigationSummary, type RouteOptions } from './navigation-logic';
+import {
+  createMapGrid,
+  distance,
+  MAX_MAP_DIMENSION,
+  type WalkGrid,
+  type NavigationSummary,
+  type PortalArea,
+  type RouteOptions,
+} from './navigation-logic';
+export {
+  NAVIGATION_MAPS,
+  MAX_MAP_DIMENSION,
+  distance,
+  minimumRouteCost,
+  routeSegment,
+  type PortalArea,
+  type WalkGrid,
+  type NavigationSummary,
+  type RouteOptions,
+} from './navigation-logic';
 
-const cardinalDirections = [[0,1],[1,0],[0,-1],[-1,0]] as const;
+const cardinalDirections = [
+  [0, 1],
+  [1, 0],
+  [0, -1],
+  [-1, 0],
+] as const;
 
 const cachedGrids = new Map<string, WalkGrid>();
 
@@ -21,7 +44,6 @@ type TileState = 'blocked' | 'portal' | 'walkable';
 const ROUTE_CACHE_ENTRIES = 256;
 
 const ROUTE_CACHE_CELLS = 4096;
-
 
 /** A snapshot of published collision cells, independent of observed server movement. */
 export class GridNavigator {
@@ -40,9 +62,17 @@ export class GridNavigator {
   private now = 0;
 
   constructor(grid: WalkGrid, excludedAreas: readonly PortalArea[] = grid.portals ?? []) {
-    if (!Number.isInteger(grid.width) || !Number.isInteger(grid.height)
-      || grid.width < 1 || grid.height < 1 || grid.width > MAX_MAP_DIMENSION || grid.height > MAX_MAP_DIMENSION) {
-      throw new RangeError(`Navigation grid dimensions must be integers from 1 to ${MAX_MAP_DIMENSION}`);
+    if (
+      !Number.isInteger(grid.width) ||
+      !Number.isInteger(grid.height) ||
+      grid.width < 1 ||
+      grid.height < 1 ||
+      grid.width > MAX_MAP_DIMENSION ||
+      grid.height > MAX_MAP_DIMENSION
+    ) {
+      throw new RangeError(
+        `Navigation grid dimensions must be integers from 1 to ${MAX_MAP_DIMENSION}`,
+      );
     }
     this.width = grid.width;
     this.height = grid.height;
@@ -58,33 +88,63 @@ export class GridNavigator {
       this.sight[cell] = (grid.seeThrough ?? grid.walkable)(p) ? 1 : 0;
       if (!grid.walkable(p)) continue;
       walkable++;
-      if (excludedAreas.some(portal => Math.abs(p.x - portal.x) <= portal.halfWidth
-        && Math.abs(p.y - portal.y) <= portal.halfHeight)) {
+      if (
+        excludedAreas.some(
+          (portal) =>
+            Math.abs(p.x - portal.x) <= portal.halfWidth &&
+            Math.abs(p.y - portal.y) <= portal.halfHeight,
+        )
+      ) {
         this.tiles[cell] = 1;
         excluded++;
       } else this.tiles[cell] = 2;
     }
-    this.counts = { width: this.width, height: this.height, walkable, blocked: this.count - walkable, excluded };
+    this.counts = {
+      width: this.width,
+      height: this.height,
+      walkable,
+      blocked: this.count - walkable,
+      excluded,
+    };
     this.analyzeClearance();
     this.analyzeComponents();
   }
 
   private index(p: Position): number {
-    return Number.isInteger(p.x) && Number.isInteger(p.y) && p.x >= 0 && p.y >= 0
-      && p.x < this.width && p.y < this.height ? p.x + p.y * this.width : -1;
+    return Number.isInteger(p.x) &&
+      Number.isInteger(p.y) &&
+      p.x >= 0 &&
+      p.y >= 0 &&
+      p.x < this.width &&
+      p.y < this.height
+      ? p.x + p.y * this.width
+      : -1;
   }
-  private position(cell: number): Position { return { x: cell % this.width, y: Math.floor(cell / this.width) }; }
+  private position(cell: number): Position {
+    return { x: cell % this.width, y: Math.floor(cell / this.width) };
+  }
   tileState(p: Position): TileState {
     const tile = this.tiles[this.index(p)];
     return tile === 2 ? 'walkable' : tile === 1 ? 'portal' : 'blocked';
   }
-  safe(p: Position): boolean { return this.tiles[this.index(p)] === 2; }
+  safe(p: Position): boolean {
+    return this.tiles[this.index(p)] === 2;
+  }
   connected(a: Position, b: Position): boolean {
-    return this.safe(a) && this.safe(b) && distance(a, b) === 1
-      && (a.x === b.x || a.y === b.y || (this.safe({ x: a.x, y: b.y }) && this.safe({ x: b.x, y: a.y })));
+    return (
+      this.safe(a) &&
+      this.safe(b) &&
+      distance(a, b) === 1 &&
+      (a.x === b.x ||
+        a.y === b.y ||
+        (this.safe({ x: a.x, y: b.y }) && this.safe({ x: b.x, y: a.y })))
+    );
   }
   validRoute(cells: Position[]): boolean {
-    return cells.length > 0 && cells.every((p, i) => this.safe(p) && (!i || this.connected(cells[i - 1]!, p)));
+    return (
+      cells.length > 0 &&
+      cells.every((p, i) => this.safe(p) && (!i || this.connected(cells[i - 1]!, p)))
+    );
   }
   summary(from: Position): NavigationSummary {
     const component = this.components[this.index(from)] ?? 0;
@@ -96,7 +156,11 @@ export class GridNavigator {
     if (!Number.isFinite(now)) return;
     this.now = now;
     let changed = false;
-    for (const [cell, until] of this.blockedUntil) if (until <= now) { this.blockedUntil.delete(cell); changed = true; }
+    for (const [cell, until] of this.blockedUntil)
+      if (until <= now) {
+        this.blockedUntil.delete(cell);
+        changed = true;
+      }
     if (changed) this.clearRouteCache();
   }
   temporaryBlocked(p: Position, until: number): void {
@@ -109,8 +173,13 @@ export class GridNavigator {
     return this.safe(p) && (this.blockedUntil.get(this.index(p)) ?? -Infinity) <= this.now;
   }
   private step(a: Position, b: Position): boolean {
-    return this.connected(a, b) && this.available(b)
-      && (a.x === b.x || a.y === b.y || (this.available({ x: a.x, y: b.y }) && this.available({ x: b.x, y: a.y })));
+    return (
+      this.connected(a, b) &&
+      this.available(b) &&
+      (a.x === b.x ||
+        a.y === b.y ||
+        (this.available({ x: a.x, y: b.y }) && this.available({ x: b.x, y: a.y })))
+    );
   }
 
   private analyzeClearance(): void {
@@ -119,14 +188,18 @@ export class GridNavigator {
     const queue = new Int32Array(this.count);
     let head = 0;
     let tail = 0;
-    for (let cell = 0; cell < this.count; cell++) if (this.tiles[cell] !== 2) {
-      this.clearance[cell] = 0;
-      queue[tail++] = cell;
-    }
+    for (let cell = 0; cell < this.count; cell++)
+      if (this.tiles[cell] !== 2) {
+        this.clearance[cell] = 0;
+        queue[tail++] = cell;
+      }
     // Add clear edge cells after the distance-zero sources so the queue stays ordered.
     for (let cell = 0; cell < this.count; cell++) {
       const p = this.position(cell);
-      if (this.tiles[cell] === 2 && (p.x === 0 || p.y === 0 || p.x === this.width - 1 || p.y === this.height - 1)) {
+      if (
+        this.tiles[cell] === 2 &&
+        (p.x === 0 || p.y === 0 || p.x === this.width - 1 || p.y === this.height - 1)
+      ) {
         this.clearance[cell] = 1;
         queue[tail++] = cell;
       }
@@ -179,15 +252,23 @@ export class GridNavigator {
    * retains the existing clear adjacent walking/no-corner-cut guarantee.
    */
   canAttack(from: Position, to: Position, range: number): boolean {
-    return this.safe(from) && this.available(to) && attackDistance(from, to) <= range
-      && projectileLineOfSight(from, to, p => this.sight[this.index(p)] === 1)
-      && (range > 1 || this.clearApproach(from, to));
+    return (
+      this.safe(from) &&
+      this.available(to) &&
+      attackDistance(from, to) <= range &&
+      projectileLineOfSight(from, to, (p) => this.sight[this.index(p)] === 1) &&
+      (range > 1 || this.clearApproach(from, to))
+    );
   }
 
   /** Spell destinations need a valid coordinate and directional LOS, not walkability. */
   canCast(from: Position, to: Position, range: number): boolean {
-    return this.safe(from) && this.index(to)>=0 && attackDistance(from,to)<=range
-      && projectileLineOfSight(from,to,p=>this.sight[this.index(p)]===1);
+    return (
+      this.safe(from) &&
+      this.index(to) >= 0 &&
+      attackDistance(from, to) <= range &&
+      projectileLineOfSight(from, to, (p) => this.sight[this.index(p)] === 1)
+    );
   }
 
   private clearApproach(from: Position, to: Position): boolean {
@@ -198,53 +279,109 @@ export class GridNavigator {
     while (current.x !== to.x || current.y !== to.y) {
       const next = { ...current };
       const twice = error * 2;
-      if (twice > -dy) { error -= dy; next.x += Math.sign(to.x - from.x); }
-      if (twice < dx) { error += dx; next.y += Math.sign(to.y - from.y); }
+      if (twice > -dy) {
+        error -= dy;
+        next.x += Math.sign(to.x - from.x);
+      }
+      if (twice < dx) {
+        error += dx;
+        next.y += Math.sign(to.y - from.y);
+      }
       if (!this.step(current, next)) return false;
       current = next;
     }
     return true;
   }
-  private clearRouteCache(): void { this.routeCache.clear(); this.cachedCells = 0; }
+  private clearRouteCache(): void {
+    this.routeCache.clear();
+    this.cachedCells = 0;
+  }
   private cacheRoute(key: string, cells: Position[] | null): void {
     if (cells && cells.length > ROUTE_CACHE_CELLS) return;
-    while (this.routeCache.size >= ROUTE_CACHE_ENTRIES || this.cachedCells + (cells?.length ?? 0) > ROUTE_CACHE_CELLS) {
+    while (
+      this.routeCache.size >= ROUTE_CACHE_ENTRIES ||
+      this.cachedCells + (cells?.length ?? 0) > ROUTE_CACHE_CELLS
+    ) {
       const oldest = this.routeCache.keys().next().value!;
       this.cachedCells -= this.routeCache.get(oldest)?.length ?? 0;
       this.routeCache.delete(oldest);
     }
-    this.routeCache.set(key, cells?.map(p => ({ ...p })) ?? null);
+    this.routeCache.set(key, cells?.map((p) => ({ ...p })) ?? null);
     this.cachedCells += cells?.length ?? 0;
   }
   plan(from: Position, to: Position, options: RouteOptions = {}): Position[] | null {
     const range = options.range ?? 0;
     const maxDistance = options.maxDistance ?? this.count - 1;
-    if (!Number.isInteger(range) || range < 0 || range > MAX_MAP_DIMENSION || !Number.isInteger(maxDistance)
-      || maxDistance < 0 || !this.safe(from) || this.index(to)<0 || (options.goal!=='cast' && !this.available(to) && distance(from, to) !== 0)) return null;
+    if (
+      !Number.isInteger(range) ||
+      range < 0 ||
+      range > MAX_MAP_DIMENSION ||
+      !Number.isInteger(maxDistance) ||
+      maxDistance < 0 ||
+      !this.safe(from) ||
+      this.index(to) < 0 ||
+      (options.goal !== 'cast' && !this.available(to) && distance(from, to) !== 0)
+    )
+      return null;
     const start = this.index(from);
     const target = this.index(to);
-    const goalMode = options.goal === 'cast' ? 'cast' : options.goal === 'attack' ? 'attack' : 'walk';
+    const goalMode =
+      options.goal === 'cast' ? 'cast' : options.goal === 'attack' ? 'attack' : 'walk';
     // One-cell melee also requires a clear walking approach. Longer attacks may
     // fire across a visible barrier into another walking component.
-    if (((goalMode === 'walk' || goalMode === 'attack' && range <= 1) && this.components[start] !== this.components[target]) || Math.max(0, distance(from, to) - range) > maxDistance) return null;
+    if (
+      ((goalMode === 'walk' || (goalMode === 'attack' && range <= 1)) &&
+        this.components[start] !== this.components[target]) ||
+      Math.max(0, distance(from, to) - range) > maxDistance
+    )
+      return null;
     // Geometry is immutable. Only the effective temporary-block set invalidates
     // exact results; extend this key whenever a new route option is introduced.
     const key = `${start}:${target}:${range}:${maxDistance}:${options.avoidWalls === false ? 0 : 1}:${goalMode}`;
     if (this.routeCache.has(key)) {
       const cached = this.routeCache.get(key)!;
-      this.routeCache.delete(key); this.routeCache.set(key, cached);
-      return cached?.map(p => ({ ...p })) ?? null;
+      this.routeCache.delete(key);
+      this.routeCache.set(key, cached);
+      return cached?.map((p) => ({ ...p })) ?? null;
     }
-    const cells = this.findRoute(from, to, range, maxDistance, options.avoidWalls !== false, goalMode);
+    const cells = this.findRoute(
+      from,
+      to,
+      range,
+      maxDistance,
+      options.avoidWalls !== false,
+      goalMode,
+    );
     this.cacheRoute(key, cells);
     return cells;
   }
-  private findRoute(from: Position, to: Position, range: number, maxDistance: number, avoidWalls: boolean, goalMode: 'walk' | 'attack' | 'cast'): Position[] | null {
-    return findNavigationRoute({ count: this.count, clearance: this.clearance,
-      index: p => this.index(p), position: cell => this.position(cell), step: (a, b) => this.step(a, b),
-      clearWalkCorridor: (a, b) => this.clearWalkCorridor(a, b), clearApproach: (a, b) => this.clearApproach(a, b),
-      canAttack: (a, b, r) => this.canAttack(a, b, r), canCast: (a, b, r) => this.canCast(a, b, r),
-    }, from, to, range, maxDistance, avoidWalls, goalMode);
+  private findRoute(
+    from: Position,
+    to: Position,
+    range: number,
+    maxDistance: number,
+    avoidWalls: boolean,
+    goalMode: 'walk' | 'attack' | 'cast',
+  ): Position[] | null {
+    return findNavigationRoute(
+      {
+        count: this.count,
+        clearance: this.clearance,
+        index: (p) => this.index(p),
+        position: (cell) => this.position(cell),
+        step: (a, b) => this.step(a, b),
+        clearWalkCorridor: (a, b) => this.clearWalkCorridor(a, b),
+        clearApproach: (a, b) => this.clearApproach(a, b),
+        canAttack: (a, b, r) => this.canAttack(a, b, r),
+        canCast: (a, b, r) => this.canCast(a, b, r),
+      },
+      from,
+      to,
+      range,
+      maxDistance,
+      avoidWalls,
+      goalMode,
+    );
   }
 
   randomGoal(from: Position, random: () => number = Math.random): Position | null {
@@ -263,7 +400,10 @@ export class GridNavigator {
     for (const cell of members) {
       const p = this.position(cell);
       const away = distance(from, p);
-      if (away > farthest && this.available(p)) { best = p; farthest = away; }
+      if (away > farthest && this.available(p)) {
+        best = p;
+        farthest = away;
+      }
     }
     return best;
   }

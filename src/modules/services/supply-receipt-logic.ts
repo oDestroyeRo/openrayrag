@@ -21,29 +21,30 @@ export interface SupplyReceipt {
   acknowledged: boolean;
 }
 export const sameSupplyItem = (a: InventoryItem, b: InventoryItem) =>
-  a.itemId === b.itemId &&
-  a.type === b.type &&
-  (a.type !== 2 || (!!a.guid && a.guid === b.guid));
+  a.itemId === b.itemId && a.type === b.type && (a.type !== 2 || (!!a.guid && a.guid === b.guid));
 const stock = (items: InventoryItem[], source: InventoryItem) =>
-  filter(items, item => sameSupplyItem(item, source)).reduce((total, item) => total + (item.count), 0);
+  filter(items, (item) => sameSupplyItem(item, source)).reduce(
+    (total, item) => total + item.count,
+    0,
+  );
 export function createSupplyReceipt(
   action: DispositionAction,
   economic: WorkflowReceipt,
   context: SupplyContext,
 ): SupplyReceipt {
   const from =
-    action.from === "inventory"
+    action.from === 'inventory'
       ? context.disposition.containers.inventory.items
-      : action.from === "storage"
+      : action.from === 'storage'
         ? context.disposition.containers.storage.items
-        : action.from === "cart"
+        : action.from === 'cart'
           ? context.disposition.containers.cart.items
           : null;
   const container =
-    action.kind === "store" || action.kind === "withdraw"
-      ? "storage"
-      : action.kind === "cart" || action.kind === "uncart"
-        ? "cart"
+    action.kind === 'store' || action.kind === 'withdraw'
+      ? 'storage'
+      : action.kind === 'cart' || action.kind === 'uncart'
+        ? 'cart'
         : null;
   return {
     economic: { ...structuredClone(economic), strictStock: false },
@@ -54,9 +55,7 @@ export function createSupplyReceipt(
     generation: context.disposition.workflow.world.generation,
     inventoryRevision: context.inventoryRevision,
     currencyRevision: context.currencyRevision,
-    source: structuredClone(
-      from?.find((item) => item.bagId === action.bagId) ?? null,
-    ),
+    source: structuredClone(from?.find((item) => item.bagId === action.bagId) ?? null),
     containerBefore: container
       ? structuredClone(context.disposition.containers[container].items)
       : null,
@@ -64,10 +63,7 @@ export function createSupplyReceipt(
     acknowledged: false,
   };
 }
-export function confirmSupplyReceipt(
-  receipt: SupplyReceipt,
-  context: SupplyContext,
-): boolean {
+export function confirmSupplyReceipt(receipt: SupplyReceipt, context: SupplyContext): boolean {
   if (
     context.character !== receipt.character ||
     context.epoch !== receipt.epoch ||
@@ -83,12 +79,15 @@ export function confirmSupplyReceipt(
   const expectedBags = new Map(receipt.economic.bags);
   for (const [id, delta] of receipt.economic.bagChanges)
     expectedBags.set(id, quantity((expectedBags.get(id) ?? 0) + delta));
-  if (a.to === "inventory") {
-    if (a.kind === "buy" || receipt.source?.type === 1)
-      expectedBags.set(regularItemBagId(a.itemId), quantity((expectedBags.get(regularItemBagId(a.itemId)) ?? 0) + a.count));
+  if (a.to === 'inventory') {
+    if (a.kind === 'buy' || receipt.source?.type === 1)
+      expectedBags.set(
+        regularItemBagId(a.itemId),
+        quantity((expectedBags.get(regularItemBagId(a.itemId)) ?? 0) + a.count),
+      );
     else if (receipt.source?.type === 2) {
-      const incoming = context.disposition.containers.inventory.items.filter(
-        (item) => sameSupplyItem(item, receipt.source!),
+      const incoming = context.disposition.containers.inventory.items.filter((item) =>
+        sameSupplyItem(item, receipt.source!),
       );
       if (
         incoming.length !== 1 ||
@@ -110,33 +109,27 @@ export function confirmSupplyReceipt(
   const actual = new Map<ItemId, number>();
   for (const item of context.disposition.containers.inventory.items)
     actual.set(itemId(item.itemId), (actual.get(itemId(item.itemId)) ?? 0) + item.count);
-  for (const id of new Set([
-    ...actual.keys(),
-    ...receipt.economic.items.keys(),
-  ]))
+  for (const id of new Set([...actual.keys(), ...receipt.economic.items.keys()]))
     if (
       (actual.get(id) ?? 0) !==
-      (receipt.economic.items.get(id) ?? 0) +
-        (receipt.economic.itemChanges.get(id) ?? 0)
+      (receipt.economic.items.get(id) ?? 0) + (receipt.economic.itemChanges.get(id) ?? 0)
     )
       return false;
-  if (a.kind === "buy" || a.kind === "sell")
+  if (a.kind === 'buy' || a.kind === 'sell')
     return context.currencyRevision > receipt.currencyRevision;
   const source = receipt.source,
     before = receipt.containerBefore,
     after = receipt.containerAfter;
   if (!receipt.acknowledged || !source || !before || !after) return false;
-  const direction = a.kind === "store" || a.kind === "cart" ? 1 : -1;
-  if (stock(after, source) !== stock(before, source) + direction * a.count)
-    return false;
+  const direction = a.kind === 'store' || a.kind === 'cart' ? 1 : -1;
+  if (stock(after, source) !== stock(before, source) + direction * a.count) return false;
   // Exact source bag identity for removals, plus unchanged unrelated rows.
   if (
     direction < 0 &&
-    (after.find((row) => row.bagId === a.bagId)?.count ?? 0) !==
-      source.count - a.count
+    (after.find((row) => row.bagId === a.bagId)?.count ?? 0) !== source.count - a.count
   )
     return false;
   const unrelated = (rows: InventoryItem[]) =>
-    [...filter(rows, item => !sameSupplyItem(item, source))].sort((a, b) => a.bagId - b.bagId);
+    [...filter(rows, (item) => !sameSupplyItem(item, source))].sort((a, b) => a.bagId - b.bagId);
   return JSON.stringify(unrelated(before)) === JSON.stringify(unrelated(after));
 }

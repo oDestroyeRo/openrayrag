@@ -1,21 +1,57 @@
 import { describe, expect, it } from 'vitest';
 import cases from '../../data/macro-script-cases.json';
 import { macroInventoryItemIds } from './macros-logic';
-import { dryRunMacro, MACRO_LIMITS, MacroRuntime, validateMacroCheckpoint, validateMacroScript,
-  type MacroCheckpoint, type MacroRule, type MacroScript, type MacroStep } from './macros';
+import {
+  dryRunMacro,
+  MACRO_LIMITS,
+  MacroRuntime,
+  validateMacroCheckpoint,
+  validateMacroScript,
+  type MacroCheckpoint,
+  type MacroRule,
+  type MacroScript,
+  type MacroStep,
+} from './macros';
 
 const item: MacroStep = { type: 'useItem', itemId: 501, timeoutSeconds: 10 };
 const farm: MacroStep = { type: 'farm', map: 'prt_fild08', targets: [1002], timeoutSeconds: 120 };
-const rule = (options: Partial<MacroRule> = {}): MacroRule => ({ name: 'Recover', priority: 10,
-  cooldownSeconds: 0, maxRuns: 1, conditions: [{ field: 'hpPercent', operator: 'lte', value: 50 }],
-  steps: [{ ...item }], ...options });
-const script = (options: Partial<MacroScript> = {}): MacroScript => ({ version: 1, name: 'Train',
-  durationSeconds: 600, maxActions: 10, maxSpend: 1_000, rules: [rule()], ...options });
-const buy = (maxSpend: number): MacroStep => ({ type: 'buy', serviceId: 'tool-dealer-buy', itemId: 501,
-  quantity: 1, maxSpend, timeoutSeconds: 120 });
+const rule = (options: Partial<MacroRule> = {}): MacroRule => ({
+  name: 'Recover',
+  priority: 10,
+  cooldownSeconds: 0,
+  maxRuns: 1,
+  conditions: [{ field: 'hpPercent', operator: 'lte', value: 50 }],
+  steps: [{ ...item }],
+  ...options,
+});
+const script = (options: Partial<MacroScript> = {}): MacroScript => ({
+  version: 1,
+  name: 'Train',
+  durationSeconds: 600,
+  maxActions: 10,
+  maxSpend: 1_000,
+  rules: [rule()],
+  ...options,
+});
+const buy = (maxSpend: number): MacroStep => ({
+  type: 'buy',
+  serviceId: 'tool-dealer-buy',
+  itemId: 501,
+  quantity: 1,
+  maxSpend,
+  timeoutSeconds: 120,
+});
 function setup() {
   let time = 1_000;
-  return { runtime: new MacroRuntime(() => time), advance: (ms: number) => { time += ms; }, setTime: (ms: number) => { time = ms; } };
+  return {
+    runtime: new MacroRuntime(() => time),
+    advance: (ms: number) => {
+      time += ms;
+    },
+    setTime: (ms: number) => {
+      time = ms;
+    },
+  };
 }
 function confirm(runtime: MacroRuntime, confirmed = true) {
   const id = runtime.currentIntent?.id;
@@ -26,17 +62,32 @@ function confirm(runtime: MacroRuntime, confirmed = true) {
 describe('macro clean continuation checkpoints', () => {
   function monitoring() {
     const fixture = setup();
-    fixture.runtime.start(script({ rules: [rule({ name: 'farm', steps: [farm] }),
-      rule({ name: 'restock', priority: 20, conditions: [{ field: 'level', operator: 'gte', value: 10 }], steps: [buy(50), item, farm] })] }));
-    fixture.runtime.tick({ hpPercent: 40 }); confirm(fixture.runtime);
+    fixture.runtime.start(
+      script({
+        rules: [
+          rule({ name: 'farm', steps: [farm] }),
+          rule({
+            name: 'restock',
+            priority: 20,
+            conditions: [{ field: 'level', operator: 'gte', value: 10 }],
+            steps: [buy(50), item, farm],
+          }),
+        ],
+      }),
+    );
+    fixture.runtime.tick({ hpPercent: 40 });
+    confirm(fixture.runtime);
     return fixture;
   }
 
   it('restores exact farm monitoring and rule exhaustion without reactivating a confirmed farm', () => {
     const { runtime, advance } = setup();
     const original = script({ maxActions: 1, rules: [rule({ steps: [farm] })] });
-    runtime.start(original); runtime.tick({ hpPercent: 40 }); confirm(runtime);
-    advance(5_000); runtime.tick({});
+    runtime.start(original);
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
+    advance(5_000);
+    runtime.tick({});
     const checkpoint = runtime.checkpoint()!;
     expect(validateMacroCheckpoint(JSON.parse(JSON.stringify(checkpoint)))).toEqual(checkpoint);
     const restored = new MacroRuntime(() => 10_000);
@@ -45,87 +96,166 @@ describe('macro clean continuation checkpoints', () => {
     expect(restored.snapshot()).toEqual(runtime.snapshot());
     expect(restored.fieldIntent).toEqual(farm);
     expect(restored.tick({ hpPercent: 40 })).toBeNull();
-    expect(restored.snapshot()).toMatchObject({ state: 'monitoring', actionsIssued: 1, sequencesIssued: 1, elapsedSeconds: 9 });
+    expect(restored.snapshot()).toMatchObject({
+      state: 'monitoring',
+      actionsIssued: 1,
+      sequencesIssued: 1,
+      elapsedSeconds: 9,
+    });
     checkpoint.script.rules[0]!.steps[0] = item;
     checkpoint.retainedField!.targets.push(999);
     expect(restored.fieldIntent).toEqual(farm);
     expect(restored.checkpoint()!.script).toEqual(original);
   });
 
-  it.each([1, 2])('resumes the next ordered step after %i confirmed economic steps', count => {
+  it.each([1, 2])('resumes the next ordered step after %i confirmed economic steps', (count) => {
     const { runtime } = monitoring();
     const first = runtime.tick({ level: 10 })!;
-    expect(first.step.type).toBe('buy'); confirm(runtime);
-    if (count === 2) { expect(runtime.tick({ level: 1 })?.step.type).toBe('useItem'); confirm(runtime); }
+    expect(first.step.type).toBe('buy');
+    confirm(runtime);
+    if (count === 2) {
+      expect(runtime.tick({ level: 1 })?.step.type).toBe('useItem');
+      confirm(runtime);
+    }
     const checkpoint = runtime.checkpoint()!;
     expect(checkpoint.sequence?.stepIndex).toBe(count);
     expect(checkpoint.selector.pending?.id).toBe(checkpoint.sequence?.selectorId);
     const restored = new MacroRuntime(() => 20_000);
     restored.restore(JSON.parse(JSON.stringify(checkpoint)));
     expect(restored.currentIntent).toBeNull();
-    expect(restored.snapshot()).toMatchObject({ fieldSuspended: true, actionsIssued: count + 1, spendReserved: 50 });
+    expect(restored.snapshot()).toMatchObject({
+      fieldSuspended: true,
+      actionsIssued: count + 1,
+      spendReserved: 50,
+    });
     const next = restored.tick({ level: 1, inventory: { 501: 100 } })!;
-    expect(next).toMatchObject({ stepIndex: count, generation: first.generation, step: { type: count === 1 ? 'useItem' : 'farm' } });
+    expect(next).toMatchObject({
+      stepIndex: count,
+      generation: first.generation,
+      step: { type: count === 1 ? 'useItem' : 'farm' },
+    });
     expect(next.id).toBeGreaterThan(checkpoint.nextId);
     expect(restored.acknowledge(first.id, true)).toBe(false);
     confirm(restored);
-    if (count === 1) { expect(restored.tick({})?.step.type).toBe('farm'); confirm(restored); }
-    expect(restored.snapshot()).toMatchObject({ state: 'monitoring', fieldSuspended: false,
-      sequencesIssued: 2, sequencesCompleted: 2, actionsIssued: 4, actionsCompleted: 4, spendReserved: 50 });
+    if (count === 1) {
+      expect(restored.tick({})?.step.type).toBe('farm');
+      confirm(restored);
+    }
+    expect(restored.snapshot()).toMatchObject({
+      state: 'monitoring',
+      fieldSuspended: false,
+      sequencesIssued: 2,
+      sequencesCompleted: 2,
+      actionsIssued: 4,
+      actionsCompleted: 4,
+      spendReserved: 50,
+    });
     expect(restored.tick({ level: 10, hpPercent: 40 })).toBeNull();
   });
 
   it('keeps spend reserved after a confirmed buy, including reservations in other rules', () => {
     const { runtime } = setup();
-    runtime.start(script({ maxSpend: 100, rules: [rule({ name: 'first', steps: [buy(60), item] }),
-      rule({ name: 'second', steps: [buy(60)] })] }));
-    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    runtime.start(
+      script({
+        maxSpend: 100,
+        rules: [
+          rule({ name: 'first', steps: [buy(60), item] }),
+          rule({ name: 'second', steps: [buy(60)] }),
+        ],
+      }),
+    );
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
     const restored = new MacroRuntime(() => 2_000);
     restored.restore(runtime.checkpoint());
-    expect(restored.tick({})?.step.type).toBe('useItem'); confirm(restored);
+    expect(restored.tick({})?.step.type).toBe('useItem');
+    confirm(restored);
     expect(restored.tick({ hpPercent: 40 })).toBeNull();
-    expect(restored.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 2, spendReserved: 60 });
+    expect(restored.snapshot()).toMatchObject({
+      state: 'failed',
+      actionsIssued: 2,
+      spendReserved: 60,
+    });
     expect(restored.snapshot().reason).toMatch(/spend budget/);
   });
 
   it('keeps action limits and rule cooldowns rather than starting a fresh allowance', () => {
     const { runtime } = setup();
-    runtime.start(script({ maxActions: 3, rules: [rule({ maxRuns: 2, cooldownSeconds: 10, steps: [item, farm] })] }));
-    runtime.tick({ hpPercent: 40 }); confirm(runtime); runtime.tick({}); confirm(runtime);
+    runtime.start(
+      script({
+        maxActions: 3,
+        rules: [rule({ maxRuns: 2, cooldownSeconds: 10, steps: [item, farm] })],
+      }),
+    );
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
+    runtime.tick({});
+    confirm(runtime);
     let time = 6_000;
     const restored = new MacroRuntime(() => time);
     restored.restore(runtime.checkpoint());
     expect(restored.tick({ hpPercent: 40 })).toBeNull();
     time = 11_000;
     expect(restored.tick({ hpPercent: 40 })).toBeNull();
-    expect(restored.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 2, sequencesIssued: 2 });
+    expect(restored.snapshot()).toMatchObject({
+      state: 'failed',
+      actionsIssued: 2,
+      sequencesIssued: 2,
+    });
     expect(restored.snapshot().reason).toMatch(/remaining step budget/);
   });
 
   it('cannot revive a farm cleared by the final confirmed travel of a completed rule', () => {
     const { runtime } = setup();
-    runtime.start(script({ rules: [rule({ steps: [farm, { type: 'travel', map: 'prontera', timeoutSeconds: 60 }] }),
-      rule({ name: 'later', conditions: [{ field: 'level', operator: 'gte', value: 10 }] })] }));
-    runtime.tick({ hpPercent: 40 }); confirm(runtime); runtime.tick({}); confirm(runtime);
+    runtime.start(
+      script({
+        rules: [
+          rule({ steps: [farm, { type: 'travel', map: 'prontera', timeoutSeconds: 60 }] }),
+          rule({ name: 'later', conditions: [{ field: 'level', operator: 'gte', value: 10 }] }),
+        ],
+      }),
+    );
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
+    runtime.tick({});
+    confirm(runtime);
     const checkpoint = runtime.checkpoint()!;
     expect(checkpoint.retainedField).toBeNull();
     expect(validateMacroCheckpoint(checkpoint)).toEqual(checkpoint);
-    checkpoint.retainedField = farm; checkpoint.state = 'monitoring';
+    checkpoint.retainedField = farm;
+    checkpoint.state = 'monitoring';
     expect(() => validateMacroCheckpoint(checkpoint)).toThrow(/field/);
   });
 
   it('counts time spent updating in the original duration and elapsed conditions', () => {
     const { runtime, advance } = setup();
     runtime.start(script({ durationSeconds: 10, rules: [rule({ steps: [farm] })] }));
-    runtime.tick({ hpPercent: 40 }); confirm(runtime);
-    advance(2_000); runtime.tick({});
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
+    advance(2_000);
+    runtime.tick({});
     const restored = new MacroRuntime(() => 11_000);
     restored.restore(runtime.checkpoint());
     expect(restored.tick({ hpPercent: 40 })).toBeNull();
-    expect(restored.snapshot()).toMatchObject({ state: 'completed', fieldIntentActive: false, actionsIssued: 1, elapsedSeconds: 10 });
+    expect(restored.snapshot()).toMatchObject({
+      state: 'completed',
+      fieldIntentActive: false,
+      actionsIssued: 1,
+      elapsedSeconds: 10,
+    });
     const waiting = setup().runtime;
-    waiting.start(script({ durationSeconds: 0, maxActions: 0, rules: [rule({ maxRuns: 0,
-      conditions: [{ field: 'elapsedSeconds', operator: 'gte', value: 60 }] })] }));
+    waiting.start(
+      script({
+        durationSeconds: 0,
+        maxActions: 0,
+        rules: [
+          rule({
+            maxRuns: 0,
+            conditions: [{ field: 'elapsedSeconds', operator: 'gte', value: 60 }],
+          }),
+        ],
+      }),
+    );
     const afterUpdate = new MacroRuntime(() => 90_001_000);
     afterUpdate.restore(waiting.checkpoint());
     expect(afterUpdate.tick({ elapsedSeconds: 0 })?.step).toEqual(item);
@@ -141,20 +271,29 @@ describe('macro clean continuation checkpoints', () => {
     expect(runtime.checkpoint()).toBeNull();
     expect(runtime.acknowledge(intent.id, true)).toBe(true);
     expect(runtime.checkpoint()).toBeNull();
-    runtime.start(script()); runtime.tick({ hpPercent: 40 }); confirm(runtime, false);
+    runtime.start(script());
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime, false);
     expect(runtime.checkpoint()).toBeNull();
-    runtime.start(script()); runtime.cancel();
+    runtime.start(script());
+    runtime.cancel();
     expect(runtime.checkpoint()).toBeNull();
   });
 
   it('retains id and generation floors when restoring into a previously used runtime', () => {
     const { runtime } = monitoring();
-    runtime.tick({ level: 10 }); confirm(runtime);
+    runtime.tick({ level: 10 });
+    confirm(runtime);
     const checkpoint = runtime.checkpoint()!;
     const { runtime: restored } = setup();
     restored.start(script({ rules: [rule({ maxRuns: 0 })] }));
-    for (let i = 0; i < 5; i++) { restored.tick({ hpPercent: 40 }); confirm(restored); }
-    restored.cancel(); restored.start(script()); restored.cancel();
+    for (let i = 0; i < 5; i++) {
+      restored.tick({ hpPercent: 40 });
+      confirm(restored);
+    }
+    restored.cancel();
+    restored.start(script());
+    restored.cancel();
     const oldGeneration = restored.snapshot().generation;
     restored.restore(checkpoint);
     const next = restored.tick({})!;
@@ -165,40 +304,178 @@ describe('macro clean continuation checkpoints', () => {
   });
 
   const corruptions: [string, (checkpoint: MacroCheckpoint) => void][] = [
-    ['version', value => { Reflect.set(value, 'version', 2); }],
-    ['unknown property', value => { Reflect.set(value, 'pending', {}); }],
-    ['macro state', value => { Reflect.set(value, 'state', 'waiting'); }],
-    ['script mismatch', value => { value.script.rules[1]!.cooldownSeconds++; }],
-    ['cursor replay', value => { value.sequence!.stepIndex = 0; }],
-    ['cursor skipped step', value => { value.sequence!.stepIndex = 2; }],
-    ['cursor rule', value => { value.sequence!.ruleIndex = 0; }],
-    ['cursor owner', value => { value.sequence!.selectorId++; }],
-    ['missing cursor', value => { value.sequence = null; }],
-    ['missing selector owner', value => { value.selector.pending = null; }],
-    ['wrong completed count', value => { value.actionsCompleted++; }],
-    ['wrong issued count', value => { value.actionsIssued++; }],
-    ['refunded spend', value => { value.spendReserved = 0; }],
-    ['wrong run count', value => { value.selector.progress[0]!.runs = 0; }],
-    ['lost cooldown', value => { value.selector.progress[1]!.lastIssued = null; }],
-    ['wrong selector count', value => { value.selector.actionsIssued++; }],
-    ['wrong selector completed count', value => { value.selector.actionsCompleted++; }],
-    ['wrong selector state', value => { value.selector.state = 'running'; }],
-    ['unknown selector property', value => { Reflect.set(value.selector, 'allowUnlimitedLimits', true); }],
-    ['invalid id', value => { value.nextId = 0; }],
-    ['invalid generation', value => { value.generation = 0; }],
-    ['reversed clock', value => { value.lastTime = 0; }],
-    ['nonfinite clock', value => { value.selector.lastTime = Number.NaN; }],
-    ['selector starts before macro', value => { value.selector.startedAt = 0; }],
-    ['future rule issuance', value => { value.selector.lastTime++; value.selector.progress[0]!.lastIssued!++; }],
-    ['changed field', value => { value.retainedField!.map = 'prontera'; }],
-    ['missing field', value => { value.retainedField = null; }],
+    [
+      'version',
+      (value) => {
+        Reflect.set(value, 'version', 2);
+      },
+    ],
+    [
+      'unknown property',
+      (value) => {
+        Reflect.set(value, 'pending', {});
+      },
+    ],
+    [
+      'macro state',
+      (value) => {
+        Reflect.set(value, 'state', 'waiting');
+      },
+    ],
+    [
+      'script mismatch',
+      (value) => {
+        value.script.rules[1]!.cooldownSeconds++;
+      },
+    ],
+    [
+      'cursor replay',
+      (value) => {
+        value.sequence!.stepIndex = 0;
+      },
+    ],
+    [
+      'cursor skipped step',
+      (value) => {
+        value.sequence!.stepIndex = 2;
+      },
+    ],
+    [
+      'cursor rule',
+      (value) => {
+        value.sequence!.ruleIndex = 0;
+      },
+    ],
+    [
+      'cursor owner',
+      (value) => {
+        value.sequence!.selectorId++;
+      },
+    ],
+    [
+      'missing cursor',
+      (value) => {
+        value.sequence = null;
+      },
+    ],
+    [
+      'missing selector owner',
+      (value) => {
+        value.selector.pending = null;
+      },
+    ],
+    [
+      'wrong completed count',
+      (value) => {
+        value.actionsCompleted++;
+      },
+    ],
+    [
+      'wrong issued count',
+      (value) => {
+        value.actionsIssued++;
+      },
+    ],
+    [
+      'refunded spend',
+      (value) => {
+        value.spendReserved = 0;
+      },
+    ],
+    [
+      'wrong run count',
+      (value) => {
+        value.selector.progress[0]!.runs = 0;
+      },
+    ],
+    [
+      'lost cooldown',
+      (value) => {
+        value.selector.progress[1]!.lastIssued = null;
+      },
+    ],
+    [
+      'wrong selector count',
+      (value) => {
+        value.selector.actionsIssued++;
+      },
+    ],
+    [
+      'wrong selector completed count',
+      (value) => {
+        value.selector.actionsCompleted++;
+      },
+    ],
+    [
+      'wrong selector state',
+      (value) => {
+        value.selector.state = 'running';
+      },
+    ],
+    [
+      'unknown selector property',
+      (value) => {
+        Reflect.set(value.selector, 'allowUnlimitedLimits', true);
+      },
+    ],
+    [
+      'invalid id',
+      (value) => {
+        value.nextId = 0;
+      },
+    ],
+    [
+      'invalid generation',
+      (value) => {
+        value.generation = 0;
+      },
+    ],
+    [
+      'reversed clock',
+      (value) => {
+        value.lastTime = 0;
+      },
+    ],
+    [
+      'nonfinite clock',
+      (value) => {
+        value.selector.lastTime = Number.NaN;
+      },
+    ],
+    [
+      'selector starts before macro',
+      (value) => {
+        value.selector.startedAt = 0;
+      },
+    ],
+    [
+      'future rule issuance',
+      (value) => {
+        value.selector.lastTime++;
+        value.selector.progress[0]!.lastIssued!++;
+      },
+    ],
+    [
+      'changed field',
+      (value) => {
+        value.retainedField!.map = 'prontera';
+      },
+    ],
+    [
+      'missing field',
+      (value) => {
+        value.retainedField = null;
+      },
+    ],
   ];
   it.each(corruptions)('rejects $0 atomically', (_, corrupt) => {
     const { runtime } = monitoring();
-    runtime.tick({ level: 10 }); confirm(runtime);
+    runtime.tick({ level: 10 });
+    confirm(runtime);
     const checkpoint = runtime.checkpoint()!;
     const { runtime: target } = setup();
-    target.start(script()); target.cancel('Previous stopped run.');
+    target.start(script());
+    target.cancel('Previous stopped run.');
     const before = target.snapshot();
     corrupt(checkpoint);
     expect(() => target.restore(checkpoint)).toThrow();
@@ -240,16 +517,36 @@ describe('macro protocol validation', () => {
     const circular: Record<string, unknown> = { ...script() };
     circular.self = circular;
     expect(() => validateMacroScript(circular)).toThrow(/JSON/);
-    const huge = script({ rules: Array.from({ length: 32 }, (_, index) => rule({ name: String(index),
-      steps: Array.from({ length: 16 }, () => ({ ...farm, targets: Array.from({ length: 64 }, (_, i) => 2_000_000_000 + i) })) })) });
+    const huge = script({
+      rules: Array.from({ length: 32 }, (_, index) =>
+        rule({
+          name: String(index),
+          steps: Array.from({ length: 16 }, () => ({
+            ...farm,
+            targets: Array.from({ length: 64 }, (_, i) => 2_000_000_000 + i),
+          })),
+        }),
+      ),
+    });
     expect(() => validateMacroScript(huge)).toThrow(/too large/);
   });
 
   it('does not impose the routine actionBytes cap on a valid ordered step array', () => {
-    const large = script({ maxActions: 16, rules: [rule({ steps: Array.from({ length: 16 }, () => ({ ...farm,
-      targets: Array.from({ length: 64 }, (_, index) => 2_000_000_000 + index) })) })] });
+    const large = script({
+      maxActions: 16,
+      rules: [
+        rule({
+          steps: Array.from({ length: 16 }, () => ({
+            ...farm,
+            targets: Array.from({ length: 64 }, (_, index) => 2_000_000_000 + index),
+          })),
+        }),
+      ],
+    });
     expect(JSON.stringify(large.rules[0]!.steps).length).toBeGreaterThan(4_096);
-    expect(new TextEncoder().encode(JSON.stringify(large)).length).toBeLessThan(MACRO_LIMITS.documentBytes);
+    expect(new TextEncoder().encode(JSON.stringify(large)).length).toBeLessThan(
+      MACRO_LIMITS.documentBytes,
+    );
     const { runtime } = setup();
     expect(() => runtime.start(large)).not.toThrow();
     expect(runtime.tick({ hpPercent: 40 })?.step.type).toBe('farm');
@@ -258,14 +555,32 @@ describe('macro protocol validation', () => {
 
 describe('macro dry run', () => {
   it('traces levels, weight, and known-zero inventory without issuing effects', () => {
-    const original = script({ rules: [rule({ conditions: [{ field: 'level', operator: 'gte', value: 10 },
-      { field: 'jobLevel', operator: 'eq', value: 5 }, { field: 'weightPercent', operator: 'gte', value: 0 },
-      { field: 'inventory', itemId: 501, operator: 'eq', value: 0 }] })] });
+    const original = script({
+      rules: [
+        rule({
+          conditions: [
+            { field: 'level', operator: 'gte', value: 10 },
+            { field: 'jobLevel', operator: 'eq', value: 5 },
+            { field: 'weightPercent', operator: 'gte', value: 0 },
+            { field: 'inventory', itemId: 501, operator: 'eq', value: 0 },
+          ],
+        }),
+      ],
+    });
     const missing = dryRunMacro(original, {});
     expect(missing.rule).toBeNull();
-    expect(missing.rules[0]!.conditions.map(condition => condition.state)).toEqual(Array(4).fill('unavailable'));
-    expect(dryRunMacro(original, { level: 10, jobLevel: 5, weightPercent: 0, inventory: {} }).rule).toBeNull();
-    const trace = dryRunMacro(original, { level: 10, jobLevel: 5, weightPercent: 0, inventory: { 501: 0 } });
+    expect(missing.rules[0]!.conditions.map((condition) => condition.state)).toEqual(
+      Array(4).fill('unavailable'),
+    );
+    expect(
+      dryRunMacro(original, { level: 10, jobLevel: 5, weightPercent: 0, inventory: {} }).rule,
+    ).toBeNull();
+    const trace = dryRunMacro(original, {
+      level: 10,
+      jobLevel: 5,
+      weightPercent: 0,
+      inventory: { 501: 0 },
+    });
     expect(trace).toMatchObject({ rule: 'Recover', ruleIndex: 0, steps: [item] });
     trace.steps[0]!.timeoutSeconds = 99;
     expect(original.rules[0]!.steps[0]!.timeoutSeconds).toBe(10);
@@ -279,8 +594,21 @@ describe('macro dry run', () => {
 describe('macro owned ordered execution', () => {
   it('selects by priority and evaluates conditions once for the complete sequence', () => {
     const { runtime } = setup();
-    runtime.start(script({ rules: [rule({ name: 'low', priority: 0 }), rule({ name: 'high', priority: 20,
-      steps: [item, { type: 'skill', skillId: 28, level: 1, mode: 'self', timeoutSeconds: 10 }] })] }));
+    runtime.start(
+      script({
+        rules: [
+          rule({ name: 'low', priority: 0 }),
+          rule({
+            name: 'high',
+            priority: 20,
+            steps: [
+              item,
+              { type: 'skill', skillId: 28, level: 1, mode: 'self', timeoutSeconds: 10 },
+            ],
+          }),
+        ],
+      }),
+    );
     const first = runtime.tick({ hpPercent: 40 })!;
     expect(first).toMatchObject({ ruleIndex: 1, stepIndex: 0, step: item });
     expect(runtime.tick({ hpPercent: 90 })).toBeNull();
@@ -293,14 +621,25 @@ describe('macro owned ordered execution', () => {
     expect(runtime.tick({ hpPercent: 90 })).toBeNull();
     expect(runtime.tick({ hpPercent: 40 })).toMatchObject({ ruleIndex: 0, stepIndex: 0 });
     confirm(runtime);
-    expect(runtime.snapshot()).toMatchObject({ state: 'completed', actionsIssued: 3, actionsCompleted: 3,
-      sequencesIssued: 2, sequencesCompleted: 2 });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'completed',
+      actionsIssued: 3,
+      actionsCompleted: 3,
+      sequencesIssued: 2,
+      sequencesCompleted: 2,
+    });
   });
 
   it('preserves declaration order for priority ties and reuses scheduler cooldowns', () => {
     const { runtime, advance } = setup();
-    runtime.start(script({ rules: [rule({ name: 'first', priority: 20, maxRuns: 2, cooldownSeconds: 5 }),
-      rule({ name: 'second', priority: 20 })] }));
+    runtime.start(
+      script({
+        rules: [
+          rule({ name: 'first', priority: 20, maxRuns: 2, cooldownSeconds: 5 }),
+          rule({ name: 'second', priority: 20 }),
+        ],
+      }),
+    );
     expect(runtime.tick({ hpPercent: 40 })?.ruleIndex).toBe(0);
     confirm(runtime);
     expect(runtime.tick({ hpPercent: 40 })?.ruleIndex).toBe(1);
@@ -314,7 +653,14 @@ describe('macro owned ordered execution', () => {
 
   it('returns defensive intent copies and uses the running clock for elapsed conditions', () => {
     const { runtime, advance } = setup();
-    const original = script({ rules: [rule({ steps: [buy(50)], conditions: [{ field: 'elapsedSeconds', operator: 'gte', value: 5 }] })] });
+    const original = script({
+      rules: [
+        rule({
+          steps: [buy(50)],
+          conditions: [{ field: 'elapsedSeconds', operator: 'gte', value: 5 }],
+        }),
+      ],
+    });
     runtime.start(original);
     original.rules[0]!.steps[0] = { ...farm };
     expect(runtime.tick({ elapsedSeconds: 500 })).toBeNull();
@@ -329,15 +675,43 @@ describe('macro owned ordered execution', () => {
 
   it('consumes spend reservations across rules before effects and never refunds uncertain costs', () => {
     const { runtime } = setup();
-    runtime.start(script({ maxSpend: 100, rules: [rule({ name: 'first', steps: [buy(60)] }),
-      rule({ name: 'second', steps: [buy(60)] })] }));
+    runtime.start(
+      script({
+        maxSpend: 100,
+        rules: [
+          rule({ name: 'first', steps: [buy(60)] }),
+          rule({ name: 'second', steps: [buy(60)] }),
+        ],
+      }),
+    );
     expect(runtime.tick({ hpPercent: 40 })?.step).toEqual(buy(60));
     expect(runtime.snapshot().spendReserved).toBe(60);
     confirm(runtime);
     expect(runtime.tick({ hpPercent: 40, zeny: 2_000_000_000 })).toBeNull();
-    expect(runtime.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 1, spendReserved: 60 });
-    runtime.start(script({ rules: [rule({ steps: [{ type: 'store', serviceId: 'kafra-south-storage',
-      itemId: 501, quantity: 1, keep: 0, maxSpend: 20, timeoutSeconds: 10 }] })] }));
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'failed',
+      actionsIssued: 1,
+      spendReserved: 60,
+    });
+    runtime.start(
+      script({
+        rules: [
+          rule({
+            steps: [
+              {
+                type: 'store',
+                serviceId: 'kafra-south-storage',
+                itemId: 501,
+                quantity: 1,
+                keep: 0,
+                maxSpend: 20,
+                timeoutSeconds: 10,
+              },
+            ],
+          }),
+        ],
+      }),
+    );
     runtime.tick({ hpPercent: 40 });
     expect(runtime.snapshot().spendReserved).toBe(20);
     confirm(runtime, false);
@@ -351,9 +725,15 @@ describe('macro owned ordered execution', () => {
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
     expect(runtime.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 0 });
     runtime.start(script({ maxActions: 2, rules: [rule({ maxRuns: 100, steps: [item, item] })] }));
-    runtime.tick({ hpPercent: 40 }); confirm(runtime);
-    runtime.tick({ hpPercent: 40 }); confirm(runtime);
-    expect(runtime.snapshot()).toMatchObject({ state: 'completed', actionsIssued: 2, sequencesCompleted: 1 });
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'completed',
+      actionsIssued: 2,
+      sequencesCompleted: 1,
+    });
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
   });
 
@@ -383,7 +763,11 @@ describe('macro owned ordered execution', () => {
     expect(runtime.acknowledge(intent.id, false, 'Inventory result was uncertain.')).toBe(true);
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
     expect(runtime.acknowledge(intent.id, true)).toBe(false);
-    expect(runtime.snapshot()).toMatchObject({ state: 'failed', reason: 'Inventory result was uncertain.', actionsIssued: 1 });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'failed',
+      reason: 'Inventory result was uncertain.',
+      actionsIssued: 1,
+    });
   });
 
   it('checks the exact per-step deadline on ticks and delayed acknowledgements', () => {
@@ -406,8 +790,12 @@ describe('macro owned ordered execution', () => {
 
   it('supports long travel deadlines without changing legacy routine timeouts', () => {
     const { runtime, advance } = setup();
-    runtime.start(script({ durationSeconds: 1_000, rules: [rule({ steps: [
-      { type: 'travel', map: 'prontera', timeoutSeconds: 600 }, item] })] }));
+    runtime.start(
+      script({
+        durationSeconds: 1_000,
+        rules: [rule({ steps: [{ type: 'travel', map: 'prontera', timeoutSeconds: 600 }, item] })],
+      }),
+    );
     runtime.tick({ hpPercent: 40 });
     advance(121_000);
     expect(confirm(runtime)).toBe(true);
@@ -445,10 +833,15 @@ describe('macro field supervision', () => {
   it('fails monitoring after the controller loses world ownership', () => {
     const { runtime } = setup();
     runtime.start(script({ rules: [rule({ steps: [farm] })] }));
-    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
     expect(runtime.snapshot().state).toBe('monitoring');
     runtime.fail('Unexpected map change.');
-    expect(runtime.snapshot()).toMatchObject({ state: 'failed', fieldIntentActive: false, reason: 'Unexpected map change.' });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'failed',
+      fieldIntentActive: false,
+      reason: 'Unexpected map change.',
+    });
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
     runtime.fail('A later stale event.');
     expect(runtime.snapshot().reason).toBe('Unexpected map change.');
@@ -456,11 +849,17 @@ describe('macro field supervision', () => {
 
   it('monitors a one-run farm until duration even when every allowance is exhausted', () => {
     const { runtime, advance } = setup();
-    runtime.start(script({ durationSeconds: 300, maxActions: 1, rules: [rule({ steps: [farm] })] }));
+    runtime.start(
+      script({ durationSeconds: 300, maxActions: 1, rules: [rule({ steps: [farm] })] }),
+    );
     const intent = runtime.tick({ hpPercent: 40 })!;
     expect(runtime.snapshot().fieldIntentActive).toBe(false);
     expect(runtime.acknowledge(intent.id, true)).toBe(true);
-    expect(runtime.snapshot()).toMatchObject({ state: 'monitoring', fieldIntentActive: true, fieldSuspended: false });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'monitoring',
+      fieldIntentActive: true,
+      fieldSuspended: false,
+    });
     expect(runtime.active).toBe(true);
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
     advance(120_000);
@@ -473,11 +872,29 @@ describe('macro field supervision', () => {
 
   it('selects new level/inventory rules during farming and resumes after temporary steps', () => {
     const { runtime } = setup();
-    runtime.start(script({ rules: [rule({ name: 'farm', priority: 0, steps: [farm],
-      conditions: [{ field: 'level', operator: 'lt', value: 10 }] }), rule({ name: 'restock', priority: 20,
-      conditions: [{ field: 'level', operator: 'gte', value: 10 }, { field: 'inventory', itemId: 501, operator: 'eq', value: 0 }],
-      steps: [buy(50), item] })] }));
-    runtime.tick({ level: 9 }); confirm(runtime);
+    runtime.start(
+      script({
+        rules: [
+          rule({
+            name: 'farm',
+            priority: 0,
+            steps: [farm],
+            conditions: [{ field: 'level', operator: 'lt', value: 10 }],
+          }),
+          rule({
+            name: 'restock',
+            priority: 20,
+            conditions: [
+              { field: 'level', operator: 'gte', value: 10 },
+              { field: 'inventory', itemId: 501, operator: 'eq', value: 0 },
+            ],
+            steps: [buy(50), item],
+          }),
+        ],
+      }),
+    );
+    runtime.tick({ level: 9 });
+    confirm(runtime);
     const retained = runtime.fieldIntent!;
     retained.targets.push(999);
     expect(runtime.fieldIntent).toEqual(farm);
@@ -486,19 +903,30 @@ describe('macro field supervision', () => {
     confirm(runtime);
     expect(runtime.tick({ level: 1, inventory: { 501: 100 } })?.step.type).toBe('useItem');
     confirm(runtime);
-    expect(runtime.snapshot()).toMatchObject({ state: 'monitoring', fieldIntentActive: true, fieldSuspended: false });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'monitoring',
+      fieldIntentActive: true,
+      fieldSuspended: false,
+    });
     expect(runtime.fieldIntent).toEqual(farm);
   });
 
   it('travel confirmation clears field intent and Stop revokes monitoring', () => {
     const { runtime } = setup();
-    runtime.start(script({ rules: [rule({ steps: [farm, { type: 'travel', map: 'prontera', timeoutSeconds: 60 }] })] }));
-    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    runtime.start(
+      script({
+        rules: [rule({ steps: [farm, { type: 'travel', map: 'prontera', timeoutSeconds: 60 }] })],
+      }),
+    );
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
     expect(runtime.fieldIntent).toEqual(farm);
-    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
     expect(runtime.snapshot()).toMatchObject({ state: 'completed', fieldIntentActive: false });
     runtime.start(script({ rules: [rule({ steps: [farm] })] }));
-    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
     runtime.cancel();
     expect(runtime.snapshot()).toMatchObject({ state: 'cancelled', fieldIntentActive: false });
     expect(runtime.fieldIntent).toBeNull();
@@ -507,31 +935,68 @@ describe('macro field supervision', () => {
 });
 
 describe('unlimited macro execution', () => {
-  const unlimited = (options: Partial<MacroScript> = {}): MacroScript => script({ durationSeconds: 0,
-    maxActions: 0, maxSpend: 0, rules: [rule({ maxRuns: 0 })], ...options });
+  const unlimited = (options: Partial<MacroScript> = {}): MacroScript =>
+    script({
+      durationSeconds: 0,
+      maxActions: 0,
+      maxSpend: 0,
+      rules: [rule({ maxRuns: 0 })],
+      ...options,
+    });
 
   it('dry-runs explicit unlimited limits using actual elapsed observations beyond a day', () => {
-    const value = unlimited({ rules: [rule({ maxRuns: 0,
-      conditions: [{ field: 'elapsedSeconds', operator: 'gt', value: 86_400 }] })] });
-    expect(dryRunMacro(value, { elapsedSeconds: 90_000 })).toMatchObject({ rule: 'Recover', steps: [item] });
+    const value = unlimited({
+      rules: [
+        rule({
+          maxRuns: 0,
+          conditions: [{ field: 'elapsedSeconds', operator: 'gt', value: 86_400 }],
+        }),
+      ],
+    });
+    expect(dryRunMacro(value, { elapsedSeconds: 90_000 })).toMatchObject({
+      rule: 'Recover',
+      steps: [item],
+    });
     value.rules[0]!.conditions = [{ field: 'elapsedSeconds', operator: 'eq', value: 86_400 }];
     expect(dryRunMacro(value, { elapsedSeconds: 90_000 }).rules[0]!.state).toBe('unmatched');
-    for (const elapsedSeconds of [Number.NaN, Number.POSITIVE_INFINITY, -1, Number.MAX_SAFE_INTEGER]) {
+    for (const elapsedSeconds of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      -1,
+      Number.MAX_SAFE_INTEGER,
+    ]) {
       expect(dryRunMacro(value, { elapsedSeconds }).rules[0]!.state).toBe('unavailable');
     }
   });
 
   it('uses the real running clock after 25 hours without accepting caller elapsed overrides', () => {
     const { runtime, advance } = setup();
-    runtime.start(unlimited({ rules: [rule({ name: 'At one day', priority: 20, maxRuns: 0,
-      conditions: [{ field: 'elapsedSeconds', operator: 'eq', value: 86_400 }] }),
-    rule({ name: 'After one day', maxRuns: 0,
-      conditions: [{ field: 'elapsedSeconds', operator: 'gt', value: 86_400 }] })] }));
+    runtime.start(
+      unlimited({
+        rules: [
+          rule({
+            name: 'At one day',
+            priority: 20,
+            maxRuns: 0,
+            conditions: [{ field: 'elapsedSeconds', operator: 'eq', value: 86_400 }],
+          }),
+          rule({
+            name: 'After one day',
+            maxRuns: 0,
+            conditions: [{ field: 'elapsedSeconds', operator: 'gt', value: 86_400 }],
+          }),
+        ],
+      }),
+    );
     expect(runtime.tick({ elapsedSeconds: 90_000 })).toBeNull();
     advance(90_000_000);
     expect(runtime.tick({ elapsedSeconds: 0 })?.ruleIndex).toBe(1);
     expect(confirm(runtime)).toBe(true);
-    expect(runtime.snapshot()).toMatchObject({ state: 'running', elapsedSeconds: 90_000, actionsCompleted: 1 });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'running',
+      elapsedSeconds: 90_000,
+      actionsCompleted: 1,
+    });
   });
 
   it('continues past 1,000 owned steps and rule runs without renewing the run or replaying intents', () => {
@@ -549,15 +1014,26 @@ describe('unlimited macro execution', () => {
         lastId = intent.id;
       }
     }
-    expect(runtime.snapshot()).toMatchObject({ state: 'running', generation: 1, actionsIssued: 2_002,
-      actionsCompleted: 2_002, sequencesIssued: 1_001, sequencesCompleted: 1_001, spendReserved: 0 });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'running',
+      generation: 1,
+      actionsIssued: 2_002,
+      actionsCompleted: 2_002,
+      sequencesIssued: 1_001,
+      sequencesCompleted: 1_001,
+      spendReserved: 0,
+    });
   });
 
   it('waits beyond the old lifetime evaluation budget and dispatches only when a rule matches', () => {
     const { runtime } = setup();
     runtime.start(unlimited());
     for (let index = 0; index <= 200_000; index++) runtime.tick({ hpPercent: 90 });
-    expect(runtime.snapshot()).toMatchObject({ state: 'running', actionsIssued: 0, sequencesIssued: 0 });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'running',
+      actionsIssued: 0,
+      sequencesIssued: 0,
+    });
     expect(runtime.tick({ hpPercent: 40 })?.step).toEqual(item);
     expect(confirm(runtime)).toBe(true);
     expect(runtime.snapshot()).toMatchObject({ state: 'running', actionsCompleted: 1 });
@@ -572,45 +1048,72 @@ describe('unlimited macro execution', () => {
       advance(46_800_000);
       expect(confirm(runtime)).toBe(true);
     }
-    expect(runtime.snapshot()).toMatchObject({ state: 'completed', elapsedSeconds: 93_600,
-      actionsCompleted: 2, sequencesCompleted: 1 });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'completed',
+      elapsedSeconds: 93_600,
+      actionsCompleted: 2,
+      sequencesCompleted: 1,
+    });
   });
 
   it('keeps a finite rule allowance when action count and duration are unlimited', () => {
     const { runtime } = setup();
     runtime.start(unlimited({ rules: [rule({ maxRuns: 2, steps: [item, item] })] }));
-    for (let index = 0; index < 4; index++) { runtime.tick({ hpPercent: 40 }); confirm(runtime); }
+    for (let index = 0; index < 4; index++) {
+      runtime.tick({ hpPercent: 40 });
+      confirm(runtime);
+    }
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
-    expect(runtime.snapshot()).toMatchObject({ state: 'completed', actionsCompleted: 4, sequencesCompleted: 2 });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'completed',
+      actionsCompleted: 4,
+      sequencesCompleted: 2,
+    });
   });
 
   it('keeps a finite step allowance when duration and rule runs are unlimited', () => {
     const { runtime } = setup();
     runtime.start(unlimited({ maxActions: 2 }));
-    for (let index = 0; index < 2; index++) { runtime.tick({ hpPercent: 40 }); confirm(runtime); }
+    for (let index = 0; index < 2; index++) {
+      runtime.tick({ hpPercent: 40 });
+      confirm(runtime);
+    }
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
-    expect(runtime.snapshot()).toMatchObject({ state: 'completed', actionsCompleted: 2, sequencesCompleted: 2 });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'completed',
+      actionsCompleted: 2,
+      sequencesCompleted: 2,
+    });
     runtime.start(unlimited({ maxActions: 1, rules: [rule({ maxRuns: 0, steps: [item, item] })] }));
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
     expect(runtime.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 0 });
   });
 
-  it.each([false, true])('keeps a finite duration with unlimited counts and pending work = %s', pending => {
-    const { runtime, advance } = setup();
-    runtime.start(unlimited({ durationSeconds: 1 }));
-    const intent = pending ? runtime.tick({ hpPercent: 40 }) : null;
-    advance(1_000);
-    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
-    expect(runtime.snapshot().state).toBe(pending ? 'failed' : 'completed');
-    if (intent) expect(runtime.acknowledge(intent.id, true)).toBe(false);
-  });
+  it.each([false, true])(
+    'keeps a finite duration with unlimited counts and pending work = %s',
+    (pending) => {
+      const { runtime, advance } = setup();
+      runtime.start(unlimited({ durationSeconds: 1 }));
+      const intent = pending ? runtime.tick({ hpPercent: 40 }) : null;
+      advance(1_000);
+      expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+      expect(runtime.snapshot().state).toBe(pending ? 'failed' : 'completed');
+      if (intent) expect(runtime.acknowledge(intent.id, true)).toBe(false);
+    },
+  );
 
   it('exhausts finite rules independently while an unlimited lower-priority rule remains eligible', () => {
     const { runtime } = setup();
-    runtime.start(unlimited({ rules: [rule({ name: 'Once', priority: 20 }), rule({ name: 'Repeat', maxRuns: 0 })] }));
-    expect(runtime.tick({ hpPercent: 40 })?.ruleIndex).toBe(0); confirm(runtime);
+    runtime.start(
+      unlimited({
+        rules: [rule({ name: 'Once', priority: 20 }), rule({ name: 'Repeat', maxRuns: 0 })],
+      }),
+    );
+    expect(runtime.tick({ hpPercent: 40 })?.ruleIndex).toBe(0);
+    confirm(runtime);
     for (let index = 0; index < 2; index++) {
-      expect(runtime.tick({ hpPercent: 40 })?.ruleIndex).toBe(1); confirm(runtime);
+      expect(runtime.tick({ hpPercent: 40 })?.ruleIndex).toBe(1);
+      confirm(runtime);
     }
     expect(runtime.snapshot()).toMatchObject({ state: 'running', sequencesCompleted: 3 });
   });
@@ -618,7 +1121,8 @@ describe('unlimited macro execution', () => {
   it('keeps cooldowns active for unlimited rule runs', () => {
     const { runtime, advance } = setup();
     runtime.start(unlimited({ rules: [rule({ maxRuns: 0, cooldownSeconds: 5 })] }));
-    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
     advance(4_999);
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
     advance(1);
@@ -627,26 +1131,43 @@ describe('unlimited macro execution', () => {
     expect(runtime.snapshot()).toMatchObject({ state: 'running', actionsCompleted: 2 });
   });
 
-  it.each([false, true])('retains uncertain-step and exact deadline failures with timeout = %s', timeout => {
-    const { runtime, advance } = setup();
-    runtime.start(unlimited());
-    const intent = runtime.tick({ hpPercent: 40 })!;
-    if (timeout) { advance(10_000); expect(runtime.acknowledge(intent.id, true)).toBe(false); }
-    else expect(runtime.acknowledge(intent.id, false)).toBe(true);
-    expect(runtime.tick({ hpPercent: 40 })).toBeNull();
-    expect(runtime.acknowledge(intent.id, true)).toBe(false);
-    expect(runtime.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 1, actionsCompleted: 0 });
-  });
+  it.each([false, true])(
+    'retains uncertain-step and exact deadline failures with timeout = %s',
+    (timeout) => {
+      const { runtime, advance } = setup();
+      runtime.start(unlimited());
+      const intent = runtime.tick({ hpPercent: 40 })!;
+      if (timeout) {
+        advance(10_000);
+        expect(runtime.acknowledge(intent.id, true)).toBe(false);
+      } else expect(runtime.acknowledge(intent.id, false)).toBe(true);
+      expect(runtime.tick({ hpPercent: 40 })).toBeNull();
+      expect(runtime.acknowledge(intent.id, true)).toBe(false);
+      expect(runtime.snapshot()).toMatchObject({
+        state: 'failed',
+        actionsIssued: 1,
+        actionsCompleted: 0,
+      });
+    },
+  );
 
   it('does not turn a zero spend cap into unlimited spending', () => {
     const { runtime } = setup();
-    expect(() => runtime.start(unlimited({ rules: [rule({ maxRuns: 0, steps: [buy(1)] })] }))).toThrow();
+    expect(() =>
+      runtime.start(unlimited({ rules: [rule({ maxRuns: 0, steps: [buy(1)] })] })),
+    ).toThrow();
     runtime.start(unlimited({ maxSpend: 100, rules: [rule({ maxRuns: 0, steps: [buy(60)] })] }));
-    expect(runtime.tick({ hpPercent: 40 })?.step).toEqual(buy(60)); confirm(runtime);
+    expect(runtime.tick({ hpPercent: 40 })?.step).toEqual(buy(60));
+    confirm(runtime);
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
-    expect(runtime.snapshot()).toMatchObject({ state: 'failed', spendReserved: 60, actionsIssued: 1 });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'failed',
+      spendReserved: 60,
+      actionsIssued: 1,
+    });
     runtime.start(unlimited({ rules: [rule({ maxRuns: 0, steps: [buy(0)] })] }));
-    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
     expect(runtime.snapshot()).toMatchObject({ state: 'running', spendReserved: 0 });
   });
 
@@ -670,11 +1191,18 @@ describe('unlimited macro execution', () => {
   it('monitors a finite-run field indefinitely without resetting spent allowances', () => {
     const { runtime, advance } = setup();
     runtime.start(unlimited({ maxActions: 1, rules: [rule({ steps: [farm] })] }));
-    runtime.tick({ hpPercent: 40 }); confirm(runtime);
+    runtime.tick({ hpPercent: 40 });
+    confirm(runtime);
     advance(90_000_000);
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
-    expect(runtime.snapshot()).toMatchObject({ state: 'monitoring', elapsedSeconds: 90_000,
-      actionsIssued: 1, actionsCompleted: 1, sequencesCompleted: 1, fieldIntentActive: true });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'monitoring',
+      elapsedSeconds: 90_000,
+      actionsIssued: 1,
+      actionsCompleted: 1,
+      sequencesCompleted: 1,
+      fieldIntentActive: true,
+    });
     expect(runtime.snapshot().reason).toMatch(/until you stop/);
     runtime.cancel();
     expect(runtime.snapshot()).toMatchObject({ state: 'cancelled', fieldIntentActive: false });
@@ -685,22 +1213,37 @@ describe('unlimited macro execution', () => {
     runtime.start(unlimited());
     Reflect.set(runtime, 'nextId', Number.MAX_SAFE_INTEGER - 1);
     const last = runtime.tick({ hpPercent: 40 })!;
-    expect(last.id).toBe(Number.MAX_SAFE_INTEGER); confirm(runtime);
+    expect(last.id).toBe(Number.MAX_SAFE_INTEGER);
+    confirm(runtime);
     expect(runtime.tick({ hpPercent: 40 })).toBeNull();
-    expect(runtime.snapshot()).toMatchObject({ state: 'failed', actionsIssued: 1, actionsCompleted: 1 });
+    expect(runtime.snapshot()).toMatchObject({
+      state: 'failed',
+      actionsIssued: 1,
+      actionsCompleted: 1,
+    });
     expect(runtime.snapshot().reason).toMatch(/identity budget/);
   });
 });
 
 describe('macro inventory observation projection', () => {
   it('deduplicates and orders requested item IDs without changing the script', () => {
-    const original = script({ rules: [rule({ conditions: [
-      { field: 'inventory', itemId: 601, operator: 'eq', value: 0 },
-      { field: 'inventory', itemId: 501, operator: 'eq', value: 0 },
-    ] }), rule({ name: 'Second', conditions: [
-      { field: 'inventory', itemId: 601, operator: 'gte', value: 1 },
-      { field: 'level', operator: 'gte', value: 10 },
-    ] })] });
+    const original = script({
+      rules: [
+        rule({
+          conditions: [
+            { field: 'inventory', itemId: 601, operator: 'eq', value: 0 },
+            { field: 'inventory', itemId: 501, operator: 'eq', value: 0 },
+          ],
+        }),
+        rule({
+          name: 'Second',
+          conditions: [
+            { field: 'inventory', itemId: 601, operator: 'gte', value: 1 },
+            { field: 'level', operator: 'gte', value: 10 },
+          ],
+        }),
+      ],
+    });
     const before = structuredClone(original);
     const ids = macroInventoryItemIds(original);
     expect(ids).toEqual([501, 601]);

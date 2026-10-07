@@ -1,81 +1,628 @@
 import { validateFormSettings } from '../settings/settings';
-import {describe,it,expect} from 'vitest';
-import {BotEngine,type Action} from '../automation/engine';
-import {DEFAULT_SETTINGS,DEFAULT_AUTOMATION,validateSettings,validateAutomation} from '../settings/settings';
+import { describe, it, expect } from 'vitest';
+import { BotEngine, type Action } from '../automation/engine';
+import {
+  DEFAULT_SETTINGS,
+  DEFAULT_AUTOMATION,
+  validateSettings,
+  validateAutomation,
+} from '../settings/settings';
 import { AutomationScheduler } from '../automation/automation';
 import { acceptsMonster } from '../automation/automation-logic';
-import {ActorObservations,type ActorPredicate} from './actor-observations';
-import {dryRunRoutine,validateRoutineSpec,RoutineRuntime} from '../automation/routines';
-import {ProfileStore} from '../settings/profiles';
-import {decode,type Entity,type GameEvent} from '../protocol/protocol';
-import {BitWriter} from '../../shared/binary';
-const player:Entity={id:1,classId:0,name:'Player',kind:0,level:7,hp:70,maxHp:100,x:100,y:100,dead:false,statuses:[]};
-const monster:Entity={...player,id:2,classId:4000,kind:1,name:'Monster',x:101};
-const absent:ActorPredicate={field:'actorStatus',actor:{scope:'self'},statusId:1,operator:'eq',value:false};
-const settings=()=>({...DEFAULT_SETTINGS,map:'prt_fild08',targets:[4000],automation:structuredClone(DEFAULT_AUTOMATION)});
-function engineSetup(walkable:(x:number,y:number)=>boolean=()=>true){let at=100_000;const sent:Action[]=[];const engine=new BotEngine(a=>sent.push(a),()=>at,()=>({width:200,height:200,walkable:(p)=>walkable(p.x,p.y)}));engine.connect(true);engine.receive([{type:'enter',id:1,map:'prt_fild08'},{type:'spawn',entity:{...player}},{type:'spawn',entity:{...monster}}]);return{engine,sent,step:(ms=100)=>{at+=ms;engine.tick();}};}
-const isAction=(value:unknown):value is {type:'stop'}=>!!value&&typeof value==='object'&&Object.keys(value).length===1&&'type' in value&&value.type==='stop';
-const routine=(conditions:ActorPredicate[])=>({name:'Conditions',durationSeconds:60,maxActions:2,rules:[{name:'First',priority:1,cooldownSeconds:1,maxRuns:1,conditions,action:{type:'stop' as const}}]});
-describe('actor predicate integration',()=>{
- it('gates candidate monster policy without substituting candidate into current target',()=>{const {engine,sent,step}=engineSetup();const a=settings();a.automation.combat.rules=[{classId:4000,action:'attack',priority:0,conditions:[{...absent,actor:{scope:'candidate'}}]}];engine.start(a);step();expect(sent).toContainEqual({type:'attack',id:2});engine.stop();sent.length=0;a.automation.combat.rules[0]!.conditions=[{...absent,actor:{scope:'target'}}];engine.start(a);step();expect(sent).toEqual([]);engine.receive([{type:'changeTarget',id:2}]);step();expect(sent).toContainEqual({type:'attack',id:2});});
- it('applies conditional ignores only when known matched and blocks unknown class state',()=>{for(const evidence of ['present','absent','unknown'] as const){const {engine,sent,step}=engineSetup();const a=settings();a.automation.combat.rules=[{classId:4000,action:'ignore',priority:0,conditions:[{...absent,actor:{scope:'candidate'},value:true}]}];if(evidence==='present')engine.receive([{type:'status',id:2,statusId:1,seconds:10}]);if(evidence==='unknown')engine.receive([{type:'spawn',entity:{...monster,statuses:undefined}}]);engine.start(a);step();expect(sent.some(action=>action.type==='attack')).toBe(evidence==='absent');}});
- it('stops an owned auto-attack when ignore conditions match, attack guards fail or expire',()=>{for(const mode of ['ignore','attack','expiry'] as const){const {engine,sent,step}=engineSetup();const a=settings();const condition:ActorPredicate={...absent,actor:{scope:'candidate'},value:mode!=='attack'};if(mode==='expiry')engine.receive([{type:'status',id:2,statusId:1,seconds:1}]);a.automation.combat.rules=[{classId:4000,action:mode==='ignore'?'ignore':'attack',priority:0,conditions:[condition]}];engine.start(a);step();expect(sent).toContainEqual({type:'attack',id:2});if(mode!=='expiry')engine.receive([{type:'status',id:2,statusId:1,seconds:10}]);step(mode==='expiry'?1000:100);expect(sent.at(-1)).toEqual({type:'stop'});expect(engine.snapshot().ruleConditions.some(rule=>rule.conditions.some(c=>c.state===(mode==='expiry'?'unavailable':'matched')||c.state==='unmatched'))).toBe(true);step();expect(sent.filter(action=>action.type==='attack')).toHaveLength(1);}});
- it('checks an active approach before selecting an enemy skill',()=>{const {engine,sent,step}=engineSetup((x,y)=>!(x===105&&y===100));engine.receive([{type:'spawn',entity:{...monster,x:115}}]);const a=settings();a.attackRouteMaxPathDistance=20;a.radius=20;a.automation.combat.rules=[{classId:4000,action:'attack',priority:0,conditions:[{...absent,actor:{scope:'candidate'}}]}];engine.start(a);step();expect(sent.some(action=>action.type==='attack')).toBe(false);engine.receive([{type:'status',id:2,statusId:1,seconds:10}]);a.automation.skills=[{skillId:5,level:1,target:'enemy',hpBelowPercent:100,spAbovePercent:0,cooldownSeconds:1}];engine.settings=validateFormSettings(a);step();expect(sent.at(-1)).toEqual({type:'stop'});expect(sent.some(action=>action.type==='skill')).toBe(false);expect(engine.reason).toContain('conditions');});
- it('keeps cancelled implicit approach fenced when a condition stops attack',()=>{const {engine,sent,step}=engineSetup();engine.receive([{type:'spawn',entity:{...monster,x:110}}]);const a=settings();a.automation.combat.rules=[{classId:4000,action:'attack',priority:0,conditions:[{...absent,actor:{scope:'candidate'}}]}];engine.start(a);step();expect(sent.at(-1)).toEqual({type:'attack',id:2});engine.receive([{type:'status',id:2,statusId:1,seconds:10}]);step();expect(sent.at(-1)).toEqual({type:'stop'});engine.receive([{type:'status',id:2,statusId:1,seconds:null,refresh:false}]);step();expect(sent.filter(action=>action.type==='attack')).toHaveLength(1);engine.receive([{type:'stop',id:1}]);step();expect(sent.filter(action=>action.type==='attack')).toHaveLength(2);});
- it('reacquires after a conditional Stop with no movement acknowledgment',()=>{const {engine,sent,step}=engineSetup();const a=settings();a.automation.combat.rules=[{classId:4000,action:'attack',priority:0,conditions:[{...absent,actor:{scope:'candidate'}}]}];engine.start(a);step();expect(sent.at(-1)).toEqual({type:'attack',id:2});engine.receive([{type:'status',id:2,statusId:1,seconds:10}]);step();expect(sent.at(-1)).toEqual({type:'stop'});engine.receive([{type:'status',id:2,statusId:1,seconds:null,refresh:false}]);step(3900);expect(sent.filter(action=>action.type==='attack')).toHaveLength(1);step(101);expect(sent.filter(action=>action.type==='attack')).toHaveLength(2);expect(engine.running).toBe(true);expect(engine.reason).not.toContain('failed');expect(engine.snapshot().navigation?.leg).toEqual([]);});
- it('waits on unknown conditional items before requiring irrelevant inventory',()=>{const {engine,sent,step}=engineSetup();const a=settings();a.automation.combat.mode='off';a.automation.items=[{itemId:501,resource:'hp',belowPercent:80,minStock:0,cooldownSeconds:1,conditions:[{field:'actorCasting',actor:{scope:'self'},operator:'eq',value:false}]}];engine.start(a);step();expect(sent).toEqual([]);expect(engine.running).toBe(true);expect(engine.snapshot().ruleConditions[0]?.conditions[0]?.state).toBe('unavailable');});
- it('ignores cast announcements as action confirmation',()=>{const {engine}=engineSetup();engine.receive([{type:'skills',learned:[{skillId:1,level:2}]}]);engine.manualAction({type:'sit',sitting:true});engine.receive([{type:'castStart',id:1,skillId:20,level:1,remainingSeconds:10,position:{x:100,y:100},flags:0}]);expect(engine.actionResult.status).toBe('pending');});
- it('gates recovery items and publishes unavailable reasons without issuing a command',()=>{const {engine,sent,step}=engineSetup();const a=settings();a.automation.combat.mode='off';a.automation.items=[{itemId:501,resource:'hp',belowPercent:80,minStock:0,cooldownSeconds:1,conditions:[{field:'actorCasting',actor:{scope:'self'},operator:'eq',value:false}]}];engine.receive([{type:'inventory',items:[{bagId:501,itemId:501,count:2,type:1}],equipment:Array(10).fill(0),ammoId:-1}]);engine.start(a);step();expect(sent).toEqual([]);expect(engine.snapshot().ruleConditions[0]?.conditions[0]?.state).toBe('unavailable');engine.receive([{type:'castStop',id:1}]);step();expect(sent).toEqual([{type:'useItem',itemId:501}]);});
- it('invalidates observations at removal/death/resurrection and all world/character boundaries',()=>{const {engine}=engineSetup();engine.receive([{type:'changeTarget',id:2}]);expect(engine.currentTargetId).toBe(2);engine.receive([{type:'remove',id:2,dead:false},{type:'status',id:2,statusId:1,seconds:10},{type:'changeTarget',id:2}]);expect(engine.currentTargetId).toBeNull();expect(engine.snapshot().actorObservations.actors.map(a=>a.id)).toEqual([1]);const before=engine.snapshot().actorObservations.actors[0]!.incarnation;engine.receive([{type:'death',id:1},{type:'resurrection',id:1,hp:70,position:{x:100,y:100}}]);expect(engine.snapshot().actorObservations.actors[0]).toMatchObject({id:1,statusesKnown:false,cast:{state:'unknown'}});expect(engine.snapshot().actorObservations.actors[0]!.incarnation).not.toBe(before);engine.receive([{type:'status',id:1,statusId:1,seconds:10},{type:'castStop',id:1}]);expect(engine.actorObservation().actors[0]).toMatchObject({statuses:[{id:1,known:true,present:true}],cast:{state:'idle'}});for(const boundary of [{type:'clear'},{type:'map',map:'prt_fild05'},{type:'enter',id:3,map:'prt_fild08'}] as GameEvent[]){engine.receive([{type:'spawn',entity:{...player}},boundary,{type:'castStop',id:1}]);expect(engine.snapshot().actorObservations.actors).toEqual([]);}engine.disconnect();expect(engine.snapshot().actorObservations.connected).toBe(false);});
- it('revives a visible player with unknown state and drops corpse metadata on departure',()=>{const {engine}=engineSetup();engine.receive([{type:'spawn',entity:{...player,id:3,name:'Other'}}]);const old=engine.snapshot().actorObservations.actors.find(a=>a.id===3)!.incarnation;engine.receive([{type:'death',id:3},{type:'castStop',id:3}]);expect(engine.snapshot().actorObservations.actors.some(a=>a.id===3)).toBe(false);engine.receive([{type:'resurrection',id:3,hp:50,position:{x:101,y:100}}]);const revived=engine.snapshot().actorObservations.actors.find(a=>a.id===3)!;expect(revived.incarnation).not.toBe(old);expect(revived).toMatchObject({statusesKnown:false,cast:{state:'unknown'}});engine.receive([{type:'status',id:3,statusId:1,seconds:10},{type:'castStop',id:3}]);expect(engine.snapshot().actorObservations.actors.find(a=>a.id===3)).toMatchObject({statuses:[{id:1,known:true}],cast:{state:'idle'}});engine.receive([{type:'death',id:3},{type:'remove',id:3,dead:false},{type:'resurrection',id:3,hp:50,position:{x:101,y:100}},{type:'castStop',id:3}]);expect(engine.snapshot().actorObservations.actors.some(a=>a.id===3)).toBe(false);});
- it('uses deterministic routine priority and fails unavailable negative casts without actions',()=>{let at=1000;const model=new ActorObservations(()=>at);model.spawn(player);model.frame();const first=routine([{field:'actorCasting',actor:{scope:'self'},operator:'ne',value:true}]);expect(dryRunRoutine(first,{actors:model.snapshot(1,null,true)},isAction).rules[0]?.state).toBe('unavailable');const second={...first,rules:[...first.rules,{...first.rules[0]!,name:'Fallback',priority:0,conditions:[absent]}]};expect(dryRunRoutine(second,{actors:model.snapshot(1,null,true)},isAction).rule).toBe('Fallback');const runtime=new RoutineRuntime(isAction,()=>at);runtime.start(first);expect(runtime.tick({actors:model.snapshot(1,null,true)})).toBeNull();model.apply({type:'castStop',id:1});at+=100;expect(runtime.tick({actors:model.snapshot(1,null,true)})).toEqual({type:'stop'});});
+import { ActorObservations, type ActorPredicate } from './actor-observations';
+import { dryRunRoutine, validateRoutineSpec, RoutineRuntime } from '../automation/routines';
+import { ProfileStore } from '../settings/profiles';
+import { decode, type Entity, type GameEvent } from '../protocol/protocol';
+import { BitWriter } from '../../shared/binary';
+const player: Entity = {
+  id: 1,
+  classId: 0,
+  name: 'Player',
+  kind: 0,
+  level: 7,
+  hp: 70,
+  maxHp: 100,
+  x: 100,
+  y: 100,
+  dead: false,
+  statuses: [],
+};
+const monster: Entity = { ...player, id: 2, classId: 4000, kind: 1, name: 'Monster', x: 101 };
+const absent: ActorPredicate = {
+  field: 'actorStatus',
+  actor: { scope: 'self' },
+  statusId: 1,
+  operator: 'eq',
+  value: false,
+};
+const settings = () => ({
+  ...DEFAULT_SETTINGS,
+  map: 'prt_fild08',
+  targets: [4000],
+  automation: structuredClone(DEFAULT_AUTOMATION),
 });
-describe('typed settings and profile compatibility',()=>{
- it('keeps condition-less settings unchanged and bounds optional predicate imports',()=>{const plain=settings();expect(validateSettings(plain)).toEqual(plain);const a=settings();a.automation.items=[{itemId:501,resource:'hp',belowPercent:80,minStock:0,cooldownSeconds:1,conditions:[absent]}];expect(validateSettings(a)).toEqual(a);for(const conditions of [null,Array(17).fill(absent),[{...absent,actor:{scope:'candidate'}}],[{...absent,actor:{scope:'self',id:1}}],[{...absent,script:'code'}]])expect(()=>validateAutomation({...a.automation,items:[{...a.automation.items[0]!,conditions}]} as never)).toThrow();expect(()=>validateRoutineSpec(routine([{...absent,actor:{scope:'candidate'}}]),isAction)).toThrow();});
- it('round-trips references verbatim without silently rebinding imported actors',()=>{const model=new ActorObservations(()=>1000);model.spawn(player);model.frame();const snapshot=model.snapshot(1,null,true);const bound={...absent,actor:{scope:'actor' as const,id:1,world:snapshot.world,incarnation:snapshot.actors[0]!.incarnation}};const a=settings();a.automation.items=[{itemId:501,resource:'hp',belowPercent:80,minStock:0,cooldownSeconds:1,conditions:[bound]}];const data=new Map<string,string>();let id=0;const store=new ProfileStore({getItem:k=>data.get(k)??null,setItem:(k,v)=>{data.set(k,v);}},()=>`profile-${++id}`,()=>1000);const saved=store.save('Bound','',a);const imported=store.import(store.export(saved.id))[0]!;expect(imported.settings.automation?.items[0]?.conditions).toEqual([bound]);model.reset();model.spawn(player);model.frame();expect(dryRunRoutine(routine([bound]),{actors:model.snapshot(1,null,true)},isAction).rules[0]?.state).toBe('unavailable');});
+function engineSetup(walkable: (x: number, y: number) => boolean = () => true) {
+  let at = 100_000;
+  const sent: Action[] = [];
+  const engine = new BotEngine(
+    (a) => sent.push(a),
+    () => at,
+    () => ({ width: 200, height: 200, walkable: (p) => walkable(p.x, p.y) }),
+  );
+  engine.connect(true);
+  engine.receive([
+    { type: 'enter', id: 1, map: 'prt_fild08' },
+    { type: 'spawn', entity: { ...player } },
+    { type: 'spawn', entity: { ...monster } },
+  ]);
+  return {
+    engine,
+    sent,
+    step: (ms = 100) => {
+      at += ms;
+      engine.tick();
+    },
+  };
+}
+const isAction = (value: unknown): value is { type: 'stop' } =>
+  !!value &&
+  typeof value === 'object' &&
+  Object.keys(value).length === 1 &&
+  'type' in value &&
+  value.type === 'stop';
+const routine = (conditions: ActorPredicate[]) => ({
+  name: 'Conditions',
+  durationSeconds: 60,
+  maxActions: 2,
+  rules: [
+    {
+      name: 'First',
+      priority: 1,
+      cooldownSeconds: 1,
+      maxRuns: 1,
+      conditions,
+      action: { type: 'stop' as const },
+    },
+  ],
+});
+describe('actor predicate integration', () => {
+  it('gates candidate monster policy without substituting candidate into current target', () => {
+    const { engine, sent, step } = engineSetup();
+    const a = settings();
+    a.automation.combat.rules = [
+      {
+        classId: 4000,
+        action: 'attack',
+        priority: 0,
+        conditions: [{ ...absent, actor: { scope: 'candidate' } }],
+      },
+    ];
+    engine.start(a);
+    step();
+    expect(sent).toContainEqual({ type: 'attack', id: 2 });
+    engine.stop();
+    sent.length = 0;
+    a.automation.combat.rules[0]!.conditions = [{ ...absent, actor: { scope: 'target' } }];
+    engine.start(a);
+    step();
+    expect(sent).toEqual([]);
+    engine.receive([{ type: 'changeTarget', id: 2 }]);
+    step();
+    expect(sent).toContainEqual({ type: 'attack', id: 2 });
+  });
+  it('applies conditional ignores only when known matched and blocks unknown class state', () => {
+    for (const evidence of ['present', 'absent', 'unknown'] as const) {
+      const { engine, sent, step } = engineSetup();
+      const a = settings();
+      a.automation.combat.rules = [
+        {
+          classId: 4000,
+          action: 'ignore',
+          priority: 0,
+          conditions: [{ ...absent, actor: { scope: 'candidate' }, value: true }],
+        },
+      ];
+      if (evidence === 'present')
+        engine.receive([{ type: 'status', id: 2, statusId: 1, seconds: 10 }]);
+      if (evidence === 'unknown')
+        engine.receive([{ type: 'spawn', entity: { ...monster, statuses: undefined } }]);
+      engine.start(a);
+      step();
+      expect(sent.some((action) => action.type === 'attack')).toBe(evidence === 'absent');
+    }
+  });
+  it('stops an owned auto-attack when ignore conditions match, attack guards fail or expire', () => {
+    for (const mode of ['ignore', 'attack', 'expiry'] as const) {
+      const { engine, sent, step } = engineSetup();
+      const a = settings();
+      const condition: ActorPredicate = {
+        ...absent,
+        actor: { scope: 'candidate' },
+        value: mode !== 'attack',
+      };
+      if (mode === 'expiry') engine.receive([{ type: 'status', id: 2, statusId: 1, seconds: 1 }]);
+      a.automation.combat.rules = [
+        {
+          classId: 4000,
+          action: mode === 'ignore' ? 'ignore' : 'attack',
+          priority: 0,
+          conditions: [condition],
+        },
+      ];
+      engine.start(a);
+      step();
+      expect(sent).toContainEqual({ type: 'attack', id: 2 });
+      if (mode !== 'expiry') engine.receive([{ type: 'status', id: 2, statusId: 1, seconds: 10 }]);
+      step(mode === 'expiry' ? 1000 : 100);
+      expect(sent.at(-1)).toEqual({ type: 'stop' });
+      expect(
+        engine
+          .snapshot()
+          .ruleConditions.some((rule) =>
+            rule.conditions.some(
+              (c) =>
+                c.state === (mode === 'expiry' ? 'unavailable' : 'matched') ||
+                c.state === 'unmatched',
+            ),
+          ),
+      ).toBe(true);
+      step();
+      expect(sent.filter((action) => action.type === 'attack')).toHaveLength(1);
+    }
+  });
+  it('checks an active approach before selecting an enemy skill', () => {
+    const { engine, sent, step } = engineSetup((x, y) => !(x === 105 && y === 100));
+    engine.receive([{ type: 'spawn', entity: { ...monster, x: 115 } }]);
+    const a = settings();
+    a.attackRouteMaxPathDistance = 20;
+    a.radius = 20;
+    a.automation.combat.rules = [
+      {
+        classId: 4000,
+        action: 'attack',
+        priority: 0,
+        conditions: [{ ...absent, actor: { scope: 'candidate' } }],
+      },
+    ];
+    engine.start(a);
+    step();
+    expect(sent.some((action) => action.type === 'attack')).toBe(false);
+    engine.receive([{ type: 'status', id: 2, statusId: 1, seconds: 10 }]);
+    a.automation.skills = [
+      {
+        skillId: 5,
+        level: 1,
+        target: 'enemy',
+        hpBelowPercent: 100,
+        spAbovePercent: 0,
+        cooldownSeconds: 1,
+      },
+    ];
+    engine.settings = validateFormSettings(a);
+    step();
+    expect(sent.at(-1)).toEqual({ type: 'stop' });
+    expect(sent.some((action) => action.type === 'skill')).toBe(false);
+    expect(engine.reason).toContain('conditions');
+  });
+  it('keeps cancelled implicit approach fenced when a condition stops attack', () => {
+    const { engine, sent, step } = engineSetup();
+    engine.receive([{ type: 'spawn', entity: { ...monster, x: 110 } }]);
+    const a = settings();
+    a.automation.combat.rules = [
+      {
+        classId: 4000,
+        action: 'attack',
+        priority: 0,
+        conditions: [{ ...absent, actor: { scope: 'candidate' } }],
+      },
+    ];
+    engine.start(a);
+    step();
+    expect(sent.at(-1)).toEqual({ type: 'attack', id: 2 });
+    engine.receive([{ type: 'status', id: 2, statusId: 1, seconds: 10 }]);
+    step();
+    expect(sent.at(-1)).toEqual({ type: 'stop' });
+    engine.receive([{ type: 'status', id: 2, statusId: 1, seconds: null, refresh: false }]);
+    step();
+    expect(sent.filter((action) => action.type === 'attack')).toHaveLength(1);
+    engine.receive([{ type: 'stop', id: 1 }]);
+    step();
+    expect(sent.filter((action) => action.type === 'attack')).toHaveLength(2);
+  });
+  it('reacquires after a conditional Stop with no movement acknowledgment', () => {
+    const { engine, sent, step } = engineSetup();
+    const a = settings();
+    a.automation.combat.rules = [
+      {
+        classId: 4000,
+        action: 'attack',
+        priority: 0,
+        conditions: [{ ...absent, actor: { scope: 'candidate' } }],
+      },
+    ];
+    engine.start(a);
+    step();
+    expect(sent.at(-1)).toEqual({ type: 'attack', id: 2 });
+    engine.receive([{ type: 'status', id: 2, statusId: 1, seconds: 10 }]);
+    step();
+    expect(sent.at(-1)).toEqual({ type: 'stop' });
+    engine.receive([{ type: 'status', id: 2, statusId: 1, seconds: null, refresh: false }]);
+    step(3900);
+    expect(sent.filter((action) => action.type === 'attack')).toHaveLength(1);
+    step(101);
+    expect(sent.filter((action) => action.type === 'attack')).toHaveLength(2);
+    expect(engine.running).toBe(true);
+    expect(engine.reason).not.toContain('failed');
+    expect(engine.snapshot().navigation?.leg).toEqual([]);
+  });
+  it('waits on unknown conditional items before requiring irrelevant inventory', () => {
+    const { engine, sent, step } = engineSetup();
+    const a = settings();
+    a.automation.combat.mode = 'off';
+    a.automation.items = [
+      {
+        itemId: 501,
+        resource: 'hp',
+        belowPercent: 80,
+        minStock: 0,
+        cooldownSeconds: 1,
+        conditions: [
+          { field: 'actorCasting', actor: { scope: 'self' }, operator: 'eq', value: false },
+        ],
+      },
+    ];
+    engine.start(a);
+    step();
+    expect(sent).toEqual([]);
+    expect(engine.running).toBe(true);
+    expect(engine.snapshot().ruleConditions[0]?.conditions[0]?.state).toBe('unavailable');
+  });
+  it('ignores cast announcements as action confirmation', () => {
+    const { engine } = engineSetup();
+    engine.receive([{ type: 'skills', learned: [{ skillId: 1, level: 2 }] }]);
+    engine.manualAction({ type: 'sit', sitting: true });
+    engine.receive([
+      {
+        type: 'castStart',
+        id: 1,
+        skillId: 20,
+        level: 1,
+        remainingSeconds: 10,
+        position: { x: 100, y: 100 },
+        flags: 0,
+      },
+    ]);
+    expect(engine.actionResult.status).toBe('pending');
+  });
+  it('gates recovery items and publishes unavailable reasons without issuing a command', () => {
+    const { engine, sent, step } = engineSetup();
+    const a = settings();
+    a.automation.combat.mode = 'off';
+    a.automation.items = [
+      {
+        itemId: 501,
+        resource: 'hp',
+        belowPercent: 80,
+        minStock: 0,
+        cooldownSeconds: 1,
+        conditions: [
+          { field: 'actorCasting', actor: { scope: 'self' }, operator: 'eq', value: false },
+        ],
+      },
+    ];
+    engine.receive([
+      {
+        type: 'inventory',
+        items: [{ bagId: 501, itemId: 501, count: 2, type: 1 }],
+        equipment: Array(10).fill(0),
+        ammoId: -1,
+      },
+    ]);
+    engine.start(a);
+    step();
+    expect(sent).toEqual([]);
+    expect(engine.snapshot().ruleConditions[0]?.conditions[0]?.state).toBe('unavailable');
+    engine.receive([{ type: 'castStop', id: 1 }]);
+    step();
+    expect(sent).toEqual([{ type: 'useItem', itemId: 501 }]);
+  });
+  it('invalidates observations at removal/death/resurrection and all world/character boundaries', () => {
+    const { engine } = engineSetup();
+    engine.receive([{ type: 'changeTarget', id: 2 }]);
+    expect(engine.currentTargetId).toBe(2);
+    engine.receive([
+      { type: 'remove', id: 2, dead: false },
+      { type: 'status', id: 2, statusId: 1, seconds: 10 },
+      { type: 'changeTarget', id: 2 },
+    ]);
+    expect(engine.currentTargetId).toBeNull();
+    expect(engine.snapshot().actorObservations.actors.map((a) => a.id)).toEqual([1]);
+    const before = engine.snapshot().actorObservations.actors[0]!.incarnation;
+    engine.receive([
+      { type: 'death', id: 1 },
+      { type: 'resurrection', id: 1, hp: 70, position: { x: 100, y: 100 } },
+    ]);
+    expect(engine.snapshot().actorObservations.actors[0]).toMatchObject({
+      id: 1,
+      statusesKnown: false,
+      cast: { state: 'unknown' },
+    });
+    expect(engine.snapshot().actorObservations.actors[0]!.incarnation).not.toBe(before);
+    engine.receive([
+      { type: 'status', id: 1, statusId: 1, seconds: 10 },
+      { type: 'castStop', id: 1 },
+    ]);
+    expect(engine.actorObservation().actors[0]).toMatchObject({
+      statuses: [{ id: 1, known: true, present: true }],
+      cast: { state: 'idle' },
+    });
+    for (const boundary of [
+      { type: 'clear' },
+      { type: 'map', map: 'prt_fild05' },
+      { type: 'enter', id: 3, map: 'prt_fild08' },
+    ] as GameEvent[]) {
+      engine.receive([
+        { type: 'spawn', entity: { ...player } },
+        boundary,
+        { type: 'castStop', id: 1 },
+      ]);
+      expect(engine.snapshot().actorObservations.actors).toEqual([]);
+    }
+    engine.disconnect();
+    expect(engine.snapshot().actorObservations.connected).toBe(false);
+  });
+  it('revives a visible player with unknown state and drops corpse metadata on departure', () => {
+    const { engine } = engineSetup();
+    engine.receive([{ type: 'spawn', entity: { ...player, id: 3, name: 'Other' } }]);
+    const old = engine.snapshot().actorObservations.actors.find((a) => a.id === 3)!.incarnation;
+    engine.receive([
+      { type: 'death', id: 3 },
+      { type: 'castStop', id: 3 },
+    ]);
+    expect(engine.snapshot().actorObservations.actors.some((a) => a.id === 3)).toBe(false);
+    engine.receive([{ type: 'resurrection', id: 3, hp: 50, position: { x: 101, y: 100 } }]);
+    const revived = engine.snapshot().actorObservations.actors.find((a) => a.id === 3)!;
+    expect(revived.incarnation).not.toBe(old);
+    expect(revived).toMatchObject({ statusesKnown: false, cast: { state: 'unknown' } });
+    engine.receive([
+      { type: 'status', id: 3, statusId: 1, seconds: 10 },
+      { type: 'castStop', id: 3 },
+    ]);
+    expect(engine.snapshot().actorObservations.actors.find((a) => a.id === 3)).toMatchObject({
+      statuses: [{ id: 1, known: true }],
+      cast: { state: 'idle' },
+    });
+    engine.receive([
+      { type: 'death', id: 3 },
+      { type: 'remove', id: 3, dead: false },
+      { type: 'resurrection', id: 3, hp: 50, position: { x: 101, y: 100 } },
+      { type: 'castStop', id: 3 },
+    ]);
+    expect(engine.snapshot().actorObservations.actors.some((a) => a.id === 3)).toBe(false);
+  });
+  it('uses deterministic routine priority and fails unavailable negative casts without actions', () => {
+    let at = 1000;
+    const model = new ActorObservations(() => at);
+    model.spawn(player);
+    model.frame();
+    const first = routine([
+      { field: 'actorCasting', actor: { scope: 'self' }, operator: 'ne', value: true },
+    ]);
+    expect(
+      dryRunRoutine(first, { actors: model.snapshot(1, null, true) }, isAction).rules[0]?.state,
+    ).toBe('unavailable');
+    const second = {
+      ...first,
+      rules: [
+        ...first.rules,
+        { ...first.rules[0]!, name: 'Fallback', priority: 0, conditions: [absent] },
+      ],
+    };
+    expect(dryRunRoutine(second, { actors: model.snapshot(1, null, true) }, isAction).rule).toBe(
+      'Fallback',
+    );
+    const runtime = new RoutineRuntime(isAction, () => at);
+    runtime.start(first);
+    expect(runtime.tick({ actors: model.snapshot(1, null, true) })).toBeNull();
+    model.apply({ type: 'castStop', id: 1 });
+    at += 100;
+    expect(runtime.tick({ actors: model.snapshot(1, null, true) })).toEqual({ type: 'stop' });
+  });
+});
+describe('typed settings and profile compatibility', () => {
+  it('keeps condition-less settings unchanged and bounds optional predicate imports', () => {
+    const plain = settings();
+    expect(validateSettings(plain)).toEqual(plain);
+    const a = settings();
+    a.automation.items = [
+      {
+        itemId: 501,
+        resource: 'hp',
+        belowPercent: 80,
+        minStock: 0,
+        cooldownSeconds: 1,
+        conditions: [absent],
+      },
+    ];
+    expect(validateSettings(a)).toEqual(a);
+    for (const conditions of [
+      null,
+      Array(17).fill(absent),
+      [{ ...absent, actor: { scope: 'candidate' } }],
+      [{ ...absent, actor: { scope: 'self', id: 1 } }],
+      [{ ...absent, script: 'code' }],
+    ])
+      expect(() =>
+        validateAutomation({
+          ...a.automation,
+          items: [{ ...a.automation.items[0]!, conditions }],
+        } as never),
+      ).toThrow();
+    expect(() =>
+      validateRoutineSpec(routine([{ ...absent, actor: { scope: 'candidate' } }]), isAction),
+    ).toThrow();
+  });
+  it('round-trips references verbatim without silently rebinding imported actors', () => {
+    const model = new ActorObservations(() => 1000);
+    model.spawn(player);
+    model.frame();
+    const snapshot = model.snapshot(1, null, true);
+    const bound = {
+      ...absent,
+      actor: {
+        scope: 'actor' as const,
+        id: 1,
+        world: snapshot.world,
+        incarnation: snapshot.actors[0]!.incarnation,
+      },
+    };
+    const a = settings();
+    a.automation.items = [
+      {
+        itemId: 501,
+        resource: 'hp',
+        belowPercent: 80,
+        minStock: 0,
+        cooldownSeconds: 1,
+        conditions: [bound],
+      },
+    ];
+    const data = new Map<string, string>();
+    let id = 0;
+    const store = new ProfileStore(
+      {
+        getItem: (k) => data.get(k) ?? null,
+        setItem: (k, v) => {
+          data.set(k, v);
+        },
+      },
+      () => `profile-${++id}`,
+      () => 1000,
+    );
+    const saved = store.save('Bound', '', a);
+    const imported = store.import(store.export(saved.id))[0]!;
+    expect(imported.settings.automation?.items[0]?.conditions).toEqual([bound]);
+    model.reset();
+    model.spawn(player);
+    model.frame();
+    expect(
+      dryRunRoutine(routine([bound]), { actors: model.snapshot(1, null, true) }, isAction).rules[0]
+        ?.state,
+    ).toBe('unavailable');
+  });
 });
 
-describe('actor conditions under loadout ownership',()=>{
- function fixture(){
-  const t=engineSetup();t.engine.receive([{type:'spawn',entity:{...player,classId:5,level:50,statuses:[]}},{type:'inventory',items:[{bagId:1001,itemId:1101,count:1,type:2,guid:'sword'},{bagId:1002,itemId:1701,count:1,type:2,guid:'bow'},{bagId:1003,itemId:2101,count:1,type:2,guid:'shield'},{bagId:1750,itemId:1750,count:20,type:1}],equipment:[0,0,0,0,1001,1003,0,0,0,0],ammoId:1750}]);
-  const a=settings();a.automation.loadout.enabled=true;a.automation.loadout.autoAmmo=false;a.automation.loadout.cooldownSeconds=1;
-  a.automation.equipment=[{itemId:1701,hpBelowPercent:80,monsterClassId:0,conditions:[{field:'actorCasting',actor:{scope:'self'},operator:'eq',value:false}]}];
-  return {...t,a,packet:(w:BitWriter)=>t.engine.receive(decode(w.finish()))};
- }
- it('gates equipment before loadout dispatch and retains escape ownership until full receipts',()=>{
-  const t=fixture();t.a.automation.combat.mode='off';t.engine.start(t.a);t.step();
-  expect(t.sent).toEqual([]);expect(t.engine.snapshot().ruleConditions[0]?.conditions[0]?.state).toBe('unavailable');
-  t.packet(new BitWriter().u8(27).i32(1));t.step();expect(t.sent).toEqual([{type:'equip',bagId:1002,equipped:true}]);expect(t.engine.featureActionsSettled).toBe(false);
-  t.packet(new BitWriter().u8(48).i32(1003).u8(5).bool(false));expect(t.engine.featureActionsSettled).toBe(false);
-  t.packet(new BitWriter().u8(48).i32(1001).u8(4).bool(false));expect(t.engine.featureActionsSettled).toBe(false);
-  t.packet(new BitWriter().u8(48).i32(1002).u8(4).bool(true));expect(t.engine.featureActionsSettled).toBe(true);
-  t.packet(new BitWriter().u8(24).i32(1).i32(-1).u8(20).u8(1).u8(0).i16(100).i16(100).f32(.5).u8(0));t.step(1000);
-  expect(t.sent.filter(action=>action.type==='equip')).toHaveLength(1);expect(t.engine.snapshot().loadout.priorCaptured).toBe(true);
- });
- it('re-evaluates authoritative target clearing after loadout Stop without a previous-target fallback',()=>{
-  const t=fixture();t.a.automation.equipment[0]!.conditions=[{...absent,actor:{scope:'target'}}];t.engine.start(t.a);t.step();expect(t.sent.at(-1)).toEqual({type:'attack',id:2});
-  t.engine.receive([{type:'attack',source:1,target:2,position:{x:100,y:100}}]);t.packet(new BitWriter().u8(33).i32(2));t.step();expect(t.sent.at(-1)).toEqual({type:'stop'});
-  t.packet(new BitWriter().u8(33).i32(0));t.step();expect(t.engine.currentTargetId).toBeNull();expect(t.sent.some(action=>action.type==='equip')).toBe(false);
-  expect(t.engine.snapshot().ruleConditions.some(rule=>rule.conditions.some(trace=>trace.state==='unavailable'))).toBe(true);
- });
+describe('actor conditions under loadout ownership', () => {
+  function fixture() {
+    const t = engineSetup();
+    t.engine.receive([
+      { type: 'spawn', entity: { ...player, classId: 5, level: 50, statuses: [] } },
+      {
+        type: 'inventory',
+        items: [
+          { bagId: 1001, itemId: 1101, count: 1, type: 2, guid: 'sword' },
+          { bagId: 1002, itemId: 1701, count: 1, type: 2, guid: 'bow' },
+          { bagId: 1003, itemId: 2101, count: 1, type: 2, guid: 'shield' },
+          { bagId: 1750, itemId: 1750, count: 20, type: 1 },
+        ],
+        equipment: [0, 0, 0, 0, 1001, 1003, 0, 0, 0, 0],
+        ammoId: 1750,
+      },
+    ]);
+    const a = settings();
+    a.automation.loadout.enabled = true;
+    a.automation.loadout.autoAmmo = false;
+    a.automation.loadout.cooldownSeconds = 1;
+    a.automation.equipment = [
+      {
+        itemId: 1701,
+        hpBelowPercent: 80,
+        monsterClassId: 0,
+        conditions: [
+          { field: 'actorCasting', actor: { scope: 'self' }, operator: 'eq', value: false },
+        ],
+      },
+    ];
+    return { ...t, a, packet: (w: BitWriter) => t.engine.receive(decode(w.finish())) };
+  }
+  it('gates equipment before loadout dispatch and retains escape ownership until full receipts', () => {
+    const t = fixture();
+    t.a.automation.combat.mode = 'off';
+    t.engine.start(t.a);
+    t.step();
+    expect(t.sent).toEqual([]);
+    expect(t.engine.snapshot().ruleConditions[0]?.conditions[0]?.state).toBe('unavailable');
+    t.packet(new BitWriter().u8(27).i32(1));
+    t.step();
+    expect(t.sent).toEqual([{ type: 'equip', bagId: 1002, equipped: true }]);
+    expect(t.engine.featureActionsSettled).toBe(false);
+    t.packet(new BitWriter().u8(48).i32(1003).u8(5).bool(false));
+    expect(t.engine.featureActionsSettled).toBe(false);
+    t.packet(new BitWriter().u8(48).i32(1001).u8(4).bool(false));
+    expect(t.engine.featureActionsSettled).toBe(false);
+    t.packet(new BitWriter().u8(48).i32(1002).u8(4).bool(true));
+    expect(t.engine.featureActionsSettled).toBe(true);
+    t.packet(
+      new BitWriter().u8(24).i32(1).i32(-1).u8(20).u8(1).u8(0).i16(100).i16(100).f32(0.5).u8(0),
+    );
+    t.step(1000);
+    expect(t.sent.filter((action) => action.type === 'equip')).toHaveLength(1);
+    expect(t.engine.snapshot().loadout.priorCaptured).toBe(true);
+  });
+  it('re-evaluates authoritative target clearing after loadout Stop without a previous-target fallback', () => {
+    const t = fixture();
+    t.a.automation.equipment[0]!.conditions = [{ ...absent, actor: { scope: 'target' } }];
+    t.engine.start(t.a);
+    t.step();
+    expect(t.sent.at(-1)).toEqual({ type: 'attack', id: 2 });
+    t.engine.receive([{ type: 'attack', source: 1, target: 2, position: { x: 100, y: 100 } }]);
+    t.packet(new BitWriter().u8(33).i32(2));
+    t.step();
+    expect(t.sent.at(-1)).toEqual({ type: 'stop' });
+    t.packet(new BitWriter().u8(33).i32(0));
+    t.step();
+    expect(t.engine.currentTargetId).toBeNull();
+    expect(t.sent.some((action) => action.type === 'equip')).toBe(false);
+    expect(
+      t.engine
+        .snapshot()
+        .ruleConditions.some((rule) =>
+          rule.conditions.some((trace) => trace.state === 'unavailable'),
+        ),
+    ).toBe(true);
+  });
 });
 
 describe('condition aggregation policy', () => {
-  it.each([false, true])('retains routine and automation precedence with reversed conditions=%s', reverse => {
-    const observations = new ActorObservations(() => 1_000);
-    observations.spawn(player); observations.frame();
-    const snapshot = observations.snapshot(1, null, true);
-    const conditions: ActorPredicate[] = [{ ...absent, value: true },
-      { field: 'actorCasting', actor: { scope: 'self' }, operator: 'eq', value: false }];
-    if (reverse) conditions.reverse();
-    const trace = dryRunRoutine(routine(conditions), { actors: snapshot }, isAction);
-    expect(trace.rules[0]!.state).toBe('unmatched');
-    expect(trace.rules[0]!.conditions.map(condition => condition.state).sort()).toEqual(['unavailable', 'unmatched']);
-    const scheduler = new AutomationScheduler(() => {}, () => 1_000);
-    expect(scheduler.conditionState('Recovery', conditions, snapshot)).toBe('unavailable');
-    expect(scheduler.ruleConditions[0]!.conditions).toHaveLength(2);
-    const automation = structuredClone(DEFAULT_AUTOMATION);
-    automation.combat.rules = [{ classId: 4000, action: 'ignore', priority: 0, conditions }];
-    expect(acceptsMonster(validateAutomation(automation), monster, player, [4000], false, snapshot)).toBe(false);
-  });
+  it.each([false, true])(
+    'retains routine and automation precedence with reversed conditions=%s',
+    (reverse) => {
+      const observations = new ActorObservations(() => 1_000);
+      observations.spawn(player);
+      observations.frame();
+      const snapshot = observations.snapshot(1, null, true);
+      const conditions: ActorPredicate[] = [
+        { ...absent, value: true },
+        { field: 'actorCasting', actor: { scope: 'self' }, operator: 'eq', value: false },
+      ];
+      if (reverse) conditions.reverse();
+      const trace = dryRunRoutine(routine(conditions), { actors: snapshot }, isAction);
+      expect(trace.rules[0]!.state).toBe('unmatched');
+      expect(trace.rules[0]!.conditions.map((condition) => condition.state).sort()).toEqual([
+        'unavailable',
+        'unmatched',
+      ]);
+      const scheduler = new AutomationScheduler(
+        () => {},
+        () => 1_000,
+      );
+      expect(scheduler.conditionState('Recovery', conditions, snapshot)).toBe('unavailable');
+      expect(scheduler.ruleConditions[0]!.conditions).toHaveLength(2);
+      const automation = structuredClone(DEFAULT_AUTOMATION);
+      automation.combat.rules = [{ classId: 4000, action: 'ignore', priority: 0, conditions }];
+      expect(
+        acceptsMonster(validateAutomation(automation), monster, player, [4000], false, snapshot),
+      ).toBe(false);
+    },
+  );
 });

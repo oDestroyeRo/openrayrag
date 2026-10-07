@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { ITEM_CATALOG, SKILL_CATALOG, itemName, skillCost, skillName, skillPrerequisites } from './game-catalog';
+import {
+  ITEM_CATALOG,
+  SKILL_CATALOG,
+  itemName,
+  skillCost,
+  skillName,
+  skillPrerequisites,
+} from './game-catalog';
 
 describe('official game catalog', () => {
   it('names inventory and skills and keeps unknown identifiers visible', () => {

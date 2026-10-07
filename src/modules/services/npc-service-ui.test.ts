@@ -41,7 +41,7 @@ class Element {
     await Promise.resolve();
   }
 }
-function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
+function setup(executionPolicy = structuredClone(DEFAULT_MAP_POLICY)) {
   vi.stubGlobal('document', { createElement: (tag: string) => new Element(tag) });
   const panel = new Element('section'),
     host = new Element('main');
@@ -56,16 +56,19 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
     },
     () => `service-${++nextId}`,
   );
-  const status: Record<string,unknown> = {};
+  const status: Record<string, unknown> = {};
   const hooks = {
     notify: vi.fn(),
     service: vi.fn(async (_spec: unknown) => 'Service requested.'),
-    map: () => typeof status.map === 'string' ? status.map : 'prontera',
+    map: () => (typeof status.map === 'string' ? status.map : 'prontera'),
     settings: () => DEFAULT_SETTINGS,
   };
   const view: object = Object.create(FeatureUi.prototype);
   Object.assign(view, {
-    read:()=>({...structuredClone(DEFAULT_AUTOMATION),mapPolicy:structuredClone(executionPolicy)}),
+    read: () => ({
+      ...structuredClone(DEFAULT_AUTOMATION),
+      mapPolicy: structuredClone(executionPolicy),
+    }),
     panels: new Map([['workflows', panel]]),
     mounts: { manualTools: panel },
     editors: new Map(),
@@ -77,10 +80,10 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
     social: { lock: () => {} },
     memo: { lock: () => {} },
     socket: { lock: () => {} },
-    manualTargets:{lock:()=>{}},
-    refine: {render:()=>{},lock:()=>{},clear:()=>{}},
-    warp:{lock:()=>{}},
-    macroUi:{lock:()=>{}},
+    manualTargets: { lock: () => {} },
+    refine: { render: () => {}, lock: () => {}, clear: () => {} },
+    warp: { lock: () => {} },
+    macroUi: { lock: () => {} },
     host,
     hooks,
     services: store,
@@ -90,8 +93,10 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
     status,
   });
   Reflect.apply(Reflect.get(FeatureUi.prototype, 'servicePanel'), view, []);
-  const button = (name: string) => panel.all().find((node) => node.tag === 'button' && node.textContent === name)!;
-  const field = (name: string) => panel.all().find((node) => node.attributes.get('aria-label') === name)!;
+  const button = (name: string) =>
+    panel.all().find((node) => node.tag === 'button' && node.textContent === name)!;
+  const field = (name: string) =>
+    panel.all().find((node) => node.attributes.get('aria-label') === name)!;
   const lock = (config: boolean, manual: boolean, service: boolean) =>
     Reflect.apply(Reflect.get(FeatureUi.prototype, 'lock'), view, [config, manual, service]);
   return { panel, store, hooks, button, field, lock, status };
@@ -99,27 +104,49 @@ function setup(executionPolicy=structuredClone(DEFAULT_MAP_POLICY)) {
 afterEach(() => vi.unstubAllGlobals());
 describe('NPC service UI ownership gates', () => {
   it('excludes player shops from the actual service preview before actor projection', async () => {
-    const s = setup(), service = JSON.parse(s.field('Service definition JSON').value);
-    const npc = { id: 7, kind: 2, classId: 50, name: service.identity.name,
-      ...service.identity.anchor, level: 1, hp: 0, maxHp: 0, dead: false };
+    const s = setup(),
+      service = JSON.parse(s.field('Service definition JSON').value);
+    const npc = {
+      id: 7,
+      kind: 2,
+      classId: 50,
+      name: service.identity.name,
+      ...service.identity.anchor,
+      level: 1,
+      hp: 0,
+      maxHp: 0,
+      dead: false,
+    };
     const shop = { ...npc, id: 8, npcSpawn: { displayType: 3 } };
-    Object.assign(s.status, { map: service.map, actors: [shop], character: {
-      inventoryKnown: true, skillsKnown: true, stats: { zeny: 2_000_000_000 },
-      learned: [{ skillId: 1, level: service.basicSkillLevel }],
-      inventory: service.workflow.minStock,
-    } });
+    Object.assign(s.status, {
+      map: service.map,
+      actors: [shop],
+      character: {
+        inventoryKnown: true,
+        skillsKnown: true,
+        stats: { zeny: 2_000_000_000 },
+        learned: [{ skillId: 1, level: service.basicSkillLevel }],
+        inventory: service.workflow.minStock,
+      },
+    });
     await s.button('Preview').click();
-    expect(s.panel.all().some(node => node.textContent.includes('Waiting for the exact NPC'))).toBe(true);
+    expect(
+      s.panel.all().some((node) => node.textContent.includes('Waiting for the exact NPC')),
+    ).toBe(true);
     s.status.actors = [shop, npc];
     await s.button('Preview').click();
-    expect(s.panel.all().some(node => node.textContent.startsWith('Verified contract'))).toBe(true);
+    expect(s.panel.all().some((node) => node.textContent.startsWith('Verified contract'))).toBe(
+      true,
+    );
     expect(s.hooks.service).not.toHaveBeenCalled();
   });
   it('previews and saves, exports, imports and deletes configuration while offline', async () => {
     const s = setup();
     s.lock(false, true, true);
     await s.button('Preview').click();
-    expect(s.panel.all().some((node) => node.textContent.startsWith('Verified contract'))).toBe(true);
+    expect(s.panel.all().some((node) => node.textContent.startsWith('Verified contract'))).toBe(
+      true,
+    );
     await s.button('Save / update').click();
     expect(s.store.list()).toHaveLength(1);
     expect(s.hooks.notify).toHaveBeenLastCalledWith('NPC service saved on this computer.');
@@ -134,22 +161,49 @@ describe('NPC service UI ownership gates', () => {
     expect(s.hooks.service).not.toHaveBeenCalled();
     expect(s.hooks.notify.mock.calls.flat().join(' ')).not.toContain('Waiting for the game');
   });
-  it('previews restrictions and sends the same detached policy beside the service definition',async()=>{
-    const executionPolicy={...structuredClone(DEFAULT_MAP_POLICY),deny:['prontera']},s=setup(executionPolicy);s.lock(false,true,false);await s.button('Preview').click();
-    expect(s.panel.all().some(node=>node.textContent.includes('forbidden by the map policy'))).toBe(true);await s.button('Run service').click();
-    expect(s.hooks.service.mock.calls[0]?.[0]).toMatchObject({executionPolicy});
+  it('previews restrictions and sends the same detached policy beside the service definition', async () => {
+    const executionPolicy = { ...structuredClone(DEFAULT_MAP_POLICY), deny: ['prontera'] },
+      s = setup(executionPolicy);
+    s.lock(false, true, false);
+    await s.button('Preview').click();
+    expect(
+      s.panel.all().some((node) => node.textContent.includes('forbidden by the map policy')),
+    ).toBe(true);
+    await s.button('Run service').click();
+    expect(s.hooks.service.mock.calls[0]?.[0]).toMatchObject({ executionPolicy });
   });
-  it('cancels the actual service-panel preview if prerequisites change during its portal plan',async()=>{
+  it('cancels the actual service-panel preview if prerequisites change during its portal plan', async () => {
     vi.useFakeTimers();
     try {
-      const s=setup({...structuredClone(DEFAULT_MAP_POLICY),mode:'weighted'});
-      Object.assign(s.status,{map:'prt_fild08',player:{id:0,x:169,y:193},character:{inventoryKnown:true,skillsKnown:true,inventory:[],stats:{zeny:10000},learned:[{skillId:1,level:5}]}});
-      await s.button('Preview').click();expect(vi.getTimerCount()).toBeGreaterThan(0);
-      s.status.character={inventoryKnown:false,skillsKnown:true,inventory:[],stats:{zeny:0},learned:[{skillId:1,level:5}]};
+      const s = setup({ ...structuredClone(DEFAULT_MAP_POLICY), mode: 'weighted' });
+      Object.assign(s.status, {
+        map: 'prt_fild08',
+        player: { id: 0, x: 169, y: 193 },
+        character: {
+          inventoryKnown: true,
+          skillsKnown: true,
+          inventory: [],
+          stats: { zeny: 10000 },
+          learned: [{ skillId: 1, level: 5 }],
+        },
+      });
+      await s.button('Preview').click();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      s.status.character = {
+        inventoryKnown: false,
+        skillsKnown: true,
+        inventory: [],
+        stats: { zeny: 0 },
+        learned: [{ skillId: 1, level: 5 }],
+      };
       await vi.runAllTimersAsync();
-      expect(s.panel.all().some(node=>node.textContent.startsWith('Preview cancelled.'))).toBe(true);
+      expect(s.panel.all().some((node) => node.textContent.startsWith('Preview cancelled.'))).toBe(
+        true,
+      );
       expect(s.hooks.service).not.toHaveBeenCalled();
-    } finally {vi.useRealTimers();}
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it('runs a verified service during field automation while keeping configuration locked', async () => {
     const s = setup();
@@ -159,7 +213,10 @@ describe('NPC service UI ownership gates', () => {
     await s.button('Run service').click();
     expect(s.hooks.service).toHaveBeenCalledOnce();
     expect(s.hooks.service.mock.calls[0]?.[0]).not.toHaveProperty('npcId');
-    expect(s.hooks.service.mock.calls[0]?.[0]).toMatchObject({executionPolicy:DEFAULT_MAP_POLICY,service:{contractId:expect.any(String)}});
+    expect(s.hooks.service.mock.calls[0]?.[0]).toMatchObject({
+      executionPolicy: DEFAULT_MAP_POLICY,
+      service: { contractId: expect.any(String) },
+    });
     expect(s.hooks.service.mock.calls[0]?.[0]).not.toHaveProperty('service.mapPolicy');
     s.lock(true, true, true);
     await s.button('Run service').click();

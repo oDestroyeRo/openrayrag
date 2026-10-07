@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { repository, mergeTitle, rejectionReason } from './dependabot-policy.mjs';
 const workflowPath = '.github/workflows/release.yml';
-const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 // All inputs are API metadata. No PR code, artifacts or package hooks execute here.
 /** @param {{request: import("../shared/tooling-domain-values.mjs").DependabotRequest, runId: string | number | undefined, dryRun?: boolean, pause?: (milliseconds: number) => Promise<void>}} options @returns {Promise<import("../shared/tooling-domain-values.mjs").DependabotOutcome>} */
@@ -15,26 +15,41 @@ export async function mergeDependabotUpdate({ request, runId, dryRun = false, pa
   const root = `/repos/${repository}`;
   const run = structuredClone(await request('GET', `${root}/actions/runs/${runId}`));
   /** @param {string} reason @returns {Extract<import('../shared/tooling-domain-values.mjs').DependabotOutcome, {outcome: 'ignored'}>} */
-  const ignored = reason => ({ outcome: 'ignored', reason, runId });
-  if (run.repository?.full_name !== repository || run.head_repository?.full_name !== repository ||
-      run.path !== workflowPath || run.event !== 'pull_request') return ignored('unrelated CI run');
-  if (run.status !== 'completed' || run.conclusion !== 'success') return ignored('CI did not succeed');
+  const ignored = (reason) => ({ outcome: 'ignored', reason, runId });
+  if (
+    run.repository?.full_name !== repository ||
+    run.head_repository?.full_name !== repository ||
+    run.path !== workflowPath ||
+    run.event !== 'pull_request'
+  )
+    return ignored('unrelated CI run');
+  if (run.status !== 'completed' || run.conclusion !== 'success')
+    return ignored('CI did not succeed');
 
   // GitHub removes run.pull_requests after merge. Commit association preserves
   // the recovery path when the release dispatch failed after a successful merge.
-  const candidates = run.pull_requests?.length ? run.pull_requests :
-    await request('GET', `${root}/commits/${run.head_sha}/pulls?per_page=100`);
-  const associated = filter(candidates, pr =>
-    pr.base?.ref === 'main' && pr.base?.repo?.id === run.repository?.id &&
-    pr.head?.repo?.id === run.repository?.id && pr.head?.sha === run.head_sha);
+  const candidates = run.pull_requests?.length
+    ? run.pull_requests
+    : await request('GET', `${root}/commits/${run.head_sha}/pulls?per_page=100`);
+  const associated = filter(
+    candidates,
+    (pr) =>
+      pr.base?.ref === 'main' &&
+      pr.base?.repo?.id === run.repository?.id &&
+      pr.head?.repo?.id === run.repository?.id &&
+      pr.head?.sha === run.head_sha,
+  );
   if (associated.length !== 1) return ignored('no unique matching main PR');
   const number = associated[0].number;
   let pr = structuredClone(await request('GET', `${root}/pulls/${number}`));
   let rejection = rejectionReason(pr, run.head_sha);
   if (rejection) return ignored(rejection);
 
-  const jobs = await request('GET', `${root}/actions/runs/${runId}/jobs?filter=latest&per_page=100`);
-  const gates = filter(jobs.jobs, job => job.name === 'CI / required');
+  const jobs = await request(
+    'GET',
+    `${root}/actions/runs/${runId}/jobs?filter=latest&per_page=100`,
+  );
+  const gates = filter(jobs.jobs, (job) => job.name === 'CI / required');
   if (gates.length !== 1 || gates[0].status !== 'completed' || gates[0].conclusion !== 'success') {
     return ignored('required desktop and security gate did not succeed');
   }
@@ -48,7 +63,8 @@ export async function mergeDependabotUpdate({ request, runId, dryRun = false, pa
   if (!pr.merged && (pr.mergeable !== true || pr.mergeable_state !== 'clean')) {
     return ignored('branch protection, conflicts or a newer main block this merge');
   }
-  if (dryRun) return { outcome: 'eligible', number, runId, headSha: run.head_sha, alreadyMerged: pr.merged };
+  if (dryRun)
+    return { outcome: 'eligible', number, runId, headSha: run.head_sha, alreadyMerged: pr.merged };
 
   let mergeSha = pr.merge_commit_sha;
   if (!pr.merged) {
@@ -71,7 +87,13 @@ export async function mergeDependabotUpdate({ request, runId, dryRun = false, pa
   // after a merge succeeded but this API call failed. It builds current main;
   // the existing release pipeline reconciles duplicates and concurrent advances.
   await request('POST', `${root}/actions/workflows/release.yml/dispatches`, { ref: 'main' });
-  return { outcome: 'release-dispatched', number, runId, headSha: run.head_sha, mergeSha: sourceCommitSha(mergeSha) };
+  return {
+    outcome: 'release-dispatched',
+    number,
+    runId,
+    headSha: run.head_sha,
+    mergeSha: sourceCommitSha(mergeSha),
+  };
 }
 
 /** @type {import("../shared/tooling-domain-values.mjs").DependabotRequest}
@@ -97,10 +119,17 @@ const githubRequest = async (method, path, body = undefined) => {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    if (!['true', 'false'].includes(process.env.DRY_RUN ?? 'false')) throw new Error('DRY_RUN must be true or false');
-    console.log(JSON.stringify(await mergeDependabotUpdate({
-      request: githubRequest, runId: process.env.RUN_ID, dryRun: process.env.DRY_RUN === 'true',
-    })));
+    if (!['true', 'false'].includes(process.env.DRY_RUN ?? 'false'))
+      throw new Error('DRY_RUN must be true or false');
+    console.log(
+      JSON.stringify(
+        await mergeDependabotUpdate({
+          request: githubRequest,
+          runId: process.env.RUN_ID,
+          dryRun: process.env.DRY_RUN === 'true',
+        }),
+      ),
+    );
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     console.error(error.message);

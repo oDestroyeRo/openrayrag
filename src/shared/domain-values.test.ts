@@ -1,19 +1,61 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  actorId, itemId, bagId, skillId, speciesId, dropId, partyId, partyMemberId,
-  quantity, percentage, seconds, minutes, milliseconds, revision, revisionFor, incarnation, worldId, mapCode, regularItemBagId,
-  addQuantities, subtractQuantities, incrementRevision, secondsToMilliseconds,
-  millisecondsToSeconds, minutesToMilliseconds, addMilliseconds, DomainValueError,
-  type ActorId, type ItemId, type BagId, type SkillId, type Quantity,
-  type Percentage, type Seconds, type Milliseconds, type Revision,
+  actorId,
+  itemId,
+  bagId,
+  skillId,
+  speciesId,
+  dropId,
+  partyId,
+  partyMemberId,
+  quantity,
+  percentage,
+  seconds,
+  minutes,
+  milliseconds,
+  revision,
+  revisionFor,
+  incarnation,
+  worldId,
+  mapCode,
+  regularItemBagId,
+  addQuantities,
+  subtractQuantities,
+  incrementRevision,
+  secondsToMilliseconds,
+  millisecondsToSeconds,
+  minutesToMilliseconds,
+  addMilliseconds,
+  DomainValueError,
+  type ActorId,
+  type ItemId,
+  type BagId,
+  type SkillId,
+  type Quantity,
+  type Percentage,
+  type Seconds,
+  type Milliseconds,
+  type Revision,
 } from './domain-values';
 
 // Compiled by the ordinary project tsc gate; this function is deliberately not run.
-function incompatibleDomains(actor: ActorId, item: ItemId, bag: BagId, skill: SkillId, count: Quantity, percent: Percentage, duration: Seconds, elapsed: Milliseconds, version: Revision): void {
+function incompatibleDomains(
+  actor: ActorId,
+  item: ItemId,
+  bag: BagId,
+  skill: SkillId,
+  count: Quantity,
+  percent: Percentage,
+  duration: Seconds,
+  elapsed: Milliseconds,
+  version: Revision,
+): void {
   const acceptsActor = (_: ActorId) => undefined;
   const acceptsItem = (_: ItemId) => undefined;
   const acceptsQuantity = (_: Quantity) => undefined;
-  acceptsActor(actor); acceptsItem(item); acceptsQuantity(count);
+  acceptsActor(actor);
+  acceptsItem(item);
+  acceptsQuantity(count);
   // @ts-expect-error Plain numbers have not crossed validation.
   acceptsActor(1);
   // @ts-expect-error Catalog identity is not actor identity.
@@ -49,23 +91,34 @@ describe('validated domain values', () => {
     for (const construct of [itemId, bagId, speciesId, dropId, partyId, partyMemberId]) {
       expect(construct(1)).toBe(1);
       expect(construct(0x7fffffff)).toBe(0x7fffffff);
-      for (const value of [-1, 0, 1.5, 0x80000000, '1', null, NaN, Infinity]) expect(() => construct(value)).toThrow(DomainValueError);
+      for (const value of [-1, 0, 1.5, 0x80000000, '1', null, NaN, Infinity])
+        expect(() => construct(value)).toThrow(DomainValueError);
     }
     expect(skillId(32767)).toBe(32767);
     expect(() => skillId(32768)).toThrow(DomainValueError);
     expect(regularItemBagId(itemId(501))).toBe(501);
-    expect(JSON.stringify({ actor: actorId(0), item: itemId(501), count: quantity(3), percent: percentage(12.5) }))
-      .toBe('{"actor":0,"item":501,"count":3,"percent":12.5}');
+    expect(
+      JSON.stringify({
+        actor: actorId(0),
+        item: itemId(501),
+        count: quantity(3),
+        percent: percentage(12.5),
+      }),
+    ).toBe('{"actor":0,"item":501,"count":3,"percent":12.5}');
   });
 
   it('validates aggregate quantities, percentages and revision boundaries', () => {
     for (const construct of [quantity, revision]) {
       expect(construct(0)).toBe(0);
       expect(construct(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
-      for (const value of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity]) expect(() => construct(value)).toThrow(DomainValueError);
+      for (const value of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity])
+        expect(() => construct(value)).toThrow(DomainValueError);
     }
-    expect(percentage(0)).toBe(0); expect(percentage(100)).toBe(100); expect(percentage(0.5)).toBe(0.5);
-    for (const value of [-0.1, 100.1, NaN, Infinity]) expect(() => percentage(value)).toThrow(DomainValueError);
+    expect(percentage(0)).toBe(0);
+    expect(percentage(100)).toBe(100);
+    expect(percentage(0.5)).toBe(0.5);
+    for (const value of [-0.1, 100.1, NaN, Infinity])
+      expect(() => percentage(value)).toThrow(DomainValueError);
   });
 
   it('preserves world spelling and separates map absence from validated identity', () => {
@@ -74,8 +127,10 @@ describe('validated domain values', () => {
     expect(mapCode('prt_fild08')).toBe('prt_fild08');
     expect(incarnation(1)).toBe(1);
     expect(() => incarnation(0)).toThrow(DomainValueError);
-    for (const invalid of ['', 'prt/fild08', 'x'.repeat(65), null]) expect(() => mapCode(invalid)).toThrow(DomainValueError);
-    for (const invalid of ['', 'not-a-world', mixed + ' ', null]) expect(() => worldId(invalid)).toThrow(DomainValueError);
+    for (const invalid of ['', 'prt/fild08', 'x'.repeat(65), null])
+      expect(() => mapCode(invalid)).toThrow(DomainValueError);
+    for (const invalid of ['', 'not-a-world', mixed + ' ', null])
+      expect(() => worldId(invalid)).toThrow(DomainValueError);
     expect(incrementRevision(revisionFor('inventory', 1))).toBe(2);
   });
 
@@ -84,7 +139,9 @@ describe('validated domain values', () => {
     expect(subtractQuantities(quantity(5), quantity(3))).toBe(2);
     expect(incrementRevision(revision(0))).toBe(1);
     expect(() => subtractQuantities(quantity(0), quantity(1))).toThrow(DomainValueError);
-    expect(() => addQuantities(quantity(Number.MAX_SAFE_INTEGER), quantity(1))).toThrow(DomainValueError);
+    expect(() => addQuantities(quantity(Number.MAX_SAFE_INTEGER), quantity(1))).toThrow(
+      DomainValueError,
+    );
     expect(() => incrementRevision(revision(Number.MAX_SAFE_INTEGER))).toThrow(DomainValueError);
   });
 
@@ -93,37 +150,62 @@ describe('validated domain values', () => {
     expect(millisecondsToSeconds(milliseconds(125))).toBe(0.125);
     expect(minutesToMilliseconds(minutes(1.5))).toBe(90000);
     expect(addMilliseconds(milliseconds(1.5), milliseconds(0.5))).toBe(2);
-    for (const construct of [seconds, minutes, milliseconds]) for (const value of [NaN, Infinity, -Infinity, '1']) expect(() => construct(value)).toThrow(DomainValueError);
+    for (const construct of [seconds, minutes, milliseconds])
+      for (const value of [NaN, Infinity, -Infinity, '1'])
+        expect(() => construct(value)).toThrow(DomainValueError);
     expect(() => secondsToMilliseconds(seconds(Number.MAX_VALUE))).toThrow(DomainValueError);
     expect(() => minutesToMilliseconds(minutes(Number.MAX_VALUE))).toThrow(DomainValueError);
-    expect(() => addMilliseconds(milliseconds(Number.MAX_VALUE), milliseconds(Number.MAX_VALUE))).toThrow(DomainValueError);
+    expect(() =>
+      addMilliseconds(milliseconds(Number.MAX_VALUE), milliseconds(Number.MAX_VALUE)),
+    ).toThrow(DomainValueError);
   });
 
   it('returns typed payload-free causes with compatible boundary labels', () => {
-    try { actorId('sensitive-input', 'target ID'); throw new Error('Expected validation failure'); }
-    catch (error) {
+    try {
+      actorId('sensitive-input', 'target ID');
+      throw new Error('Expected validation failure');
+    } catch (error) {
       expect(error).toBeInstanceOf(DomainValueError);
-      expect(error).toMatchObject({ domain: 'ActorId', issue: 'type', message: 'Invalid target ID' });
+      expect(error).toMatchObject({
+        domain: 'ActorId',
+        issue: 'type',
+        message: 'Invalid target ID',
+      });
       expect(JSON.stringify(error)).not.toContain('sensitive-input');
     }
   });
 
   it.each([
-    ['1', 'type'], [Number.NaN, 'non-finite'], [Number.POSITIVE_INFINITY, 'non-finite'],
-    [-0.5, 'integer'], [-1, 'range'], [0x80000000, 'range'],
+    ['1', 'type'],
+    [Number.NaN, 'non-finite'],
+    [Number.POSITIVE_INFINITY, 'non-finite'],
+    [-0.5, 'integer'],
+    [-1, 'range'],
+    [0x80000000, 'range'],
   ])('retains dependent validation precedence for %s', (value, issue) => {
-    expect(() => itemId(value, 'selected item')).toThrow(expect.objectContaining({
-      name: 'DomainValueError', domain: 'ItemId', issue, message: 'Invalid selected item',
-    }));
+    expect(() => itemId(value, 'selected item')).toThrow(
+      expect.objectContaining({
+        name: 'DomainValueError',
+        domain: 'ItemId',
+        issue,
+        message: 'Invalid selected item',
+      }),
+    );
   });
 
   it('short-circuits dependent numeric checks after the first failed admission', () => {
-    const finite = vi.spyOn(Number, 'isFinite'), integer = vi.spyOn(Number, 'isInteger');
+    const finite = vi.spyOn(Number, 'isFinite'),
+      integer = vi.spyOn(Number, 'isInteger');
     try {
       expect(() => itemId('1')).toThrow(DomainValueError);
-      expect(finite).not.toHaveBeenCalled(); expect(integer).not.toHaveBeenCalled();
+      expect(finite).not.toHaveBeenCalled();
+      expect(integer).not.toHaveBeenCalled();
       expect(() => itemId(Number.NaN)).toThrow(DomainValueError);
-      expect(finite).toHaveBeenCalledOnce(); expect(integer).not.toHaveBeenCalled();
-    } finally { finite.mockRestore(); integer.mockRestore(); }
+      expect(finite).toHaveBeenCalledOnce();
+      expect(integer).not.toHaveBeenCalled();
+    } finally {
+      finite.mockRestore();
+      integer.mockRestore();
+    }
   });
 });

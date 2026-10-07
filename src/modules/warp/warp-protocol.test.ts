@@ -1,15 +1,90 @@
-import {describe,expect,it} from 'vitest';
-import {BitWriter} from '../../shared/binary';
-import {decode} from '../protocol/protocol';
-import {decodeWarp,warpCommand,validateWarpEnvelope,warpInitializationPacket,officialWarpSkill} from './warp-protocol';
+import { describe, expect, it } from 'vitest';
+import { BitWriter } from '../../shared/binary';
+import { decode } from '../protocol/protocol';
+import {
+  decodeWarp,
+  warpCommand,
+  validateWarpEnvelope,
+  warpInitializationPacket,
+  officialWarpSkill,
+} from './warp-protocol';
 import cases from '../../data/warp-request-cases.json';
-import {validateExpandedAction} from '../protocol/protocol-feature';
-import {DEFAULT_AUTOMATION} from '../settings/settings';
-describe('Warp Portal pinned wire and shared native envelope',()=>{
- it('uses exact ground55 and slot-encoded self55 wire shapes',()=>{expect([...warpCommand({stage:'ground',x:11,y:10,level:4})]).toEqual([29,4,11,0,10,0,55,4]);for(const slot of [0,1,2,3] as const){const packet=warpCommand({stage:'activate',slot});expect([...packet]).toEqual([29,5,55,0,slot+1]);expect(officialWarpSkill(packet)).toBe(true);}expect(officialWarpSkill(Uint8Array.from([29,4,11,0,10,0,55,4]))).toBe(true);expect(officialWarpSkill(Uint8Array.from([29,5,54,0,1]))).toBe(false);});
- it('strictly reads state97 only; unknown, partial or trailing packets fail closed',()=>{expect(decode(Uint8Array.from([97,1]))).toEqual([{type:'warpState',state:1}]);expect(decodeWarp(Uint8Array.from([97,0]))).toEqual([{type:'warpState',state:0}]);for(const bytes of [[97],[97,2],[97,1,0]])expect(()=>decode(Uint8Array.from(bytes))).toThrow();});
- it('matches strict native fixtures and refuses every automation mode',()=>{for(const row of cases){const valid=(()=>{try{if(row.mode==='warpCancel'){if(Object.keys(row.request).length)throw new Error();}else if(row.mode==='warp'||row.mode==='warpPreview')validateWarpEnvelope(row.request,row.mode==='warpPreview');else throw new Error();return true;}catch{return false;}})();expect(valid,row.name).toBe(row.valid);}});
- it('prohibits generic ground and self Warp even though allocation remains valid',()=>{for(const mode of ['self','ground'] as const)expect(()=>validateExpandedAction({type:'skill',mode,skillId:55,level:1,...(mode==='ground'?{position:{x:11,y:10}}:{})})).toThrow('dedicated');expect(validateExpandedAction({type:'allocateSkill',skillId:55})).toEqual({type:'allocateSkill',skillId:55});});
- it('recognizes only bounded existing-character Enter and one-byte Ready; does not use generic map resets',()=>{expect(warpInitializationPacket(new BitWriter().u8(3).bool(false).string('Synthetic').finish())).toEqual({type:'enterRequest',character:'Synthetic'});for(const p of [new BitWriter().u8(3).bool(true).string('Synthetic').finish(),new BitWriter().u8(3).bool(false).string('').finish(),new BitWriter().u8(3).bool(false).string('x'.repeat(49)).finish(),Uint8Array.from([2,0]),Uint8Array.from([16])])expect(warpInitializationPacket(p)).toBeNull();expect(warpInitializationPacket(Uint8Array.from([2]))).toEqual({type:'playerReady'});});
- it('bounds UTF8 policy bytes and rejects incomplete Unicode',()=>{const policy=structuredClone(DEFAULT_AUTOMATION);policy.follow.name='\ud800';expect(()=>validateWarpEnvelope({type:'warpActivate',policy},true)).toThrow('Unicode');const oversized={type:'warpActivate',policy:{...DEFAULT_AUTOMATION,padding:'x'.repeat(65536)}};expect(()=>validateWarpEnvelope(oversized,true)).toThrow('65,536');});
+import { validateExpandedAction } from '../protocol/protocol-feature';
+import { DEFAULT_AUTOMATION } from '../settings/settings';
+describe('Warp Portal pinned wire and shared native envelope', () => {
+  it('uses exact ground55 and slot-encoded self55 wire shapes', () => {
+    expect([...warpCommand({ stage: 'ground', x: 11, y: 10, level: 4 })]).toEqual([
+      29, 4, 11, 0, 10, 0, 55, 4,
+    ]);
+    for (const slot of [0, 1, 2, 3] as const) {
+      const packet = warpCommand({ stage: 'activate', slot });
+      expect([...packet]).toEqual([29, 5, 55, 0, slot + 1]);
+      expect(officialWarpSkill(packet)).toBe(true);
+    }
+    expect(officialWarpSkill(Uint8Array.from([29, 4, 11, 0, 10, 0, 55, 4]))).toBe(true);
+    expect(officialWarpSkill(Uint8Array.from([29, 5, 54, 0, 1]))).toBe(false);
+  });
+  it('strictly reads state97 only; unknown, partial or trailing packets fail closed', () => {
+    expect(decode(Uint8Array.from([97, 1]))).toEqual([{ type: 'warpState', state: 1 }]);
+    expect(decodeWarp(Uint8Array.from([97, 0]))).toEqual([{ type: 'warpState', state: 0 }]);
+    for (const bytes of [[97], [97, 2], [97, 1, 0]])
+      expect(() => decode(Uint8Array.from(bytes))).toThrow();
+  });
+  it('matches strict native fixtures and refuses every automation mode', () => {
+    for (const row of cases) {
+      const valid = (() => {
+        try {
+          if (row.mode === 'warpCancel') {
+            if (Object.keys(row.request).length) throw new Error();
+          } else if (row.mode === 'warp' || row.mode === 'warpPreview')
+            validateWarpEnvelope(row.request, row.mode === 'warpPreview');
+          else throw new Error();
+          return true;
+        } catch {
+          return false;
+        }
+      })();
+      expect(valid, row.name).toBe(row.valid);
+    }
+  });
+  it('prohibits generic ground and self Warp even though allocation remains valid', () => {
+    for (const mode of ['self', 'ground'] as const)
+      expect(() =>
+        validateExpandedAction({
+          type: 'skill',
+          mode,
+          skillId: 55,
+          level: 1,
+          ...(mode === 'ground' ? { position: { x: 11, y: 10 } } : {}),
+        }),
+      ).toThrow('dedicated');
+    expect(validateExpandedAction({ type: 'allocateSkill', skillId: 55 })).toEqual({
+      type: 'allocateSkill',
+      skillId: 55,
+    });
+  });
+  it('recognizes only bounded existing-character Enter and one-byte Ready; does not use generic map resets', () => {
+    expect(
+      warpInitializationPacket(new BitWriter().u8(3).bool(false).string('Synthetic').finish()),
+    ).toEqual({ type: 'enterRequest', character: 'Synthetic' });
+    for (const p of [
+      new BitWriter().u8(3).bool(true).string('Synthetic').finish(),
+      new BitWriter().u8(3).bool(false).string('').finish(),
+      new BitWriter().u8(3).bool(false).string('x'.repeat(49)).finish(),
+      Uint8Array.from([2, 0]),
+      Uint8Array.from([16]),
+    ])
+      expect(warpInitializationPacket(p)).toBeNull();
+    expect(warpInitializationPacket(Uint8Array.from([2]))).toEqual({ type: 'playerReady' });
+  });
+  it('bounds UTF8 policy bytes and rejects incomplete Unicode', () => {
+    const policy = structuredClone(DEFAULT_AUTOMATION);
+    policy.follow.name = '\ud800';
+    expect(() => validateWarpEnvelope({ type: 'warpActivate', policy }, true)).toThrow('Unicode');
+    const oversized = {
+      type: 'warpActivate',
+      policy: { ...DEFAULT_AUTOMATION, padding: 'x'.repeat(65536) },
+    };
+    expect(() => validateWarpEnvelope(oversized, true)).toThrow('65,536');
+  });
 });

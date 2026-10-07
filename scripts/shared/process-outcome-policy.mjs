@@ -10,8 +10,11 @@ import { fail, match, succeed } from 'effect/Result';
 
 /** @param {unknown} code */
 export function processErrorCode(code) {
-  return (typeof code === 'string' || typeof code === 'number') && code && /^[A-Z0-9_]+$/.test(String(code))
-    ? String(code) : 'unknown';
+  return (typeof code === 'string' || typeof code === 'number') &&
+    code &&
+    /^[A-Z0-9_]+$/.test(String(code))
+    ? String(code)
+    : 'unknown';
 }
 
 /**
@@ -20,8 +23,8 @@ export function processErrorCode(code) {
  */
 export function classifyProcessOutcome({ failureCode, exitCode, signal, discardedBytes }) {
   return match(classifyProcessResult({ failureCode, exitCode, signal, discardedBytes }), {
-    onSuccess: outcome => outcome,
-    onFailure: failure => failure,
+    onSuccess: (outcome) => outcome,
+    onFailure: (failure) => failure,
   });
 }
 
@@ -30,7 +33,8 @@ export function classifyProcessOutcome({ failureCode, exitCode, signal, discarde
  * @returns {import('effect/Result').Result<ProcessSuccess, ProcessFailure>}
  */
 export function classifyProcessResult({ failureCode, exitCode, signal, discardedBytes }) {
-  if (failureCode !== null) return fail({ kind: 'process-error', code: processErrorCode(failureCode) });
+  if (failureCode !== null)
+    return fail({ kind: 'process-error', code: processErrorCode(failureCode) });
   if (exitCode === 0) return succeed({ kind: 'success', exitCode, signal, discardedBytes });
   if (signal !== null) return fail({ kind: 'signal', signal });
   return fail({ kind: 'exit', exitCode });
@@ -42,18 +46,31 @@ export function classifyProcessResult({ failureCode, exitCode, signal, discarded
  */
 export function processFailureDetails(failure) {
   switch (failure.kind) {
-    case 'process-error': return { kind: failure.kind, code: processErrorCode(failure.code) };
-    case 'signal': return { kind: failure.kind, signal: typeof failure.signal === 'string' ? failure.signal : 'unknown' };
-    case 'exit': return { kind: failure.kind, exitCode: typeof failure.exitCode === 'number' ? failure.exitCode : null };
-    default: throw new TypeError('Expected a failed process outcome.');
+    case 'process-error':
+      return { kind: failure.kind, code: processErrorCode(failure.code) };
+    case 'signal':
+      return {
+        kind: failure.kind,
+        signal: typeof failure.signal === 'string' ? failure.signal : 'unknown',
+      };
+    case 'exit':
+      return {
+        kind: failure.kind,
+        exitCode: typeof failure.exitCode === 'number' ? failure.exitCode : null,
+      };
+    default:
+      throw new TypeError('Expected a failed process outcome.');
   }
 }
 
 /** @param {ProcessFailure} failure @param {string} report */
 export function processFailureMessage(failure, report) {
   switch (failure.kind) {
-    case 'process-error': return `Process launch or diagnostic output failed (${failure.code}). See ${report}.`;
-    case 'signal': return `Process exited with ${failure.signal}. See ${report}.`;
-    case 'exit': return `Process exited with ${failure.exitCode}. See ${report}.`;
+    case 'process-error':
+      return `Process launch or diagnostic output failed (${failure.code}). See ${report}.`;
+    case 'signal':
+      return `Process exited with ${failure.signal}. See ${report}.`;
+    case 'exit':
+      return `Process exited with ${failure.exitCode}. See ${report}.`;
   }
 }
