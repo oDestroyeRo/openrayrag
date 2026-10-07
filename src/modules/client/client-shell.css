@@ -18,384 +18,1813 @@
   --client-focus: #86efac;
 }
 
-body:has(.client-shell) { margin: 0; background: var(--client-bg); }
-#app:has(.client-shell) { display: block; min-height: 100dvh; }
+body:has(.client-shell) {
+  margin: 0;
+  background: var(--client-bg);
+}
+#app:has(.client-shell) {
+  display: block;
+  min-height: 100dvh;
+}
 .client-shell {
   box-sizing: border-box;
-  width: 100%; max-width: 1280px; min-width: 0; margin: 0 auto; padding: 0 24px 24px;
-  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: var(--client-text); color-scheme: dark;
+  width: 100%;
+  max-width: 1280px;
+  min-width: 0;
+  margin: 0 auto;
+  padding: 0 24px 24px;
+  font:
+    14px/1.5 -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  color: var(--client-text);
+  color-scheme: dark;
 }
-.client-shell *, .client-shell *::before, .client-shell *::after { box-sizing: border-box; }
-.client-shell [hidden] { display: none !important; }
-.client-shell :is(button, input, select, textarea) { font: inherit; }
+.client-shell *,
+.client-shell *::before,
+.client-shell *::after {
+  box-sizing: border-box;
+}
+.client-shell [hidden] {
+  display: none !important;
+}
+.client-shell :is(button, input, select, textarea) {
+  font: inherit;
+}
 .client-shell :is(button, input, select, textarea, summary, a):focus-visible {
-  outline: 3px solid var(--client-focus); outline-offset: 3px;
+  outline: 3px solid var(--client-focus);
+  outline-offset: 3px;
 }
-.client-shell :is(button, input, select, textarea, summary, a, h2, h3, h4) { scroll-margin-top: var(--client-toolbar-offset, 16rem); scroll-margin-bottom: 16px; }
-.client-shell :is(h2, h3, h4)[tabindex]:focus-visible { outline: 2px solid var(--client-focus); outline-offset: 5px; border-radius: 2px; }
-.client-shell :is(button, summary, a) { touch-action: manipulation; }
-.client-shell :is(button, summary) { cursor: pointer; }
-.client-shell button { min-height: 44px; border: 1px solid var(--client-border); border-radius: 8px; padding: 9px 14px; background: var(--client-surface); color: var(--client-text); white-space: normal; line-height: 1.4; transition: background-color .15s, border-color .15s; }
-.client-shell button:disabled { opacity: .5; cursor: not-allowed; }
-.client-shell :is(input, select, textarea):disabled { opacity: .6; }
-.client-shell :is(p, .hint, .footnote, .navigation-info, .session-details) { font-size: 12px; line-height: 1.6; color: var(--client-secondary); }
-.client-shell :is(h1, h2, h3) { color: var(--client-text); letter-spacing: 0; margin: 0; font-weight: 650; }
-.client-shell h1 { font-size: 20px; }
-.client-shell h2 { font-size: 22px; }
-.client-shell h3 { font-size: 16px; }
-.client-shell :is(p, label, summary, small, strong, a, output, code, li) { overflow-wrap: anywhere; }
-.client-shell :is(code, .rule-row code) { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--client-muted); }
-.client-icon { display: inline-flex; width: 18px; height: 18px; flex: 0 0 18px; vertical-align: middle; }
-.client-icon svg { width: 100%; height: 100%; }
-.client-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-.client-shell .client-skip-link { position: absolute; left: 24px; top: -100px; z-index: 20; padding: 12px; background: var(--client-text); color: var(--client-bg); border-radius: 8px; }
-.client-shell[data-client-page="game"] .console-character-bar { display: none; }
-.client-game-viewport { height: calc(100dvh - var(--client-toolbar-offset, 240px) - 40px); min-height: 320px; background: var(--client-field); border: 1px solid var(--client-border); border-radius: 8px; }
-.client-game-placeholder { display: grid; place-content: center; justify-items: center; height: 100%; padding: 24px; text-align: center; }
-.client-skip-link:focus { top: 8px; }
+.client-shell :is(button, input, select, textarea, summary, a, h2, h3, h4) {
+  scroll-margin-top: var(--client-toolbar-offset, 16rem);
+  scroll-margin-bottom: 16px;
+}
+.client-shell :is(h2, h3, h4)[tabindex]:focus-visible {
+  outline: 2px solid var(--client-focus);
+  outline-offset: 5px;
+  border-radius: 2px;
+}
+.client-shell :is(button, summary, a) {
+  touch-action: manipulation;
+}
+.client-shell :is(button, summary) {
+  cursor: pointer;
+}
+.client-shell button {
+  min-height: 44px;
+  border: 1px solid var(--client-border);
+  border-radius: 8px;
+  padding: 9px 14px;
+  background: var(--client-surface);
+  color: var(--client-text);
+  white-space: normal;
+  line-height: 1.4;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+.client-shell button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.client-shell :is(input, select, textarea):disabled {
+  opacity: 0.6;
+}
+.client-shell :is(p, .hint, .footnote, .navigation-info, .session-details) {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--client-secondary);
+}
+.client-shell :is(h1, h2, h3) {
+  color: var(--client-text);
+  letter-spacing: 0;
+  margin: 0;
+  font-weight: 650;
+}
+.client-shell h1 {
+  font-size: 20px;
+}
+.client-shell h2 {
+  font-size: 22px;
+}
+.client-shell h3 {
+  font-size: 16px;
+}
+.client-shell :is(p, label, summary, small, strong, a, output, code, li) {
+  overflow-wrap: anywhere;
+}
+.client-shell :is(code, .rule-row code) {
+  font:
+    12px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  color: var(--client-muted);
+}
+.client-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  vertical-align: middle;
+}
+.client-icon svg {
+  width: 100%;
+  height: 100%;
+}
+.client-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.client-shell .client-skip-link {
+  position: absolute;
+  left: 24px;
+  top: -100px;
+  z-index: 20;
+  padding: 12px;
+  background: var(--client-text);
+  color: var(--client-bg);
+  border-radius: 8px;
+}
+.client-shell[data-client-page='game'] .console-character-bar {
+  display: none;
+}
+.client-game-viewport {
+  height: calc(100dvh - var(--client-toolbar-offset, 240px) - 40px);
+  min-height: 320px;
+  background: var(--client-field);
+  border: 1px solid var(--client-border);
+  border-radius: 8px;
+}
+.client-game-placeholder {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+.client-skip-link:focus {
+  top: 8px;
+}
 
 /* The monitor, run reason and primary controls persist across all pages. */
-.client-shell .client-toolbar { position: sticky; top: 0; z-index: 10; display: grid; gap: 12px; padding: 0 0 18px; margin: 0 0 0; background: var(--client-bg); }
-.client-topbar { display: flex; min-height: 54px; align-items: center; gap: 24px; border-bottom: 1px solid var(--client-border); }
-.client-brand { display: flex; gap: 7px; align-items: baseline; flex-shrink: 0; }
-.client-shell .client-brand h1 { font-size: 19px; letter-spacing: -.4px; }
-.client-brand > span { font-size: 14px; color: var(--client-secondary); }
-.client-page-nav { display: flex; align-self: stretch; gap: 8px; margin: 0; }
-.client-shell .client-page-nav button { display: flex; align-items: center; gap: 7px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--client-secondary); background: transparent; }
-.client-shell .client-page-nav button.selected { border-bottom-color: var(--client-accent); color: var(--client-focus); font-weight: 650; }
-.client-shell .client-page-nav button:hover { background: var(--client-surface); }
-.client-shell .client-account-link { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; font-size: 14px; white-space: nowrap; }
-.client-shell .pill { display: inline-block; width: fit-content; font-size: 12px; line-height: 1.3; letter-spacing: .06em; color: var(--client-secondary); padding: 4px 8px; border: 1px solid var(--client-border); border-radius: 5px; }
-.client-shell .pill.active { color: var(--client-focus); background: var(--client-accent-soft); border-color: var(--client-accent); }
-.client-shell .pill[data-state="WAITING"], .client-shell .pill[data-state="SETUP"], .client-shell .pill[data-state="LIMIT"] { color: var(--client-warning); border-color: var(--client-warning); }
-.client-run-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
-.client-run-copy { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 5px 12px; }
-.client-shell #client-run-title { font-size: 28px; line-height: 1.25; letter-spacing: -.5px; overflow-wrap: anywhere; }
-.client-shell .client-toolbar .notice { grid-column: 2; margin: 0; color: var(--client-secondary); font-size: 14px; line-height: 1.5; }
-.client-shell .notice.error { color: var(--client-warning); }
-.client-shell #config-help { grid-column: 2; margin: 0; color: var(--client-warning); }
-.client-shell #config-help:empty { display: none; }
-.client-shell .run-controls { position: static; display: flex; flex-shrink: 0; gap: 8px; margin: 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
-.client-shell .run-controls button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 52px; padding: 12px 18px; }
-.client-shell .primary { background: var(--client-accent); color: var(--client-accent-text); border: 1px solid var(--client-accent); font-weight: 650; }
-.client-shell .primary:hover:not(:disabled) { background: var(--client-focus); }
-.client-shell .secondary { background: var(--client-surface); color: var(--client-text); border: 1px solid var(--client-border); }
-.client-shell .secondary:hover:not(:disabled) { background: var(--client-surface-raised); }
-.client-shell .secondary span { color: inherit; margin: 0; }
-.client-shell .client-stop { min-width: 136px; background: #fd6768; color: #251016; border-color: #fd6768; font-weight: 650; }
-.client-shell .client-stop:hover:not(:disabled) { background: #ff8586; }
-.client-bot-nav button { display: flex; align-items: center; justify-content: center; gap: 8px; background: var(--client-surface); color: var(--client-secondary); border: 1px solid var(--client-border); }
-.client-bot-nav button:hover { background: var(--client-surface-raised); }
-.client-bot-nav button.selected { color: var(--client-focus); border-color: var(--client-accent); background: var(--client-accent-soft); font-weight: 650; }
-.client-bot-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
-.client-bot-nav button { flex: 1 1 auto; }
-.setup-step-number { display: inline-grid; place-items: center; width: 22px; height: 22px; flex: 0 0 22px; border: 1px solid currentColor; border-radius: 50%; font-size: 12px; }
-.client-shell .setup-guidance { margin: -6px 0 12px; }
-.setup-step-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
-.setup-step-controls > div { display: flex; gap: 8px; }
-.client-shell .setup-step-controls .hint { margin: 0; }
-.client-shell .setup-advanced { border-top: 1px solid var(--client-border); margin-top: 16px; }
-.client-shell .setup-advanced > summary { min-height: 44px; padding: 12px 0; color: var(--client-secondary); }
-.client-shell .setup-advanced > .form-grid { margin-top: 4px; }
-.client-pages, .client-page { min-width: 0; }
-.client-page-heading { margin-bottom: 16px; }
-.client-page-heading p { margin-top: 4px; }
-.client-page > .panel + .panel { margin-top: 16px; }
-.client-shell .panel { padding: 20px; background: var(--client-surface); border: 1px solid var(--client-border); border-radius: 12px; min-width: 0; }
-.client-shell .panel-title { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-.client-shell .panel-title > span { font-size: 12px; color: var(--client-muted); letter-spacing: 0; }
-.client-session-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-.client-shell .session-card { margin-bottom: 16px; }
-.client-resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
-.client-shell .health { min-width: 0; margin: 0; max-width: 420px; }
-.client-shell .health > div:first-child { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--client-secondary); letter-spacing: 0; margin-bottom: 8px; }
-.client-shell .health b { font-size: 14px; font-weight: 600; color: var(--client-text); }
-.client-shell .health-track { height: 8px; background: var(--client-surface-raised); border-radius: 8px; overflow: hidden; }
-.client-shell .health-track i { display: block; height: 100%; width: 0; background: var(--client-accent); }
-.client-shell .client-sp-track i { background: #7dd3fc; }
-.client-death-status { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 16px 0 0; }
-.client-death-status > div { display: flex; gap: 8px; align-items: baseline; }
-.client-death-status dt { font-size: 12px; color: var(--client-secondary); }
-.client-death-status dd { margin: 0; font-size: 14px; font-weight: 600; }
-.client-shell .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; border-top: 1px solid var(--client-border); margin-top: 16px; padding: 16px 0; }
-.client-shell .stats > div + div { border-color: var(--client-border); padding-left: 12px; }
-.client-shell .stats strong { display: block; font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.client-shell .stats span { display: block; font-size: 12px; line-height: 1.5; color: var(--client-secondary); margin-top: 6px; }
-.client-shell .radar-wrap { max-width: 420px; margin-inline: auto; background: var(--client-field); border: 1px solid var(--client-border); border-radius: 8px; overflow: hidden; }
-.client-shell .activity #radar { display: block; width: 100%; height: auto; aspect-ratio: 1; object-fit: contain; }
-.client-shell :is(.radar-label, .map-legend, .monster-list) { font-size: 12px; color: var(--client-secondary); line-height: 1.6; }
-.client-shell .radar-label { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; padding: 8px; }
-.client-shell .legend-dot { width: 6px; height: 6px; border-radius: 50%; margin-left: 8px; }
-.client-shell .you { background: var(--client-accent); }
-.client-shell .mob { background: #fdba74; }
-.client-shell .drop { background: #c4b5fd; }
-.client-shell .legend-dot.player-shop { background: #f9a8d4; border-radius: 0; }
-.client-shell .legend-dot.npc { background: #67e8f9; border-radius: 0; transform: rotate(45deg); }
-.client-shell .navigation-info { margin-top: 12px; }
-.client-shell .map-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.client-shell .map-legend span { display: inline-block; width: 9px; height: 9px; border: 1px solid var(--client-muted); margin-left: 4px; }
-.client-shell .terrain-key { background: var(--client-bg); }
-.client-shell .walkable-key { background: var(--client-accent-soft); }
-.client-shell .portal-key { background: #854d0e; }
-.client-shell .route-key { background: #7dd3fc; }
-.client-shell .monster-list { margin-top: 12px; }
-.client-shell :is(.log, .target-options, .telemetry-summary, .workflow-steps, .coverage-list) { max-height: none; overflow: visible; }
-.client-shell .log { list-style: none; margin: 0; padding: 0; }
-.client-shell .log li { display: flex; gap: 12px; padding: 8px 0; font-size: 12px; line-height: 1.6; color: var(--client-secondary); border-bottom: 1px solid var(--client-border); }
-.client-shell .log time { font-size: 12px; color: var(--client-muted); }
-.client-shell .log .empty { font-size: 12px; color: var(--client-muted); border: 0; }
-.client-session-details:empty { display: none; }
-.client-session-details > * { margin-top: 16px; }
+.client-shell .client-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: grid;
+  gap: 12px;
+  padding: 0 0 18px;
+  margin: 0 0 0;
+  background: var(--client-bg);
+}
+.client-topbar {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  gap: 24px;
+  border-bottom: 1px solid var(--client-border);
+}
+.client-brand {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  flex-shrink: 0;
+}
+.client-shell .client-brand h1 {
+  font-size: 19px;
+  letter-spacing: -0.4px;
+}
+.client-brand > span {
+  font-size: 14px;
+  color: var(--client-secondary);
+}
+.client-page-nav {
+  display: flex;
+  align-self: stretch;
+  gap: 8px;
+  margin: 0;
+}
+.client-shell .client-page-nav button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--client-secondary);
+  background: transparent;
+}
+.client-shell .client-page-nav button.selected {
+  border-bottom-color: var(--client-accent);
+  color: var(--client-focus);
+  font-weight: 650;
+}
+.client-shell .client-page-nav button:hover {
+  background: var(--client-surface);
+}
+.client-shell .client-account-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.client-shell .pill {
+  display: inline-block;
+  width: fit-content;
+  font-size: 12px;
+  line-height: 1.3;
+  letter-spacing: 0.06em;
+  color: var(--client-secondary);
+  padding: 4px 8px;
+  border: 1px solid var(--client-border);
+  border-radius: 5px;
+}
+.client-shell .pill.active {
+  color: var(--client-focus);
+  background: var(--client-accent-soft);
+  border-color: var(--client-accent);
+}
+.client-shell .pill[data-state='WAITING'],
+.client-shell .pill[data-state='SETUP'],
+.client-shell .pill[data-state='LIMIT'] {
+  color: var(--client-warning);
+  border-color: var(--client-warning);
+}
+.client-run-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.client-run-copy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px 12px;
+}
+.client-shell #client-run-title {
+  font-size: 28px;
+  line-height: 1.25;
+  letter-spacing: -0.5px;
+  overflow-wrap: anywhere;
+}
+.client-shell .client-toolbar .notice {
+  grid-column: 2;
+  margin: 0;
+  color: var(--client-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.client-shell .notice.error {
+  color: var(--client-warning);
+}
+.client-shell #config-help {
+  grid-column: 2;
+  margin: 0;
+  color: var(--client-warning);
+}
+.client-shell #config-help:empty {
+  display: none;
+}
+.client-shell .run-controls {
+  position: static;
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.client-shell .run-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 12px 18px;
+}
+.client-shell .primary {
+  background: var(--client-accent);
+  color: var(--client-accent-text);
+  border: 1px solid var(--client-accent);
+  font-weight: 650;
+}
+.client-shell .primary:hover:not(:disabled) {
+  background: var(--client-focus);
+}
+.client-shell .secondary {
+  background: var(--client-surface);
+  color: var(--client-text);
+  border: 1px solid var(--client-border);
+}
+.client-shell .secondary:hover:not(:disabled) {
+  background: var(--client-surface-raised);
+}
+.client-shell .secondary span {
+  color: inherit;
+  margin: 0;
+}
+.client-shell .client-stop {
+  min-width: 136px;
+  background: #fd6768;
+  color: #251016;
+  border-color: #fd6768;
+  font-weight: 650;
+}
+.client-shell .client-stop:hover:not(:disabled) {
+  background: #ff8586;
+}
+.client-bot-nav button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--client-surface);
+  color: var(--client-secondary);
+  border: 1px solid var(--client-border);
+}
+.client-bot-nav button:hover {
+  background: var(--client-surface-raised);
+}
+.client-bot-nav button.selected {
+  color: var(--client-focus);
+  border-color: var(--client-accent);
+  background: var(--client-accent-soft);
+  font-weight: 650;
+}
+.client-bot-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+.client-bot-nav button {
+  flex: 1 1 auto;
+}
+.setup-step-number {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 12px;
+}
+.client-shell .setup-guidance {
+  margin: -6px 0 12px;
+}
+.setup-step-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+.setup-step-controls > div {
+  display: flex;
+  gap: 8px;
+}
+.client-shell .setup-step-controls .hint {
+  margin: 0;
+}
+.client-shell .setup-advanced {
+  border-top: 1px solid var(--client-border);
+  margin-top: 16px;
+}
+.client-shell .setup-advanced > summary {
+  min-height: 44px;
+  padding: 12px 0;
+  color: var(--client-secondary);
+}
+.client-shell .setup-advanced > .form-grid {
+  margin-top: 4px;
+}
+.client-pages,
+.client-page {
+  min-width: 0;
+}
+.client-page-heading {
+  margin-bottom: 16px;
+}
+.client-page-heading p {
+  margin-top: 4px;
+}
+.client-page > .panel + .panel {
+  margin-top: 16px;
+}
+.client-shell .panel {
+  padding: 20px;
+  background: var(--client-surface);
+  border: 1px solid var(--client-border);
+  border-radius: 12px;
+  min-width: 0;
+}
+.client-shell .panel-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.client-shell .panel-title > span {
+  font-size: 12px;
+  color: var(--client-muted);
+  letter-spacing: 0;
+}
+.client-session-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.client-shell .session-card {
+  margin-bottom: 16px;
+}
+.client-resource-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+.client-shell .health {
+  min-width: 0;
+  margin: 0;
+  max-width: 420px;
+}
+.client-shell .health > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--client-secondary);
+  letter-spacing: 0;
+  margin-bottom: 8px;
+}
+.client-shell .health b {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--client-text);
+}
+.client-shell .health-track {
+  height: 8px;
+  background: var(--client-surface-raised);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.client-shell .health-track i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--client-accent);
+}
+.client-shell .client-sp-track i {
+  background: #7dd3fc;
+}
+.client-death-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin: 16px 0 0;
+}
+.client-death-status > div {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.client-death-status dt {
+  font-size: 12px;
+  color: var(--client-secondary);
+}
+.client-death-status dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.client-shell .stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  border-top: 1px solid var(--client-border);
+  margin-top: 16px;
+  padding: 16px 0;
+}
+.client-shell .stats > div + div {
+  border-color: var(--client-border);
+  padding-left: 12px;
+}
+.client-shell .stats strong {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.client-shell .stats span {
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--client-secondary);
+  margin-top: 6px;
+}
+.client-shell .radar-wrap {
+  max-width: 420px;
+  margin-inline: auto;
+  background: var(--client-field);
+  border: 1px solid var(--client-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.client-shell .activity #radar {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+.client-shell :is(.radar-label, .map-legend, .monster-list) {
+  font-size: 12px;
+  color: var(--client-secondary);
+  line-height: 1.6;
+}
+.client-shell .radar-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+}
+.client-shell .legend-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-left: 8px;
+}
+.client-shell .you {
+  background: var(--client-accent);
+}
+.client-shell .mob {
+  background: #fdba74;
+}
+.client-shell .drop {
+  background: #c4b5fd;
+}
+.client-shell .legend-dot.player-shop {
+  background: #f9a8d4;
+  border-radius: 0;
+}
+.client-shell .legend-dot.npc {
+  background: #67e8f9;
+  border-radius: 0;
+  transform: rotate(45deg);
+}
+.client-shell .navigation-info {
+  margin-top: 12px;
+}
+.client-shell .map-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.client-shell .map-legend span {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--client-muted);
+  margin-left: 4px;
+}
+.client-shell .terrain-key {
+  background: var(--client-bg);
+}
+.client-shell .walkable-key {
+  background: var(--client-accent-soft);
+}
+.client-shell .portal-key {
+  background: #854d0e;
+}
+.client-shell .route-key {
+  background: #7dd3fc;
+}
+.client-shell .monster-list {
+  margin-top: 12px;
+}
+.client-shell :is(.log, .target-options, .telemetry-summary, .workflow-steps, .coverage-list) {
+  max-height: none;
+  overflow: visible;
+}
+.client-shell .log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.client-shell .log li {
+  display: flex;
+  gap: 12px;
+  padding: 8px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--client-secondary);
+  border-bottom: 1px solid var(--client-border);
+}
+.client-shell .log time {
+  font-size: 12px;
+  color: var(--client-muted);
+}
+.client-shell .log .empty {
+  font-size: 12px;
+  color: var(--client-muted);
+  border: 0;
+}
+.client-session-details:empty {
+  display: none;
+}
+.client-session-details > * {
+  margin-top: 16px;
+}
 
 /* Run dashboard: authentic activity alongside the current collision map. */
-.client-shell .console-character-bar { display: grid; grid-template-columns: minmax(160px, 1.3fr) minmax(85px, .7fr) minmax(85px, .7fr) minmax(0, 3.7fr); align-items: center; gap: 16px; padding: 10px 16px; border: 1px solid var(--client-border); border-radius: 10px; background: var(--client-surface); }
-.client-session-identity { line-height: 1.25; display: grid; min-width: 0; gap: 3px; padding-right: 14px; border-right: 1px solid var(--client-border); }
-.client-session-identity strong { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.console-level-label { font-size: 12px; color: var(--client-muted); }
-.console-level-label b { color: var(--client-secondary); font-weight: 500; }
-.client-shell #location { margin: 0; font-size: 12px; line-height: 1.25; color: var(--client-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.client-shell .console-character-bar .health { max-width: none; }
-.client-shell .console-character-bar .health > div:first-child { display: grid; gap: 3px; margin-bottom: 7px; }
-.client-shell .console-character-bar .health b { font-size: 14px; }
-.console-character-stats { display: grid; grid-template-columns: .9fr 1.1fr 1.1fr .7fr .8fr; gap: 12px; align-items: start; margin: 0; font-variant-numeric: tabular-nums; }
-.console-character-stats dt { color: var(--client-muted); font-size: 12px; margin-bottom: 6px; }
-.console-character-stats dd { margin: 0; color: var(--client-text); font-size: 14px; overflow-wrap: anywhere; }
-.console-character-stats dd small { display: block; color: var(--client-focus); font-size: 12px; }
-.bot-console-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 18px; align-items: start; }
-.console-primary, .console-secondary { min-width: 0; display: grid; gap: 16px; }
-.client-shell .bot-console-grid .panel { padding: 16px; border-radius: 10px; }
-.console-setup-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; border: 1px solid var(--client-border); border-radius: 8px; background: var(--client-surface); }
-.client-shell #client-page-session > .console-setup-summary { margin-bottom: 16px; }
-.client-shell .console-attention { margin-bottom: 16px; padding: 12px 16px; border-color: var(--client-warning); }
-.client-shell .console-attention .panel-title { margin-bottom: 8px; }
-#console-attention-list { display: grid; gap: 8px; list-style: none; padding: 0; margin: 0; }
-.console-attention-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--client-border); padding-top: 8px; }
-.console-attention-item:first-child { border-top: 0; padding-top: 0; }
-.console-attention-item > div { min-width: 0; }
-.console-attention-item > button { flex-shrink: 0; }
-.client-shell .console-attention-item p { margin: 3px 0 0; }
-.console-attention-item strong { color: var(--client-warning); }
-.console-attention-item[data-severity="info"] strong { color: var(--client-secondary); }
-.console-attention-item[data-severity="error"] strong { color: var(--client-danger); }
-.console-setup-copy { display: flex; align-items: center; min-width: 0; gap: 10px; color: var(--client-secondary); }
-.client-shell .console-setup-summary button { display: flex; gap: 7px; align-items: center; white-space: nowrap; padding-inline: 6px; color: var(--client-secondary); font-size: 14px; flex-shrink: 0; }
-.client-shell .console-activity { margin: 0; display: flex; flex-direction: column; }
-.console-log-heading { display: grid; grid-template-columns: 78px 1fr; gap: 12px; color: var(--client-muted); font-size: 12px; border-bottom: 1px solid var(--client-border); padding: 0 0 10px; }
-.client-shell .console-activity .panel-title { margin-bottom: 14px; }
-.client-shell .console-activity .log { max-height: 280px; min-height: 120px; overflow: auto; scrollbar-gutter: stable; }
-.client-shell .console-activity .log li { font-size: 14px; padding: 12px 0; line-height: 1.45; align-items: baseline; }
-.client-shell .console-activity .log time { flex: 0 0 78px; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.client-shell .console-activity .log li > span { min-width: 0; }
-.client-shell .console-activity .log .empty { padding: 26px 0; }
-.console-run-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.console-run-metrics strong { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
-.console-run-metrics span { font-size: 12px; color: var(--client-muted); }
-.client-shell .console-results .session-details { margin: 12px 0 0; padding-top: 12px; border-top: 1px solid var(--client-border); font-size: 12px; }
-.console-map-layout { display: grid; grid-template-columns: minmax(0, 1fr) 82px; gap: 12px; align-items: start; }
-.client-shell .console-map .radar-wrap { width: 100%; max-width: none; aspect-ratio: 1; border-radius: 6px; }
-.client-shell .console-map #radar { cursor: crosshair; width: 100%; height: 100%; object-fit: fill; }
-.client-shell .console-map #radar.console-map-locked { cursor: default; }
-.client-shell .console-map-keys .radar-label, .client-shell .console-map-keys .map-legend { display: grid; justify-content: start; gap: 10px; padding: 8px 0; margin: 0; }
-.console-map-keys .map-legend { border-top: 1px solid var(--client-border); }
-.client-shell .console-map-keys :is(.radar-label, .map-legend) > span { display: flex; align-items: center; gap: 7px; width: auto; height: auto; margin: 0; border: 0; font-size: 12px; }
-.client-shell .console-map-keys .legend-dot { display: inline-block; flex: 0 0 6px; margin: 0; }
-.console-map-keys .map-legend i { display: inline-block; flex: 0 0 9px; height: 9px; border: 1px solid var(--client-muted); }
-.client-shell .console-map :is(.navigation-info, #console-lock) { margin: 10px 0 0; font-size: 12px; }
-.console-manual-map { margin-top: 8px; border-top: 1px solid var(--client-border); }
-.client-shell .console-manual-map summary { min-height: 44px; padding: 10px 0; color: var(--client-secondary); font-size: 12px; }
-.console-walk { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; margin-top: 8px; }
-.client-shell .console-walk input { min-height: 44px; }
-.client-shell .bot-console-grid .console-inspector { padding-top: 0; padding-bottom: 8px; }
-.console-inspector-tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--client-border); margin-bottom: 4px; }
-.client-shell .console-inspector-tabs button { min-height: 44px; padding: 0 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--client-secondary); }
-.client-shell .console-inspector-tabs button.selected { color: var(--client-text); border-bottom-color: var(--client-accent); }
-.console-inspector-tabs #nearby { color: var(--client-muted); padding-left: 5px; font-size: 12px; }
-.client-shell .console-inspector :is(.monster-list, .npc-list) { margin: 0; max-height: 220px; overflow: auto; font-size: 12px; color: var(--client-secondary); line-height: 1.6; }
-.client-shell .console-nearby-heading { margin: 12px 0 4px; color: var(--client-text); font-size: 12px; font-weight: 600; }
-.console-actor-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--client-border); }
-.console-actor-row > span { min-width: 0; white-space: pre-line; overflow-wrap: anywhere; }
-.client-shell .console-actor-row > button { min-height: 44px; padding: 9px 12px; flex-shrink: 0; }
-.console-list { font-size: 14px; color: var(--client-secondary); }
-.client-shell .console-ground-items summary { min-height: 44px; padding: 10px 0; color: var(--client-secondary); font-size: 12px; }
-.client-shell .console-inventory { padding-top: 12px; }
-.client-shell .console-inventory > button { margin-top: 8px; width: 100%; }
-.client-shell .console-inventory .panel-title { margin-bottom: 8px; }
-.console-connection { border-top: 1px solid var(--client-border); margin-top: 0; padding-top: 0; }
-.client-shell .console-connection > summary { min-height: 44px; padding: 10px 0; color: var(--client-muted); font-size: 14px; }
-.console-connection-copy { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--client-muted); }
-.client-shell :is(.form-grid, .routing-grid, .rule-row) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
-.client-shell :is(.form-field, .routing-grid label, .routing-field label, .signin-fields label, .map-targets legend, .field-row, .toggle-row) { font-size: 14px; color: var(--client-secondary); }
-.client-shell :is(.form-field, .routing-grid label, .routing-field label, .signin-fields label) { display: block; min-width: 0; }
-.client-shell .form-field > span { display: block; min-height: 0; }
-.client-shell :is(input[type="text"], input[type="password"], input[type="number"], input:not([type]), select, textarea, .document-editor) {
-  display: block; width: 100%; min-width: 0; max-width: 100%; min-height: 44px;
-  border: 1px solid var(--client-border); border-radius: 8px; background: var(--client-field);
-  color: var(--client-text); padding: 9px 12px; font-size: 14px; margin-top: 6px;
+.client-shell .console-character-bar {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.3fr) minmax(85px, 0.7fr) minmax(85px, 0.7fr) minmax(
+      0,
+      3.7fr
+    );
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border: 1px solid var(--client-border);
+  border-radius: 10px;
+  background: var(--client-surface);
 }
-.client-shell :is(.document-editor, .routine-document) { font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
-.client-shell input[type="range"] { width: 100%; min-height: 44px; height: auto; accent-color: var(--client-accent); margin: 0 0 12px; }
-.client-shell input[type="checkbox"] { appearance: auto; width: 18px; height: 18px; accent-color: var(--client-accent); border-radius: 3px; margin: 0; flex: 0 0 18px; }
-.client-shell input[type="checkbox"]::after { content: none; }
-.client-shell .field-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 16px 0 8px; }
-.client-shell .field-row output { font-size: 14px; color: var(--client-focus); flex-shrink: 0; }
-.client-shell .toggle-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; gap: 16px; border-top: 1px solid var(--client-border); }
-.client-shell .toggle-row small { display: block; font-size: 12px; line-height: 1.6; color: var(--client-muted); margin-top: 4px; }
-.client-shell .form-grid .toggle-row { grid-column: 1/-1; margin: 0; }
-.client-shell :is(.hint, .footnote) { margin: 8px 0 12px; }
-.client-shell .text-button { background: transparent; color: var(--client-focus); font-size: 12px; padding: 8px; min-height: 44px; }
-.client-shell .map-targets { border: 0; padding: 0; margin: 0; min-width: 0; }
-.client-shell .map-targets legend { padding: 0; margin-bottom: 8px; }
-.client-shell .target-tools { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; font-size: 12px; color: var(--client-secondary); }
-.client-shell .target-tools > div { display: flex; flex-wrap: wrap; gap: 8px; }
-.client-shell .target-map { font-size: 14px; color: var(--client-text); }
-.client-shell .target-options { background: var(--client-field); border: 1px solid var(--client-border); border-radius: 8px; }
-.client-shell .target-option { display: flex; align-items: center; padding: 12px; gap: 12px; border-bottom: 1px solid var(--client-border); cursor: pointer; }
-.client-shell .target-option:last-child { border-bottom: 0; }
-.client-shell .target-option:has(input:disabled) { cursor: default; }
-.client-shell .target-option.selected { background: var(--client-accent-soft); }
-.client-shell .target-description { flex: 1; min-width: 0; }
-.client-shell .target-description strong { display: block; font-size: 14px; color: var(--client-text); }
-.client-shell :is(.target-description small, .target-visible, .target-empty) { font-size: 12px; color: var(--client-secondary); }
-.client-shell .target-description small { display: block; line-height: 1.6; margin-top: 4px; }
-.client-shell .target-empty { padding: 12px; }
-.client-shell .target-visible { white-space: normal; }
-.client-shell .target-visible.present { color: var(--client-focus); }
-.client-shell :is(.routing-settings, .rule-editor, .manual-group) { border-top: 1px solid var(--client-border); padding-top: 16px; margin-top: 16px; min-width: 0; }
-.client-shell :is(.routing-settings, .rule-editor, .manual-group) > summary { color: var(--client-text); font-size: 14px; padding: 8px 0; min-height: 44px; }
-.client-shell .rule-row { background: var(--client-field); border: 1px solid var(--client-border); border-radius: 8px; padding: 16px; }
-.client-shell .rule-remove { grid-column: 1/-1; justify-self: start; }
-.client-shell .rule-row > .actor-conditions { grid-column: 1/-1; }
-.client-shell .actor-conditions .form-grid > .hint { grid-column: 1/-1; }
-.client-shell .button-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
-.client-shell .compact { font-size: 14px; padding: 9px 12px; }
-.client-shell .telemetry-summary { background: var(--client-field); border: 1px solid var(--client-border); border-radius: 8px; color: var(--client-secondary); font-size: 12px; line-height: 1.6; padding: 12px; margin-top: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.client-shell :is(.workflow-steps li, .coverage-list > div, .coverage-state) { font-size: 12px; color: var(--client-secondary); }
-.client-shell .workflow-steps { padding-left: 24px; margin: 16px 0; }
-.client-shell .workflow-steps li { padding: 8px 0; }
-.client-shell .workflow-steps li span { margin-right: 12px; font-family: ui-monospace, monospace; }
-.client-shell .coverage-list { border: 1px solid var(--client-border); border-radius: 8px; }
-.client-shell .coverage-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 12px; border-bottom: 1px solid var(--client-border); }
-.client-shell .coverage-list > div:last-child { border-bottom: 0; }
-.client-shell .coverage-state { text-align: right; flex: 0 0 160px; }
-.client-manual-index { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0 16px; }
-.client-shell .signin { margin: 0; }
-.client-shell .signin summary { font-size: 16px; color: var(--client-text); min-height: 44px; line-height: 1.5; }
-.client-shell .signin summary > span { float: none; display: inline-block; margin-left: 12px; font-size: 12px; color: var(--client-secondary); }
-.client-shell .signin-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 12px; }
-.client-shell .signin-options { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-top: 12px; font-size: 14px; color: var(--client-secondary); }
-.client-shell .signin-options label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
-.client-shell .signin-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin-top: 12px; }
-.client-shell .signin-actions .hint { flex: 1 1 240px; margin: 0; }
-.client-shell .signin-actions .primary { min-height: 44px; font-size: 14px; }
-.client-shell .social-panel > .compact { margin: 8px 0 16px; }
-.client-shell .social-panel > .form-field { margin-top: 12px; }
-.client-shell .social-history { margin-bottom: 12px; }
-.client-shell :is(section.manual-refine, section.warp-panel) { border-top: 1px solid var(--client-border); padding-top: 16px; margin-top: 16px; min-width: 0; }
-.client-shell :is(.manual-refine, .warp-panel) > :is(h2, h3, h4) { margin-bottom: 8px; }
-.client-shell :is(.manual-refine, .warp-panel) > label { display: block; margin-top: 16px; min-width: 0; color: var(--client-secondary); font-size: 14px; }
-.client-shell :is(.manual-refine, .warp-panel) .actions { position: static; display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; padding: 0; background: transparent; border: 0; }
-.client-shell :is(.manual-refine, .warp-panel) .actions > button { flex: 1 1 180px; min-width: 0; }
-.client-shell .warp-panel > button { margin: 8px 8px 0 0; max-width: 100%; }
-.client-shell pre { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--client-secondary); background: var(--client-field); border: 1px solid var(--client-border); border-radius: 8px; padding: 12px; margin: 16px 0; }
-.client-shell a { color: var(--client-focus); text-underline-offset: 3px; }
-.client-shell footer { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--client-muted); margin-top: 12px; flex-wrap: wrap; }
+.client-session-identity {
+  line-height: 1.25;
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding-right: 14px;
+  border-right: 1px solid var(--client-border);
+}
+.client-session-identity strong {
+  font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.console-level-label {
+  font-size: 12px;
+  color: var(--client-muted);
+}
+.console-level-label b {
+  color: var(--client-secondary);
+  font-weight: 500;
+}
+.client-shell #location {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.25;
+  color: var(--client-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.client-shell .console-character-bar .health {
+  max-width: none;
+}
+.client-shell .console-character-bar .health > div:first-child {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 7px;
+}
+.client-shell .console-character-bar .health b {
+  font-size: 14px;
+}
+.console-character-stats {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr 1.1fr 0.7fr 0.8fr;
+  gap: 12px;
+  align-items: start;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.console-character-stats dt {
+  color: var(--client-muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.console-character-stats dd {
+  margin: 0;
+  color: var(--client-text);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.console-character-stats dd small {
+  display: block;
+  color: var(--client-focus);
+  font-size: 12px;
+}
+.bot-console-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.console-primary,
+.console-secondary {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+}
+.client-shell .bot-console-grid .panel {
+  padding: 16px;
+  border-radius: 10px;
+}
+.console-setup-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border: 1px solid var(--client-border);
+  border-radius: 8px;
+  background: var(--client-surface);
+}
+.client-shell #client-page-session > .console-setup-summary {
+  margin-bottom: 16px;
+}
+.client-shell .console-attention {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border-color: var(--client-warning);
+}
+.client-shell .console-attention .panel-title {
+  margin-bottom: 8px;
+}
+#console-attention-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.console-attention-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--client-border);
+  padding-top: 8px;
+}
+.console-attention-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.console-attention-item > div {
+  min-width: 0;
+}
+.console-attention-item > button {
+  flex-shrink: 0;
+}
+.client-shell .console-attention-item p {
+  margin: 3px 0 0;
+}
+.console-attention-item strong {
+  color: var(--client-warning);
+}
+.console-attention-item[data-severity='info'] strong {
+  color: var(--client-secondary);
+}
+.console-attention-item[data-severity='error'] strong {
+  color: var(--client-danger);
+}
+.console-setup-copy {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+  color: var(--client-secondary);
+}
+.client-shell .console-setup-summary button {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  white-space: nowrap;
+  padding-inline: 6px;
+  color: var(--client-secondary);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.client-shell .console-activity {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+.console-log-heading {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  gap: 12px;
+  color: var(--client-muted);
+  font-size: 12px;
+  border-bottom: 1px solid var(--client-border);
+  padding: 0 0 10px;
+}
+.client-shell .console-activity .panel-title {
+  margin-bottom: 14px;
+}
+.client-shell .console-activity .log {
+  max-height: 280px;
+  min-height: 120px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.client-shell .console-activity .log li {
+  font-size: 14px;
+  padding: 12px 0;
+  line-height: 1.45;
+  align-items: baseline;
+}
+.client-shell .console-activity .log time {
+  flex: 0 0 78px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.client-shell .console-activity .log li > span {
+  min-width: 0;
+}
+.client-shell .console-activity .log .empty {
+  padding: 26px 0;
+}
+.console-run-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.console-run-metrics strong {
+  display: block;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+.console-run-metrics span {
+  font-size: 12px;
+  color: var(--client-muted);
+}
+.client-shell .console-results .session-details {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--client-border);
+  font-size: 12px;
+}
+.console-map-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 82px;
+  gap: 12px;
+  align-items: start;
+}
+.client-shell .console-map .radar-wrap {
+  width: 100%;
+  max-width: none;
+  aspect-ratio: 1;
+  border-radius: 6px;
+}
+.client-shell .console-map #radar {
+  cursor: crosshair;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+}
+.client-shell .console-map #radar.console-map-locked {
+  cursor: default;
+}
+.client-shell .console-map-keys .radar-label,
+.client-shell .console-map-keys .map-legend {
+  display: grid;
+  justify-content: start;
+  gap: 10px;
+  padding: 8px 0;
+  margin: 0;
+}
+.console-map-keys .map-legend {
+  border-top: 1px solid var(--client-border);
+}
+.client-shell .console-map-keys :is(.radar-label, .map-legend) > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: auto;
+  height: auto;
+  margin: 0;
+  border: 0;
+  font-size: 12px;
+}
+.client-shell .console-map-keys .legend-dot {
+  display: inline-block;
+  flex: 0 0 6px;
+  margin: 0;
+}
+.console-map-keys .map-legend i {
+  display: inline-block;
+  flex: 0 0 9px;
+  height: 9px;
+  border: 1px solid var(--client-muted);
+}
+.client-shell .console-map :is(.navigation-info, #console-lock) {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+.console-manual-map {
+  margin-top: 8px;
+  border-top: 1px solid var(--client-border);
+}
+.client-shell .console-manual-map summary {
+  min-height: 44px;
+  padding: 10px 0;
+  color: var(--client-secondary);
+  font-size: 12px;
+}
+.console-walk {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 8px;
+}
+.client-shell .console-walk input {
+  min-height: 44px;
+}
+.client-shell .bot-console-grid .console-inspector {
+  padding-top: 0;
+  padding-bottom: 8px;
+}
+.console-inspector-tabs {
+  display: flex;
+  gap: 20px;
+  border-bottom: 1px solid var(--client-border);
+  margin-bottom: 4px;
+}
+.client-shell .console-inspector-tabs button {
+  min-height: 44px;
+  padding: 0 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--client-secondary);
+}
+.client-shell .console-inspector-tabs button.selected {
+  color: var(--client-text);
+  border-bottom-color: var(--client-accent);
+}
+.console-inspector-tabs #nearby {
+  color: var(--client-muted);
+  padding-left: 5px;
+  font-size: 12px;
+}
+.client-shell .console-inspector :is(.monster-list, .npc-list) {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 12px;
+  color: var(--client-secondary);
+  line-height: 1.6;
+}
+.client-shell .console-nearby-heading {
+  margin: 12px 0 4px;
+  color: var(--client-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.console-actor-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--client-border);
+}
+.console-actor-row > span {
+  min-width: 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.client-shell .console-actor-row > button {
+  min-height: 44px;
+  padding: 9px 12px;
+  flex-shrink: 0;
+}
+.console-list {
+  font-size: 14px;
+  color: var(--client-secondary);
+}
+.client-shell .console-ground-items summary {
+  min-height: 44px;
+  padding: 10px 0;
+  color: var(--client-secondary);
+  font-size: 12px;
+}
+.client-shell .console-inventory {
+  padding-top: 12px;
+}
+.client-shell .console-inventory > button {
+  margin-top: 8px;
+  width: 100%;
+}
+.client-shell .console-inventory .panel-title {
+  margin-bottom: 8px;
+}
+.console-connection {
+  border-top: 1px solid var(--client-border);
+  margin-top: 0;
+  padding-top: 0;
+}
+.client-shell .console-connection > summary {
+  min-height: 44px;
+  padding: 10px 0;
+  color: var(--client-muted);
+  font-size: 14px;
+}
+.console-connection-copy {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  color: var(--client-muted);
+}
+.client-shell :is(.form-grid, .routing-grid, .rule-row) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 16px 0;
+}
+.client-shell
+  :is(
+    .form-field,
+    .routing-grid label,
+    .routing-field label,
+    .signin-fields label,
+    .map-targets legend,
+    .field-row,
+    .toggle-row
+  ) {
+  font-size: 14px;
+  color: var(--client-secondary);
+}
+.client-shell :is(.form-field, .routing-grid label, .routing-field label, .signin-fields label) {
+  display: block;
+  min-width: 0;
+}
+.client-shell .form-field > span {
+  display: block;
+  min-height: 0;
+}
+.client-shell
+  :is(
+    input[type='text'],
+    input[type='password'],
+    input[type='number'],
+    input:not([type]),
+    select,
+    textarea,
+    .document-editor
+  ) {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--client-border);
+  border-radius: 8px;
+  background: var(--client-field);
+  color: var(--client-text);
+  padding: 9px 12px;
+  font-size: 14px;
+  margin-top: 6px;
+}
+.client-shell :is(.document-editor, .routine-document) {
+  font:
+    13px/1.6 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  resize: vertical;
+}
+.client-shell input[type='range'] {
+  width: 100%;
+  min-height: 44px;
+  height: auto;
+  accent-color: var(--client-accent);
+  margin: 0 0 12px;
+}
+.client-shell input[type='checkbox'] {
+  appearance: auto;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--client-accent);
+  border-radius: 3px;
+  margin: 0;
+  flex: 0 0 18px;
+}
+.client-shell input[type='checkbox']::after {
+  content: none;
+}
+.client-shell .field-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin: 16px 0 8px;
+}
+.client-shell .field-row output {
+  font-size: 14px;
+  color: var(--client-focus);
+  flex-shrink: 0;
+}
+.client-shell .toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  gap: 16px;
+  border-top: 1px solid var(--client-border);
+}
+.client-shell .toggle-row small {
+  display: block;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--client-muted);
+  margin-top: 4px;
+}
+.client-shell .form-grid .toggle-row {
+  grid-column: 1/-1;
+  margin: 0;
+}
+.client-shell :is(.hint, .footnote) {
+  margin: 8px 0 12px;
+}
+.client-shell .text-button {
+  background: transparent;
+  color: var(--client-focus);
+  font-size: 12px;
+  padding: 8px;
+  min-height: 44px;
+}
+.client-shell .map-targets {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.client-shell .map-targets legend {
+  padding: 0;
+  margin-bottom: 8px;
+}
+.client-shell .target-tools {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--client-secondary);
+}
+.client-shell .target-tools > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.client-shell .target-map {
+  font-size: 14px;
+  color: var(--client-text);
+}
+.client-shell .target-options {
+  background: var(--client-field);
+  border: 1px solid var(--client-border);
+  border-radius: 8px;
+}
+.client-shell .target-option {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  gap: 12px;
+  border-bottom: 1px solid var(--client-border);
+  cursor: pointer;
+}
+.client-shell .target-option:last-child {
+  border-bottom: 0;
+}
+.client-shell .target-option:has(input:disabled) {
+  cursor: default;
+}
+.client-shell .target-option.selected {
+  background: var(--client-accent-soft);
+}
+.client-shell .target-description {
+  flex: 1;
+  min-width: 0;
+}
+.client-shell .target-description strong {
+  display: block;
+  font-size: 14px;
+  color: var(--client-text);
+}
+.client-shell :is(.target-description small, .target-visible, .target-empty) {
+  font-size: 12px;
+  color: var(--client-secondary);
+}
+.client-shell .target-description small {
+  display: block;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+.client-shell .target-empty {
+  padding: 12px;
+}
+.client-shell .target-visible {
+  white-space: normal;
+}
+.client-shell .target-visible.present {
+  color: var(--client-focus);
+}
+.client-shell :is(.routing-settings, .rule-editor, .manual-group) {
+  border-top: 1px solid var(--client-border);
+  padding-top: 16px;
+  margin-top: 16px;
+  min-width: 0;
+}
+.client-shell :is(.routing-settings, .rule-editor, .manual-group) > summary {
+  color: var(--client-text);
+  font-size: 14px;
+  padding: 8px 0;
+  min-height: 44px;
+}
+.client-shell .rule-row {
+  background: var(--client-field);
+  border: 1px solid var(--client-border);
+  border-radius: 8px;
+  padding: 16px;
+}
+.client-shell .rule-remove {
+  grid-column: 1/-1;
+  justify-self: start;
+}
+.client-shell .rule-row > .actor-conditions {
+  grid-column: 1/-1;
+}
+.client-shell .actor-conditions .form-grid > .hint {
+  grid-column: 1/-1;
+}
+.client-shell .button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+.client-shell .compact {
+  font-size: 14px;
+  padding: 9px 12px;
+}
+.client-shell .telemetry-summary {
+  background: var(--client-field);
+  border: 1px solid var(--client-border);
+  border-radius: 8px;
+  color: var(--client-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 12px;
+  margin-top: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.client-shell :is(.workflow-steps li, .coverage-list > div, .coverage-state) {
+  font-size: 12px;
+  color: var(--client-secondary);
+}
+.client-shell .workflow-steps {
+  padding-left: 24px;
+  margin: 16px 0;
+}
+.client-shell .workflow-steps li {
+  padding: 8px 0;
+}
+.client-shell .workflow-steps li span {
+  margin-right: 12px;
+  font-family: ui-monospace, monospace;
+}
+.client-shell .coverage-list {
+  border: 1px solid var(--client-border);
+  border-radius: 8px;
+}
+.client-shell .coverage-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid var(--client-border);
+}
+.client-shell .coverage-list > div:last-child {
+  border-bottom: 0;
+}
+.client-shell .coverage-state {
+  text-align: right;
+  flex: 0 0 160px;
+}
+.client-manual-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 0 16px;
+}
+.client-shell .signin {
+  margin: 0;
+}
+.client-shell .signin summary {
+  font-size: 16px;
+  color: var(--client-text);
+  min-height: 44px;
+  line-height: 1.5;
+}
+.client-shell .signin summary > span {
+  float: none;
+  display: inline-block;
+  margin-left: 12px;
+  font-size: 12px;
+  color: var(--client-secondary);
+}
+.client-shell .signin-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+.client-shell .signin-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--client-secondary);
+}
+.client-shell .signin-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.client-shell .signin-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+}
+.client-shell .signin-actions .hint {
+  flex: 1 1 240px;
+  margin: 0;
+}
+.client-shell .signin-actions .primary {
+  min-height: 44px;
+  font-size: 14px;
+}
+.client-shell .social-panel > .compact {
+  margin: 8px 0 16px;
+}
+.client-shell .social-panel > .form-field {
+  margin-top: 12px;
+}
+.client-shell .social-history {
+  margin-bottom: 12px;
+}
+.client-shell :is(section.manual-refine, section.warp-panel) {
+  border-top: 1px solid var(--client-border);
+  padding-top: 16px;
+  margin-top: 16px;
+  min-width: 0;
+}
+.client-shell :is(.manual-refine, .warp-panel) > :is(h2, h3, h4) {
+  margin-bottom: 8px;
+}
+.client-shell :is(.manual-refine, .warp-panel) > label {
+  display: block;
+  margin-top: 16px;
+  min-width: 0;
+  color: var(--client-secondary);
+  font-size: 14px;
+}
+.client-shell :is(.manual-refine, .warp-panel) .actions {
+  position: static;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+.client-shell :is(.manual-refine, .warp-panel) .actions > button {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.client-shell .warp-panel > button {
+  margin: 8px 8px 0 0;
+  max-width: 100%;
+}
+.client-shell pre {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    13px/1.6 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  color: var(--client-secondary);
+  background: var(--client-field);
+  border: 1px solid var(--client-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 16px 0;
+}
+.client-shell a {
+  color: var(--client-focus);
+  text-underline-offset: 3px;
+}
+.client-shell footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--client-muted);
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
 
 @media (max-width: 1000px) {
-  .client-shell { padding-inline: 20px; }
-  .client-topbar { gap: 14px; }
-  .client-shell .client-page-nav button { padding-inline: 9px; }
-  .client-shell .console-character-bar { grid-template-columns: minmax(145px, 1fr) minmax(75px, .5fr) minmax(75px, .5fr); gap: 10px 16px; }
-  .console-character-stats { grid-column: 1/-1; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid var(--client-border); padding-top: 8px; }
-  .console-character-stats dt { margin-bottom: 2px; }
-  .console-character-stats dd small { display: inline; }
-  .client-shell #client-run-title { font-size: 25px; }
-  .client-run-heading { gap: 14px; }
-  .client-shell .run-controls button { padding-inline: 12px; min-height: 48px; }
-  .client-shell .client-stop { min-width: 110px; }
-  .bot-console-grid { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; }
-  .console-map-layout { grid-template-columns: minmax(0, 1fr); }
-  .console-map-keys { display: flex; flex-wrap: wrap; gap: 8px 16px; }
-  .client-shell .console-map-keys :is(.radar-label, .map-legend) { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 0; border: 0; }
-  .console-log-heading { grid-template-columns: 66px 1fr; }
-  .client-shell .console-activity .log time { flex-basis: 66px; }
-  .client-shell .console-setup-summary { align-items: start; }
-  .console-setup-copy { padding-block: 7px; }
-  .client-session-grid { grid-template-columns: minmax(0, 1fr); }
+  .client-shell {
+    padding-inline: 20px;
+  }
+  .client-topbar {
+    gap: 14px;
+  }
+  .client-shell .client-page-nav button {
+    padding-inline: 9px;
+  }
+  .client-shell .console-character-bar {
+    grid-template-columns: minmax(145px, 1fr) minmax(75px, 0.5fr) minmax(75px, 0.5fr);
+    gap: 10px 16px;
+  }
+  .console-character-stats {
+    grid-column: 1/-1;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    border-top: 1px solid var(--client-border);
+    padding-top: 8px;
+  }
+  .console-character-stats dt {
+    margin-bottom: 2px;
+  }
+  .console-character-stats dd small {
+    display: inline;
+  }
+  .client-shell #client-run-title {
+    font-size: 25px;
+  }
+  .client-run-heading {
+    gap: 14px;
+  }
+  .client-shell .run-controls button {
+    padding-inline: 12px;
+    min-height: 48px;
+  }
+  .client-shell .client-stop {
+    min-width: 110px;
+  }
+  .bot-console-grid {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    gap: 16px;
+  }
+  .console-map-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .console-map-keys {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+  .client-shell .console-map-keys :is(.radar-label, .map-legend) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    padding: 0;
+    border: 0;
+  }
+  .console-log-heading {
+    grid-template-columns: 66px 1fr;
+  }
+  .client-shell .console-activity .log time {
+    flex-basis: 66px;
+  }
+  .client-shell .console-setup-summary {
+    align-items: start;
+  }
+  .console-setup-copy {
+    padding-block: 7px;
+  }
+  .client-session-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 @media (max-width: 720px) {
-  .client-shell { padding-inline: 16px; }
-  .client-topbar { flex-wrap: wrap; gap: 0 12px; padding-top: 10px; }
-  .client-page-nav { order: 3; width: 100%; justify-content: space-between; min-height: 46px; }
-  .client-shell .client-account-link { font-size: 12px; }
-  .client-shell .client-toolbar { gap: 12px; }
-  .client-shell .console-character-bar { grid-template-columns: minmax(120px, 1fr) minmax(70px, .65fr) minmax(70px, .65fr); gap: 10px; padding: 12px; }
-  .console-character-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .client-run-heading { align-items: start; flex-wrap: wrap; gap: 12px; }
-  .client-run-copy { width: 100%; }
-  .client-shell .run-controls { margin-left: auto; }
-  .bot-console-grid { grid-template-columns: minmax(0, 1fr); }
-  .client-shell .console-activity .log { min-height: 120px; max-height: 240px; }
-  .console-map-layout { grid-template-columns: minmax(0, 1fr) 82px; }
-  .console-map-keys { display: block; }
-  .client-shell .console-map-keys :is(.radar-label, .map-legend) { display: grid; gap: 10px; padding: 8px 0; }
-  .client-shell .panel { padding: 16px; }
-  .client-shell :is(.form-grid, .routing-grid, .rule-row, .signin-fields) { grid-template-columns: minmax(0, 1fr); }
-  .client-resource-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .client-shell .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .client-shell .stats > div + div { padding-left: 0; border-left: 0; }
-  .client-shell .coverage-list > div { flex-direction: column; }
-  .client-shell .coverage-state { flex-basis: auto; text-align: left; }
-  .console-attention-item { align-items: start; flex-wrap: wrap; }
+  .client-shell {
+    padding-inline: 16px;
+  }
+  .client-topbar {
+    flex-wrap: wrap;
+    gap: 0 12px;
+    padding-top: 10px;
+  }
+  .client-page-nav {
+    order: 3;
+    width: 100%;
+    justify-content: space-between;
+    min-height: 46px;
+  }
+  .client-shell .client-account-link {
+    font-size: 12px;
+  }
+  .client-shell .client-toolbar {
+    gap: 12px;
+  }
+  .client-shell .console-character-bar {
+    grid-template-columns: minmax(120px, 1fr) minmax(70px, 0.65fr) minmax(70px, 0.65fr);
+    gap: 10px;
+    padding: 12px;
+  }
+  .console-character-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .client-run-heading {
+    align-items: start;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .client-run-copy {
+    width: 100%;
+  }
+  .client-shell .run-controls {
+    margin-left: auto;
+  }
+  .bot-console-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .client-shell .console-activity .log {
+    min-height: 120px;
+    max-height: 240px;
+  }
+  .console-map-layout {
+    grid-template-columns: minmax(0, 1fr) 82px;
+  }
+  .console-map-keys {
+    display: block;
+  }
+  .client-shell .console-map-keys :is(.radar-label, .map-legend) {
+    display: grid;
+    gap: 10px;
+    padding: 8px 0;
+  }
+  .client-shell .panel {
+    padding: 16px;
+  }
+  .client-shell :is(.form-grid, .routing-grid, .rule-row, .signin-fields) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .client-resource-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .client-shell .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .client-shell .stats > div + div {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .client-shell .coverage-list > div {
+    flex-direction: column;
+  }
+  .client-shell .coverage-state {
+    flex-basis: auto;
+    text-align: left;
+  }
+  .console-attention-item {
+    align-items: start;
+    flex-wrap: wrap;
+  }
 }
 @media (max-width: 420px) {
-  .client-shell .console-character-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .client-session-identity { grid-column: 1/-1; }
-  .client-page-nav { gap: 0; }
-  .client-shell .client-page-nav button { padding-inline: 5px; gap: 4px; font-size: 12px; }
-  .console-map-layout { grid-template-columns: minmax(0, 1fr); }
-  .console-map-keys { display: flex; flex-wrap: wrap; }
-  .client-shell .console-map-keys :is(.radar-label, .map-legend) { display: flex; flex-wrap: wrap; }
-  .console-walk { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .console-walk button { grid-column: 1/-1; }
+  .client-shell .console-character-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .client-session-identity {
+    grid-column: 1/-1;
+  }
+  .client-page-nav {
+    gap: 0;
+  }
+  .client-shell .client-page-nav button {
+    padding-inline: 5px;
+    gap: 4px;
+    font-size: 12px;
+  }
+  .console-map-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .console-map-keys {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .client-shell .console-map-keys :is(.radar-label, .map-legend) {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .console-walk {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .console-walk button {
+    grid-column: 1/-1;
+  }
 }
 @media (max-height: 650px) {
-  .client-shell .client-toolbar { position: static; }
-  .client-shell :is(button, input, select, textarea, summary, a, h2, h3, h4) { scroll-margin-top: 16px; }
+  .client-shell .client-toolbar {
+    position: static;
+  }
+  .client-shell :is(button, input, select, textarea, summary, a, h2, h3, h4) {
+    scroll-margin-top: 16px;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .client-shell *, .client-shell *::before, .client-shell *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+  .client-shell *,
+  .client-shell *::before,
+  .client-shell *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
 }
 
-.client-shell .macro-panel > label { display: block; margin: 16px 0 8px; font-weight: 600; }
-.client-shell #macro-document { width: 100%; min-height: 320px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; tab-size: 2; }
-.client-shell .macro-actions { flex-wrap: wrap; margin-block: 14px; }
-.client-shell .macro-actions select { flex: 1 1 160px; }
-.client-shell .macro-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; font-size: 12px; line-height: 1.6; }
-.client-shell #macro-state { white-space: pre-wrap; }
+.client-shell .macro-panel > label {
+  display: block;
+  margin: 16px 0 8px;
+  font-weight: 600;
+}
+.client-shell #macro-document {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+.client-shell .macro-actions {
+  flex-wrap: wrap;
+  margin-block: 14px;
+}
+.client-shell .macro-actions select {
+  flex: 1 1 160px;
+}
+.client-shell .macro-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.client-shell #macro-state {
+  white-space: pre-wrap;
+}
 
-.client-shell .hp-potion-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 0; border-top: 1px solid var(--client-border); }
-.client-shell .hp-potion-choice { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 180px; }
-.client-shell .hp-potion-position { min-width: 16px; color: var(--client-accent); }
-.client-shell .hp-potion-stock { color: var(--client-muted); font-size: 12px; }
-.client-shell .hp-potion-row .button-row { margin: 0; }
-.client-shell .hp-potion-panel .notice { margin-top: 10px; }
+.client-shell .hp-potion-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--client-border);
+}
+.client-shell .hp-potion-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 180px;
+}
+.client-shell .hp-potion-position {
+  min-width: 16px;
+  color: var(--client-accent);
+}
+.client-shell .hp-potion-stock {
+  color: var(--client-muted);
+  font-size: 12px;
+}
+.client-shell .hp-potion-row .button-row {
+  margin: 0;
+}
+.client-shell .hp-potion-panel .notice {
+  margin-top: 10px;
+}
 
-.client-shell .setup-view-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
-.client-shell .setup-view-tabs button { min-width: 90px; padding: 10px 18px; border: 1px solid var(--client-border); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
-.client-shell .setup-view-tabs button[aria-selected="true"] { background: var(--client-surface); border-color: var(--client-accent); }
-.client-shell .setup-rules-summary { margin-bottom: 16px; }
-.client-shell #setup-script-editor { max-width: 1100px; }
-.client-shell .live-settings-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; margin-bottom: 16px; padding: 12px 16px; }
-.client-shell .live-settings-panel > :is(h3, p) { margin: 0; }
-.client-shell .live-settings-panel > h3 { font-size: 14px; }
-.client-shell .live-settings-panel > p[role="status"] { grid-column: 1; color: var(--client-text); }
-.client-shell .live-settings-panel > button { grid-column: 2; grid-row: 1/3; }
-.client-shell .live-settings-panel > details { grid-column: 1/-1; border-top: 1px solid var(--client-border); }
-.client-shell .live-settings-panel > details > summary { min-height: 44px; padding: 10px 0; color: var(--client-secondary); }
-.client-shell .live-settings-panel:has(> button[hidden]) > details:not([open]) { grid-column: 2; grid-row: 1/3; border-top: 0; }
+.client-shell .setup-view-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.client-shell .setup-view-tabs button {
+  min-width: 90px;
+  padding: 10px 18px;
+  border: 1px solid var(--client-border);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.client-shell .setup-view-tabs button[aria-selected='true'] {
+  background: var(--client-surface);
+  border-color: var(--client-accent);
+}
+.client-shell .setup-rules-summary {
+  margin-bottom: 16px;
+}
+.client-shell #setup-script-editor {
+  max-width: 1100px;
+}
+.client-shell .live-settings-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+}
+.client-shell .live-settings-panel > :is(h3, p) {
+  margin: 0;
+}
+.client-shell .live-settings-panel > h3 {
+  font-size: 14px;
+}
+.client-shell .live-settings-panel > p[role='status'] {
+  grid-column: 1;
+  color: var(--client-text);
+}
+.client-shell .live-settings-panel > button {
+  grid-column: 2;
+  grid-row: 1/3;
+}
+.client-shell .live-settings-panel > details {
+  grid-column: 1/-1;
+  border-top: 1px solid var(--client-border);
+}
+.client-shell .live-settings-panel > details > summary {
+  min-height: 44px;
+  padding: 10px 0;
+  color: var(--client-secondary);
+}
+.client-shell .live-settings-panel:has(> button[hidden]) > details:not([open]) {
+  grid-column: 2;
+  grid-row: 1/3;
+  border-top: 0;
+}
 @media (max-width: 720px) {
-  .client-shell .live-settings-panel { grid-template-columns: minmax(0, 1fr); }
-  .client-shell .live-settings-panel > button { grid-column: 1; grid-row: auto; justify-self: start; }
-  .client-shell .live-settings-panel:has(> button[hidden]) > details:not([open]) { grid-column: 1; grid-row: auto; border-top: 1px solid var(--client-border); }
+  .client-shell .live-settings-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .client-shell .live-settings-panel > button {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+  }
+  .client-shell .live-settings-panel:has(> button[hidden]) > details:not([open]) {
+    grid-column: 1;
+    grid-row: auto;
+    border-top: 1px solid var(--client-border);
+  }
 }

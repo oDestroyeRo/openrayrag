@@ -140,7 +140,11 @@ cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 bun run app:build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
-`check` builds the frontend and injected bridge, typechecks TypeScript, runs behavioral/protocol/login tests and Rust boundary tests, and runs Clippy. Tests use synthetic events and a public monster fixture; no unattended account test is bundled. Local-login persistence tests use isolated synthetic temporary directories, never the real saved profile or Keychain:
+`check` prepares the pinned Effect compiler/Oxlint integration, checks release-tool types, lint and authored-source formatting, builds the frontend and injected bridge, runs behavioral/protocol/login tests and Rust boundary tests, and runs Clippy and Rust formatting. Tests use synthetic events and a public monster fixture; no unattended account test is bundled. Local-login persistence tests use isolated synthetic temporary directories, never the real saved profile or Keychain:
+
+Use `bun run lint`, `bun run fmt` and `bun run fmt:check` for focused checks or formatting. The Oxc npm tools support Node.js 20.19+ or 22.12+; keep a supported Node executable available alongside the pinned Bun runtime. A normal or frozen `bun install` patches the pinned TypeScript, Oxlint and type-aware binaries through `prepare`; `check` also runs `tooling:prepare` explicitly for installs made with `--ignore-scripts`. Version mismatches fail setup instead of silently omitting diagnostics.
+
+Oxlint enables Effect correctness diagnostics and a focused JavaScript/TypeScript correctness ruleset, including unhandled promises. Test registration from `node:test` is an allowed call; promises inside tests still require handling. Native APIs remain allowed. The editor plugin retains refactors and quick fixes while Oxlint owns diagnostic reporting. The existing compiler and architecture checks remain authoritative. Oxfmt covers authored frontend and Bun source/configuration, with import sorting and embedded-language formatting disabled. Generated catalogs, upstream inputs, vendor and build output keep their owning representation; Rust remains under `cargo fmt`.
 
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml login::

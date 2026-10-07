@@ -1,37 +1,176 @@
 import { admitInventoryItem } from '../world/character-state-logic';
 import { bagId as domainBagId } from '../../shared/domain-values';
-import {describe,it,expect} from 'vitest';
-import {castReadiness,effectiveSpCost,warpCastReadiness} from './cast-policy';
-import {CharacterState} from '../world/character-state';
-import {ActorObservations,PERMANENT_STATUS_SECONDS} from '../world/actor-observations';
-import {skillCost} from '../catalog/game-catalog';
-import {decodeFeatures,FEATURE_OP,type InventoryItem} from '../protocol/protocol-feature';
-import {BitWriter} from '../../shared/binary';
-const item=(bagId:number,itemId:number,slots=[0,0,0,0],refine=0):InventoryItem=>({bagId,itemId,type:2,count:1,flags:0,refine,slots,guid:'01'.repeat(16)});
-function state(items:InventoryItem[]=[],equipment:number[]=Array(10).fill(0)){const value=new CharacterState();value.apply({type:'inventory',items,equipment,ammoId:-1},1);return value;}
-describe('pinned effective SP and cast prerequisites',()=>{
- it('uses integer rounding and counts installed cards and physical equipment once',()=>{const base=skillCost(11,1)!;const s=state([item(900,1201,[4053,4053,0,0])],[0,0,0,0,900,900,0,0,0,0]);expect(effectiveSpCost(s,11,1)).toBe(Math.trunc(base*130/100));s.inventory.set(domainBagId(900),admitInventoryItem(item(900,1201,[4128,0,0,0])));expect(effectiveSpCost(s,11,1)).toBe(base*2);s.inventory.set(domainBagId(900),admitInventoryItem(item(900,1201,[4148,0,0,0])));expect(effectiveSpCost(s,11,1)).toBe(Math.trunc(base*70/100));});
- it('applies refinement and each completed combo once',()=>{const s=state([item(900,2000,undefined,7),item(901,2337),item(902,2654),item(903,2654)],[0,0,0,901,900,0,0,0,902,903]);expect(effectiveSpCost(s,11,1)).toBe(Math.trunc(skillCost(11,1)!*84/100));s.inventory.set(domainBagId(901),admitInventoryItem(item(901,2359)));expect(effectiveSpCost(s,11,1)).toBe(Math.trunc(skillCost(11,1)!*84/100));});
- it('does not infer zero modifiers from incomplete or unsupported metadata',()=>{for(const candidate of [{...item(900,1201),slots:undefined},{...item(900,1201),guid:undefined},item(900,2147483647),item(900,1201,[999999,0,0,0]),item(900,1201,[4148,4148,4148,4148])])expect(effectiveSpCost(state([candidate],[0,0,0,0,900,0,0,0,0,0]),11,1)).toBeNull();expect(effectiveSpCost(state([],[]),11,1)).toBeNull();});
- it('decodes source-shaped 63 without a type tag and updates only the verified unique identity',()=>{const s=state([item(900,2000)],[0,0,0,0,900,0,0,0,0,0]);const w=new BitWriter().u8(FEATURE_OP.inventoryItem).i32(900).i32(2000).i16(1).u8(0).u8(10);for(let n=0;n<16;n++)w.u8(1);for(const card of [4053,0,0,0])w.i32(card);const bytes=w.finish();expect(bytes).toHaveLength(45);const events=decodeFeatures(bytes)!;expect(events[0]).toMatchObject({type:'inventoryItem',item:{bagId:900,refine:10,slots:[4053,0,0,0]}});s.apply(events[0]!,1);expect(effectiveSpCost(s,11,1)).toBe(Math.trunc(skillCost(11,1)!*135/100));expect(()=>decodeFeatures(bytes.slice(0,-1))).toThrow();expect(()=>decodeFeatures(Uint8Array.from([...bytes,0]))).toThrow();s.apply({type:'inventoryItem',item:{...item(900,2000),guid:'02'.repeat(16)}},1);expect(s.inventoryKnown).toBe(false);expect(effectiveSpCost(s,11,1)).toBeNull();});
- it('uses range9/Blind5 and treats expired, refreshed and missing status evidence as unavailable',()=>{let now=1000;const observations=new ActorObservations(()=>now);observations.spawn({id:1,kind:0,classId:2,name:'Mage',level:1,hp:100,maxHp:100,x:1,y:1,dead:false,statuses:[]});observations.frame();const s=state();s.apply({type:'skills',learned:[{skillId:11,level:10}]},1);s.apply({type:'stats',level:1,hp:100,maxHp:100,sp:100},1);const ready=()=>castReadiness(11,1,s,observations.snapshot(1,null,true));expect(ready()).toMatchObject({state:'ready',profile:{range:9}});observations.apply({type:'castStart',id:1,skillId:11,level:1,position:{x:1,y:1},remainingSeconds:3,flags:0,target:2});expect(ready()).toMatchObject({state:'blocked',reason:'A known observed cast is still active.'});observations.apply({type:'castStop',id:1});observations.apply({type:'status',id:1,statusId:5,seconds:1});expect(ready()).toMatchObject({state:'ready',profile:{range:5}});now+=1000;observations.frame();expect(ready().state).toBe('unavailable');observations.apply({type:'status',id:1,statusId:5,seconds:null});expect(ready().state).toBe('ready');observations.apply({type:'status',id:1,statusId:6,seconds:PERMANENT_STATUS_SECONDS});expect(ready().state).toBe('blocked');observations.apply({type:'status',id:1,statusId:6,seconds:null,refresh:true});expect(ready().state).toBe('unavailable');expect(castReadiness(19,1,s,undefined).state).toBe('unavailable');});
+import { describe, it, expect } from 'vitest';
+import { castReadiness, effectiveSpCost, warpCastReadiness } from './cast-policy';
+import { CharacterState } from '../world/character-state';
+import { ActorObservations, PERMANENT_STATUS_SECONDS } from '../world/actor-observations';
+import { skillCost } from '../catalog/game-catalog';
+import { decodeFeatures, FEATURE_OP, type InventoryItem } from '../protocol/protocol-feature';
+import { BitWriter } from '../../shared/binary';
+const item = (bagId: number, itemId: number, slots = [0, 0, 0, 0], refine = 0): InventoryItem => ({
+  bagId,
+  itemId,
+  type: 2,
+  count: 1,
+  flags: 0,
+  refine,
+  slots,
+  guid: '01'.repeat(16),
+});
+function state(items: InventoryItem[] = [], equipment: number[] = Array(10).fill(0)) {
+  const value = new CharacterState();
+  value.apply({ type: 'inventory', items, equipment, ammoId: -1 }, 1);
+  return value;
+}
+describe('pinned effective SP and cast prerequisites', () => {
+  it('uses integer rounding and counts installed cards and physical equipment once', () => {
+    const base = skillCost(11, 1)!;
+    const s = state([item(900, 1201, [4053, 4053, 0, 0])], [0, 0, 0, 0, 900, 900, 0, 0, 0, 0]);
+    expect(effectiveSpCost(s, 11, 1)).toBe(Math.trunc((base * 130) / 100));
+    s.inventory.set(domainBagId(900), admitInventoryItem(item(900, 1201, [4128, 0, 0, 0])));
+    expect(effectiveSpCost(s, 11, 1)).toBe(base * 2);
+    s.inventory.set(domainBagId(900), admitInventoryItem(item(900, 1201, [4148, 0, 0, 0])));
+    expect(effectiveSpCost(s, 11, 1)).toBe(Math.trunc((base * 70) / 100));
+  });
+  it('applies refinement and each completed combo once', () => {
+    const s = state(
+      [item(900, 2000, undefined, 7), item(901, 2337), item(902, 2654), item(903, 2654)],
+      [0, 0, 0, 901, 900, 0, 0, 0, 902, 903],
+    );
+    expect(effectiveSpCost(s, 11, 1)).toBe(Math.trunc((skillCost(11, 1)! * 84) / 100));
+    s.inventory.set(domainBagId(901), admitInventoryItem(item(901, 2359)));
+    expect(effectiveSpCost(s, 11, 1)).toBe(Math.trunc((skillCost(11, 1)! * 84) / 100));
+  });
+  it('does not infer zero modifiers from incomplete or unsupported metadata', () => {
+    for (const candidate of [
+      { ...item(900, 1201), slots: undefined },
+      { ...item(900, 1201), guid: undefined },
+      item(900, 2147483647),
+      item(900, 1201, [999999, 0, 0, 0]),
+      item(900, 1201, [4148, 4148, 4148, 4148]),
+    ])
+      expect(
+        effectiveSpCost(state([candidate], [0, 0, 0, 0, 900, 0, 0, 0, 0, 0]), 11, 1),
+      ).toBeNull();
+    expect(effectiveSpCost(state([], []), 11, 1)).toBeNull();
+  });
+  it('decodes source-shaped 63 without a type tag and updates only the verified unique identity', () => {
+    const s = state([item(900, 2000)], [0, 0, 0, 0, 900, 0, 0, 0, 0, 0]);
+    const w = new BitWriter().u8(FEATURE_OP.inventoryItem).i32(900).i32(2000).i16(1).u8(0).u8(10);
+    for (let n = 0; n < 16; n++) w.u8(1);
+    for (const card of [4053, 0, 0, 0]) w.i32(card);
+    const bytes = w.finish();
+    expect(bytes).toHaveLength(45);
+    const events = decodeFeatures(bytes)!;
+    expect(events[0]).toMatchObject({
+      type: 'inventoryItem',
+      item: { bagId: 900, refine: 10, slots: [4053, 0, 0, 0] },
+    });
+    s.apply(events[0]!, 1);
+    expect(effectiveSpCost(s, 11, 1)).toBe(Math.trunc((skillCost(11, 1)! * 135) / 100));
+    expect(() => decodeFeatures(bytes.slice(0, -1))).toThrow();
+    expect(() => decodeFeatures(Uint8Array.from([...bytes, 0]))).toThrow();
+    s.apply({ type: 'inventoryItem', item: { ...item(900, 2000), guid: '02'.repeat(16) } }, 1);
+    expect(s.inventoryKnown).toBe(false);
+    expect(effectiveSpCost(s, 11, 1)).toBeNull();
+  });
+  it('uses range9/Blind5 and treats expired, refreshed and missing status evidence as unavailable', () => {
+    let now = 1000;
+    const observations = new ActorObservations(() => now);
+    observations.spawn({
+      id: 1,
+      kind: 0,
+      classId: 2,
+      name: 'Mage',
+      level: 1,
+      hp: 100,
+      maxHp: 100,
+      x: 1,
+      y: 1,
+      dead: false,
+      statuses: [],
+    });
+    observations.frame();
+    const s = state();
+    s.apply({ type: 'skills', learned: [{ skillId: 11, level: 10 }] }, 1);
+    s.apply({ type: 'stats', level: 1, hp: 100, maxHp: 100, sp: 100 }, 1);
+    const ready = () => castReadiness(11, 1, s, observations.snapshot(1, null, true));
+    expect(ready()).toMatchObject({ state: 'ready', profile: { range: 9 } });
+    observations.apply({
+      type: 'castStart',
+      id: 1,
+      skillId: 11,
+      level: 1,
+      position: { x: 1, y: 1 },
+      remainingSeconds: 3,
+      flags: 0,
+      target: 2,
+    });
+    expect(ready()).toMatchObject({
+      state: 'blocked',
+      reason: 'A known observed cast is still active.',
+    });
+    observations.apply({ type: 'castStop', id: 1 });
+    observations.apply({ type: 'status', id: 1, statusId: 5, seconds: 1 });
+    expect(ready()).toMatchObject({ state: 'ready', profile: { range: 5 } });
+    now += 1000;
+    observations.frame();
+    expect(ready().state).toBe('unavailable');
+    observations.apply({ type: 'status', id: 1, statusId: 5, seconds: null });
+    expect(ready().state).toBe('ready');
+    observations.apply({ type: 'status', id: 1, statusId: 6, seconds: PERMANENT_STATUS_SECONDS });
+    expect(ready().state).toBe('blocked');
+    observations.apply({ type: 'status', id: 1, statusId: 6, seconds: null, refresh: true });
+    expect(ready().state).toBe('unavailable');
+    expect(castReadiness(19, 1, s, undefined).state).toBe('unavailable');
+  });
 });
 
 describe('cast prerequisite ordering', () => {
   it('returns the first disabling prerequisite before reading later evidence', () => {
     const observations = new ActorObservations(() => 1_000);
-    observations.spawn({ id: 1, kind: 0, classId: 2, name: 'Mage', level: 1, hp: 100, maxHp: 100,
-      x: 1, y: 1, dead: false, statuses: [] });
+    observations.spawn({
+      id: 1,
+      kind: 0,
+      classId: 2,
+      name: 'Mage',
+      level: 1,
+      hp: 100,
+      maxHp: 100,
+      x: 1,
+      y: 1,
+      dead: false,
+      statuses: [],
+    });
     observations.frame();
     observations.apply({ type: 'status', id: 1, statusId: 2, seconds: 10 });
     const snapshot = observations.snapshot(1, null, true);
     const statuses = snapshot.actors[0]!.statuses;
     // The first prerequisite finds status 2; later prerequisite searches would reach this row.
     statuses.push({ id: 3, known: true, present: false, observedAt: 1_000, expiresAt: null });
-    Object.defineProperty(statuses, 1, { get: () => { throw new Error('A later prerequisite was evaluated.'); } });
+    Object.defineProperty(statuses, 1, {
+      get: () => {
+        throw new Error('A later prerequisite was evaluated.');
+      },
+    });
     const character = state();
-    character.apply({ type: 'skills', learned: [{ skillId: 11, level: 10 }, { skillId: 55, level: 4 }] }, 1);
-    expect(castReadiness(11, 1, character, snapshot)).toEqual({ state: 'blocked', reason: 'A disabling or hidden status prevents this skill.' });
-    expect(warpCastReadiness(character, snapshot)).toEqual({ state: 'blocked', reason: 'Verified clear body-state prerequisites are required for Warp Portal.' });
+    character.apply(
+      {
+        type: 'skills',
+        learned: [
+          { skillId: 11, level: 10 },
+          { skillId: 55, level: 4 },
+        ],
+      },
+      1,
+    );
+    expect(castReadiness(11, 1, character, snapshot)).toEqual({
+      state: 'blocked',
+      reason: 'A disabling or hidden status prevents this skill.',
+    });
+    expect(warpCastReadiness(character, snapshot)).toEqual({
+      state: 'blocked',
+      reason: 'Verified clear body-state prerequisites are required for Warp Portal.',
+    });
   });
 });

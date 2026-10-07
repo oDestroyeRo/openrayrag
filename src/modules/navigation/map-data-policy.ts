@@ -13,8 +13,8 @@ export type MapDataResult<T> =
 /** Project composed admission at the existing public result boundary. */
 export function mapDataResult<T>(result: Result<T, MapDataFailure>): MapDataResult<T> {
   return match(result, {
-    onFailure: cause => ({ kind: 'failure' as const, cause }),
-    onSuccess: value => ({ kind: 'success' as const, value }),
+    onFailure: (cause) => ({ kind: 'failure' as const, cause }),
+    onSuccess: (value) => ({ kind: 'success' as const, value }),
   });
 }
 
@@ -22,11 +22,17 @@ export const MAX_MAP_DOCUMENT_BYTES = 2_000_000;
 
 export function mapDataFailureMessage(cause: MapDataFailure): string {
   switch (cause.kind) {
-    case 'network': case 'http': return 'Map database unavailable';
-    case 'timeout': return 'Map database request deadline exceeded';
-    case 'cancelled': return 'Map database request cancelled';
-    case 'size-limit': return 'Map database exceeds its limit';
-    case 'invalid-data': return cause.message;
+    case 'network':
+    case 'http':
+      return 'Map database unavailable';
+    case 'timeout':
+      return 'Map database request deadline exceeded';
+    case 'cancelled':
+      return 'Map database request cancelled';
+    case 'size-limit':
+      return 'Map database exceeds its limit';
+    case 'invalid-data':
+      return cause.message;
   }
 }
 
@@ -47,8 +53,13 @@ export function mapDataFailure(error: unknown): MapDataFailure {
 
 export function mapDataRetryDelay(cause: MapDataFailure, attempt: number): number | null {
   if (!Number.isInteger(attempt) || attempt < 0 || attempt >= 2) return null;
-  const transient = cause.kind === 'network' || cause.kind === 'timeout'
-    || cause.kind === 'http' && (cause.status === 408 || cause.status === 429 || cause.status >= 500 && cause.status <= 599);
+  const transient =
+    cause.kind === 'network' ||
+    cause.kind === 'timeout' ||
+    (cause.kind === 'http' &&
+      (cause.status === 408 ||
+        cause.status === 429 ||
+        (cause.status >= 500 && cause.status <= 599)));
   return transient ? (attempt === 0 ? 2_000 : 10_000) : null;
 }
 

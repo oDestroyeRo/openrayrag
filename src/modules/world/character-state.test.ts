@@ -1,13 +1,29 @@
 import { admitInventoryItem } from './character-state-logic';
-import { itemId as domainItemId, bagId as domainBagId, skillId as domainSkillId } from '../../shared/domain-values';
+import {
+  itemId as domainItemId,
+  bagId as domainBagId,
+  skillId as domainSkillId,
+} from '../../shared/domain-values';
 import { describe, expect, it } from 'vitest';
 import { CharacterState } from './character-state';
 import { inventoryItemCount } from './character-state-logic';
 import type { InventoryItem } from '../protocol/protocol-feature';
 import type { Entity } from '../protocol/protocol';
 
-const player: Entity = { id: 1, classId: 0, name: 'Player', kind: 0, level: 13,
-  hp: 149, maxHp: 149, x: 100, y: 100, dead: false, sp: 0, maxSp: 0 };
+const player: Entity = {
+  id: 1,
+  classId: 0,
+  name: 'Player',
+  kind: 0,
+  level: 13,
+  hp: 149,
+  maxHp: 149,
+  x: 100,
+  y: 100,
+  dead: false,
+  sp: 0,
+  maxSp: 0,
+};
 
 describe('player spawn resources', () => {
   it('preserves full login stats when a nearby-player broadcast follows', () => {
@@ -42,7 +58,8 @@ describe('inventory projections', () => {
     items[1] = { bagId: 501, itemId: 501, type: 1, count: 2 };
     items[2] = { bagId: 502, itemId: 502, type: 1, count: 7 };
     items[3] = { bagId: 900, itemId: 501, type: 2, count: 1 };
-    const before = structuredClone(items), count = inventoryItemCount(domainItemId(501));
+    const before = structuredClone(items),
+      count = inventoryItemCount(domainItemId(501));
     expect(count(items)).toBe(3);
     expect(count([])).toBe(0);
     expect(inventoryItemCount(domainItemId(999))(items)).toBe(0);
@@ -53,8 +70,15 @@ describe('inventory projections', () => {
 
   it('bounds dense state projections and detaches published rows', () => {
     const state = new CharacterState();
-    for (let id = 1; id <= 601; id++) state.inventory.set(domainBagId(id), admitInventoryItem({ bagId: id, itemId: id, type: 1, count: 1 }));
-    for (let id = 1; id <= 513; id++) { state.learned.set(domainSkillId(id), 2); state.granted.set(domainSkillId(id), 3); }
+    for (let id = 1; id <= 601; id++)
+      state.inventory.set(
+        domainBagId(id),
+        admitInventoryItem({ bagId: id, itemId: id, type: 1, count: 1 }),
+      );
+    for (let id = 1; id <= 513; id++) {
+      state.learned.set(domainSkillId(id), 2);
+      state.granted.set(domainSkillId(id), 3);
+    }
     for (let id = 1; id <= 129; id++) state.statuses.set(id, 10);
     const snapshot = state.snapshot();
     expect(snapshot.inventory).toHaveLength(600);

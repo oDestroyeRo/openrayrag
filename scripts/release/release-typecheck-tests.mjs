@@ -1,24 +1,24 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, symlink, writeFile, rm } from "node:fs/promises";
-import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, symlink, writeFile, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = fileURLToPath(new URL("../..", import.meta.url));
+const root = fileURLToPath(new URL('../..', import.meta.url));
 const compiler = join(
-  dirname(createRequire(import.meta.url).resolve("typescript/package.json")),
-  "bin/tsc",
+  dirname(createRequire(import.meta.url).resolve('typescript/package.json')),
+  'bin/tsc',
 );
-const configuration = join(root, "tsconfig.release.json");
+const configuration = join(root, 'tsconfig.release.json');
 
 function compile(project) {
   const result = spawnSync(
     process.execPath,
-    [compiler, "--project", project, "--pretty", "false"],
-    { cwd: root, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 },
+    [compiler, '--project', project, '--pretty', 'false'],
+    { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024 },
   );
   assert.equal(result.error, undefined);
   assert.equal(result.signal, null);
@@ -26,20 +26,23 @@ function compile(project) {
 }
 
 async function compileMutation(mutate) {
-  const folder = await mkdtemp(join(tmpdir(), "rayrag-release-typecheck-"));
+  const folder = await mkdtemp(join(tmpdir(), 'rayrag-release-typecheck-'));
   try {
-    await mkdir(join(folder, "scripts/release"), { recursive: true });
+    await mkdir(join(folder, 'scripts/release'), { recursive: true });
     // rootDirs resolves relative source overlays, while packages resolve from
     // their own node_modules ancestry. Keep the pure library available here.
-    await mkdir(join(folder, "node_modules"));
-    await symlink(join(root, "node_modules/effect"), join(folder, "node_modules/effect"),
-      process.platform === "win32" ? "junction" : "dir");
-    const source = await readFile(join(root, "scripts/release/release.mjs"), "utf8");
+    await mkdir(join(folder, 'node_modules'));
+    await symlink(
+      join(root, 'node_modules/effect'),
+      join(folder, 'node_modules/effect'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const source = await readFile(join(root, 'scripts/release/release.mjs'), 'utf8');
     const changed = mutate(source);
-    assert.notEqual(changed, source, "The fixture must mutate production code.");
-    const entrypoint = join(folder, "scripts/release/release.mjs");
+    assert.notEqual(changed, source, 'The fixture must mutate production code.');
+    const entrypoint = join(folder, 'scripts/release/release.mjs');
     await writeFile(entrypoint, changed);
-    const project = join(folder, "tsconfig.json");
+    const project = join(folder, 'tsconfig.json');
     await writeFile(
       project,
       JSON.stringify({
@@ -47,7 +50,7 @@ async function compileMutation(mutate) {
         compilerOptions: {
           // Resolve the unchanged production dependencies beside this overlay.
           rootDirs: [folder, root],
-          typeRoots: [join(root, "node_modules/@types")],
+          typeRoots: [join(root, 'node_modules/@types')],
         },
         files: [entrypoint],
       }),
@@ -58,18 +61,19 @@ async function compileMutation(mutate) {
   }
 }
 
-test("release entrypoint and its production dependency graph type-check", () => {
+test('release entrypoint and its production dependency graph type-check', () => {
   const result = compile(configuration);
   assert.equal(result.status, 0, result.output);
 });
 
-test("compiler rejects the original string argument to reservation slice", async () => {
-  const result = await compileMutation((source) =>
-    source.replace(
-      'PLAN_REF_PREFIX.slice("refs/".length)',
-      'PLAN_REF_PREFIX.slice("refs/")',
-    ),
-  );
+test('compiler rejects the original string argument to reservation slice', async () => {
+  const result = await compileMutation((source) => {
+    // Match the checked call across quote/layout changes, then prove that the
+    // fixture still changes exactly the production argument being tested.
+    const call = /PLAN_REF_PREFIX\s*\.\s*slice\s*\(\s*(["'])refs\/\1\s*\.\s*length\s*\)/g;
+    assert.equal([...source.matchAll(call)].length, 1);
+    return source.replace(call, 'PLAN_REF_PREFIX.slice("refs/")');
+  });
   assert.notEqual(result.status, 0);
   assert.match(
     result.output,
@@ -78,7 +82,7 @@ test("compiler rejects the original string argument to reservation slice", async
   assert.equal((result.output.match(/error TS/g) ?? []).length, 1, result.output);
 });
 
-test("request method, path and uploaded bytes have checked input contracts", async () => {
+test('request method, path and uploaded bytes have checked input contracts', async () => {
   const result = await compileMutation(
     (source) => `${source}
 const apiTypeFixture = new GitHubReleaseApi("synthetic-token");
@@ -94,9 +98,10 @@ apiTypeFixture.upload(releaseId(1), "bundle.zip", "invalid-byte-body");
   assert.equal((result.output.match(/error TS/g) ?? []).length, 3, result.output);
 });
 
-test("compiler rejects identity and digest swaps in actual API and policy consumers", async () => {
-  const result = await compileMutation(source => `${source}
-import { workflowRunId, workflowJobId, actionsArtifactId, pullRequestNumber,
+test('compiler rejects identity and digest swaps in actual API and policy consumers', async () => {
+  const result = await compileMutation(
+    (source) => `${source}
+import { gitTagObjectSha, workflowRunId, workflowJobId, actionsArtifactId, pullRequestNumber,
   fileDigest, policyDigest, releaseTag, stableReleaseVersion, workflowAttempt } from '../shared/tooling-domain-values.mjs';
 import { downloadActionsZip } from './release-public-io.mjs';
 import { validateRun, createPullRequestStatus } from '../quality/hosted-status-policy.mjs';
@@ -124,10 +129,21 @@ releaseBody({sourceSha: sourceValue, version: stableReleaseVersion('1.2.3'), tag
 /** @type {import('../shared/tooling-domain-values.mjs').FirstParentCount} */
 const countSwap = workflowAttempt(1);
 checkedPlan.analysisBase.version = stableReleaseVersion('9.9.9');
-`);
+`,
+  );
   assert.notEqual(result.status, 0);
-  for (const name of ['GitTagObjectSha', 'SourceCommitSha', 'ActionsArtifactId', 'WorkflowRunId',
-    'PullRequestNumber', 'StableReleaseVersion', 'PolicyDigest', 'PlanDigest', 'ArtifactDigest', 'FirstParentCount']) {
+  for (const name of [
+    'GitTagObjectSha',
+    'SourceCommitSha',
+    'ActionsArtifactId',
+    'WorkflowRunId',
+    'PullRequestNumber',
+    'StableReleaseVersion',
+    'PolicyDigest',
+    'PlanDigest',
+    'ArtifactDigest',
+    'FirstParentCount',
+  ]) {
     assert.match(result.output, new RegExp(name), result.output);
   }
   assert.match(result.output, /read-only property/, result.output);

@@ -10,7 +10,14 @@
     "noUnusedParameters": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnostics": false
+      }
+    ]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "$schema": "./node_modules/@effect/tsgo/schema.json"
 }

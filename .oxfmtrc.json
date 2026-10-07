@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "singleQuote": true,
+  "printWidth": 100,
+  "sortImports": false,
+  "sortPackageJson": false,
+  "embeddedLanguageFormatting": "off",
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "vendor/**",
+    ".references/**",
+    "dist/**",
+    "reports/**",
+    "platform-bundles/**",
+    "release-bundle/**",
+    "src-tauri/target/**",
+    "src-tauri/gen/**",
+    "src-tauri/generated/**",
+    "src/data/**",
+    "scripts/catalogs/*.json"
+  ]
+}

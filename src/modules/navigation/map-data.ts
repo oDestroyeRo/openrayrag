@@ -1,41 +1,82 @@
 import { all, fromResult, gen, result, runPromise, tryPromise, type Effect } from 'effect/Effect';
-import { admitMapCatalog, admitMapDataText, parseMapCatalogAssetsResult, type MapCatalog } from './map-data-logic';
+import {
+  admitMapCatalog,
+  admitMapDataText,
+  parseMapCatalogAssetsResult,
+  type MapCatalog,
+} from './map-data-logic';
 import { readNativeMapData, waitForMapDataRetry, withMapDataRequests } from './map-data-effects';
-import { mapDataFailure, mapDataResult, mapDataRetryDelay, unwrapMapData, type MapDataFailure, type MapDataResult } from './map-data-policy';
-export { currentMapInfo, parseMapCatalog, validMapInfo, type MapMonster, type MapInfo, type MapCatalog, type CatalogMonster } from './map-data-logic';
+import {
+  mapDataFailure,
+  mapDataResult,
+  mapDataRetryDelay,
+  unwrapMapData,
+  type MapDataFailure,
+  type MapDataResult,
+} from './map-data-policy';
+export {
+  currentMapInfo,
+  parseMapCatalog,
+  validMapInfo,
+  type MapMonster,
+  type MapInfo,
+  type MapCatalog,
+  type CatalogMonster,
+} from './map-data-logic';
 export { MAP_DATA_URL } from './map-data-effects';
 
-export async function loadMapCatalog(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<MapCatalog> {
+export async function loadMapCatalog(
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<MapCatalog> {
   return unwrapMapData(await loadMapCatalogResult(fetcher, signal));
 }
 
-export async function loadMapCatalogResult(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<MapDataResult<MapCatalog>> {
+export async function loadMapCatalogResult(
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<MapDataResult<MapCatalog>> {
   return mapDataResult(await runPromise(result(mapCatalogProgram(fetcher, signal))));
 }
 
 /** A lazy read program: each interpretation creates and retires its own request scope. */
-export function mapCatalogProgram(fetcher: typeof fetch = fetch, signal?: AbortSignal): Effect<MapCatalog, MapDataFailure> {
+export function mapCatalogProgram(
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Effect<MapCatalog, MapDataFailure> {
   return gen(function* () {
     const admitted = yield* tryPromise({
-      try: programSignal => withMapDataRequests(async (read, scopeSignal) => {
-        // This program stays inside the request scope; it never exposes its reader.
-        const document = (file: string) => gen(function* () {
-          const text = yield* tryPromise({ try: () => read(file), catch: mapDataFailure });
-          return yield* fromResult(admitMapDataText(text));
-        });
-        const program = gen(function* () {
-          const [maps, monsters] = yield* all([document('maps.json'), document('monsterdatabase.json')], { concurrency: 2 });
-          return yield* fromResult(admitMapCatalog(maps, monsters));
-        });
-        return runPromise(result(program), { signal: scopeSignal });
-      }, fetcher, signal, programSignal),
+      try: (programSignal) =>
+        withMapDataRequests(
+          async (read, scopeSignal) => {
+            // This program stays inside the request scope; it never exposes its reader.
+            const document = (file: string) =>
+              gen(function* () {
+                const text = yield* tryPromise({ try: () => read(file), catch: mapDataFailure });
+                return yield* fromResult(admitMapDataText(text));
+              });
+            const program = gen(function* () {
+              const [maps, monsters] = yield* all(
+                [document('maps.json'), document('monsterdatabase.json')],
+                { concurrency: 2 },
+              );
+              return yield* fromResult(admitMapCatalog(maps, monsters));
+            });
+            return runPromise(result(program), { signal: scopeSignal });
+          },
+          fetcher,
+          signal,
+          programSignal,
+        ),
       catch: mapDataFailure,
     });
     return yield* fromResult(admitted);
   });
 }
 
-export async function loadNativeMapCatalog(invoke: (name: string, args: unknown) => Promise<unknown>): Promise<MapCatalog> {
+export async function loadNativeMapCatalog(
+  invoke: (name: string, args: unknown) => Promise<unknown>,
+): Promise<MapCatalog> {
   return unwrapMapData(parseMapCatalogAssetsResult(await readNativeMapData(invoke)));
 }
 
@@ -47,14 +88,24 @@ type MapCatalogLoadState =
 /** One runtime owns this catalogue load; retiring it suppresses every late result. */
 export class MapCatalogLoader {
   private state: MapCatalogLoadState = { kind: 'idle' };
-  get catalog(): MapCatalog | null { return this.state.kind === 'ready' ? this.state.catalog : null; }
-  get loading(): boolean { return this.state.kind === 'loading'; }
-  get failure(): MapDataFailure | null { return this.state.kind === 'failed' ? this.state.cause : null; }
+  get catalog(): MapCatalog | null {
+    return this.state.kind === 'ready' ? this.state.catalog : null;
+  }
+  get loading(): boolean {
+    return this.state.kind === 'loading';
+  }
+  get failure(): MapDataFailure | null {
+    return this.state.kind === 'failed' ? this.state.cause : null;
+  }
   private readonly lifetime = new AbortController();
-  constructor(private readonly read: (signal: AbortSignal) => Promise<MapCatalog>, private readonly changed: () => void) {}
+  constructor(
+    private readonly read: (signal: AbortSignal) => Promise<MapCatalog>,
+    private readonly changed: () => void,
+  ) {}
   async start(): Promise<void> {
     if (this.lifetime.signal.aborted || this.loading || this.catalog) return;
-    this.state = { kind: 'loading' }; this.changed();
+    this.state = { kind: 'loading' };
+    this.changed();
     try {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -64,7 +115,7 @@ export class MapCatalogLoader {
         } catch (error) {
           const cause = mapDataFailure(error);
           const delay = mapDataRetryDelay(cause, attempt);
-          if (delay === null || !await waitForMapDataRetry(delay, this.lifetime.signal)) {
+          if (delay === null || !(await waitForMapDataRetry(delay, this.lifetime.signal))) {
             this.state = { kind: 'failed', cause };
             return;
           }
@@ -75,5 +126,7 @@ export class MapCatalogLoader {
       if (!this.lifetime.signal.aborted) this.changed();
     }
   }
-  dispose(): void { this.lifetime.abort(); }
+  dispose(): void {
+    this.lifetime.abort();
+  }
 }

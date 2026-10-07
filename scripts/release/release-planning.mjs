@@ -3,23 +3,21 @@ import { getOrThrow } from 'effect/Result';
 // Trusted-source orchestration. The pure engines and reservation ledger own policy;
 // callers inject Git history, commit ranges, API access and native verification.
 import {
-  validatePlan, parseTransportedPlanResult,
+  validatePlan,
+  parseTransportedPlanResult,
   serializePlan,
   planSha256,
-} from "./semantic-release-policy.mjs";
-import { planRelease } from "./semantic-release-plan.mjs";
-import {
-  readReservations,
-  reservePlan,
-  verifyReservedPlan,
-} from "./release-reservations.mjs";
+} from './semantic-release-policy.mjs';
+import { planRelease } from './semantic-release-plan.mjs';
+import { readReservations, reservePlan, verifyReservedPlan } from './release-reservations.mjs';
 import {
   requireValue,
   migrationBridge,
   legacyFeed,
   verifiedRelease,
-  preflight, fileBytes,
-} from "./release-core.mjs";
+  preflight,
+  fileBytes,
+} from './release-core.mjs';
 /** @param {import('../shared/tooling-domain-values.mjs').ReleaseIdentity | import('../shared/tooling-domain-values.mjs').ReleasePlan} value @returns {import('../shared/tooling-domain-values.mjs').ReleaseBase} */
 const baseOf = ({ sourceSha, version, tag }) => ({ sourceSha, version, tag });
 /** @param {import('../shared/tooling-domain-values.mjs').ReleasePlan} plan @returns {import('../shared/tooling-domain-values.mjs').ReleaseIdentity} */
@@ -36,7 +34,7 @@ export const planIdentity = (plan) => ({
 export async function reservationContext(ctx, bridge = migrationBridge) {
   requireValue(
     ctx.history[bridge.firstParentCount - 1] === bridge.sourceSha,
-    "Migration bridge is outside current main ancestry.",
+    'Migration bridge is outside current main ancestry.',
   );
   ctx = { ...ctx, history: [...ctx.history] };
   bridge = { ...bridge };
@@ -47,43 +45,33 @@ export async function reservationContext(ctx, bridge = migrationBridge) {
     const reserved = plans.find((p) => p.sourceSha === plan.sourceSha);
     requireValue(
       reserved && planSha256(reserved) === planSha256(plan),
-      "Release does not match its durable reservation.",
+      'Release does not match its durable reservation.',
     );
   };
   return { ...ctx, bridge: releaseBridgeValues(bridge), plans, verifyPlan };
 }
 /** @param {import('../shared/tooling-domain-values.mjs').PlanningContext} ctx @param {{bridge?: import('../shared/tooling-domain-values.mjs').ReleaseBridgeDto, feed?: () => Buffer}} [options] @returns {Promise<import('../shared/tooling-domain-values.mjs').ProductionPlanResult>} */
-export async function planProduction(
-  ctx,
-  { bridge = migrationBridge, feed = legacyFeed } = {},
-) {
+export async function planProduction(ctx, { bridge = migrationBridge, feed = legacyFeed } = {}) {
   const index = ctx.history.indexOf(ctx.sha);
-  requireValue(index >= 0, "Release source is outside current main ancestry.");
+  requireValue(index >= 0, 'Release source is outside current main ancestry.');
   ctx = { ...ctx, history: [...ctx.history] };
   let context = await reservationContext(ctx, bridge);
   const anchor = await ctx.api.release(context.bridge.tag);
-  requireValue(
-    anchor && !anchor.draft,
-    "Published migration bridge is required.",
-  );
+  requireValue(anchor && !anchor.draft, 'Published migration bridge is required.');
   const verifiedBridge = await verifiedRelease(context, anchor);
   requireValue(
     verifiedBridge.id.sourceSha === context.bridge.sourceSha &&
-      fileBytes(verifiedBridge.files, "latest.json").equals(feed()),
-    "Migration bridge/feed changed.",
+      fileBytes(verifiedBridge.files, 'latest.json').equals(feed()),
+    'Migration bridge/feed changed.',
   );
   const latest = await ctx.api.latest();
-  requireValue(
-    latest && !latest.draft,
-    "Verified published baseline is required.",
-  );
+  requireValue(latest && !latest.draft, 'Verified published baseline is required.');
   const published = await verifiedRelease(context, latest);
   const publishedCount = ctx.history.indexOf(published.id.sourceSha) + 1;
   requireValue(
     publishedCount >= context.bridge.firstParentCount &&
-      (published.meta.schemaVersion === 3 ||
-        published.id.sourceSha === context.bridge.sourceSha),
-    "Published baseline is outside the semantic migration.",
+      (published.meta.schemaVersion === 3 || published.id.sourceSha === context.bridge.sourceSha),
+    'Published baseline is outside the semantic migration.',
   );
   let plan = context.plans.find((p) => p.sourceSha === ctx.sha);
   if (plan) {
@@ -91,15 +79,15 @@ export async function planProduction(
     // Preserve an existing draft's original artifact even after a later release.
     if (publishedCount > index + 1 && !release)
       return {
-        state: "skip",
-        reason: "Source was superseded by a published release.",
+        state: 'skip',
+        reason: 'Source was superseded by a published release.',
       };
   } else {
     const previous = context.plans.at(-1);
     if (index + 1 <= Math.max(publishedCount, previous?.firstParentCount ?? 0))
       return {
-        state: "skip",
-        reason: "Source was already published or superseded.",
+        state: 'skip',
+        reason: 'Source was already published or superseded.',
       };
     const analysisBase = previous ?? published.id;
     const result = await planRelease({
@@ -110,13 +98,10 @@ export async function planProduction(
       },
       published: baseOf(published.id),
       reservation: previous ?? null,
-      analysisCommits: await ctx.commitsBetween(
-        analysisBase.sourceSha,
-        ctx.sha,
-      ),
+      analysisCommits: await ctx.commitsBetween(analysisBase.sourceSha, ctx.sha),
       notesCommits: await ctx.commitsBetween(published.id.sourceSha, ctx.sha),
     });
-    if (result.state === "skip") return result;
+    if (result.state === 'skip') return result;
     plan = await reservePlan({ ...ctx, bridge: context.bridge }, result.plan);
     context = await reservationContext(ctx, bridge);
   }
@@ -132,12 +117,11 @@ export async function loadProductionPlan(ctx, bytes) {
       plan.sourceSha === ctx.sha &&
       ctx.history[plan.firstParentCount - 1] === ctx.sha &&
       plan.pubDate === (await ctx.dateFor(ctx.sha)),
-    "Transported plan differs from the exact workflow source.",
+    'Transported plan differs from the exact workflow source.',
   );
   requireValue(
-    ctx.history[migrationBridge.firstParentCount - 1] ===
-      migrationBridge.sourceSha,
-    "Migration bridge is outside current main ancestry.",
+    ctx.history[migrationBridge.firstParentCount - 1] === migrationBridge.sourceSha,
+    'Migration bridge is outside current main ancestry.',
   );
   const verifyPlan = (candidate) =>
     verifyReservedPlan({ ...ctx, bridge: migrationBridge }, candidate);

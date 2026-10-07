@@ -18,7 +18,13 @@ export interface ClientShell {
 }
 
 const pages: readonly ClientPage[] = ['session', 'game', 'bot', 'manual', 'settings'];
-const botSections: readonly BotSection[] = ['combat', 'recovery', 'travel', 'inventory', 'workflows'];
+const botSections: readonly BotSection[] = [
+  'combat',
+  'recovery',
+  'travel',
+  'inventory',
+  'workflows',
+];
 
 /** Mount once before binding the existing controller callbacks and feature forms. */
 export function mountClientShell(root: HTMLElement): ClientShell {
@@ -193,11 +199,22 @@ export function mountClientShell(root: HTMLElement): ClientShell {
 
   const main = required<HTMLElement>('main');
   const toolbar = required<HTMLElement>('.client-toolbar');
-  const pagePanels = Object.fromEntries(pages.map(page => [page, required<HTMLElement>(`#client-page-${page}`)])) as Record<ClientPage, HTMLElement>;
-  const pageButtons = Object.fromEntries(pages.map(page => [page, required<HTMLButtonElement>(`#client-tab-${page}`)])) as Record<ClientPage, HTMLButtonElement>;
-  const sections = Object.fromEntries(botSections.map(section => [section, required<HTMLElement>(`#client-bot-${section}`)])) as Record<BotSection | 'profiles', HTMLElement>;
+  const pagePanels = Object.fromEntries(
+    pages.map((page) => [page, required<HTMLElement>(`#client-page-${page}`)]),
+  ) as Record<ClientPage, HTMLElement>;
+  const pageButtons = Object.fromEntries(
+    pages.map((page) => [page, required<HTMLButtonElement>(`#client-tab-${page}`)]),
+  ) as Record<ClientPage, HTMLButtonElement>;
+  const sections = Object.fromEntries(
+    botSections.map((section) => [section, required<HTMLElement>(`#client-bot-${section}`)]),
+  ) as Record<BotSection | 'profiles', HTMLElement>;
   sections.profiles = required<HTMLElement>('#client-profiles');
-  const sectionButtons = Object.fromEntries(botSections.map(section => [section, required<HTMLButtonElement>(`#client-bot-tab-${section}`)])) as Record<BotSection, HTMLButtonElement>;
+  const sectionButtons = Object.fromEntries(
+    botSections.map((section) => [
+      section,
+      required<HTMLButtonElement>(`#client-bot-tab-${section}`),
+    ]),
+  ) as Record<BotSection, HTMLButtonElement>;
   const setupBack = required<HTMLButtonElement>('#setup-back');
   const setupNext = required<HTMLButtonElement>('#setup-next');
   const setupReview = required<HTMLButtonElement>('#setup-review');
@@ -206,14 +223,21 @@ export function mountClientShell(root: HTMLElement): ClientShell {
   const manualTools = required<HTMLElement>('#client-manual-tools');
   const manualIndex = required<HTMLElement>('#client-manual-index');
   const inspectors: readonly ConsoleInspector[] = ['nearby', 'inventory'];
-  const inspectorPanels = Object.fromEntries(inspectors.map(key => [key, required<HTMLElement>(`#console-panel-${key}`)])) as Record<ConsoleInspector, HTMLElement>;
-  const inspectorButtons = Object.fromEntries(inspectors.map(key => [key, required<HTMLButtonElement>(`#console-tab-${key}`)])) as Record<ConsoleInspector, HTMLButtonElement>;
+  const inspectorPanels = Object.fromEntries(
+    inspectors.map((key) => [key, required<HTMLElement>(`#console-panel-${key}`)]),
+  ) as Record<ConsoleInspector, HTMLElement>;
+  const inspectorButtons = Object.fromEntries(
+    inspectors.map((key) => [key, required<HTMLButtonElement>(`#console-tab-${key}`)]),
+  ) as Record<ConsoleInspector, HTMLButtonElement>;
   let selectedPage: ClientPage = 'session';
   let selectedBotSection: BotSection = 'combat';
   const pageListeners = new Set<(page: ClientPage) => void>();
 
   function syncToolbarOffset(): void {
-    main.style.setProperty('--client-toolbar-offset', `${Math.ceil(toolbar.getBoundingClientRect().height) + 16}px`);
+    main.style.setProperty(
+      '--client-toolbar-offset',
+      `${Math.ceil(toolbar.getBoundingClientRect().height) + 16}px`,
+    );
   }
 
   function focusContent(target: HTMLElement): void {
@@ -257,7 +281,8 @@ export function mountClientShell(root: HTMLElement): ClientShell {
     setupNext.hidden = index === botSections.length - 1;
     setupReview.hidden = !setupNext.hidden;
     setupProgress.textContent = `Step ${index + 1} of ${botSections.length}`;
-    if (focus && !pagePanels.bot.hidden) focusContent(required<HTMLElement>(`#client-bot-${section}-title`));
+    if (focus && !pagePanels.bot.hidden)
+      focusContent(required<HTMLElement>(`#client-bot-${section}-title`));
   }
 
   function selectInspector(inspector: ConsoleInspector, focus: boolean): void {
@@ -271,15 +296,21 @@ export function mountClientShell(root: HTMLElement): ClientShell {
     if (focus) focusContent(required<HTMLElement>(`#console-${inspector}-title`));
   }
 
-  function bindTabs<Key extends string>(keys: readonly Key[], buttons: Record<Key, HTMLButtonElement>, select: (key: Key, focus: boolean) => void): void {
+  function bindTabs<Key extends string>(
+    keys: readonly Key[],
+    buttons: Record<Key, HTMLButtonElement>,
+    select: (key: Key, focus: boolean) => void,
+  ): void {
     for (const key of keys) {
       const button = buttons[key];
       button.addEventListener('click', () => select(key, true));
-      button.addEventListener('keydown', event => {
+      button.addEventListener('keydown', (event) => {
         const index = keys.indexOf(key);
         let next: Key | undefined;
-        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = keys[(index + 1) % keys.length];
-        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = keys[(index + keys.length - 1) % keys.length];
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown')
+          next = keys[(index + 1) % keys.length];
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp')
+          next = keys[(index + keys.length - 1) % keys.length];
         if (event.key === 'Home') next = keys[0];
         if (event.key === 'End') next = keys[keys.length - 1];
         if (!next) return;
@@ -302,22 +333,32 @@ export function mountClientShell(root: HTMLElement): ClientShell {
     if (next) selectBotSection(next, true);
   });
   setupReview.addEventListener('click', () => selectPage('session', true));
-  required<HTMLButtonElement>('#console-edit-setup').addEventListener('click', () => selectPage('bot', true));
+  required<HTMLButtonElement>('#console-edit-setup').addEventListener('click', () =>
+    selectPage('bot', true),
+  );
   selectInspector('nearby', false);
   selectPage('session', false);
   selectBotSection('combat', false);
 
   return {
-    main, sections, manualTools,
-    get page() { return selectedPage; },
-    onPageChange: listener => { pageListeners.add(listener); },
+    main,
+    sections,
+    manualTools,
+    get page() {
+      return selectedPage;
+    },
+    onPageChange: (listener) => {
+      pageListeners.add(listener);
+    },
     sessionDetails: required<HTMLElement>('#client-session-details'),
-    showPage: page => selectPage(page, true),
-    showBotSection: section => selectBotSection(section, true),
-    showInspector: inspector => selectInspector(inspector, true),
+    showPage: (page) => selectPage(page, true),
+    showBotSection: (section) => selectBotSection(section, true),
+    showInspector: (inspector) => selectInspector(inspector, true),
     refreshManualIndex() {
       manualIndex.replaceChildren();
-      for (const group of manualTools.querySelectorAll<HTMLElement>('details.manual-group, section.manual-refine, section.warp-panel, details.warp-panel')) {
+      for (const group of manualTools.querySelectorAll<HTMLElement>(
+        'details.manual-group, section.manual-refine, section.warp-panel, details.warp-panel',
+      )) {
         const expandable = group.tagName === 'DETAILS';
         const heading = group.querySelector<HTMLElement>(expandable ? 'summary' : 'h2, h3, h4');
         const title = heading?.textContent?.trim();
@@ -331,7 +372,11 @@ export function mountClientShell(root: HTMLElement): ClientShell {
         button.addEventListener('click', () => {
           selectPage('manual', false);
           if (expandable) (group as HTMLDetailsElement).open = true;
-          for (let parent = group.parentElement; parent && parent !== manualTools; parent = parent.parentElement) {
+          for (
+            let parent = group.parentElement;
+            parent && parent !== manualTools;
+            parent = parent.parentElement
+          ) {
             if (parent.tagName === 'DETAILS') (parent as HTMLDetailsElement).open = true;
           }
           focusContent(heading);

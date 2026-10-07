@@ -2,7 +2,10 @@
 import { join } from 'node:path';
 /** @param {string} root @param {string} output @returns {import('esbuild').BuildOptions} */
 export function responsiveFixtureBuildOptions(root, output) {
-  return {stdin:{resolveDir:root,contents:`
+  return {
+    stdin: {
+      resolveDir: root,
+      contents: `
 import {TravelController} from './src/modules/navigation/travel-controller';
 import {TravelPlanner} from './src/modules/navigation/travel';
 import {DEFAULT_MAP_POLICY} from './src/modules/navigation/map-policy';
@@ -47,7 +50,17 @@ element('measure').addEventListener('click',async()=>{
   finally{measurement=null;element('plan').disabled=element('measure').disabled=false;}
 });
 window.routePlanningFixture={state,stop:()=>element('stop').click()};
-`},bundle:true,platform:'browser',target:'safari16',format:'iife',outfile:join(output,'fixture.js'),write:false,logLevel:'silent'};
+`,
+    },
+    bundle: true,
+    platform: 'browser',
+    target: 'safari16',
+    format: 'iife',
+    outfile: join(output, 'fixture.js'),
+    write: false,
+    logLevel: 'silent',
+  };
 }
 
-export const FIXTURE_HTML = '<!doctype html><html><head><meta charset="utf-8"><title>Offline route planning fixture</title><style>body{font:16px system-ui;max-width:900px;margin:32px auto;background:#141b23;color:#e3eaf2}label{display:block;margin:12px 0}button,input,select{font:inherit;margin:8px;padding:8px}output{display:block}output p,#measurement-rows p{background:#223044;padding:10px;margin:6px 0}#measurement-state{font-weight:600}</style></head><body><main id="fixture"></main><script src="fixture.js"></script></body></html>';
+export const FIXTURE_HTML =
+  '<!doctype html><html><head><meta charset="utf-8"><title>Offline route planning fixture</title><style>body{font:16px system-ui;max-width:900px;margin:32px auto;background:#141b23;color:#e3eaf2}label{display:block;margin:12px 0}button,input,select{font:inherit;margin:8px;padding:8px}output{display:block}output p,#measurement-rows p{background:#223044;padding:10px;margin:6px 0}#measurement-state{font-weight:600}</style></head><body><main id="fixture"></main><script src="fixture.js"></script></body></html>';

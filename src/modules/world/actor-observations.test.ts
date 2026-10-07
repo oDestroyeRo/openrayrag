@@ -1,33 +1,343 @@
-import {describe,it,expect} from 'vitest';
-import {ActorObservations,PERMANENT_STATUS_SECONDS,evaluateActorPredicate,validActorConditions,validActorSnapshot,publishConditionReports,type ActorPredicate} from './actor-observations';
+import { describe, it, expect } from 'vitest';
+import {
+  ActorObservations,
+  PERMANENT_STATUS_SECONDS,
+  evaluateActorPredicate,
+  validActorConditions,
+  validActorSnapshot,
+  publishConditionReports,
+  type ActorPredicate,
+} from './actor-observations';
 import { actorConditionsMatch, actorPredicateEvaluator } from './actor-observations-logic';
-import {STATUS_CATALOG} from './actor-status-catalog';
-import type {Entity,GameEvent} from '../protocol/protocol';
-const statusId=()=>STATUS_CATALOG[0]!.id;
-const entity:Entity={id:1,kind:0,classId:0,name:'Player',level:1,hp:100,maxHp:100,x:10,y:10,dead:false,statuses:[]};
-const status=(value=true):Extract<ActorPredicate,{field:'actorStatus'}>=>({field:'actorStatus',actor:{scope:'self'},statusId:statusId(),operator:'eq',value});
-const casting=(value=true):Extract<ActorPredicate,{field:'actorCasting'}>=>({field:'actorCasting',actor:{scope:'self'},operator:'eq',value});
-function setup(){let time=1000;let world=0;const observations=new ActorObservations(()=>time,()=>`00000000-0000-0000-0000-${String(++world).padStart(12,'0')}`);observations.spawn({...entity});observations.frame();const snapshot=()=>observations.snapshot(1,null,true);return{observations,snapshot,advance:(ms:number)=>{time+=ms;},set:(at:number)=>{time=at;},match:(condition:ActorPredicate)=>evaluateActorPredicate(condition,snapshot()).state};}
-const start=(remainingSeconds=10,skillId=20):GameEvent=>({type:'castStart',id:1,skillId,level:1,remainingSeconds,flags:0,position:{x:10,y:10},target:-1});
-const result=(skillId=20,indirect=false):GameEvent=>({type:'skillResult',mode:'self',source:1,skillId,level:1,motionSeconds:0,position:{x:10,y:10},indirect});
-describe('actor status observation',()=>{
- it('distinguishes absent snapshot, empty snapshot, supported kinds and invisible statuses',()=>{const s=setup();expect(s.match(status(false))).toBe('matched');s.observations.spawn({...entity,statuses:undefined});expect(s.match(status(false))).toBe('unavailable');s.observations.spawn({...entity,kind:2});expect(s.match(status(false))).toBe('unavailable');expect(s.match({...status(),statusId:255})).toBe('unavailable');});
- it('keeps permanent and long buffs known through fresh frames without a per-status TTL',()=>{const s=setup();s.observations.apply({type:'status',id:1,statusId:statusId(),seconds:3600});s.advance(20_000);s.observations.frame();expect(s.match(status())).toBe('matched');s.observations.apply({type:'status',id:1,statusId:statusId(),seconds:PERMANENT_STATUS_SECONDS});s.advance(4_000_000);s.observations.frame();expect(s.match(status())).toBe('matched');expect(s.snapshot().actors[0]!.statuses[0]!.expiresAt).toBeNull();});
- it('expires finite duration and invalidates refresh gaps for both signs',()=>{const s=setup();s.observations.apply({type:'status',id:1,statusId:statusId(),seconds:1});s.advance(1000);expect(s.match(status(false))).toBe('unavailable');s.observations.apply({type:'status',id:1,statusId:statusId(),seconds:null,refresh:true});expect(s.match(status())).toBe('unavailable');expect(s.match(status(false))).toBe('unavailable');expect(s.match({...status(),operator:'ne'})).toBe('unavailable');s.observations.apply({type:'status',id:1,statusId:statusId(),seconds:10});expect(s.match(status())).toBe('matched');s.observations.apply({type:'status',id:1,statusId:statusId(),seconds:null,refresh:false});expect(s.match(status(false))).toBe('matched');});
- it('fails disconnected, stale and backward-clock predicates without interpreting absence',()=>{const s=setup();s.advance(15_001);expect(s.match(status(false))).toBe('unavailable');s.observations.frame();expect(s.match(status(false))).toBe('matched');expect(evaluateActorPredicate(status(false),{...s.snapshot(),connected:false}).state).toBe('unavailable');s.set(10);expect(s.match(status(false))).toBe('unavailable');s.observations.frame();expect(s.snapshot().actors).toEqual([]);});
- it('never creates absent actors from deltas and fences removed/reused references and local events',()=>{const s=setup();const first=s.snapshot();const actor=first.actors[0]!;const predicate={...status(false),actor:{scope:'actor' as const,id:actor.id,world:first.world,incarnation:actor.incarnation}};const context=s.observations.context(1);s.observations.remove(1);const missingContext=s.observations.context(1);s.observations.apply(start());expect(s.snapshot().actors).toEqual([]);s.observations.spawn({...entity});s.observations.apply(start(),missingContext);expect(s.match(casting())).toBe('unavailable');s.observations.apply(start(),context);expect(s.match(casting())).toBe('unavailable');expect(s.match(predicate)).toBe('unavailable');s.observations.reset();s.observations.spawn({...entity});s.observations.frame();expect(s.match(predicate)).toBe('unavailable');});
- it('ignores out-of-order local timestamps and impossible finite duration arithmetic',()=>{const s=setup();const old=s.observations.context(1);s.advance(100);s.observations.apply({type:'status',id:1,statusId:statusId(),seconds:1});s.observations.apply({type:'status',id:1,statusId:statusId(),seconds:null},old);expect(s.match(status())).toBe('matched');s.observations.apply({type:'status',id:1,statusId:statusId(),seconds:PERMANENT_STATUS_SECONDS/2});expect(s.match(status())).toBe('unavailable');expect(s.match(status(false))).toBe('unavailable');});
+import { STATUS_CATALOG } from './actor-status-catalog';
+import type { Entity, GameEvent } from '../protocol/protocol';
+const statusId = () => STATUS_CATALOG[0]!.id;
+const entity: Entity = {
+  id: 1,
+  kind: 0,
+  classId: 0,
+  name: 'Player',
+  level: 1,
+  hp: 100,
+  maxHp: 100,
+  x: 10,
+  y: 10,
+  dead: false,
+  statuses: [],
+};
+const status = (value = true): Extract<ActorPredicate, { field: 'actorStatus' }> => ({
+  field: 'actorStatus',
+  actor: { scope: 'self' },
+  statusId: statusId(),
+  operator: 'eq',
+  value,
 });
-describe('actor cast evidence',()=>{
- it('starts unknown, accepts explicit stop, and bounds target selection',()=>{const s=setup();expect(s.match(casting(false))).toBe('unavailable');s.observations.apply({type:'castStop',id:1});expect(s.match(casting(false))).toBe('matched');expect(evaluateActorPredicate({...casting(false),actor:{scope:'target'}},s.snapshot()).state).toBe('unavailable');});
- it('applies signed extension deltas, replaces casts and never revives expired casting',()=>{const s=setup();s.observations.apply(start(10));const deadline=s.snapshot().actors[0]!.cast.deadline!;s.observations.apply({type:'castExtend',id:1,deltaSeconds:-2});expect(s.snapshot().actors[0]!.cast.deadline).toBe(deadline-2000);s.observations.apply({type:'castExtend',id:1,deltaSeconds:1});expect(s.snapshot().actors[0]!.cast.deadline).toBe(deadline-1000);s.observations.apply(start(1,21));expect(s.match({...casting(),skillId:20})).toBe('unmatched');s.advance(1000);expect(s.match(casting())).toBe('unavailable');expect(s.match(casting(false))).toBe('unavailable');s.observations.apply({type:'castExtend',id:1,deltaSeconds:10});expect(s.match(casting())).toBe('unavailable');});
- it('closes only direct matching results, even after predicted deadline, without confirming actions',()=>{const s=setup();s.observations.apply(start(1));s.observations.apply(result(21));s.observations.apply(result(20,true));s.observations.apply({type:'skillImpact',source:1,target:2,skillId:20,damage:1,damageSeconds:0,hits:1,result:1,position:{x:10,y:10}});expect(s.match(casting())).toBe('matched');s.advance(1000);expect(s.match(casting(false))).toBe('unavailable');s.observations.apply(result());expect(s.match(casting(false))).toBe('matched');});
- it('ignores pre-start extensions and rejects unsafe deadline overflow',()=>{const s=setup();s.observations.apply({type:'castExtend',id:1,deltaSeconds:5});expect(s.match(casting(false))).toBe('unavailable');s.observations.apply(start(PERMANENT_STATUS_SECONDS));expect(s.match(casting())).toBe('unavailable');});
+const casting = (value = true): Extract<ActorPredicate, { field: 'actorCasting' }> => ({
+  field: 'actorCasting',
+  actor: { scope: 'self' },
+  operator: 'eq',
+  value,
 });
-describe('bounded predicate data',()=>{
- it('accepts exact typed conditions and rejects unbounded or executable additions',()=>{expect(validActorConditions([status(),casting()])).toBe(true);for(const invalid of [null,Array(17).fill(status()),[{...status(),script:'code'}],[{...casting(),skillId:null}],[{...status(),statusId:0}],[{...status(),value:0}],[{...status(),operator:{toString:()=>"eq"}}],[{...status(),actor:{scope:'self',id:1}}],[{...status(),actor:{scope:'actor',id:1,incarnation:1,world:'bad'}}]])expect(validActorConditions(invalid)).toBe(false);});
- it('bounds display status and condition publication without changing authoritative evaluation',()=>{const s=setup();s.set(Number.MAX_SAFE_INTEGER-100_000);s.observations.frame();for(let id=1;id<=64;id++)s.observations.spawn({...entity,id,name:'\u0000'.repeat(64),statuses:STATUS_CATALOG.map(status=>({id:status.id,seconds:60}))});const snapshot=s.snapshot();const third=snapshot.actors.find(actor=>actor.id===3)!;const condition:ActorPredicate={...status(),actor:{scope:'actor',id:3,world:snapshot.world,incarnation:third.incarnation}};expect(snapshot.truncated).toBe(true);expect(snapshot.actors.reduce((total,actor)=>total+actor.statuses.length,0)).toBeLessThanOrEqual(128);expect(evaluateActorPredicate(condition,snapshot).state).toBe('unavailable');expect(evaluateActorPredicate({...condition,value:false},snapshot).state).toBe('unavailable');expect(evaluateActorPredicate(condition,s.observations.snapshot(1,null,true,[condition],false)).state).toBe('matched');const reports=Array.from({length:32},()=>({rule:'Monster 2147483647 · actor 2147483647',conditions:Array.from({length:16},()=>evaluateActorPredicate({...condition,actor:{scope:'actor',id:2147483647,world:snapshot.world,incarnation:2147483647}},snapshot))}));const published=publishConditionReports(reports);expect(published).toHaveLength(9);expect(published.slice(0,8).every(report=>report.conditions.length===4&&report.truncated)).toBe(true);expect(published.at(-1)?.rule).toContain('omitted');expect(new TextEncoder().encode(JSON.stringify({actorObservations:snapshot,ruleConditions:published})).length).toBeLessThan(65_536);});
- it('publishes a bounded clone and reports truncation as unknown',()=>{const s=setup();for(let id=2;id<=400;id++)s.observations.spawn({...entity,id});const snapshot=s.snapshot();expect(snapshot.actors).toHaveLength(64);expect(validActorSnapshot(snapshot)).toBe(true);expect(validActorSnapshot({...snapshot,actors:Array(65).fill(snapshot.actors[0])})).toBe(false);expect(validActorSnapshot({...snapshot,actors:[snapshot.actors[0],snapshot.actors[0]]})).toBe(false);snapshot.actors[0]!.name='mutated';expect(s.snapshot().actors[0]!.name).toBe('Player');});
+function setup() {
+  let time = 1000;
+  let world = 0;
+  const observations = new ActorObservations(
+    () => time,
+    () => `00000000-0000-0000-0000-${String(++world).padStart(12, '0')}`,
+  );
+  observations.spawn({ ...entity });
+  observations.frame();
+  const snapshot = () => observations.snapshot(1, null, true);
+  return {
+    observations,
+    snapshot,
+    advance: (ms: number) => {
+      time += ms;
+    },
+    set: (at: number) => {
+      time = at;
+    },
+    match: (condition: ActorPredicate) => evaluateActorPredicate(condition, snapshot()).state,
+  };
+}
+const start = (remainingSeconds = 10, skillId = 20): GameEvent => ({
+  type: 'castStart',
+  id: 1,
+  skillId,
+  level: 1,
+  remainingSeconds,
+  flags: 0,
+  position: { x: 10, y: 10 },
+  target: -1,
+});
+const result = (skillId = 20, indirect = false): GameEvent => ({
+  type: 'skillResult',
+  mode: 'self',
+  source: 1,
+  skillId,
+  level: 1,
+  motionSeconds: 0,
+  position: { x: 10, y: 10 },
+  indirect,
+});
+describe('actor status observation', () => {
+  it('distinguishes absent snapshot, empty snapshot, supported kinds and invisible statuses', () => {
+    const s = setup();
+    expect(s.match(status(false))).toBe('matched');
+    s.observations.spawn({ ...entity, statuses: undefined });
+    expect(s.match(status(false))).toBe('unavailable');
+    s.observations.spawn({ ...entity, kind: 2 });
+    expect(s.match(status(false))).toBe('unavailable');
+    expect(s.match({ ...status(), statusId: 255 })).toBe('unavailable');
+  });
+  it('keeps permanent and long buffs known through fresh frames without a per-status TTL', () => {
+    const s = setup();
+    s.observations.apply({ type: 'status', id: 1, statusId: statusId(), seconds: 3600 });
+    s.advance(20_000);
+    s.observations.frame();
+    expect(s.match(status())).toBe('matched');
+    s.observations.apply({
+      type: 'status',
+      id: 1,
+      statusId: statusId(),
+      seconds: PERMANENT_STATUS_SECONDS,
+    });
+    s.advance(4_000_000);
+    s.observations.frame();
+    expect(s.match(status())).toBe('matched');
+    expect(s.snapshot().actors[0]!.statuses[0]!.expiresAt).toBeNull();
+  });
+  it('expires finite duration and invalidates refresh gaps for both signs', () => {
+    const s = setup();
+    s.observations.apply({ type: 'status', id: 1, statusId: statusId(), seconds: 1 });
+    s.advance(1000);
+    expect(s.match(status(false))).toBe('unavailable');
+    s.observations.apply({
+      type: 'status',
+      id: 1,
+      statusId: statusId(),
+      seconds: null,
+      refresh: true,
+    });
+    expect(s.match(status())).toBe('unavailable');
+    expect(s.match(status(false))).toBe('unavailable');
+    expect(s.match({ ...status(), operator: 'ne' })).toBe('unavailable');
+    s.observations.apply({ type: 'status', id: 1, statusId: statusId(), seconds: 10 });
+    expect(s.match(status())).toBe('matched');
+    s.observations.apply({
+      type: 'status',
+      id: 1,
+      statusId: statusId(),
+      seconds: null,
+      refresh: false,
+    });
+    expect(s.match(status(false))).toBe('matched');
+  });
+  it('fails disconnected, stale and backward-clock predicates without interpreting absence', () => {
+    const s = setup();
+    s.advance(15_001);
+    expect(s.match(status(false))).toBe('unavailable');
+    s.observations.frame();
+    expect(s.match(status(false))).toBe('matched');
+    expect(evaluateActorPredicate(status(false), { ...s.snapshot(), connected: false }).state).toBe(
+      'unavailable',
+    );
+    s.set(10);
+    expect(s.match(status(false))).toBe('unavailable');
+    s.observations.frame();
+    expect(s.snapshot().actors).toEqual([]);
+  });
+  it('never creates absent actors from deltas and fences removed/reused references and local events', () => {
+    const s = setup();
+    const first = s.snapshot();
+    const actor = first.actors[0]!;
+    const predicate = {
+      ...status(false),
+      actor: {
+        scope: 'actor' as const,
+        id: actor.id,
+        world: first.world,
+        incarnation: actor.incarnation,
+      },
+    };
+    const context = s.observations.context(1);
+    s.observations.remove(1);
+    const missingContext = s.observations.context(1);
+    s.observations.apply(start());
+    expect(s.snapshot().actors).toEqual([]);
+    s.observations.spawn({ ...entity });
+    s.observations.apply(start(), missingContext);
+    expect(s.match(casting())).toBe('unavailable');
+    s.observations.apply(start(), context);
+    expect(s.match(casting())).toBe('unavailable');
+    expect(s.match(predicate)).toBe('unavailable');
+    s.observations.reset();
+    s.observations.spawn({ ...entity });
+    s.observations.frame();
+    expect(s.match(predicate)).toBe('unavailable');
+  });
+  it('ignores out-of-order local timestamps and impossible finite duration arithmetic', () => {
+    const s = setup();
+    const old = s.observations.context(1);
+    s.advance(100);
+    s.observations.apply({ type: 'status', id: 1, statusId: statusId(), seconds: 1 });
+    s.observations.apply({ type: 'status', id: 1, statusId: statusId(), seconds: null }, old);
+    expect(s.match(status())).toBe('matched');
+    s.observations.apply({
+      type: 'status',
+      id: 1,
+      statusId: statusId(),
+      seconds: PERMANENT_STATUS_SECONDS / 2,
+    });
+    expect(s.match(status())).toBe('unavailable');
+    expect(s.match(status(false))).toBe('unavailable');
+  });
+});
+describe('actor cast evidence', () => {
+  it('starts unknown, accepts explicit stop, and bounds target selection', () => {
+    const s = setup();
+    expect(s.match(casting(false))).toBe('unavailable');
+    s.observations.apply({ type: 'castStop', id: 1 });
+    expect(s.match(casting(false))).toBe('matched');
+    expect(
+      evaluateActorPredicate({ ...casting(false), actor: { scope: 'target' } }, s.snapshot()).state,
+    ).toBe('unavailable');
+  });
+  it('applies signed extension deltas, replaces casts and never revives expired casting', () => {
+    const s = setup();
+    s.observations.apply(start(10));
+    const deadline = s.snapshot().actors[0]!.cast.deadline!;
+    s.observations.apply({ type: 'castExtend', id: 1, deltaSeconds: -2 });
+    expect(s.snapshot().actors[0]!.cast.deadline).toBe(deadline - 2000);
+    s.observations.apply({ type: 'castExtend', id: 1, deltaSeconds: 1 });
+    expect(s.snapshot().actors[0]!.cast.deadline).toBe(deadline - 1000);
+    s.observations.apply(start(1, 21));
+    expect(s.match({ ...casting(), skillId: 20 })).toBe('unmatched');
+    s.advance(1000);
+    expect(s.match(casting())).toBe('unavailable');
+    expect(s.match(casting(false))).toBe('unavailable');
+    s.observations.apply({ type: 'castExtend', id: 1, deltaSeconds: 10 });
+    expect(s.match(casting())).toBe('unavailable');
+  });
+  it('closes only direct matching results, even after predicted deadline, without confirming actions', () => {
+    const s = setup();
+    s.observations.apply(start(1));
+    s.observations.apply(result(21));
+    s.observations.apply(result(20, true));
+    s.observations.apply({
+      type: 'skillImpact',
+      source: 1,
+      target: 2,
+      skillId: 20,
+      damage: 1,
+      damageSeconds: 0,
+      hits: 1,
+      result: 1,
+      position: { x: 10, y: 10 },
+    });
+    expect(s.match(casting())).toBe('matched');
+    s.advance(1000);
+    expect(s.match(casting(false))).toBe('unavailable');
+    s.observations.apply(result());
+    expect(s.match(casting(false))).toBe('matched');
+  });
+  it('ignores pre-start extensions and rejects unsafe deadline overflow', () => {
+    const s = setup();
+    s.observations.apply({ type: 'castExtend', id: 1, deltaSeconds: 5 });
+    expect(s.match(casting(false))).toBe('unavailable');
+    s.observations.apply(start(PERMANENT_STATUS_SECONDS));
+    expect(s.match(casting())).toBe('unavailable');
+  });
+});
+describe('bounded predicate data', () => {
+  it('accepts exact typed conditions and rejects unbounded or executable additions', () => {
+    expect(validActorConditions([status(), casting()])).toBe(true);
+    for (const invalid of [
+      null,
+      Array(17).fill(status()),
+      [{ ...status(), script: 'code' }],
+      [{ ...casting(), skillId: null }],
+      [{ ...status(), statusId: 0 }],
+      [{ ...status(), value: 0 }],
+      [{ ...status(), operator: { toString: () => 'eq' } }],
+      [{ ...status(), actor: { scope: 'self', id: 1 } }],
+      [{ ...status(), actor: { scope: 'actor', id: 1, incarnation: 1, world: 'bad' } }],
+    ])
+      expect(validActorConditions(invalid)).toBe(false);
+  });
+  it('bounds display status and condition publication without changing authoritative evaluation', () => {
+    const s = setup();
+    s.set(Number.MAX_SAFE_INTEGER - 100_000);
+    s.observations.frame();
+    for (let id = 1; id <= 64; id++)
+      s.observations.spawn({
+        ...entity,
+        id,
+        name: '\u0000'.repeat(64),
+        statuses: STATUS_CATALOG.map((status) => ({ id: status.id, seconds: 60 })),
+      });
+    const snapshot = s.snapshot();
+    const third = snapshot.actors.find((actor) => actor.id === 3)!;
+    const condition: ActorPredicate = {
+      ...status(),
+      actor: { scope: 'actor', id: 3, world: snapshot.world, incarnation: third.incarnation },
+    };
+    expect(snapshot.truncated).toBe(true);
+    expect(
+      snapshot.actors.reduce((total, actor) => total + actor.statuses.length, 0),
+    ).toBeLessThanOrEqual(128);
+    expect(evaluateActorPredicate(condition, snapshot).state).toBe('unavailable');
+    expect(evaluateActorPredicate({ ...condition, value: false }, snapshot).state).toBe(
+      'unavailable',
+    );
+    expect(
+      evaluateActorPredicate(condition, s.observations.snapshot(1, null, true, [condition], false))
+        .state,
+    ).toBe('matched');
+    const reports = Array.from({ length: 32 }, () => ({
+      rule: 'Monster 2147483647 · actor 2147483647',
+      conditions: Array.from({ length: 16 }, () =>
+        evaluateActorPredicate(
+          {
+            ...condition,
+            actor: {
+              scope: 'actor',
+              id: 2147483647,
+              world: snapshot.world,
+              incarnation: 2147483647,
+            },
+          },
+          snapshot,
+        ),
+      ),
+    }));
+    const published = publishConditionReports(reports);
+    expect(published).toHaveLength(9);
+    expect(
+      published.slice(0, 8).every((report) => report.conditions.length === 4 && report.truncated),
+    ).toBe(true);
+    expect(published.at(-1)?.rule).toContain('omitted');
+    expect(
+      new TextEncoder().encode(
+        JSON.stringify({ actorObservations: snapshot, ruleConditions: published }),
+      ).length,
+    ).toBeLessThan(65_536);
+  });
+  it('publishes a bounded clone and reports truncation as unknown', () => {
+    const s = setup();
+    for (let id = 2; id <= 400; id++) s.observations.spawn({ ...entity, id });
+    const snapshot = s.snapshot();
+    expect(snapshot.actors).toHaveLength(64);
+    expect(validActorSnapshot(snapshot)).toBe(true);
+    expect(validActorSnapshot({ ...snapshot, actors: Array(65).fill(snapshot.actors[0]) })).toBe(
+      false,
+    );
+    expect(
+      validActorSnapshot({ ...snapshot, actors: [snapshot.actors[0], snapshot.actors[0]] }),
+    ).toBe(false);
+    snapshot.actors[0]!.name = 'mutated';
+    expect(s.snapshot().actors[0]!.name).toBe('Player');
+  });
 });
 
 describe('snapshot-bound actor evaluation', () => {
@@ -37,19 +347,25 @@ describe('snapshot-bound actor evaluation', () => {
     const before = structuredClone({ snapshot, conditions });
     const evaluate = actorPredicateEvaluator(snapshot);
     const traces = conditions.map(evaluate);
-    expect(traces.map(trace => trace.state)).toEqual(['matched', 'unmatched', 'unavailable']);
+    expect(traces.map((trace) => trace.state)).toEqual(['matched', 'unmatched', 'unavailable']);
     expect(conditions.map(evaluate)).toEqual(traces);
     expect({ snapshot, conditions }).toEqual(before);
     traces[0]!.condition.actor.scope = 'target';
     expect(conditions.map(evaluate)[0]!.condition.actor).toEqual({ scope: 'self' });
     expect(conditions).toEqual(before.conditions);
-    expect(actorPredicateEvaluator({ ...snapshot, connected: false })(conditions[0]!).state).toBe('unavailable');
+    expect(actorPredicateEvaluator({ ...snapshot, connected: false })(conditions[0]!).state).toBe(
+      'unavailable',
+    );
     expect(evaluate(conditions[0]!).state).toBe('matched');
   });
 
   it('stops matching after the first failed condition and leaves absent conditions optional', () => {
     const conditions = [status(true), status(false)];
-    Object.defineProperty(conditions, 1, { get: () => { throw new Error('A later condition was evaluated.'); } });
+    Object.defineProperty(conditions, 1, {
+      get: () => {
+        throw new Error('A later condition was evaluated.');
+      },
+    });
     expect(actorConditionsMatch(conditions, setup().snapshot())).toBe(false);
     expect(actorConditionsMatch([], undefined)).toBe(true);
     expect(actorConditionsMatch(undefined, undefined)).toBe(true);

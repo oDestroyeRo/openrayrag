@@ -97,7 +97,17 @@ function setup(definition = storage) {
     if (definition.outcome.type === 'arrival') {
       const d = definition.workflow.steps[3]!;
       if (d.type !== 'advance') throw Error();
-      receive([], [{ type: 'npcDialog', name: d.exactDialogue!.name, text: d.exactDialogue!.text, big: false }]);
+      receive(
+        [],
+        [
+          {
+            type: 'npcDialog',
+            name: d.exactDialogue!.name,
+            text: d.exactDialogue!.text,
+            big: false,
+          },
+        ],
+      );
       tick();
       const m = definition.workflow.steps[4]!;
       if (m.type !== 'option') throw Error();
@@ -133,7 +143,9 @@ describe('portable pinned NPC contracts', () => {
     expect(BUILTIN_SERVICES).toHaveLength(9);
     for (const s of BUILTIN_SERVICES) {
       expect(validateServiceRequest(s)).toEqual(s);
-      expect(s.workflow.steps.every((step) => 'expectedCost' in step && step.expectedCost === 0)).toBe(true);
+      expect(
+        s.workflow.steps.every((step) => 'expectedCost' in step && step.expectedCost === 0),
+      ).toBe(true);
       expect(JSON.stringify(s)).not.toContain('npcId');
     }
   });
@@ -142,16 +154,19 @@ describe('portable pinned NPC contracts', () => {
     changed.identity.name = 'Custom NPC';
     expect(serviceAvailability(validateServiceDefinition(changed))).toMatch(/differs/);
     expect(() => validateServiceRequest(changed)).toThrow(/differs/);
-    expect(serviceAvailability(validateServiceDefinition({ ...storage, contractId: 'custom.v1' }))).toMatch(
-      /No verified/,
-    );
+    expect(
+      serviceAvailability(validateServiceDefinition({ ...storage, contractId: 'custom.v1' })),
+    ).toMatch(/No verified/);
     for (const bad of [
       { ...storage, npcId: 20 },
       { ...storage, receipt: {} },
       { ...storage, map: 'missing' },
       { ...storage, identity: { ...storage.identity, kind: 4 } },
       { ...storage, approach: { ...storage.approach, y: 26 } },
-      { ...storage, workflow: { ...storage.workflow, steps: [{ type: 'deposit', bagId: 10, count: 1 }] } },
+      {
+        ...storage,
+        workflow: { ...storage.workflow, steps: [{ type: 'deposit', bagId: 10, count: 1 }] },
+      },
     ])
       expect(() => validateServiceDefinition(bad)).toThrow();
   });
@@ -172,7 +187,9 @@ describe('portable pinned NPC contracts', () => {
     expect(exported).not.toMatch(/npcId|bagId|generation|pending|receipt/);
     expect(() => store.import(exported.slice(0, -1))).toThrow();
     expect(() => store.import(' '.repeat(256001))).toThrow();
-    expect(new NpcServiceStore({ getItem: () => exported, setItem: () => {} }).list()[0]!.name).toBe('My storage');
+    expect(
+      new NpcServiceStore({ getItem: () => exported, setItem: () => {} }).list()[0]!.name,
+    ).toBe('My storage');
   });
 });
 describe('fresh service identity', () => {
@@ -195,7 +212,9 @@ describe('fresh service identity', () => {
     ])
       expect(resolveServiceNpc(storage, 'prontera', actors).state).toBe('missing');
     expect(resolveServiceNpc(storage, 'izlude', [npc]).state).toBe('missing');
-    expect(resolveServiceNpc(storage, 'prontera', [npc, { ...npc, id: 21 }]).state).toBe('ambiguous');
+    expect(resolveServiceNpc(storage, 'prontera', [npc, { ...npc, id: 21 }]).state).toBe(
+      'ambiguous',
+    );
   });
   it('waits for missing actors and rejects ambiguous actors without talking', () => {
     const missing = setup();
@@ -261,7 +280,10 @@ describe('strict service dialogue and authoritative outcomes', () => {
     if (d.type !== 'advance') throw Error();
     f.dialog(d.exactDialogue!.name, d.exactDialogue!.text);
     f.tick();
-    f.receive([], [{ type: 'npcOptions', options: ['Save', 'Use Storage', 'Teleport Service', 'Cancel'] }]);
+    f.receive(
+      [],
+      [{ type: 'npcOptions', options: ['Save', 'Use Storage', 'Teleport Service', 'Cancel'] }],
+    );
     f.tick();
     expect(f.service.snapshot().state).toBe('failed');
     expect(f.sent.filter((a) => a.type === 'npcOption')).toEqual([]);
@@ -354,24 +376,47 @@ describe('shared native service request corpus', () => {
 
 describe('shop-open and resource-effect contracts', () => {
   it('recognizes only the observed six-row deployed menu for storage, never the recovery entry', () => {
-    const menu = ['Save','Use Storage','Teleport Service','','Recover Old Cart Items','Cancel'];
-    const f = setup(); f.start();
+    const menu = [
+      'Save',
+      'Use Storage',
+      'Teleport Service',
+      '',
+      'Recover Old Cart Items',
+      'Cancel',
+    ];
+    const f = setup();
+    f.start();
     const greeting = storage.workflow.steps[1]!;
     if (greeting.type !== 'advance') throw Error();
-    f.dialog(greeting.exactDialogue!.name, greeting.exactDialogue!.text); f.tick();
-    f.receive([], [{ type:'npcOptions', options:menu }]); f.tick();
-    expect(f.sent.at(-1)).toEqual({ type:'npcOption', index:1 });
+    f.dialog(greeting.exactDialogue!.name, greeting.exactDialogue!.text);
+    f.tick();
+    f.receive([], [{ type: 'npcOptions', options: menu }]);
+    f.tick();
+    expect(f.sent.at(-1)).toEqual({ type: 'npcOption', index: 1 });
     expect(f.service.snapshot().state).toBe('outcome');
-    f.receive([], [{ type:'storageOpened', items:[] }]);
+    f.receive([], [{ type: 'storageOpened', items: [] }]);
     expect(f.service.snapshot().state).toBe('complete');
-    expect(f.sent.some(action => action.type === 'npcOption' && action.index === 4)).toBe(false);
+    expect(f.sent.some((action) => action.type === 'npcOption' && action.index === 4)).toBe(false);
     for (const definition of [transport, storage]) {
-      const rejected = setup(definition); rejected.start();
-      rejected.dialog(greeting.exactDialogue!.name, greeting.exactDialogue!.text); rejected.tick();
-      rejected.receive([], [{ type:'npcOptions', options:definition === transport ? menu : menu.map(label => label === '' ? 'Rent Push Cart' : label) }]);
+      const rejected = setup(definition);
+      rejected.start();
+      rejected.dialog(greeting.exactDialogue!.name, greeting.exactDialogue!.text);
+      rejected.tick();
+      rejected.receive(
+        [],
+        [
+          {
+            type: 'npcOptions',
+            options:
+              definition === transport
+                ? menu
+                : menu.map((label) => (label === '' ? 'Rent Push Cart' : label)),
+          },
+        ],
+      );
       rejected.tick();
       expect(rejected.service.snapshot().state).toBe('failed');
-      expect(rejected.sent.some(action => action.type === 'npcOption')).toBe(false);
+      expect(rejected.sent.some((action) => action.type === 'npcOption')).toBe(false);
     }
   });
   it('opens only the requested verified shop mode after its exact menu', () => {
@@ -401,7 +446,10 @@ describe('shop-open and resource-effect contracts', () => {
         ],
       );
       expect(f.service.snapshot().state).toBe('outcome');
-      f.receive([], [{ type: 'shopOpened', mode: definition.outcome.mode, discountLevel: 0, entries: [] }]);
+      f.receive(
+        [],
+        [{ type: 'shopOpened', mode: definition.outcome.mode, discountLevel: 0, entries: [] }],
+      );
       expect(f.service.snapshot().state).toBe('complete');
     }
   });
@@ -443,7 +491,12 @@ describe('shop-open and resource-effect contracts', () => {
     f.prepareFinal();
     const r = f.service.receipt()!;
     r.outcome = { type: 'arrival', map: 'prontera', position: { x: 150, y: 28 }, timeoutMs: 20000 };
-    observeServiceReceipt(r, [{ type: 'clear' }, { type: 'spawn', entity: { ...player }, entryType: 0 }], [], f.c);
+    observeServiceReceipt(
+      r,
+      [{ type: 'clear' }, { type: 'spawn', entity: { ...player }, entryType: 0 }],
+      [],
+      f.c,
+    );
     expect(r.arrived).toBe(false);
     observeServiceReceipt(r, [{ type: 'spawn', entity: { ...player }, entryType: 2 }], [], f.c);
     expect(confirmServiceReceipt(r, f.c)).toBe(true);
@@ -490,9 +543,17 @@ describe('shop-open and resource-effect contracts', () => {
 describe('composed NPC identity checks', () => {
   it('short-circuits later evidence for ineligible kinds and dead actors', () => {
     const ineligible = { ...player };
-    Object.defineProperty(ineligible, 'dead', { get: () => { throw new Error('Ineligible actor evidence was read.'); } });
+    Object.defineProperty(ineligible, 'dead', {
+      get: () => {
+        throw new Error('Ineligible actor evidence was read.');
+      },
+    });
     const dead = { ...npc, dead: true };
-    Object.defineProperty(dead, 'name', { get: () => { throw new Error('Dead actor identity was read.'); } });
+    Object.defineProperty(dead, 'name', {
+      get: () => {
+        throw new Error('Dead actor identity was read.');
+      },
+    });
     expect(resolveServiceNpc(storage, storage.map, [ineligible, dead]).state).toBe('missing');
   });
 });

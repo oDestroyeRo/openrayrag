@@ -8,14 +8,19 @@ export class EmbeddedGameView {
   private completed = 'null';
   private sending = false;
 
-  constructor(private readonly hooks: {
-    bounds(): GameViewBounds | null;
-    present(bounds: GameViewBounds | null): Promise<void>;
-    changed(shown: boolean): void;
-    error(): void;
-  }) {}
+  constructor(
+    private readonly hooks: {
+      bounds(): GameViewBounds | null;
+      present(bounds: GameViewBounds | null): Promise<void>;
+      changed(shown: boolean): void;
+      error(): void;
+    },
+  ) {}
 
-  setVisible(selected: boolean): void { this.selected = selected; this.refresh(); }
+  setVisible(selected: boolean): void {
+    this.selected = selected;
+    this.refresh();
+  }
 
   refresh(): void {
     this.desired = this.selected ? this.hooks.bounds() : null;
@@ -26,15 +31,21 @@ export class EmbeddedGameView {
     this.sending = true;
     try {
       while (JSON.stringify(this.desired) !== this.completed) {
-        const bounds = this.desired, key = JSON.stringify(bounds);
+        const bounds = this.desired,
+          key = JSON.stringify(bounds);
         try {
           await this.hooks.present(bounds);
           if (key === JSON.stringify(this.desired)) this.hooks.changed(bounds !== null);
         } catch {
-          if (key === JSON.stringify(this.desired)) { this.hooks.changed(false); this.hooks.error(); }
+          if (key === JSON.stringify(this.desired)) {
+            this.hooks.changed(false);
+            this.hooks.error();
+          }
         }
         this.completed = key;
       }
-    } finally { this.sending = false; }
+    } finally {
+      this.sending = false;
+    }
   }
 }

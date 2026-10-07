@@ -1,10 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
-  absoluteResource, copyResourceObservation, damageResource, resourceFresh, resourceValues,
-  unavailableResource, validResourceObservation, RESOURCE_STALE_MS,
-  type ResourceObservation, type ResourceReason,
+  absoluteResource,
+  copyResourceObservation,
+  damageResource,
+  resourceFresh,
+  resourceValues,
+  unavailableResource,
+  validResourceObservation,
+  RESOURCE_STALE_MS,
+  type ResourceObservation,
+  type ResourceReason,
 } from './actor-resources';
-import { addQuantities, milliseconds, percentage, quantity, subtractQuantities, type Quantity } from '../../shared/domain-values';
+import {
+  addQuantities,
+  milliseconds,
+  percentage,
+  quantity,
+  subtractQuantities,
+  type Quantity,
+} from '../../shared/domain-values';
 
 /** Raw JSON fixtures cross the same guard as external resource observations. */
 function resourceFixture(value: unknown): ResourceObservation | null {
@@ -53,26 +67,71 @@ void incompatibleResourceEvidence;
 
 describe('admitted actor resource values', () => {
   it('preserves the boolean value contract and checks resource relationships before quantity construction', () => {
-    for (const [value, max] of [[0, 1], [1, 1], [0, 0x7fffffff], [0x7fffffff, 0x7fffffff]]) {
+    for (const [value, max] of [
+      [0, 1],
+      [1, 1],
+      [0, 0x7fffffff],
+      [0x7fffffff, 0x7fffffff],
+    ]) {
       expect(resourceValues(value, max)).toBe(true);
-      expect(absoluteResource(value, max, 0, 'spawn')).toEqual({ value, max, at: 0, source: 'spawn', reason: null });
+      expect(absoluteResource(value, max, 0, 'spawn')).toEqual({
+        value,
+        max,
+        at: 0,
+        source: 'spawn',
+        reason: null,
+      });
     }
-    for (const [value, max] of [[-1, 1], [2, 1], [0, 0], [1, -1], [0, 0x80000000],
-      [0.5, 1], [1, 1.5], [NaN, 1], [1, Infinity], [Infinity, Infinity], ['1', 1], [1, '1'], [true, 1], [undefined, 1], [1, null]]) {
+    for (const [value, max] of [
+      [-1, 1],
+      [2, 1],
+      [0, 0],
+      [1, -1],
+      [0, 0x80000000],
+      [0.5, 1],
+      [1, 1.5],
+      [NaN, 1],
+      [1, Infinity],
+      [Infinity, Infinity],
+      ['1', 1],
+      [1, '1'],
+      [true, 1],
+      [undefined, 1],
+      [1, null],
+    ]) {
       expect(resourceValues(value, max)).toBe(false);
-      expect(absoluteResource(value, max, 0, 'spawn')).toEqual({ value: null, max: null, at: 0, source: 'spawn', reason: 'invalid' });
+      expect(absoluteResource(value, max, 0, 'spawn')).toEqual({
+        value: null,
+        max: null,
+        at: 0,
+        source: 'spawn',
+        reason: 'invalid',
+      });
     }
     expect(Object.is(absoluteResource(-0, 1, 0, 'spawn').value, -0)).toBe(true);
   });
 
   it('keeps all unavailable reasons separate from quantities without adding wire fields', () => {
-    const reasons: readonly ResourceReason[] = ['invalid', 'missing-baseline', 'stale-baseline', 'conflict', 'binding', 'out-of-order'];
+    const reasons: readonly ResourceReason[] = [
+      'invalid',
+      'missing-baseline',
+      'stale-baseline',
+      'conflict',
+      'binding',
+      'out-of-order',
+    ];
     for (const reason of reasons) {
       const missing = unavailableResource(reason);
       expect(missing).toEqual({ value: null, max: null, at: null, source: null, reason });
       expect(validResourceObservation(missing)).toBe(true);
       expect(resourceFresh(missing, 0)).toBe(false);
-      expect(unavailableResource(reason, 0.25, 'party')).toEqual({ value: null, max: null, at: 0.25, source: 'party', reason });
+      expect(unavailableResource(reason, 0.25, 'party')).toEqual({
+        value: null,
+        max: null,
+        at: 0.25,
+        source: 'party',
+        reason,
+      });
     }
   });
 
@@ -96,13 +155,24 @@ describe('admitted actor resource values', () => {
 
   it('rejects impossible and malformed external observations at the existing admission point', () => {
     const available = { value: 1, max: 2, at: 0.25, source: 'spawn', reason: null };
-    for (const invalid of [null, [], 1, { ...available, extra: true },
-      { ...available, value: null }, { ...available, max: null }, { ...available, at: null },
-      { ...available, source: null }, { ...available, source: 'skill-cost' },
-      { ...available, reason: 'invalid' }, { ...available, reason: 'unknown' },
-      { ...available, value: 3 }, { ...available, max: 0 }, { ...available, value: 1.5 },
+    for (const invalid of [
+      null,
+      [],
+      1,
+      { ...available, extra: true },
+      { ...available, value: null },
+      { ...available, max: null },
+      { ...available, at: null },
+      { ...available, source: null },
+      { ...available, source: 'skill-cost' },
+      { ...available, reason: 'invalid' },
+      { ...available, reason: 'unknown' },
+      { ...available, value: 3 },
+      { ...available, max: 0 },
+      { ...available, value: 1.5 },
       { ...available, value: null, max: null, reason: 'invalid', at: -1 },
-      { value: 1, max: 2, at: 0.25, source: 'spawn' }]) {
+      { value: 1, max: 2, at: 0.25, source: 'spawn' },
+    ]) {
       expect(validResourceObservation(invalid)).toBe(false);
       expect(resourceFixture(invalid)).toBeNull();
     }
@@ -126,7 +196,10 @@ describe('admitted actor resource values', () => {
 
   it('keeps the erased relational proof outside runtime objects and copied wire data', () => {
     const keys = ['value', 'max', 'at', 'source', 'reason'];
-    for (const observation of [absoluteResource(5, 10, 0.25, 'party'), unavailableResource('binding')]) {
+    for (const observation of [
+      absoluteResource(5, 10, 0.25, 'party'),
+      unavailableResource('binding'),
+    ]) {
       const copy = copyResourceObservation(observation);
       expect(Reflect.ownKeys(observation)).toEqual(keys);
       expect(Reflect.ownKeys(copy)).toEqual(keys);
@@ -154,25 +227,50 @@ describe('admitted actor resource values', () => {
 
   it('retains invalid-damage, missing-baseline and stale-baseline failure order', () => {
     for (const damage of [-1, 0.5, 0x80000000, NaN, Infinity]) {
-      expect(damageResource(undefined, damage, -1)).toEqual(unavailableResource('invalid', -1, 'hit-target'));
-      expect(damageResource(unavailableResource('conflict'), damage, 0)).toEqual(unavailableResource('invalid', 0, 'hit-target'));
+      expect(damageResource(undefined, damage, -1)).toEqual(
+        unavailableResource('invalid', -1, 'hit-target'),
+      );
+      expect(damageResource(unavailableResource('conflict'), damage, 0)).toEqual(
+        unavailableResource('invalid', 0, 'hit-target'),
+      );
     }
-    expect(damageResource(undefined, 0, 0)).toEqual(unavailableResource('missing-baseline', 0, 'hit-target'));
-    expect(damageResource(unavailableResource('conflict'), 0, 0)).toEqual(unavailableResource('missing-baseline', 0, 'hit-target'));
-    expect(damageResource(absoluteResource(5, 10, 1, 'spawn'), 0, 0)).toEqual(unavailableResource('stale-baseline', 0, 'hit-target'));
-    expect(damageResource(absoluteResource(5, 10, 0, 'spawn'), 0, 15_001)).toEqual(unavailableResource('stale-baseline', 15_001, 'hit-target'));
+    expect(damageResource(undefined, 0, 0)).toEqual(
+      unavailableResource('missing-baseline', 0, 'hit-target'),
+    );
+    expect(damageResource(unavailableResource('conflict'), 0, 0)).toEqual(
+      unavailableResource('missing-baseline', 0, 'hit-target'),
+    );
+    expect(damageResource(absoluteResource(5, 10, 1, 'spawn'), 0, 0)).toEqual(
+      unavailableResource('stale-baseline', 0, 'hit-target'),
+    );
+    expect(damageResource(absoluteResource(5, 10, 0, 'spawn'), 0, 15_001)).toEqual(
+      unavailableResource('stale-baseline', 15_001, 'hit-target'),
+    );
   });
 
   it('revalidates clamped damage results and preserves detached wire values and raw timing', () => {
     const baseline = absoluteResource(5, 10, -1, 'spawn');
     const before = JSON.stringify(baseline);
     const damaged = damageResource(baseline, 2, -0.5);
-    expect(JSON.stringify(damaged)).toBe('{"value":3,"max":10,"at":-0.5,"source":"hit-target","reason":null}');
-    expect(damageResource(baseline, 0x7fffffff, -0.5)).toEqual({ value: quantity(0), max: quantity(10), at: -0.5, source: 'hit-target', reason: null });
+    expect(JSON.stringify(damaged)).toBe(
+      '{"value":3,"max":10,"at":-0.5,"source":"hit-target","reason":null}',
+    );
+    expect(damageResource(baseline, 0x7fffffff, -0.5)).toEqual({
+      value: quantity(0),
+      max: quantity(10),
+      at: -0.5,
+      source: 'hit-target',
+      reason: null,
+    });
     expect(damaged).not.toBe(baseline);
     expect(JSON.stringify(baseline)).toBe(before);
     expect(validResourceObservation(damaged)).toBe(false);
-    expect(damageResource(absoluteResource(0, 0x7fffffff, 0.25, 'party'), 0, 0.5))
-      .toEqual({ value: quantity(0), max: quantity(0x7fffffff), at: 0.5, source: 'hit-target', reason: null });
+    expect(damageResource(absoluteResource(0, 0x7fffffff, 0.25, 'party'), 0, 0.5)).toEqual({
+      value: quantity(0),
+      max: quantity(0x7fffffff),
+      at: 0.5,
+      source: 'hit-target',
+      reason: null,
+    });
   });
 });

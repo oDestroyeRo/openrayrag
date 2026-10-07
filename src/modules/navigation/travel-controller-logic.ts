@@ -4,11 +4,21 @@ import type { Entity, GameEvent, Position } from '../protocol/protocol';
 import type { routeBetweenMapsAsync } from './travel';
 export interface TravelSnapshot {
   state: 'idle' | 'planning' | 'walking' | 'transition' | 'complete' | 'failed' | 'cancelled';
-  destination: string; reason: string; policy: MapPolicy; purpose: 'travel' | 'service' | 'return' | 'field-entry' | 'party-follow'; remainingMaps: string[]; route: Position[]; leg: Position[];
+  destination: string;
+  reason: string;
+  policy: MapPolicy;
+  purpose: 'travel' | 'service' | 'return' | 'field-entry' | 'party-follow';
+  remainingMaps: string[];
+  route: Position[];
+  leg: Position[];
 }
 
 export interface TravelTransition {
-  trip:number; phase:'remove'|'clear'|'map'|'spawn'; fromMap:string; toMap:string; event:GameEvent;
+  trip: number;
+  phase: 'remove' | 'clear' | 'map' | 'spawn';
+  fromMap: string;
+  toMap: string;
+  event: GameEvent;
 }
 
 export interface DatabaseTravelTransport {
@@ -22,13 +32,31 @@ export interface DatabaseTravelTransport {
 }
 
 export interface DatabaseTrip {
-  trip:number; fromMap:string; toMap:string; ownId:number; ownName:string; identity:string; connection:string;
-  sent:boolean; phase:'source'|'departed'|'map'; ready:boolean; contradictory:boolean;
+  trip: number;
+  fromMap: string;
+  toMap: string;
+  ownId: number;
+  ownName: string;
+  identity: string;
+  connection: string;
+  sent: boolean;
+  phase: 'source' | 'departed' | 'map';
+  ready: boolean;
+  contradictory: boolean;
 }
 
 export interface MovementReceipt {
-  map:string; ownId:number; ownName:string; identity:string|null; requestedEnd:Position; cells:Position[]; acceptedUntil:number|null;
-  expectedMap:string|null; expectedArrival:Position|null; portalArea:{x:number;y:number;halfWidth:number;halfHeight:number}|null; awaitingSpawn:boolean;
+  map: string;
+  ownId: number;
+  ownName: string;
+  identity: string | null;
+  requestedEnd: Position;
+  cells: Position[];
+  acceptedUntil: number | null;
+  expectedMap: string | null;
+  expectedArrival: Position | null;
+  portalArea: { x: number; y: number; halfWidth: number; halfHeight: number } | null;
+  awaitingSpawn: boolean;
 }
 
 export interface TravelPlanningContext {
@@ -47,7 +75,7 @@ export interface TravelPlanningOptions {
   continueRequested?: () => boolean;
   databaseTravel?: DatabaseTravelTransport;
   /** The same verified retired walk may reconcile the transport's original endpoint owner. */
-  retiredWalkAccepted?: (requested:Position,accepted:Position) => void;
+  retiredWalkAccepted?: (requested: Position, accepted: Position) => void;
   scheduler?: PlanningOptions['scheduler'];
   plan?: typeof routeBetweenMapsAsync;
 }

@@ -17,20 +17,41 @@ function dispatch(client: UnityClient, object: string, method: string, value?: s
   const originals = { log: console.log, warn: console.warn, error: console.error };
   for (const level of ['log', 'warn', 'error'] as const) {
     console[level] = (...args: unknown[]) => {
-      if (args.some(arg => typeof arg === 'string' && /SendMessage:|Failed to execute SendMessage/.test(arg))) {
+      if (
+        args.some(
+          (arg) =>
+            typeof arg === 'string' && /SendMessage:|Failed to execute SendMessage/.test(arg),
+        )
+      ) {
         missing = true;
-        present ||= method === READY_PROBE && args.some(arg => typeof arg === 'string'
-          && arg.includes(`SendMessage: object ${object} does not have receiver for function ${READY_PROBE}!`));
-      }
-      else originals[level](...args);
+        present ||=
+          method === READY_PROBE &&
+          args.some(
+            (arg) =>
+              typeof arg === 'string' &&
+              arg.includes(
+                `SendMessage: object ${object} does not have receiver for function ${READY_PROBE}!`,
+              ),
+          );
+      } else originals[level](...args);
     };
   }
-  try { client.SendMessage(object, method, value); } catch { missing = true; }
-  finally { Object.assign(console, originals); }
+  try {
+    client.SendMessage(object, method, value);
+  } catch {
+    missing = true;
+  } finally {
+    Object.assign(console, originals);
+  }
   return { sent: !missing, present };
 }
 
-export function unityMessage(client: UnityClient, object: string, method: string, value?: string | number): boolean {
+export function unityMessage(
+  client: UnityClient,
+  object: string,
+  method: string,
+  value?: string | number,
+): boolean {
   return dispatch(client, object, method, value).sent;
 }
 
@@ -46,8 +67,10 @@ export function loginReady(client: UnityClient): boolean {
 
 export class SelectionDispatchError extends Error {
   constructor(stage: 'slot' | 'enter') {
-    super(stage === 'slot'
-      ? 'Could not select the requested slot. Choose your character in the game window.'
-      : 'Could not enter with the selected character. Continue in the game window.');
+    super(
+      stage === 'slot'
+        ? 'Could not select the requested slot. Choose your character in the game window.'
+        : 'Could not enter with the selected character. Continue in the game window.',
+    );
   }
 }
