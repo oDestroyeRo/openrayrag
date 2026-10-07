@@ -3,6 +3,7 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "ci_smoke_report",
             "update_status",
+            "update_check",
             "update_open_release",
             "current_form",
             "save_current_form",
