@@ -138,7 +138,7 @@ async fn bounded(
         if bytes
             .len()
             .checked_add(chunk.len())
-            .map_or(true, |n| n > limit)
+            .is_none_or(|n| n > limit)
         {
             return Err(DownloadError::SizeLimit);
         }

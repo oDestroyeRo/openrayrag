@@ -46,6 +46,9 @@ import {
 } from '../modules/client/client-status';
 import { clientDashboard } from '../modules/client/client-dashboard';
 import { liveSettingLabel, planLiveSettings } from '../modules/settings/live-settings-logic';
+import { mountMcp } from '../modules/mcp/mcp-client';
+import { retainedMcpObservation, type McpObservation } from '../modules/mcp/mcp-logic';
+import type { FormSnapshot } from '../modules/settings/settings-form-logic';
 import '../modules/client/client-shell.css';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
@@ -169,6 +172,7 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let gameOpen = false;
 let latest: ValidatedGameStatus | null = null;
 let receivedAt = 0;
+let mcpObservation: McpObservation | null = null;
 let busy = false;
 let heartbeatPending = false;
 let previousSession: string | undefined;
@@ -1032,6 +1036,7 @@ function render(s: ValidatedGameStatus): void {
   latest = s;
   receivedAt = Date.now();
   gameOpen = true;
+  mcpObservation = retainedMcpObservation({ status: s, previousSession, retained: mcpObservation });
   if (sessionLoginAvailable !== s.reconnectAvailable) {
     sessionLoginAvailable = s.reconnectAvailable;
     configureReconnect();
@@ -1130,6 +1135,30 @@ if (native) {
         'Settings could not be initialized. Reopen the app to edit them safely.';
       return;
     }
+    await mountMcp(element('client-mcp'), (query) => {
+      let snapshot: FormSnapshot | null = null;
+      if (query.tool === 'get_settings' || query.tool === 'validate_script') {
+        try {
+          if (currentForm.initialized) snapshot = form.snapshot();
+        } catch {
+          /* Invalid editable inputs remain untouched. */
+        }
+      }
+      return {
+        now: Date.now(),
+        runtimeGeneration: query.runtimeGeneration,
+        status: latest,
+        observation: mcpObservation,
+        gameOpen,
+        runRequested: fieldRun.requested,
+        limitReason: fieldRun.limitReason,
+        updateBusy,
+        updateContinuationPending: updateContinuation.pending,
+        form: snapshot,
+        formInitialized: currentForm.initialized,
+        profiles: query.tool === 'list_profiles' ? features.readProfiles() : [],
+      };
+    });
     await listen<unknown>('game-status', (event) => {
       if (validStatus(event.payload)) render(event.payload);
     });
@@ -1146,6 +1175,7 @@ if (native) {
       gameOpen = false;
       latest = null;
       receivedAt = 0;
+      mcpObservation = null;
       loginBusy = false;
       element('status').textContent = 'OFFLINE';
       element('status').classList.remove('active');

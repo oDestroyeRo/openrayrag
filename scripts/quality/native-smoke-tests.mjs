@@ -12,7 +12,13 @@ const result = () => ({
   stage: 'save',
   token,
   passed: true,
-  checks: ['webview-boot', 'offline-controller', 'native-settings-ipc', 'window-close-save'],
+  checks: [
+    'webview-boot',
+    'offline-controller',
+    'native-settings-ipc',
+    'window-close-save',
+    'mcp-loopback-read-only',
+  ],
   document: {
     version: 1,
     revision: 2,

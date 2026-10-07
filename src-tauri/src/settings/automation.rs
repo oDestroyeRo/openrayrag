@@ -368,7 +368,7 @@ impl MapPolicy {
                     && p.cost.is_finite()
                     && (0.0..=1_000_000.0).contains(&p.cost)
             })
-            && self.lock_area.as_ref().map_or(true, |a| {
+            && self.lock_area.as_ref().is_none_or(|a| {
                 crate::game::catalog_logic::map_dimensions(&a.map).is_some_and(|(w, h)| {
                     a.min_x <= a.max_x
                         && a.min_y <= a.max_y
@@ -542,7 +542,7 @@ impl SupplyResumeGuard {
             && self.reserved <= 2_000_000_000
             && self.interval_seconds <= 86400
             && self.deadline_seconds <= 3600
-            && self.return_destination.as_ref().map_or(true, |d| {
+            && self.return_destination.as_ref().is_none_or(|d| {
                 map_code(&d.map, false) && d.position.x <= 511 && d.position.y <= 511
             })
         {
@@ -727,7 +727,7 @@ where
 impl EscapeResumeGuard {
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.cooldown_seconds <= 3600
-            && self.recovery.as_ref().map_or(true, |r| {
+            && self.recovery.as_ref().is_none_or(|r| {
                 (1..=100).contains(&r.hp_percent)
                     && r.threat_count <= 64
                     && r.quiet_seconds <= 60
@@ -1282,7 +1282,7 @@ fn deserialize_conditions<'de, D: serde::Deserializer<'de>>(
     Vec::<Value>::deserialize(deserializer).map(Some)
 }
 fn conditions_valid(conditions: &Option<Vec<Value>>, allow_candidate: bool) -> bool {
-    conditions.as_ref().map_or(true, |values| {
+    conditions.as_ref().is_none_or(|values| {
         values.len() <= 16
             && values.iter().all(|value| {
                 crate::game::control::validate_actor_predicate_for(value, allow_candidate).is_ok()
@@ -1313,8 +1313,8 @@ impl AutomationSettings {
         let valid = self
             .party_heal
             .as_ref()
-            .map_or(true, PartyHealSettings::valid)
-            && self.attack_strategies.as_ref().map_or(true, |rules| {
+            .is_none_or(PartyHealSettings::valid)
+            && self.attack_strategies.as_ref().is_none_or(|rules| {
                 rules.len() <= 32
                     && unique_by(rules, |rule| rule.id.clone())
                     && rules.iter().all(AttackStrategyRule::valid)
@@ -1343,11 +1343,11 @@ impl AutomationSettings {
             && self
                 .hp_potions
                 .as_ref()
-                .map_or(true, |policy| policy.valid(Resource::Hp))
+                .is_none_or(|policy| policy.valid(Resource::Hp))
             && self
                 .sp_potions
                 .as_ref()
-                .map_or(true, |policy| policy.valid(Resource::Sp))
+                .is_none_or(|policy| policy.valid(Resource::Sp))
             && self.items.len() <= 32
             && unique_by(&self.items, |r| r.item_id)
             && self.items.iter().all(|r| {
@@ -1403,7 +1403,7 @@ impl AutomationSettings {
                 .follow
                 .mode
                 .as_deref()
-                .map_or(true, |mode| matches!(mode, "name" | "partyLeader"))
+                .is_none_or(|mode| matches!(mode, "name" | "partyLeader"))
             && (self.follow.mode.as_deref() != Some("partyLeader") || self.follow.name.is_empty())
             && (self.follow.rendezvous != Some(true)
                 || self.follow.mode.as_deref() == Some("partyLeader"))
@@ -1429,10 +1429,10 @@ impl AutomationSettings {
             && self
                 .disposition
                 .as_ref()
-                .map_or(true, DispositionPolicy::valid)
-            && self.supply.as_ref().map_or(true, SupplySettings::valid)
-            && self.map_policy.as_ref().map_or(true, MapPolicy::valid)
-            && self.retreat.as_ref().map_or(true, RetreatSettings::valid);
+                .is_none_or(DispositionPolicy::valid)
+            && self.supply.as_ref().is_none_or(SupplySettings::valid)
+            && self.map_policy.as_ref().is_none_or(MapPolicy::valid)
+            && self.retreat.as_ref().is_none_or(RetreatSettings::valid);
         if valid {
             Ok(())
         } else {

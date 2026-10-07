@@ -2554,6 +2554,10 @@ export class FeatureUi {
     show();
   }
 
+  /** Detached validated read; MCP never enters profile application or persistence. */
+  readProfiles(): ReturnType<ProfileStore['list']> {
+    return this.profiles.list();
+  }
   selectedProfileId(): string | null {
     return this.host.querySelector<HTMLSelectElement>('#profile-select')?.value || null;
   }

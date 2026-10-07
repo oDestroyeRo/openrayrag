@@ -2,19 +2,23 @@
 name = "rayrag-companion"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.88"
 
 [lib]
 name = "rayrag_companion_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
-ci-smoke = []
+ci-smoke = ["reqwest/json"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Official MCP protocol/Streamable HTTP implementation; Axum hosts its Tower service.
+rmcp = { version = "=3.5.1", default-features = false, features = ["server", "transport-streamable-http-server"] }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+tokio-util = { version = "=0.7.19", features = ["rt"] }
 tokio = { version = "=1.53.2", features = ["rt", "net", "sync", "time", "macros"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
@@ -29,6 +33,7 @@ semver = "1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+rmcp = { version = "=3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
 tempfile = "3"
 plist = "1"
 

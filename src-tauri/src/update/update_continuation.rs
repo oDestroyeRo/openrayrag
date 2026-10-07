@@ -301,7 +301,7 @@ fn owner(
     let identity = gate.identity.clone().ok_or(ERROR)?;
     if gate
         .observed
-        .map_or(true, |t| t.elapsed() > Duration::from_secs(2))
+        .is_none_or(|t| t.elapsed() > Duration::from_secs(2))
     {
         return invalid();
     }
@@ -929,6 +929,8 @@ mod tests {
                     | "allow-update-startup-stopped"
                     | "allow-update-initialized"
                     | "allow-update-status"
+                    | "allow-mcp-set-enabled"
+                    | "allow-mcp-reply"
             ));
         }
     }
