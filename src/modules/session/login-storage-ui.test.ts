@@ -531,6 +531,38 @@ it('opens the manual release through a fixed native command without gameplay com
  const f=await fixture();await f.get('update-download').emit('click');expect(f.calls('update_open_release')).toEqual([['update_open_release']]);expect(f.calls('control_bot')).toEqual([]);
 });
 
+it('checks immediately during an active run without pausing for the download or duplicating a pending check',async()=>{
+ const f=await fixture();await publishStatus(readyStatus());await f.get('select-targets').emit('click');await f.get('start').emit('click');
+ const checking=pendingNative();
+ ipc.invoke.mockImplementation(async(command:string)=>{
+  if(command==='update_check'){
+   await checking.promise;
+   return {version:'0.2.27',platform:'macos',phase:'downloading',message:'Downloading a signed client update in the background.'};
+  }
+ });
+ expect(f.get('update-check').disabled).toBe(false);
+ await f.get('update-check').emit('click');expect(f.get('update-check').disabled).toBe(true);
+ await f.get('update-check').emit('click');expect(f.calls('update_check')).toEqual([['update_check']]);
+ expect(f.get('stop').disabled).toBe(false);expect(f.calls('update_prepare')).toEqual([]);
+ checking.resolve();await settleMain();
+ expect(f.get('update-status').textContent).toBe('Downloading a signed client update in the background.');
+ expect(f.get('update-check').disabled).toBe(false);
+ expect(f.calls('update_reserve')).toEqual([]);expect(f.calls('update_install')).toEqual([]);
+ expect(f.calls('control_bot').map(call=>(call[1] as {action:string}).action)).toEqual(['start']);
+});
+
+it('permits an immediate check with an account draft while deferring installation',async()=>{
+ const f=await fixture();f.get('password').value='synthetic-unsent';
+ ipc.invoke.mockImplementation(async(command:string)=>{
+  if(command==='update_check')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
+ });
+ await f.get('update-check').emit('click');await settleMain();
+ expect(f.calls('update_check')).toEqual([['update_check']]);
+ expect(f.get('update-status').textContent).toContain('account draft');
+ expect(f.get('password').value).toBe('synthetic-unsent');
+ expect(f.calls('update_reserve')).toEqual([]);expect(f.calls('control_bot')).toEqual([]);
+});
+
 it('defers the actual main updater while a refine preview or retained economic owner is unsettled',async()=>{
  const f=await fixture();ipc.featureSettled=false;
  ipc.invoke.mockImplementation(async(command:string,args?:{document:{revision:number}})=>{
@@ -561,16 +593,17 @@ it('defers the actual main updater for an unsaved macro and permits installation
 });
 
 describe('updater waiting diagnostics',()=>{
- it('suspends an active run, keeps Stop available, and preserves intent in the update reservation',async()=>{
+ it.each(['periodic','requested'])('%s update suspends an active run, keeps Stop available, and preserves intent',async trigger=>{
   const f=await fixture();await publishStatus(readyStatus());await f.get('select-targets').emit('click');await f.get('start').emit('click');
   const installing=pendingNative();
   ipc.invoke.mockImplementation(async(command:string,args?:{document?:{revision:number}})=>{
-   if(command==='update_status')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
+   if(command==='update_status'||command==='update_check')return {version:'0.2.27',platform:'macos',phase:'waiting',message:'Update ready'};
    if(command==='save_current_form')return args!.document!.revision;
    if(command==='update_reserve')return 'f'.repeat(32);
    if(command==='update_install')return installing.promise;
   });
-  await vi.advanceTimersByTimeAsync(15000);
+  if(trigger==='requested'){await f.get('update-check').emit('click');await settleMain();}
+  else await vi.advanceTimersByTimeAsync(15000);
   expect(f.calls('update_prepare')).toHaveLength(1);expect(f.calls('update_reserve')).toEqual([]);
   expect(f.get('stop').disabled).toBe(false);expect(f.get('radius').disabled).toBe(true);
   const checkpoint=continuationFixture().runtime;

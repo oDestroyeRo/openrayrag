@@ -319,7 +319,9 @@ describe('client shell navigation', () => {
     expect(html).not.toContain('<code>route_');
     expect(html).toContain('id="radius" type="range" min="1" max="20" value="12"');
     expect(html).toContain('id="min-hp" type="range" min="20" max="95" value="45"');
-    expect(html).toContain('Signed updates install automatically when every game and login action is stopped.');
+    expect(ids.filter(value => value === 'update-check')).toHaveLength(1);
+    expect(html).toContain('Check for updates');
+    expect(html).toContain('Check anytime, including while the bot runs.');
     expect(html).not.toContain('<iframe');
     expect(html).toContain('role="tablist" aria-label="Companion pages"');
     expect(html).toContain('class="panel settings feature-panel" data-section="profiles"');

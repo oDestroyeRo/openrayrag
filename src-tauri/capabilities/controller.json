@@ -16,6 +16,7 @@
     "allow-saved-login",
     "allow-forget-login",
     "allow-update-status",
+    "allow-update-check",
     "allow-update-open-release",
     "allow-current-form",
     "allow-save-current-form",
