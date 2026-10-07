@@ -58,17 +58,17 @@ function spawn(entity: Entity, entry = 1): Uint8Array {
       .finish();
   return new BitWriter().u8(OP.spawn).u8(entry).i32(body.length).take(body).finish();
 }
-function fixture(name = 'Test', at = 100_000) {
+function fixture(name = 'Test', at = 100_000, physical = false) {
   let now = at;
   const sent: Array<Action | ControllerAction> = [];
   const c = new CompanionController(
     (action) => sent.push(action),
     () => now,
-    () => ({ width: 200, height: 200, walkable: () => true }),
+    physical ? undefined : () => ({ width: 200, height: 200, walkable: () => true }),
   );
   c.connect(true);
   c.receive(new BitWriter().u8(OP.enter).i32(1).string('prt_fild08').finish());
-  c.receive(spawn({ ...own, name }));
+  c.receive(spawn({ ...own, name, ...(physical ? { x: 170, y: 370 } : {}) }));
   c.engine.receive([
     {
       type: 'inventory',
@@ -123,6 +123,39 @@ const script: MacroScript = {
     },
   ],
 };
+
+it.each([true, false, undefined])('restores one-shot configured entry pending=%s', (pending) => {
+  const f = fixture('Test', 100_000, true);
+  f.c.heartbeat(false);
+  f.c.start({ ...f.settings, map: 'prontera' });
+  f.c.prepareUpdate();
+  const checkpoint = f.c.updateCheckpoint()!;
+  expect(checkpoint.status.initialFieldEntryPending).toBe(true);
+  if (pending === undefined) delete checkpoint.status.initialFieldEntryPending;
+  else checkpoint.status.initialFieldEntryPending = pending;
+  const next = fixture('Test', 101_000, true);
+  next.c.restoreUpdate(checkpoint);
+  next.step();
+  expect(next.c.travel.active).toBe(pending === true);
+  expect(next.c.engine.running).toBe(pending !== true);
+  expect(next.c.snapshot().initialFieldEntryPending).toBe(pending === true);
+  expect(next.c.snapshot().elapsedSeconds).toBe(1);
+});
+
+it('rejects malformed configured-entry telemetry before updater restoration', () => {
+  const f = fixture();
+  f.c.start(f.settings);
+  f.c.prepareUpdate();
+  const checkpoint = f.c.updateCheckpoint()!;
+  Object.assign(checkpoint.status, { initialFieldEntryPending: 'pending' });
+  expect(() => validateControllerUpdateCheckpoint(checkpoint)).toThrow(
+    'Invalid controller update checkpoint',
+  );
+  const next = fixture('Test', 101_000);
+  expect(() => next.c.restoreUpdate(checkpoint)).toThrow('Invalid controller update checkpoint');
+  expect(next.c.active).toBe(false);
+  expect(next.sent).toEqual([]);
+});
 
 describe('safe update controller boundary', () => {
   it('suspends decisions while retaining intent and resumes the same run after cancellation', () => {

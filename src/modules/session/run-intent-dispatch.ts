@@ -68,6 +68,7 @@ export class RunIntentDispatch {
       deaths: status.deaths ?? 0,
       attacks: status.attacks ?? 0,
       runExperience: status.runExperience,
+      map: status.map,
     });
     this.held = false;
     const supplyGuard = this.field.supplyGuardForStart(settings, character, session);

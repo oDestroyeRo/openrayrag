@@ -36,6 +36,11 @@ describe('native full status and heartbeat boundary during route planning', () =
       mapInfo: { code: 'prt_fild08', name: 'Field', source: 'observed', monsters: [] },
     };
     expect(validStatus(status)).toBe(true);
+    expect(validStatus({ ...status, initialFieldEntryPending: true })).toBe(true);
+    expect(validStatus({ ...status, initialFieldEntryPending: 'pending' })).toBe(false);
+    const historical = { ...status };
+    delete historical.initialFieldEntryPending;
+    expect(validStatus(historical)).toBe(true);
     expect(status.actorObservations.actors[0]).toMatchObject({
       hp: { value: 100, max: 100, source: 'spawn' },
       sp: { value: 50, max: 100, source: 'spawn' },

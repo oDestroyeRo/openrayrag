@@ -250,6 +250,7 @@ function packetObservation(opcode: number, events: GameEvent[]): PacketObservati
 }
 export interface CompanionSnapshot extends Snapshot {
   runRequested: boolean;
+  initialFieldEntryPending?: boolean;
   state: 'running' | 'waiting' | 'idle';
   world: WorldSnapshot;
   workflow: WorkflowSnapshot;
@@ -382,6 +383,7 @@ export class CompanionController {
   private travelSettings: Settings | null = null;
   private returnSettings: Settings | null = null;
   private returning = false;
+  private initialFieldEntryPending = false;
   private requestedSettings: RunSettings | null = null;
   private protectedSettings: Settings | null = null;
   private pendingSettings: { id: string; plan: LiveSettingsPlan; character: string } | null = null;
@@ -875,6 +877,7 @@ export class CompanionController {
     if (!this.runRequested) {
       this.returning = false;
       this.returnSettings = null;
+      this.initialFieldEntryPending = false;
     }
   }
   stop(reason = 'Stopped by you.'): void {
@@ -1245,6 +1248,8 @@ export class CompanionController {
         this.experienceConnection = this.connectionEpoch;
       }
       this.requestedSettings = checkpoint.status.runRequested ? structuredClone(settings) : null;
+      this.initialFieldEntryPending =
+        !!this.requestedSettings && checkpoint.status.initialFieldEntryPending === true;
       this.returnSettings = automationSettings(settings).travel.returnToLockMap
         ? { ...structuredClone(settings), map: farmingDestination(settings) }
         : null;
@@ -1365,6 +1370,7 @@ export class CompanionController {
     if (this.partyHeal.busy)
       throw new Error('Waiting for the previous party Heal execution receipt.');
     this.beginRun(settings, escapeGuard, supplyGuard, recoveryGuard);
+    this.initialFieldEntryPending = !this.partyFollow.enabled && settings.map !== this.engine.map;
     if (protection) {
       this.resourceGuard = protection;
       this.engine.restoreLiveSettingsCooldowns(protection.cooldowns);
@@ -1545,6 +1551,7 @@ export class CompanionController {
       ? { ...structuredClone(settings), map: farmingDestination(settings) }
       : null;
     this.returning = !!this.deathCycle;
+    this.initialFieldEntryPending = false;
     this.requestedSettings = settings;
     this.characterName = this.engine.player?.name ?? null;
     this.engine.actionReceipts.discardReceipt();
@@ -2233,6 +2240,7 @@ export class CompanionController {
         );
       // Explicit service visits replace field intent; they never install a supply-trip policy.
       this.requestedSettings = null;
+      this.initialFieldEntryPending = false;
       this.returnSettings = null;
       this.returning = false;
       this.travelSettings = null;
@@ -3225,7 +3233,11 @@ export class CompanionController {
       }
       let intent = this.supplyIntent;
       if (!intent) {
-        intent = this.supply.resumeIntent(context) ?? this.supply.next(context);
+        intent =
+          this.supply.resumeIntent(context) ??
+          (this.initialFieldEntryPending && !this.supply.ownsField && !this.supply.uncertain
+            ? null
+            : this.supply.next(context));
         this.supplyIntent = intent;
         this.supplyCloseSent = false;
         this.supplyReturnApproach = false;
@@ -3427,6 +3439,10 @@ export class CompanionController {
         throw new Error('Supply return must reach the captured allowed field area.');
       this.supply.acknowledge(intent.id, 'confirmed', context);
       this.supplyIntent = null;
+      if (this.initialFieldEntryPending) {
+        this.resumeRun();
+        return true;
+      }
       this.engine.resumeRequested({
         ...intent.settings,
         map: intent.settings.automation?.mapPolicy?.lockArea ? intent.settings.map : context.map,
@@ -4024,6 +4040,7 @@ export class CompanionController {
     this.escape.cancel(reason);
     this.partyHeal.cancel(reason);
     this.requestedSettings = null;
+    this.initialFieldEntryPending = false;
     this.returnSettings = null;
     this.returning = false;
     this.captureActionFailure();
@@ -4539,7 +4556,8 @@ export class CompanionController {
           ? ''
           : this.returning && this.returnSettings
             ? this.returnSettings.map
-            : policy.travel.destinationMap);
+            : policy.travel.destinationMap ||
+              (this.initialFieldEntryPending && !this.partyFollow.enabled ? settings.map : ''));
       if (!player.dead && destination && destination !== this.engine.map) {
         this.travel.start(
           this.engine.map,
@@ -4598,6 +4616,7 @@ export class CompanionController {
           map: executionPolicy.lockArea ? settings.map : this.engine.map,
         };
         this.engine.resumeRequested(bound);
+        this.initialFieldEntryPending = false;
         this.experienceConnection = this.connectionEpoch;
         this.returning = false;
         this.travelSettings = null;
@@ -5058,6 +5077,7 @@ export class CompanionController {
       runExperience: this.runExperience ? { ...this.runExperience } : null,
       running: executing,
       runRequested: this.runRequested,
+      initialFieldEntryPending: this.initialFieldEntryPending,
       activeSettings: this.requestedSettings ? structuredClone(this.requestedSettings) : null,
       settingsApply: this.settingsApply ? structuredClone(this.settingsApply) : null,
       liveSettingsGuard: this.liveSettingsProtection(),

@@ -92,6 +92,19 @@ function fixture() {
 }
 afterEach(() => vi.useRealTimers());
 describe('one-shot updater continuation owner', () => {
+  it.each([true, false, undefined])(
+    'transfers initial field entry from frozen telemetry pending=%s',
+    (pending) => {
+      const f = fixture();
+      if (pending === undefined) delete f.continuation.runtime.status.initialFieldEntryPending;
+      else f.continuation.runtime.status.initialFieldEntryPending = pending;
+      f.owner.claim(f.continuation, f.field);
+      expect(
+        f.field.resumeFor({ ...f.fresh, map: 'prontera' }, { settledUpdate: true })?.settings.map,
+      ).toBe(pending === true ? 'prt_fild08' : 'prontera');
+    },
+  );
+
   it('applies final frozen counters before observing the successor and sends remaining field limits', async () => {
     const f = fixture();
     f.continuation.runtime.status.kills = 2;

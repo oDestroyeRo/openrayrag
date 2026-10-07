@@ -86,6 +86,8 @@ export function validateControllerUpdateCheckpoint(
     c.status.compatible !== true ||
     c.status.running !== false ||
     typeof c.status.runRequested !== 'boolean' ||
+    (c.status.initialFieldEntryPending !== undefined &&
+      typeof c.status.initialFieldEntryPending !== 'boolean') ||
     !c.status.macro ||
     typeof c.status.macro.state !== 'string'
   )

@@ -122,6 +122,101 @@ function policy() {
   return structuredClone(DEFAULT_AUTOMATION);
 }
 
+describe('configured field entry', () => {
+  it.each([false, true])('travels before farming and retires entry on Stop=%s', (stopped) => {
+    let now = 100_000;
+    const sent: Array<Action | ControllerAction> = [];
+    const c = new CompanionController(
+      (action) => sent.push(action),
+      () => now,
+    );
+    const packet = (writer: BitWriter) => c.receive(writer.finish());
+    const own = { ...player, x: 170, y: 370 };
+    c.connect(true);
+    packet(new BitWriter().u8(OP.enter).i32(1).string('prt_fild08'));
+    packet(ownPacket(own, 1));
+    c.engine.receive([{ type: 'spawn', entity: { ...monster, x: 171, y: 370 } }]);
+    c.start({ ...settings, map: 'prontera' });
+    expect(c.travel.active).toBe(true);
+    expect(c.engine.running).toBe(false);
+    expect(sent.some((action) => action.type === 'attack')).toBe(false);
+    for (let i = 0; i < 20 && c.travel.snapshot().state === 'walking'; i++) {
+      const cells = c.travel.snapshot().leg;
+      if (cells.length > 1) {
+        const dirs = [
+          [0, -1],
+          [-1, -1],
+          [-1, 0],
+          [-1, 1],
+          [0, 1],
+          [1, 1],
+          [1, 0],
+          [1, -1],
+        ];
+        const w = new BitWriter()
+          .u8(OP.walk)
+          .i32(1)
+          .position(cells[0]!)
+          .f32(cells[0]!.x)
+          .f32(cells[0]!.y)
+          .f32(0.05)
+          .f32(0)
+          .u8(cells.length);
+        const d = cells
+          .slice(1)
+          .map((cell, j) =>
+            dirs.findIndex(([x, y]) => cell.x - cells[j]!.x === x && cell.y - cells[j]!.y === y),
+          );
+        for (let j = 0; j < d.length; j += 2) w.u8((d[j]! << 4) | (d[j + 1] ?? 0));
+        packet(w.u8(0));
+      }
+      for (let j = 0; j < 15; j++) {
+        now += 100;
+        c.tick();
+      }
+    }
+    expect(c.travel.snapshot().state).toBe('transition');
+    expect(sent.some((action) => action.type === 'attack')).toBe(false);
+    packet(new BitWriter().u8(OP.map).string('prontera'));
+    expect(c.engine.running).toBe(false);
+    if (stopped) c.stop();
+    const count = sent.length;
+    packet(ownPacket({ ...own, x: 156, y: 26 }, 1));
+    c.engine.receive([{ type: 'spawn', entity: { ...monster, x: 157, y: 26 } }]);
+    now += 100;
+    c.tick();
+    if (stopped) {
+      expect(c.runRequested).toBe(false);
+      expect(sent).toHaveLength(count);
+    } else {
+      expect(c.engine.running).toBe(true);
+      now += 100;
+      c.tick();
+      expect(sent.some((action) => action.type === 'attack')).toBe(true);
+      c.pause('Manual map change');
+      packet(new BitWriter().u8(OP.map).string('prt_fild08'));
+      packet(ownPacket(own, 1));
+      now += 100;
+      c.tick();
+      expect(c.travel.active).toBe(false);
+      expect(c.engine.running).toBe(true);
+      expect(c.engine.settings.map).toBe('prt_fild08');
+    }
+  });
+
+  it('keeps forbidden configured destinations waiting without attacking on the departure map', () => {
+    const f = setup();
+    const automation = policy();
+    automation.mapPolicy = { ...structuredClone(DEFAULT_MAP_POLICY), deny: ['prontera'] };
+    f.controller.start({ ...settings, map: 'prontera', automation });
+    f.step();
+    expect(f.controller.runRequested).toBe(true);
+    expect(f.controller.engine.running).toBe(false);
+    expect(f.controller.snapshot().reason).toContain('forbidden');
+    expect(f.sent).toEqual([]);
+  });
+});
+
 describe('manual NPC map click admission', () => {
   const npc: Entity = {
     ...player,

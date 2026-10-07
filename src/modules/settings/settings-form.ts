@@ -54,6 +54,11 @@ export class SettingsForm {
     return settingsWithFieldMap(this.read(this.targets.map, this.targets.ids));
   }
 
+  /** Start can enter the retained field; current-field actions keep their own projection. */
+  startSettings(): SettingsInput {
+    return this.startProjection(this.read(this.targets.map, this.targets.ids));
+  }
+
   snapshot(): FormSnapshot {
     return this.checkedSnapshot({
       settings: this.retainedSettings(this.read(this.targets.map, this.targets.configuredIds)),
@@ -66,7 +71,9 @@ export class SettingsForm {
    * Read lazily so FeatureUi has accepted the status before locks are projected.
    */
   project(): SettingsFormProjection {
-    let current: { field: SettingsInput; retained: FormSnapshotInput } | undefined;
+    let current:
+      | { field: SettingsInput; start: SettingsInput; retained: FormSnapshotInput }
+      | undefined;
     let read = false,
       error: unknown;
     const value = () => {
@@ -77,6 +84,7 @@ export class SettingsForm {
           const field = this.read(this.targets.map, this.targets.ids);
           current = {
             field: settingsWithFieldMap(field),
+            start: this.startProjection(field),
             retained: {
               settings: this.retainedSettings(field),
               selectedProfileId: this.automation.selectedProfileId(),
@@ -91,8 +99,15 @@ export class SettingsForm {
     };
     return {
       runSettings: () => value().field,
+      startSettings: () => value().start,
       snapshot: () => this.checkedSnapshot(value().retained),
     };
+  }
+
+  private startProjection(field: SettingsInput): SettingsInput {
+    return this.targets.configuredMap && this.targets.configuredMap !== this.targets.map
+      ? this.retainedSettings(field)
+      : settingsWithFieldMap(field);
   }
 
   private retainedSettings(value: SettingsInput): SettingsInput {

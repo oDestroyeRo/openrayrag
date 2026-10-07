@@ -17,6 +17,8 @@ const ipc = vi.hoisted(() => ({
   scriptStorageFails: false,
   useEditor: false,
   limitMinutes: 0,
+  travelDestination: '',
+  partyFollow: false,
   editor: null as MacroUi | null,
   setupScript: null as BotScriptDocument['script'],
   setupSettings: null as SettingsInput | null,
@@ -145,6 +147,8 @@ vi.mock('../client/feature-ui', async () => {
       read() {
         const value = structuredClone(DEFAULT_AUTOMATION);
         value.limits.minutes = ipc.limitMinutes;
+        value.travel.destinationMap = ipc.travelDestination;
+        if (ipc.partyFollow) value.follow.mode = 'partyLeader';
         return value;
       }
       lock(): void {}
@@ -363,6 +367,8 @@ async function fixture(
   ipc.macroDirty = false;
   ipc.useEditor = useEditor;
   ipc.limitMinutes = 0;
+  ipc.travelDestination = '';
+  ipc.partyFollow = false;
   ipc.scriptStorageFails = false;
   ipc.editor = null;
   ipc.setupScript = null;
@@ -1898,7 +1904,74 @@ it('keeps a settings-only setup on the existing projected field Start path', asy
   expect(f.calls('control_bot').some((call) => call[1]?.action === 'macro')).toBe(false);
 });
 
-it('aligns readiness with current-field targets while preserving the retained field choices until an explicit edit', async () => {
+it.each(['botOnly', 'gameClient'] as const)(
+  'starts the retained field from another map in %s mode and describes its selected targets',
+  async (mode) => {
+    const settings = {
+      ...structuredClone(DEFAULT_SETTINGS),
+      map: 'prt_fild07',
+      targets: [4005, 4006],
+    };
+    const f = await fixture(null, false, {
+      version: 1,
+      revision: 2,
+      selectedProfileId: null,
+      settings,
+    });
+    await publishStatus({ ...readyStatus('cross-map-start'), connectionMode: mode });
+    expect(f.get('status').textContent).toBe('READY');
+    expect(f.get('start').disabled).toBe(false);
+    expect(f.get('console-setup-summary').textContent).toContain('prt_fild07');
+    expect(f.get('console-setup-summary').textContent).not.toContain('No targets selected');
+    await f.get('start').emit('click');
+    expect(
+      f.calls('control_bot').find((call) => call[1]?.action === 'start')?.[1]?.settings,
+    ).toMatchObject({ map: 'prt_fild07', targets: [4005, 4006] });
+  },
+);
+
+it('describes the explicit travel destination while retaining the configured target field', async () => {
+  const f = await fixture(null, false, {
+    version: 1,
+    revision: 2,
+    selectedProfileId: null,
+    settings: { ...structuredClone(DEFAULT_SETTINGS), map: 'prt_fild07', targets: [4005] },
+  });
+  ipc.travelDestination = 'prt_fild06';
+  await publishStatus(readyStatus('explicit-destination'));
+  expect(f.get('console-setup-summary').textContent).toContain('Travel to prt_fild06');
+  await f.get('start').emit('click');
+  expect(
+    f.calls('control_bot').find((call) => call[1]?.action === 'start')?.[1]?.settings,
+  ).toMatchObject({
+    map: 'prt_fild07',
+    targets: [4005],
+    automation: { travel: { destinationMap: 'prt_fild06' } },
+  });
+});
+
+it('keeps party leader destination ownership out of the ordinary initial-trip hint', async () => {
+  const f = await fixture(null, false, {
+    version: 1,
+    revision: 2,
+    selectedProfileId: null,
+    settings: { ...structuredClone(DEFAULT_SETTINGS), map: 'prt_fild07', targets: [4005] },
+  });
+  ipc.partyFollow = true;
+  await publishStatus(readyStatus('party-destination'));
+  expect(f.get('start').disabled).toBe(false);
+  expect(f.get('console-setup-summary').textContent).not.toContain('Travel to');
+  await f.get('start').emit('click');
+  expect(
+    f.calls('control_bot').find((call) => call[1]?.action === 'start')?.[1]?.settings,
+  ).toMatchObject({
+    map: 'prt_fild07',
+    targets: [4005],
+    automation: { follow: { mode: 'partyLeader' } },
+  });
+});
+
+it('preserves retained field choices until an explicit current-field target edit', async () => {
   const saved = {
     version: 1,
     revision: 2,
@@ -1908,25 +1981,20 @@ it('aligns readiness with current-field targets while preserving the retained fi
   const before = structuredClone(saved),
     f = await fixture(null, false, saved);
   await publishStatus(readyStatus('different-field'));
-  expect(f.get('status').textContent).toBe('SETUP');
-  expect(f.get('client-run-title').textContent).toBe('Setup needs attention');
-  expect(f.get('start').disabled).toBe(true);
-  expect(f.get('config-help').textContent).toContain('Choose selected monsters');
-  expect(f.get('console-setup-summary').textContent).toContain('No targets selected');
-  expect(f.get('console-saved-draft-summary').hidden).toBe(false);
-  expect(f.get('console-saved-draft-summary').textContent).toContain(
-    'Retained choices for prt_fild07: 2 selected targets',
-  );
-  expect(f.get('console-edit-setup').textContent).toBe('Choose current-field targets');
+  expect(f.get('status').textContent).toBe('READY');
+  expect(f.get('start').disabled).toBe(false);
+  expect(f.get('console-setup-summary').textContent).toContain('prt_fild07');
+  expect(f.get('console-saved-draft-summary').hidden).toBe(true);
   const saves = f.calls('save_current_form').length;
   await f.get('client-bot-tab-recovery').emit('click');
   await f.get('client-tab-session').emit('click');
   await f.get('console-edit-setup').emit('click');
   expect(f.get('client-page-bot').hidden).toBe(false);
-  expect(f.get('client-bot-combat').hidden).toBe(false);
+  expect(f.get('client-bot-recovery').hidden).toBe(false);
   expect(f.calls('save_current_form')).toHaveLength(saves);
   expect(saved).toEqual(before);
   expect(f.calls('control_bot')).toEqual([]);
+  await f.get('client-bot-tab-combat').emit('click');
   await f.get('select-targets').emit('click');
   expect(f.get('status').textContent).toBe('READY');
   expect(f.get('start').disabled).toBe(false);
@@ -2341,6 +2409,30 @@ it('blocks Main draft writes after a failed UI disable until a new control grant
   expect(f.calls('save_current_form').at(-1)?.[1]).toMatchObject({ mcpOperation: renewed });
   expect(f.calls('control_bot')).toEqual([]);
 });
+
+it.each(['botOnly', 'gameClient'] as const)(
+  'dispatches MCP Start with retained destination targets from another map in %s',
+  async (mode) => {
+    const settings = {
+      ...structuredClone(DEFAULT_SETTINGS),
+      map: 'prt_fild07',
+      targets: [4005, 4006],
+    };
+    const f = await fixture(null, false, { ...mcpForm(), settings });
+    await publishMcpStatus(mode);
+    const started = mainMcpQuery('start_bot', {
+      requestId: 'cross-map-start',
+      expectedDraftRevision: await mcpDraftRevision(),
+      expectedGeneration: 2,
+    });
+    expect(await mainMcpResult(started)).toMatchObject({ dispatch: 'accepted' });
+    expect(f.calls('control_bot')[0]?.[1]).toMatchObject({
+      action: 'start',
+      mcpOperation: started,
+      settings: { map: 'prt_fild07', targets: [4005, 4006] },
+    });
+  },
+);
 
 it.each(['botOnly', 'gameClient'] as const)(
   'dispatches MCP Start and Stop through the same Main owners in %s',
