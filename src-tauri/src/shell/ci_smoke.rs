@@ -45,13 +45,23 @@ pub(crate) fn destroyed(app: &tauri::AppHandle, label: &str) {
 
 #[cfg(feature = "ci-smoke")]
 #[tauri::command]
-pub(crate) fn ci_smoke_report(
+pub(crate) async fn ci_smoke_report(
     app: tauri::AppHandle,
     window: tauri::Webview,
     token: String,
     event: String,
 ) -> Result<bool, String> {
-    enabled::report(app, window, token, event)
+    if event == "mcp" {
+        enabled::authorize_mcp(&app, &window, &token)?;
+        enabled::milestone("mcp-loopback-started");
+        if let Err(error) = crate::mcp::smoke_check(app, window).await {
+            enabled::mcp_failed(error);
+        }
+        enabled::mcp_checked();
+        Ok(true)
+    } else {
+        enabled::report(app, window, token, event)
+    }
 }
 
 #[cfg(feature = "ci-smoke")]
@@ -81,6 +91,7 @@ mod enabled {
         baseline: Mutex<Option<Value>>,
         milestone: Mutex<&'static str>,
         finished: AtomicBool,
+        mcp_verified: AtomicBool,
     }
 
     #[derive(Clone, Copy, PartialEq, Debug)]
@@ -170,6 +181,7 @@ mod enabled {
             baseline: Mutex::new(None),
             milestone: Mutex::new("smoke-installed"),
             finished: AtomicBool::new(false),
+            mcp_verified: AtomicBool::new(false),
         }))
     }
 
@@ -253,6 +265,9 @@ mod enabled {
             "native-settings-ipc",
             "window-close-save",
         ];
+        if run.mcp_verified.load(Ordering::SeqCst) {
+            checks.push("mcp-loopback-read-only");
+        }
         if run.stage == Stage::Reopen {
             checks.push("settings-restore");
         }
@@ -280,6 +295,31 @@ mod enabled {
             eprintln!("CI smoke result could not be saved");
             std::process::exit(1);
         }
+    }
+
+    pub(super) fn authorize_mcp(
+        app: &tauri::AppHandle,
+        window: &tauri::Webview,
+        token: &str,
+    ) -> Result<(), String> {
+        crate::require_view(window, "main")?;
+        let run = RUN.get().ok_or("CI smoke is not active")?;
+        if token != run.token || app.config().identifier != IDENTIFIER {
+            return Err("CI smoke request is not authorized".into());
+        }
+        offline(app)
+    }
+    pub(super) fn mcp_checked() {
+        if let Some(run) = RUN.get() {
+            run.mcp_verified.store(true, Ordering::SeqCst);
+        }
+        milestone("mcp-loopback-verified");
+    }
+    pub(super) fn mcp_failed(error: String) -> ! {
+        if let Some(run) = RUN.get() {
+            finish(run, Err(error));
+        }
+        std::process::exit(1);
     }
 
     pub(super) fn report(
@@ -362,6 +402,7 @@ mod enabled {
                     if (config.stage === 'reopen') {{
                         assert(before.settings.radius === 17 && before.settings.loot === false && before.settings.route_step === 7);
                     }}
+                    assert(await report('mcp'));
                     await report('arm');
                     if (config.stage === 'save') {{
                         node('radius').value = '17';
@@ -377,7 +418,7 @@ mod enabled {
         );
         if app
             .get_webview("main")
-            .map_or(true, |window| window.eval(script).is_err())
+            .is_none_or(|window| window.eval(script).is_err())
         {
             finish(
                 run,
@@ -395,6 +436,9 @@ mod enabled {
         milestone("window-destroyed");
         let outcome = (|| {
             offline(app)?;
+            if !run.mcp_verified.load(Ordering::SeqCst) {
+                return Err("MCP packaged bridge was not verified".into());
+            }
             let baseline = run.baseline.lock().map_err(|_| "CI baseline unavailable")?;
             let baseline = baseline
                 .as_ref()

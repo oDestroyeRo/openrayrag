@@ -2,6 +2,8 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "ci_smoke_report",
+            "mcp_set_enabled",
+            "mcp_reply",
             "update_status",
             "update_check",
             "update_open_release",

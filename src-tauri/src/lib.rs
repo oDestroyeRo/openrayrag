@@ -2,6 +2,7 @@ use settings::automation::Settings;
 use tauri::{webview::WebviewBuilder, Emitter, Manager, Webview, WebviewUrl};
 
 mod game;
+mod mcp;
 mod session;
 mod settings;
 mod shared;
@@ -356,6 +357,7 @@ fn bridge_status(
     if encoded.len() > MAX_STATUS_BYTES || !status.is_object() {
         return Err("Status exceeds its limit.".into());
     }
+    status["mcpObservation"] = serde_json::Value::Null;
     if let Ok(mut gate) = app.state::<session::maintenance::SharedGate>().lock() {
         if session::direct::runtime_mode(&window)? == session::login::ConnectionMode::BotOnly
             && !app
@@ -392,6 +394,7 @@ fn bridge_status(
         session::mode_guard::bind_owner(&app, gate.game_generation, &identity);
         gate.identity = identity;
         gate.observed = Some(std::time::Instant::now());
+        status["mcpObservation"] = mcp::observe(&app, gate.game_generation);
     }
     if let Ok(mut state) = app.state::<session::login::SharedLogin>().lock() {
         state.observe(
@@ -453,6 +456,7 @@ pub fn run() {
         .manage(session::login::SharedLogin::default())
         .manage(session::direct::SharedDirect::default())
         .manage(settings::settings_close::SharedClose::default())
+        .manage(mcp::SharedMcp::default())
         .setup(|app| {
             shell::ci_smoke::install(app.handle())?;
             update::update_continuation::initialize(app.handle())?;
@@ -470,6 +474,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            mcp::mcp_set_enabled,
+            mcp::mcp_reply,
             #[cfg(feature = "ci-smoke")]
             shell::ci_smoke::ci_smoke_report,
             settings::settings_close::settings_close_ready,
@@ -516,6 +522,11 @@ pub fn run() {
             session::login::take_pending_login
         ])
         .on_page_load(|webview, payload| {
+            if webview.label() == "main"
+                && payload.event() == tauri::webview::PageLoadEvent::Started
+            {
+                mcp::shutdown(webview.app_handle());
+            }
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 shell::ci_smoke::page_loaded(webview.app_handle(), webview.label());
             }
@@ -530,6 +541,7 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 shell::ci_smoke::destroyed(window.app_handle(), window.label());
                 if window.label() == "main" {
+                    mcp::shutdown(window.app_handle());
                     session::direct::cancel(window.app_handle());
                     if let Ok(mut gate) = window
                         .app_handle()
@@ -551,6 +563,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Could not launch Rayrag Companion")
         .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                mcp::shutdown(app);
+            }
             #[cfg(target_os = "macos")]
             if matches!(
                 event,

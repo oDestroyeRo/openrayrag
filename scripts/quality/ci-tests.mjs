@@ -628,6 +628,8 @@ test('smoke packages support startup queries without gameplay or installation pr
       'core:window:allow-close',
       'allow-ci-smoke-report',
       'allow-current-form',
+      'allow-mcp-set-enabled',
+      'allow-mcp-reply',
       'allow-save-current-form',
       'allow-settings-close-ready',
       'allow-settings-close-cancel',

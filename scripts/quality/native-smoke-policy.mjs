@@ -8,6 +8,7 @@ const EXPECTED_CHECKS = [
   'offline-controller',
   'native-settings-ipc',
   'window-close-save',
+  'mcp-loopback-read-only',
 ];
 
 /** @param {string} binary @param {string} root @param {string} platform @param {NodeJS.ProcessEnv} env */

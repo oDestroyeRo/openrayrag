@@ -30,6 +30,8 @@ The release profile leaves build dependencies unstripped to work around a macOS 
 
 [Bot console behavior and limits](docs/BOT_CONSOLE.md) explain manual controls, observed receipts and transport verification. [Connection modes](docs/CONNECTION_MODES.md) explain native authentication, lifecycle and update settlement.
 
+[Optional local MCP access](docs/MCP.md) lets an external AI assistant read status/settings/profiles and validate Bot scripts. Enable it explicitly in Settings; it cannot execute or save changes.
+
 [Feature-local verification](docs/LOCAL_FEATURE_VERIFICATION.md) records current local test results, supported feature coverage and remaining live-game checks.
 
 After Start, the run request remains active until **Stop** or game-window close, subject to configured limits and unresolved actions. The status distinguishes **RUNNING**, **WAITING** and idle. Low HP, map loading, missing navigation, interrupted routes, connection loss or controller pauses put the bot into waiting/recovery; valid state lets it resume. Opening panels, typing and official gameplay actions preserve the requested run and macro. The bot follows authoritative movement and casting, waits for an NPC interaction to close, and continues with its original allowances and deadlines. A confirmed manual map change preserves the same character's field intent; a macro can return to its configured farming map. See [game input ownership](docs/GAME_INPUT.md). The run retains its selected monster classes when it binds to a new map; it does not automatically add new targets.
