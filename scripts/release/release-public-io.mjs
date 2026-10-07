@@ -1,4 +1,4 @@
-import { filter, fromEntries } from "remeda";
+import { filter } from "effect/Array";
 // Read-only transports. Public downloads never receive gh credentials.
 import { spawn, execFile, execFileSync } from "node:child_process";
 import { chmod, mkdtemp, open, writeFile } from "node:fs/promises";
@@ -17,7 +17,7 @@ export function requireValue(ok, message) {
 }
 
 export function privateEnvironment(folder, environment = process.env) {
-  const clean = fromEntries(filter(Object.entries(environment), ([key]) =>
+  const clean = Object.fromEntries(filter(Object.entries(environment), ([key]) =>
     !/TOKEN|PASSWORD|SECRET|AUTH|COOKIE|GITHUB|GH_|TAURI_SIGNING|GIT_|NPM_CONFIG|NODE_OPTIONS|NODE_PATH|^BUN_/i.test(key),
   ));
   return {

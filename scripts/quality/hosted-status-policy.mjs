@@ -1,5 +1,5 @@
 import { workflowRunId, workflowJobId, pullRequestNumber, sourceCommitSha, hostedRunValues } from '../shared/tooling-domain-values.mjs';
-import { map, sort } from 'remeda';
+import { map } from 'effect/Array';
 
 // Pure hosted metadata validation, normalization and CLI parsing.
 export const repository = 'oDestroyeRo/openrayrag';
@@ -11,11 +11,11 @@ export const id = workflowRunId;
 export function createPullRequestStatus(number, result, expectedSha) {
   requireValue(result.headRefOid === expectedSha, 'Pull request head differs from the workflow source.');
   requireValue(Array.isArray(result.statusCheckRollup) && typeof result.mergeStateStatus === 'string', 'Missing pull request check metadata.');
-  const checks = sort(map(result.statusCheckRollup, check => ({
+  const checks = map(result.statusCheckRollup, check => ({
     name: check.name ?? check.context,
     status: check.status?.toLowerCase() ?? ((check.state === 'PENDING' || check.state === 'EXPECTED') ? 'pending' : 'completed'),
     conclusion: check.conclusion?.toLowerCase() ?? (check.state === 'SUCCESS' ? 'success' : check.state === 'FAILURE' || check.state === 'ERROR' ? 'failure' : null),
-  })), (a, b) => String(a.name).localeCompare(String(b.name)));
+  })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
   return { number: pullRequestNumber(number), state: result.state, mergeState: result.mergeStateStatus, reviewDecision: result.reviewDecision ?? null, checks };
 }
 
@@ -37,7 +37,7 @@ export function parseHostedRun(runId, run, expectedSha) {
 /** @param {import('../shared/tooling-domain-values.mjs').WorkflowRunId} runId @param {import('../shared/tooling-domain-values.mjs').HostedRun} run @param {readonly import('../shared/tooling-domain-values.mjs').HostedJob[]} jobs @param {number} count @returns {import('../shared/tooling-domain-values.mjs').RunSnapshot} */
 export function createRunSnapshot(runId, run, jobs, count) {
   requireValue(jobs.length === count && new Set(map(jobs, job => job.id)).size === count, 'Incomplete or duplicate job listing.');
-  const sorted = sort(jobs, (a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }));
+  const sorted = [...jobs].sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }));
   return { repository, runId, sourceSha: run.head_sha, attempt: run.run_attempt, status: run.status, conclusion: run.conclusion ?? null, url: `https://github.com/${repository}/actions/runs/${runId}`, jobs: sorted };
 }
 

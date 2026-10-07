@@ -1,4 +1,5 @@
-import { filter, map, pipe } from 'remeda';
+import { filter, map } from 'effect/Array';
+import { pipe } from 'effect/Function';
 import { validActorSnapshot, type ActorObservationSnapshot, type ActorSelector } from './actor-observations-logic';
 
 /** Refresh observation time in a detached snapshot without reading the clock. */

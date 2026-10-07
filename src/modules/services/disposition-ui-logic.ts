@@ -1,4 +1,6 @@
-import { entries, filter, fromEntries, groupBy, map, pipe, reduce, take, values } from 'remeda';
+import { filter, groupBy, map, reduce, take } from 'effect/Array';
+import { pipe } from 'effect/Function';
+import { values } from 'effect/Record';
 import { hpPotionIds } from '../recovery/hp-potions';
 import { recoveryItemIds } from '../recovery/recovery-items';
 import { ITEM_CATALOG, itemName } from '../catalog/game-catalog';
@@ -34,15 +36,15 @@ function items(input: unknown): InventoryItem[] | null {
  * Equipment, selected ammo and unique protections are applied by the planner.
  */
 export function publishedDispositionMetadata(): Readonly<Record<string, DispositionItemInfo>> {
-  return pipe(ITEM_CATALOG, entries(), map(([id, item]) => {
+  return pipe(ITEM_CATALOG, Object.entries, map(([id, item]) => {
     const known = [1, 2, 3, 4, 5, 6].includes(item.itemClass);
     return [id, { weight: number(item.weight), sellPrice: number(item.sellPrice), itemClass: item.itemClass,
       unique: known ? [2, 3].includes(item.itemClass) : null,
       ...(known ? { store: true, sell: true, cart: true, buy: true } : {}) }] as const;
-  }), fromEntries());
+  }), Object.fromEntries);
 }
 const metadata = publishedDispositionMetadata();
-const compatibleAmmoIds = pipe(AMMO_CATALOG, entries(), filter(([, info]) => info.ammoType === 0), map(([id]) => Number(id)));
+const compatibleAmmoIds = pipe(AMMO_CATALOG, Object.entries, filter(([, info]) => info.ammoType === 0), map(([id]) => Number(id)));
 
 export function dispositionStockFloors(settings: AutomationSettingsInput): { itemId: number; count: number }[] {
   const floors = map(settings.items, row => ({ itemId: row.itemId, count: row.minStock }));
@@ -53,8 +55,8 @@ export function dispositionStockFloors(settings: AutomationSettingsInput): { ite
   if (escape?.enabled && escape.method === 'item') floors.push({ itemId: escape.mode === 'random' ? 601 : 602, count: escape.minStock });
   if (settings.loadout.enabled && settings.loadout.minAmmoStock > 0)
     floors.push(...map(compatibleAmmoIds, withReserve({ minStock: settings.loadout.minAmmoStock })));
-  return pipe(floors, groupBy(row => `item:${row.itemId}`), values(),
-    map(rows => ({ itemId: rows[0]!.itemId, count: reduce(rows, (count, row) => Math.max(count, row.count), 0) })));
+  return pipe(floors, groupBy(row => `item:${row.itemId}`), values,
+    map(rows => ({ itemId: rows[0]!.itemId, count: reduce(rows, 0, (count, row) => Math.max(count, row.count)) })));
 }
 
 /** Read-only adapter. No game/controller hooks are available to this module. */

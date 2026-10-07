@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { posix } from 'node:path';
-import { parse } from 'yaml';
 
-const readYaml = async path => parse(await readFile(new URL(path, import.meta.url), 'utf8'));
+const readYaml = async path => Bun.YAML.parse(await readFile(new URL(path, import.meta.url), 'utf8'));
 const desktop = await readYaml('../../.github/workflows/release.yml');
 const release = await readYaml('../../.github/workflows/release-publish.yml');
 const security = await readYaml('../../.github/workflows/security.yml');
@@ -203,12 +202,15 @@ test('the braces advisory exception cannot reach the desktop dependency graph or
   assert.equal(manifest.dependencies, undefined);
   assert.deepEqual(Object.keys(manifest.devDependencies).sort(), [
     '@semantic-release/commit-analyzer', '@semantic-release/release-notes-generator',
-    'conventional-changelog-conventionalcommits', 'remeda', 'semver',
+    'conventional-changelog-conventionalcommits', 'effect', 'semver',
   ]);
   assert.equal(manifest.overrides['conventional-changelog-writer'], '9.2.1');
   const lock = Bun.JSONC.parse(await readFile(new URL('../../tools/release/bun.lock', import.meta.url), 'utf8'));
-  assert.equal(manifest.devDependencies.remeda, root.workspaces[''].dependencies.remeda);
-  assert.deepEqual(lock.packages.remeda[2], {}, 'Remeda must add no runtime dependency to the isolated tools graph');
+  assert.equal(manifest.devDependencies.effect, root.workspaces[''].dependencies.effect);
+  assert.deepEqual(lock.packages.effect[2], {}, 'Effect must add no runtime dependency to the isolated tools graph');
+  assert.equal(root.packages.remeda, undefined);
+  assert.equal(root.packages.yaml, undefined);
+  assert.equal(lock.packages.remeda, undefined);
   for (const path of Object.keys(lock.packages)) {
     assert.doesNotMatch(path, /(?:^|\/)(?:semantic-release|@semantic-release\/(?:npm|github|git))(?:\/|$)/, path);
   }

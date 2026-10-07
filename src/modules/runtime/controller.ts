@@ -1,7 +1,7 @@
+import { filter, map } from 'effect/Array';
 import { quantity, revisionFor, partyMemberId, type ItemId, type Quantity } from '../../shared/domain-values';
 import { addExperience, type RunExperience } from '../session/run-experience-logic';
 import { skillId as domainSkillId, itemId as domainItemId, bagId as domainBagId } from '../../shared/domain-values';
-import { filter, map } from 'remeda';
 import { fieldIdentityWaitReason, fieldResumeDecision } from './controller-field-policy';
 import { PartyFollowRuntime, type PartyFollowContext, type PartyFollowSnapshot } from '../party/party-follow';
 import { PartyHealPolicy, partyHealCandidates, partyHpCondition, type PartyHealSnapshot } from '../party/party-heal';

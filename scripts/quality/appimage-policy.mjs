@@ -1,4 +1,4 @@
-import { filter, find, map, sort } from "remeda";
+import { filter, map, sort } from "effect/Array";
 import { fileDigest } from '../shared/tooling-domain-values.mjs';
 
 // Pure ELF and loader comparison. File and tool effects stay in appimage-proof.
@@ -280,7 +280,7 @@ function sectionLoads(elf, section) {
 function validateMetadataLoad(elf, program, moved) {
   requireValue(program.flags === 6 && program.fileSize === program.memorySize && program.physical === program.address,
     'ELF relocated metadata LOAD permissions or mapping differ.');
-  const sections = sort(filter(moved, section => mappedBy(section, program)), (a, b) => a.offset - b.offset);
+  const sections = filter(moved, section => mappedBy(section, program)).sort((a, b) => a.offset - b.offset);
   requireValue(sections.length > 0, 'ELF new LOAD contains no relocated metadata.');
   const spans = map(sections, section => ({ offset: section.offset, size: section.size }));
   // Bundled Patchelf may place the actual section/program header table before
@@ -289,7 +289,7 @@ function validateMetadataLoad(elf, program, moved) {
   for (const [offset, size] of [[elf.table, elf.sections.length * 64], [elf.phOffset, elf.phSize]])
     if (offset >= program.offset && offset + size <= program.offset + program.fileSize) spans.push({ offset, size });
   let cursor = program.offset;
-  for (const span of sort(spans, (a, b) => a.offset - b.offset)) {
+  for (const span of [...spans].sort((a, b) => a.offset - b.offset)) {
     requireValue(span.offset === cursor, 'ELF new LOAD contains unexpected mapped data.');
     cursor += Number(roundUp(BigInt(span.size), 8n));
     requireValue(elf.bytes.subarray(span.offset + span.size, cursor).every(byte => byte === 0),
@@ -312,7 +312,7 @@ function canonicalHeaders(elf, original = elf) {
     else if (program.type === 6) {
       requireValue(program.offset === elf.phOffset && program.fileSize === elf.phSize && program.memorySize === elf.phSize,
         'ELF PHDR table mapping differs.');
-      const load = find(elf.programs, load => load.type === 1 && program.offset >= load.offset
+      const load = elf.programs.find(load => load.type === 1 && program.offset >= load.offset
         && program.offset + program.fileSize <= load.offset + load.fileSize
         && program.address - load.address === BigInt(program.offset - load.offset)
         && program.physical - load.physical === BigInt(program.offset - load.offset));
@@ -327,14 +327,14 @@ function canonicalHeaders(elf, original = elf) {
         // the property section; its former bytes may overlap the enlarged PHDR
         // table. Preserve the original raw header, not a claimed current mapping.
         // Patchelf 0.18 also updates PT_GNU_PROPERTY in writeReplacedSections.
-        const prior = find(original.programs, header => header.type === program.type
+        const prior = original.programs.find(header => header.type === program.type
           && sameFields(header, program, Object.keys(program)));
         requireValue(prior, 'ELF retained GNU_PROPERTY header differs.');
         result.push(mappedHeader(original, prior, '.note.gnu.property'));
       }
     } else if (program.type === 4) {
-      const notes = sort(filter([...elf.byName.values()], section => section.type === 7 && section.offset >= program.offset
-        && section.offset + section.size <= program.offset + program.fileSize), (a, b) => a.offset - b.offset);
+      const notes = filter([...elf.byName.values()], section => section.type === 7 && section.offset >= program.offset
+        && section.offset + section.size <= program.offset + program.fileSize).sort((a, b) => a.offset - b.offset);
       requireValue(notes.length > 0 && program.fileSize === program.memorySize, 'ELF NOTE mapping is invalid.');
       let cursor = program.offset;
       for (const section of notes) {
@@ -369,7 +369,7 @@ function compareProgramMappings(original, deployed) {
   const extra = filter(after, program => !before.some(old => old.address === program.address));
   requireValue(extra.length <= 1, 'ELF new LOAD inventory differs.');
   for (const left of before) {
-    const right = find(after, program => program.address === left.address);
+    const right = after.find(program => program.address === left.address);
     requireValue(right && sameFields(left, right, ['flags', 'offset', 'address', 'physical', 'alignment']),
       'ELF existing LOAD permissions or mapping differ.');
     if (sameFields(left, right, ['fileSize', 'memorySize'])) continue;

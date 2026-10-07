@@ -1,6 +1,6 @@
+import { filter, map } from 'effect/Array';
 import { itemId as domainItemId, bagId as domainBagId, quantity, type ItemId, type BagId, type Quantity } from '../../shared/domain-values';
 import { inventoryItemCount } from '../world/character-state-logic';
-import { filter, map, sumBy } from 'remeda';
 import type { ActionIdentity } from '../world/actor-identity';
 import type { InventoryItemInput as InventoryItem, InventoryItem as InventoryItemDraft } from '../protocol/protocol-feature';
 import { validateWorldAction, type PartyMember, type ItemRow, type WorldAction, type WorldEvent } from '../protocol/world-protocol';
@@ -200,7 +200,7 @@ export function barterConsumption(action: Extract<WorldAction, { type: 'npcBarte
   // could consume a refined, socketed, or equipped item the user did not select.
   for (const item of selected) if (item && !required.has(item.itemId)) return null;
   for (const [itemId, count] of required) {
-    const regular = sumBy(filter(context.inventory, item => item.itemId === itemId && item.type === 1 && !protectedItem(item, context)), item => item.count);
+    const regular = filter(context.inventory, item => item.itemId === itemId && item.type === 1 && !protectedItem(item, context)).reduce((total, item) => total + (item.count), 0);
     const unique = selected.filter(item => item?.itemId === itemId).length;
     if (regular < count && unique !== count) return null;
     if (regular >= count && unique > 0) return null;

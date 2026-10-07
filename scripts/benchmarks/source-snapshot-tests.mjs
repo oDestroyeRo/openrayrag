@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { benchmarkSourcePlugin } from './source-snapshot.mjs';
 
@@ -26,7 +26,13 @@ test('real flat historical renderer sources bundle through current module entrie
   assert.ok(loaded.size > 50);
   assert.equal([...loaded].some(file => file.startsWith('src/modules/')), false);
   assert.equal(Object.keys(result.metafile.inputs).some(file => file.startsWith('src/modules/')), false);
-  assert.ok(Object.keys(result.metafile.inputs).some(file => file.includes('node_modules/remeda/')));
+  const historicalLibrary = Object.keys(result.metafile.inputs).find(file => file.includes('/node_modules/remeda/'));
+  assert.ok(historicalLibrary);
+  const dependencyFolder = resolve(root, historicalLibrary.split('/node_modules/remeda/')[0]);
+  assert.match(dependencyFolder, /rayrag-benchmark-dependencies-/);
+  await assert.rejects(stat(dependencyFolder), { code: 'ENOENT' });
+  await assert.rejects(stat(join(root, 'node_modules/remeda')), { code: 'ENOENT' });
+  assert.ok(Object.keys(result.metafile.inputs).some(file => file.includes('node_modules/effect/')));
 });
 
 test('immutable modular snapshots retain their own nested imports, and mixed layouts reject', async t => {
@@ -54,4 +60,36 @@ test('immutable modular snapshots retain their own nested imports, and mixed lay
   git(['add', 'src']);
   git(['-c', 'user.name=Offline Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'test: ambiguous snapshot']);
   assert.throws(() => benchmarkSourcePlugin(directory, git(['rev-parse', 'HEAD'])), /ambiguous benchmark source layout/);
+});
+
+test('failed historical bundles clean their locked install and never run package lifecycle hooks', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'rayrag-benchmark-failure-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const git = args => execFileSync('git', args, { cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git(['init', '--quiet']);
+  await mkdir(join(directory, 'src/modules/automation'), { recursive: true });
+  await writeFile(join(directory, 'src/modules/automation/engine.ts'), "export { map } from 'remeda';\n");
+  const source = name => execFileSync('git', ['show', `7d68d08:${name}`], { cwd: root });
+  const manifest = JSON.parse(source('package.json'));
+  manifest.scripts = { postinstall: `${JSON.stringify(process.execPath)} -e "require('node:fs').writeFileSync('lifecycle-ran','unsafe')"` };
+  await writeFile(join(directory, 'package.json'), JSON.stringify(manifest));
+  await writeFile(join(directory, 'bun.lock'), source('bun.lock'));
+  git(['add', 'src', 'package.json', 'bun.lock']);
+  git(['-c', 'user.name=Offline Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'test: historical dependencies']);
+  let dependencyFolder;
+  await assert.rejects(build({
+    stdin: { contents: "export { map } from './src/modules/automation/engine.ts';", resolveDir: directory },
+    bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent',
+    plugins: [benchmarkSourcePlugin(directory, git(['rev-parse', 'HEAD'])), {
+      name: 'controlled-dependency-failure', setup(builder) {
+        builder.onLoad({ filter: /[\\/]node_modules[\\/]remeda[\\/]/ }, async args => {
+          dependencyFolder = args.path.split(/[\\/]node_modules[\\/]remeda[\\/]/)[0];
+          await assert.rejects(stat(join(dependencyFolder, 'lifecycle-ran')), { code: 'ENOENT' });
+          return { errors: [{ text: 'controlled historical dependency failure' }] };
+        });
+      },
+    }],
+  }), /controlled historical dependency failure/);
+  assert.match(dependencyFolder, /rayrag-benchmark-dependencies-/);
+  await assert.rejects(stat(dependencyFolder), { code: 'ENOENT' });
 });

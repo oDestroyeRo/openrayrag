@@ -1,4 +1,5 @@
-import { concat, filter, map, pipe, piped, unique } from 'remeda';
+import { appendAll, filter, map, dedupe } from 'effect/Array';
+import { pipe, flow } from 'effect/Function';
 import { DomainValueError } from '../../shared/domain-values';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, validateSettings, type SettingsInput, type RunSettings } from './settings';
 
@@ -25,7 +26,7 @@ export function profileSavedAt(value: unknown): ProfileSavedAt {
 export interface BotProfileInput { id: string; name: string; character: string; savedAt: number; settings: SettingsInput }
 export interface BotProfile { readonly id: ProfileId; readonly name: ProfileName; readonly character: string; readonly savedAt: ProfileSavedAt; readonly settings: RunSettings }
 export interface ProfileDocument { readonly version: 1; readonly profiles: readonly BotProfile[] }
-const profileIds = piped(map<readonly BotProfile[], string>(profile => profile.id), unique());
+const profileIds = flow(map<readonly BotProfile[], string>(profile => profile.id), dedupe);
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 function keys(value: Record<string, unknown>, expected: string[]): boolean {
   const actual = Object.keys(value);
@@ -96,7 +97,7 @@ export function profileSaveAllowed(profiles: readonly BotProfile[], existingId?:
   if (!existingId && profiles.length >= MAX_PROFILES) throw new Error(`Keep at most ${MAX_PROFILES} profiles.`);
 }
 export function savedProfiles(profiles: readonly BotProfile[], profile: BotProfile): BotProfile[] {
-  return pipe(profiles, filter(saved => saved.id !== profile.id), concat([profile]), map(checkedProfile));
+  return pipe(profiles, filter(saved => saved.id !== profile.id), appendAll([profile]), map(checkedProfile));
 }
 export function encodeProfileDocument(profiles: readonly BotProfile[]): string {
   const document = JSON.stringify({ version: 1, profiles });

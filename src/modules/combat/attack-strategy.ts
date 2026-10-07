@@ -1,4 +1,4 @@
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 import { foldConditions, unavailableFirstConditions } from '../../shared/condition-logic';
 import type { AttackStrategyRule, ReadonlyData } from '../settings/settings';
 import type { ActorObservationSnapshot } from '../world/actor-observations-logic';

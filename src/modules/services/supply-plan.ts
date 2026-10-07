@@ -1,6 +1,5 @@
 import { quantity, type ItemId } from '../../shared/domain-values';
 import { inventoryItemCount } from '../world/character-state-logic';
-import { sort } from 'remeda';
 import { insideLockArea, mapAllowed, mapPolicy, policySummary } from '../navigation/map-policy-logic';
 import { planDisposition, VALIDATED_DEFAULT_DISPOSITION, type DispositionPolicyView, type DispositionRuleView } from './disposition';
 import { serviceByContractId } from './npc-services-logic';
@@ -34,7 +33,7 @@ export function nextSupplyAction(
         ?.filter((row) => row.itemId === rule.itemId)
         .map((row) => row.count) ?? []),
     );
-  const rules = sort(policy.rules, (a, b) => a.itemId - b.itemId);
+  const rules = [...policy.rules].sort((a, b) => a.itemId - b.itemId);
   // Dispose before receiving new stock, so capacity is based on confirmed data.
   const target =
     rules.find(

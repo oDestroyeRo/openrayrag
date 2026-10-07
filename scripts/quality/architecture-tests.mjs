@@ -75,26 +75,30 @@ test('ambient references, aliases, computed clocks and dynamic imports reject be
   assert.deepEqual(scriptEffectViolations('logic.ts', 'import { createHash } from "node:crypto"; export const hash = value => createHash("sha256").update(value).digest("hex");'), []);
 });
 
-test('logic permits named pure Remeda composition and rejects effectful or unrestricted imports', async () => {
+test('logic permits named pure Effect composition and rejects effectful or unrestricted imports', async () => {
   const roles = { 'logic.ts': 'logic', 'effects.ts': 'effects' };
   for (const source of [
-    'import { pipe, map, filter } from "remeda"; export const doublePositive = xs => pipe(xs, filter(x => x > 0), map(x => x * 2));',
-    'import { map as transform } from "remeda"; export const copy = xs => transform(xs, x => x);',
-    'export { map as transform, filter } from "remeda";',
+    'import { pipe } from "effect/Function"; import { map, filter } from "effect/Array"; export const doublePositive = xs => pipe(xs, filter(x => x > 0), map(x => x * 2));',
+    'import { map as transform } from "effect/Array"; export const copy = xs => transform(xs, x => x);',
+    'export { map as transform, filter } from "effect/Array";',
+    'import { every } from "effect/Predicate"; export const positive = every([x => x > 0]);',
+    'import { make } from "effect/Order"; import { sort } from "effect/Array"; export const sorted = xs => sort(xs, make((a, b) => a < b ? -1 : a > b ? 1 : 0));',
   ]) assert.deepEqual(await scriptViolations('logic.ts', source, roles), [], source);
   for (const source of [
-    'import * as R from "remeda"; export const random = R.randomString;',
-    'import R from "remeda"; export const random = R.randomString;',
-    'import "remeda";',
-    'import { randomString as text } from "remeda"; export const id = () => text(10);',
-    'import { shuffle, sample, randomInteger, debounce, once, tap } from "remeda"; export { shuffle, sample, randomInteger, debounce, once, tap };',
-    'export { randomString as text } from "remeda";',
-    'export * from "remeda";',
-    'export * as utilities from "remeda";',
-    'import { map } from "remeda/dist/map.js"; export { map };',
-    'import { map } from "remeda"; export const stamps = xs => map(xs, () => Date.now());',
+    'import * as A from "effect/Array"; export const copy = A.map;',
+    'import A from "effect/Array"; export const copy = A.map;',
+    'import "effect/Array";',
+    'import { memoize } from "effect/Function"; export const cached = memoize(value => value);',
+    'import { assignProperty } from "effect/Record"; export const change = value => assignProperty(value, "key", 1);',
+    'import { runSync, sync } from "effect/Effect"; export const now = () => runSync(sync(() => Date.now()));',
+    'import { Clock, Random } from "effect"; export { Clock, Random };',
+    'export * from "effect/Array";',
+    'export * as utilities from "effect/Array";',
+    'import { map } from "effect/internal/array"; export { map };',
+    'import { map } from "effect/Array"; export const stamps = xs => map(xs, () => Date.now());',
+    'import { map } from "remeda"; export const copy = xs => map(xs, x => x);',
   ]) assert.ok((await scriptViolations('logic.ts', source, roles)).length, source);
-  assert.deepEqual(await scriptViolations('effects.ts', 'import { randomString } from "remeda"; export const id = () => randomString(10);', roles), []);
+  assert.deepEqual(await scriptViolations('effects.ts', 'import { runSync, sync } from "effect/Effect"; export const now = () => runSync(sync(() => Date.now()));', roles), []);
 });
 
 test('Rust checks production effects while allowing I/O in separate test modules', () => {

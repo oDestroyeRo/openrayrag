@@ -1,5 +1,5 @@
 import { reservationRefValues } from '../shared/tooling-domain-values.mjs';
-import { sort } from "remeda";
+import { sort } from "effect/Array";
 // Pure reservation encoding, ref validation and complete ledger contracts.
 import { canonicalJson } from "../../release.config.mjs";
 import {
@@ -76,7 +76,7 @@ export function validateLedger(ctx, plans) {
     plans.length <= MAX_RESERVATIONS,
     "Release reservation ledger exceeds its bound.",
   );
-  const sorted = sort(plans,
+  const sorted = [...plans].sort(
     (a, b) => a.firstParentCount - b.firstParentCount,
   );
   const sources = new Set(),

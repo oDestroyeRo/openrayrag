@@ -1,6 +1,7 @@
 // Deterministic architecture rules. Discovery, compilation and reporting live in architecture.mjs.
 import { createScanner, SyntaxKind } from 'typescript/unstable/ast';
-import { filter, flatMap, map, pipe } from 'remeda';
+import { filter, flatMap, map } from 'effect/Array';
+import { pipe } from 'effect/Function';
 
 /** @type {readonly import("../shared/tooling-domain-values.mjs").ArchitectureRole[]} */
 export const ROLES = ['logic', 'effects', 'orchestration'];
@@ -24,15 +25,23 @@ const PACKAGE_OPERATIONS = new Map([
   ['node:crypto', CRYPTO_OPERATIONS], ['node:util', UTIL_OPERATIONS],
   ['node:path', new Set(['join', 'normalize', 'dirname', 'basename', 'extname', 'isAbsolute', 'parse', 'format'])],
   ['node:url', new Set(['fileURLToPath', 'domainToASCII', 'domainToUnicode'])],
-  // Remeda also exports randomness, timers and retained state. Only explicit
-  // deterministic operations are available to logic; callbacks must stay pure.
-  ['remeda', new Set([
-    'allPass', 'anyPass', 'concat', 'countBy', 'entries', 'filter', 'find', 'findIndex',
-    'first', 'flatMap', 'fromEntries', 'groupBy', 'identity', 'indexBy', 'isDefined',
-    'isNonNullish', 'keys', 'map', 'mapKeys', 'mapValues', 'omit', 'partition', 'pick',
-    'pipe', 'piped', 'prop', 'reduce', 'sort', 'sortBy', 'sumBy', 'take', 'unique',
-    'uniqueBy', 'values',
+  // Import the deterministic Effect owners directly. The runtime, clock,
+  // randomness and retained-state helpers belong to effects or orchestration.
+  // Caller-supplied callbacks and observations still require purity review.
+  ['effect/Function', new Set(['identity', 'pipe', 'flow'])],
+  ['effect/Array', new Set([
+    'appendAll', 'dedupe', 'dedupeWith', 'every', 'filter', 'filterMap', 'findFirst',
+    'findFirstIndex', 'flatMap', 'fromIterable', 'groupBy', 'head', 'map', 'partition',
+    'reduce', 'some', 'sort', 'sortBy', 'sortWith', 'take',
   ])],
+  ['effect/Record', new Set(['filter', 'fromEntries', 'get', 'keys', 'map', 'mapEntries', 'mapKeys', 'reduce', 'toEntries', 'values'])],
+  ['effect/Struct', new Set(['omit', 'pick'])],
+  ['effect/Predicate', new Set(['and', 'every', 'isNotNullish', 'isNotUndefined', 'not', 'or', 'some'])],
+  ['effect/Filter', new Set(['fromPredicate'])],
+  ['effect/Order', new Set(['make', 'mapInput', 'combine', 'combineAll', 'Number', 'String'])],
+  ['effect/Number', new Set(['sum', 'sumAll'])],
+  ['effect/Option', new Set(['getOrUndefined', 'isNone', 'isSome', 'match', 'none', 'some'])],
+  ['effect/Result', new Set(['fail', 'succeed'])],
 ]);
 const AMBIENT = ['window', 'document', 'globalThis', 'self', 'localStorage', 'sessionStorage',
   'fetch', 'XMLHttpRequest', 'WebSocket', 'console', 'process', 'Bun', 'Deno',

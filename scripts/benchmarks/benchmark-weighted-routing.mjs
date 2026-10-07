@@ -1,4 +1,4 @@
-import { filter, find, map as mapArray } from 'remeda';
+import { filter, map as mapArray } from 'effect/Array';
 // bun scripts/benchmarks/benchmark-weighted-routing.mjs <frozen-before-esm-bundle> [--incremental]
 // The bundle must export TravelPlanner and DEFAULT_MAP_POLICY. Scores, not tie
 // paths, are compared: the conservative frontier can change equal-cost order.
@@ -22,7 +22,7 @@ let seed=2532;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;re
 /** @returns {import("../shared/tooling-domain-values.mjs").RouteOptimum | null} */
 function outcome(planner,route,fromMap,from,walls,policy){
   if(!route)return null;let score=0,map=fromMap,p=from;
-  for(const step of route){const path=planner.search(map,p,step.portal,walls);if(!path)throw new Error('Returned approach is not physically reachable.');score=score+path.cost+200+(find(policy.penalties,r=>r.map===map)?.cost??0);map=step.portal.toMap;p=step.portal.arrival;}
+  for(const step of route){const path=planner.search(map,p,step.portal,walls);if(!path)throw new Error('Returned approach is not physically reachable.');score=score+path.cost+200+(policy.penalties.find(r=>r.map===map)?.cost??0);map=step.portal.toMap;p=step.portal.arrival;}
   if(route.length)score+=planner.search(map,p,null,walls).cost;return {score,hops:route.length};
 }
 try{

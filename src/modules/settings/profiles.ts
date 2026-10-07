@@ -1,4 +1,4 @@
-import { filter, map } from 'remeda';
+import { filter, map } from 'effect/Array';
 import type { SettingsInput } from './settings';
 import { checkedProfile, parseProfileDocument, profileSaveAllowed, savedProfiles, encodeProfileDocument, profileImportAllowed, importedProfiles, profileForMap, exportProfile, type BotProfile } from './profiles-logic';
 import { readStoredText, writeStoredText, type TextStorage } from '../../shared/storage-effects';

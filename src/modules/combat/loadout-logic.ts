@@ -1,6 +1,7 @@
+import { filter } from 'effect/Array';
+import { pipe } from 'effect/Function';
 import type { DomainInventoryItem as InventoryItem } from '../world/character-state-logic';
 import { bagId as domainBagId, itemId as domainItemId, type ItemId, type BagId, type Quantity } from '../../shared/domain-values';
-import { filter, pipe, sort } from 'remeda';
 import catalog from '../../data/weapon-catalog.json';
 import type { CharacterState } from '../world/character-state';
 import type { Entity } from '../protocol/protocol';
@@ -88,6 +89,6 @@ export function selectAmmo(state:CharacterState,p:Entity,a:Pick<AutomationSettin
   const preference=(id:ItemId)=>{const i=a.loadout.ammoPreferences.findIndex(v=>v.itemId===id);return i<0?a.loadout.ammoPreferences.length:i;};
   const candidates=pipe([...state.inventory.values()],
     filter(i=>i.type===1&&AMMO_CATALOG[i.itemId]?.ammoType===0&&p.level>=AMMO_CATALOG[i.itemId]!.minLevel&&i.count>a.loadout.minAmmoStock),
-    sort((x,y)=>preference(x.itemId)-preference(y.itemId)||(x.bagId===state.ammoId?-1:0)-(y.bagId===state.ammoId?-1:0)||x.itemId-y.itemId||x.bagId-y.bagId));
+    items => [...items].sort((x,y)=>preference(x.itemId)-preference(y.itemId)||(x.bagId===state.ammoId?-1:0)-(y.bagId===state.ammoId?-1:0)||x.itemId-y.itemId||x.bagId-y.bagId));
   return candidates[0]??null;
 }

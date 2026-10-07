@@ -1,4 +1,4 @@
-import { map, sort } from "remeda";
+import { map, sort } from "effect/Array";
 // Pure semantic release contracts. No plugin loading, filesystem or network effects.
 import { createHash } from "node:crypto";
 import { sourceCommitSha, stableReleaseVersion, releaseBaseValues, releaseSourceValues, releasePlanValues, releaseTagFor, planDigest } from '../shared/tooling-domain-values.mjs';

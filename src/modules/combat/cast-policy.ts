@@ -1,5 +1,5 @@
+import { map } from 'effect/Array';
 import { bagId as domainBagId, skillId as domainSkillId } from '../../shared/domain-values';
-import { map } from 'remeda';
 import data from '../../data/cast-policy.json';
 import { ITEM_CATALOG, SKILL_CATALOG, skillCost } from '../catalog/game-catalog';
 import type { CharacterState } from '../world/character-state';

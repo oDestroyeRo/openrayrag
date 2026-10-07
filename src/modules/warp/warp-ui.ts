@@ -1,4 +1,4 @@
-import { omit } from 'remeda';
+import { omit } from 'effect/Struct';
 import { validWarpSnapshot } from './warp-ui-logic';
 export { validWarpSnapshot } from './warp-ui-logic';
 import { WARP_RECOVERY, type WarpSnapshot } from './warp';

@@ -1,5 +1,5 @@
 import { releaseTagFor, releaseId, ownedReleaseDto } from '../shared/tooling-domain-values.mjs';
-import { find, map } from "remeda";
+import { map } from "effect/Array";
 // Publication orchestration. API, dates, reservations and native verification
 // are injected; release-policy owns all deterministic bundle/source contracts.
 import { compareVersions, planSha256 } from "./semantic-release-policy.mjs";
@@ -192,7 +192,7 @@ export async function publishRelease(ctx) {
         assets.every((a) => releaseNames.includes(a.name)),
       "Unexpected or duplicate draft assets.",
     );
-    let asset = find(assets, (a) => a.name === name);
+    let asset = assets.find((a) => a.name === name);
     if (!asset) {
       try {
         await ctx.api.upload(releaseId(release.id), name, fileBytes(ctx.files, name));
@@ -200,7 +200,7 @@ export async function publishRelease(ctx) {
         /* Reconcile a lost upload response without replacing any asset. */
       }
       assets = await ctx.api.assets(releaseId(release.id));
-      asset = find(assets, (a) => a.name === name);
+      asset = assets.find((a) => a.name === name);
     }
     requireValue(
       asset && asset.state === "uploaded",

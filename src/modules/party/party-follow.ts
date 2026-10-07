@@ -1,5 +1,5 @@
+import { filter } from 'effect/Array';
 import { partyMemberId } from '../../shared/domain-values';
-import { filter } from 'remeda';
 import { RESOURCE_STALE_MS } from '../world/actor-resources';
 import { onlinePartyMembers, distinctPartyActors, type PartyActorBinding } from './party-actors-logic';
 import { mapAllowed, mapPolicy } from '../navigation/map-policy-logic';

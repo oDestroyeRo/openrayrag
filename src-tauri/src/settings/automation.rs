@@ -1,5 +1,4 @@
 use crate::shared::domain_values::{Percentage, RecoveryTimeoutSeconds};
-use frunk::{hlist_pat, prelude::IntoValidated, HList, Validated};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -881,16 +880,14 @@ struct Recovery {
     sp_end: u8,
     timeout_seconds: u16,
 }
-type RecoveryValidation = Validated<
-    HList!(
-        Percentage,
-        Percentage,
-        Percentage,
-        Percentage,
-        RecoveryTimeoutSeconds
-    ),
-    &'static str,
->;
+#[derive(Debug)]
+struct RecoveryBounds {
+    hp_start: Percentage,
+    hp_end: Percentage,
+    sp_start: Percentage,
+    sp_end: Percentage,
+    _timeout: RecoveryTimeoutSeconds,
+}
 
 #[derive(Debug)]
 enum RecoveryError {
@@ -898,7 +895,7 @@ enum RecoveryError {
     Hysteresis,
 }
 // A policy is constructed only after both range and cross-field checks; no
-// Generic/Deserialize implementation can rebuild an inverted hysteresis pair.
+// unchecked deserialization can rebuild an inverted hysteresis pair.
 struct RecoveryPolicy {
     hp_start: Percentage,
 }
@@ -921,22 +918,43 @@ fn recovery_percentage(
 }
 
 impl Recovery {
-    fn validated_bounds(&self) -> RecoveryValidation {
-        recovery_percentage(self.hp_start, 1, 95, "hpStart").into_validated()
-            + recovery_percentage(self.hp_end, 2, 100, "hpEnd")
-            + recovery_percentage(self.sp_start, 0, 95, "spStart")
-            + recovery_percentage(self.sp_end, 1, 100, "spEnd")
-            + RecoveryTimeoutSeconds::try_from(self.timeout_seconds).map_err(|_| "timeoutSeconds")
+    fn validated_bounds(&self) -> Result<RecoveryBounds, Vec<&'static str>> {
+        match (
+            recovery_percentage(self.hp_start, 1, 95, "hpStart"),
+            recovery_percentage(self.hp_end, 2, 100, "hpEnd"),
+            recovery_percentage(self.sp_start, 0, 95, "spStart"),
+            recovery_percentage(self.sp_end, 1, 100, "spEnd"),
+            RecoveryTimeoutSeconds::try_from(self.timeout_seconds).map_err(|_| "timeoutSeconds"),
+        ) {
+            (Ok(hp_start), Ok(hp_end), Ok(sp_start), Ok(sp_end), Ok(timeout)) => {
+                Ok(RecoveryBounds {
+                    hp_start,
+                    hp_end,
+                    sp_start,
+                    sp_end,
+                    _timeout: timeout,
+                })
+            }
+            (hp_start, hp_end, sp_start, sp_end, timeout) => Err([
+                hp_start.err(),
+                hp_end.err(),
+                sp_start.err(),
+                sp_end.err(),
+                timeout.err(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect()),
+        }
     }
     fn policy(&self) -> Result<RecoveryPolicy, RecoveryError> {
-        let hlist_pat!(hp_start, hp_end, sp_start, sp_end, _timeout) = self
-            .validated_bounds()
-            .into_result()
-            .map_err(|_| RecoveryError::Bounds)?;
-        if hp_start >= hp_end || sp_start >= sp_end {
+        let bounds = self.validated_bounds().map_err(|_| RecoveryError::Bounds)?;
+        if bounds.hp_start >= bounds.hp_end || bounds.sp_start >= bounds.sp_end {
             return Err(RecoveryError::Hysteresis);
         }
-        Ok(RecoveryPolicy { hp_start })
+        Ok(RecoveryPolicy {
+            hp_start: bounds.hp_start,
+        })
     }
     fn valid(&self) -> bool {
         self.policy().is_ok()
@@ -1449,7 +1467,7 @@ mod tests {
             timeout_seconds: 3601,
         };
         assert_eq!(
-            malformed.validated_bounds().into_result().unwrap_err(),
+            malformed.validated_bounds().unwrap_err(),
             ["hpStart", "hpEnd", "spStart", "spEnd", "timeoutSeconds"]
         );
         assert!(!malformed.valid());

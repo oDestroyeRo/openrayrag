@@ -1,6 +1,6 @@
+import { flatMap, map } from 'effect/Array';
 import { reachedRunLimit, runLimitReason } from '../session/run-limit-logic';
 import { skillId as domainSkillId } from '../../shared/domain-values';
-import { flatMap, map } from 'remeda';
 import { manualActionBlocker } from './engine-action-policy';
 import { ObservedThreats, type ThreatSnapshot } from '../world/observed-threats';
 import { CastAvailability, type ObservedCast } from '../combat/cast-availability';

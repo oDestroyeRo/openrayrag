@@ -1,4 +1,5 @@
-import { concat, filter, map, pipe, piped, unique } from 'remeda';
+import { appendAll, filter, map, dedupe } from 'effect/Array';
+import { pipe, flow } from 'effect/Function';
 import { validateServiceDefinition, type NpcServiceDefinition, type ServiceOutcome } from './npc-services-logic';
 import { DomainValueError, mapCode, milliseconds, itemId, quantity, type MapCode, type Milliseconds, type ItemId, type Quantity } from '../../shared/domain-values';
 import type { ReadonlyData } from '../settings/settings';
@@ -34,7 +35,7 @@ export function checkedSavedService(input: unknown): SavedServiceDefinition {
     outcome: { ...service.outcome, timeoutMs: milliseconds(service.outcome.timeoutMs) } };
 }
 export const MAX_SERVICES = 20;
-const serviceIds = piped(map<readonly ServiceDefinitionInput[], string>(service => service.id), unique());
+const serviceIds = flow(map<readonly ServiceDefinitionInput[], string>(service => service.id), dedupe);
 export function parseServiceDocument(text: string): readonly SavedServiceDefinition[] {
   if (new TextEncoder().encode(text).length > 256_000) throw new Error('Service document is too large.');
   const v: unknown = JSON.parse(text);
@@ -66,7 +67,7 @@ export function serviceSaveAllowed(services: readonly ServiceDefinitionInput[], 
 export function savedServices(services: readonly ServiceDefinitionInput[], input: unknown, id: string, existingId?: string): { readonly services: readonly SavedServiceDefinition[]; readonly saved: SavedServiceDefinition } {
   const saved = checkedSavedService({ ...validateServiceDefinition(input), id });
   if (!existingId && services.some(service => service.id === saved.id)) throw new Error('Could not create a unique service ID.');
-  return { services: pipe(services, filter(service => service.id !== saved.id), concat([saved]), map(checkedSavedService)), saved };
+  return { services: pipe(services, filter(service => service.id !== saved.id), appendAll([saved]), map(checkedSavedService)), saved };
 }
 export function serviceImportAllowed(services: readonly ServiceDefinitionInput[], imported: readonly ServiceDefinitionInput[]): void {
   if (!imported.length) throw new Error('Service document is empty.');

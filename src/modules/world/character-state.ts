@@ -1,4 +1,5 @@
-import { map, pipe, take } from 'remeda';
+import { map, take } from 'effect/Array';
+import { pipe } from 'effect/Function';
 import type { FeatureEvent, InventoryItem, PlayerStats } from '../protocol/protocol-feature';
 
 import { admitInventoryItem, inventoryItemCount, type CharacterSnapshot, type StatefulEntity, type DomainInventoryItem } from './character-state-logic';

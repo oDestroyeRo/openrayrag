@@ -1,5 +1,6 @@
+import { String as stringOrder } from 'effect/Order';
+import { sortWith } from 'effect/Array';
 import type { ReadonlyData } from '../settings/settings';
-import { sort, sortBy } from 'remeda';
 import { NAVIGATION_MAPS, mapDimensions, type WalkGrid } from './navigation-logic';
 import type { Position } from '../protocol/protocol';
 export interface LockArea { map: string; minX: number; minY: number; maxX: number; maxY: number }
@@ -65,7 +66,7 @@ export function insideLockArea(policy: ReadonlyData<MapPolicy>, map: string, p: 
 }
 
 export function policyIdentity(policy: ReadonlyData<MapPolicy>): string {
-  return JSON.stringify([policy.mode,sortBy(policy.allow, map=>map),sortBy(policy.deny, map=>map),sort(policy.penalties, (a,b)=>a.map.localeCompare(b.map)),policy.lockArea]);
+  return JSON.stringify([policy.mode,sortWith(policy.allow, map=>map, stringOrder),sortWith(policy.deny, map=>map, stringOrder),[...policy.penalties].sort((a,b)=>a.map.localeCompare(b.map)),policy.lockArea]);
 }
 
 export function policySummary(policy: ReadonlyData<MapPolicy>, origin?: string): string {

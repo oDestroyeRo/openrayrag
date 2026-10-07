@@ -1,4 +1,3 @@
-import { sort } from 'remeda';
 import { MAX_TARGETS } from '../automation/engine';
 import type { MapInfo, MapMonster } from '../navigation/map-data';
 
@@ -30,7 +29,7 @@ export class MapTargets {
     for (const monster of info.monsters) this.monsters.set(monster.classId, { ...monster });
   }
   get options(): MapMonster[] {
-    return sort([...this.monsters.values()], (a,b) => a.level - b.level || a.name.localeCompare(b.name) || a.classId - b.classId);
+    return [...this.monsters.values()].sort((a,b) => a.level - b.level || a.name.localeCompare(b.name) || a.classId - b.classId);
   }
   eligible(id: number): boolean {
     const monster = this.monsters.get(id);

@@ -1,4 +1,4 @@
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 import type { ConditionState } from '../../shared/condition-logic';
 import { SUPPORTED_STATUS_IDS } from './actor-status-catalog';
 import { resourceFresh, compareResource, validResourceObservation, RESOURCE_OPERATORS, type ResourceObservation, type ResourceOperator } from './actor-resources';

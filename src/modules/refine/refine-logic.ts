@@ -1,6 +1,8 @@
+import { map, sortWith } from 'effect/Array';
+import { pipe } from 'effect/Function';
+import { Number as numberOrder } from 'effect/Order';
 import { actorId, itemId, quantity, regularItemBagId, type ActorId, type BagId, type ItemId, type Quantity, type Revision, type Milliseconds } from '../../shared/domain-values';
 import { admitInventoryItem, inventoryItemDraft, type DomainInventoryItem } from '../world/character-state-logic';
-import { map, pipe, sortBy } from 'remeda';
 import catalog from '../../data/socket-catalog.json';
 import { dispositionStockFloors } from '../services/disposition-ui-logic';
 import type { InventoryItemInput as InventoryItem } from '../protocol/protocol-feature';
@@ -47,7 +49,7 @@ export function refineFloors(request:ValidatedRefinePreviewRequest):Array<{itemI
   const floors=new Map<ItemId,Quantity>();
   for(const row of [...dispositionStockFloors(request.policy),...request.policy.disposition?.rules.map(row=>({itemId:row.itemId,count:row.keep}))??[]])
     {const id=itemId(row.itemId);floors.set(id,quantity(Math.max(floors.get(id)??0,row.count)));}
-  return pipe([...floors], map(([itemId,count])=>({itemId,count})), sortBy(row=>row.itemId));
+  return pipe([...floors], map(([itemId,count])=>({itemId,count})), sortWith(row=>row.itemId, numberOrder));
 }
 
 function guardKey(request:ValidatedRefinePreviewRequest):string { return JSON.stringify([request.targetBagId,refineFloors(request),request.maxSpend,request.minZeny,request.policy.disposition?.maxSpend??null]); }

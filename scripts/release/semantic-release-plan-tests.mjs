@@ -613,11 +613,11 @@ test("pure release contracts and injected planning work without installing relea
   try {
     await mkdir(join(folder, "scripts/release"), { recursive: true });
     await mkdir(join(folder, "scripts/shared"), { recursive: true });
-    // Pure contracts need Remeda, but no semantic-release plugin installation.
+    // Pure contracts need Effect, but no semantic-release plugin installation.
     await mkdir(join(folder, "node_modules"));
     await symlink(
-      fileURLToPath(new URL("../../node_modules/remeda", import.meta.url)),
-      join(folder, "node_modules/remeda"),
+      fileURLToPath(new URL("../../node_modules/effect", import.meta.url)),
+      join(folder, "node_modules/effect"),
       process.platform === "win32" ? "junction" : "dir",
     );
     for (const name of ["tooling-domain-values", "semantic-release-policy", "semantic-release-plan", "release-policy", "release-reservation-policy", "release-source-policy"]) {

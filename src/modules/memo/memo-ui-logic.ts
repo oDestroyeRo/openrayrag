@@ -1,4 +1,4 @@
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 import type { MemoSnapshot } from './memo';
 import { validateMemoRequest, type MemoLocation } from './memo-protocol';
 const object=(v:unknown):Record<string,unknown>=>v&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};

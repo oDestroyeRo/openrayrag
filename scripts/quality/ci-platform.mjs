@@ -1,4 +1,5 @@
-import { filter, map, pipe } from 'remeda';
+import { filter, map } from 'effect/Array';
+import { pipe } from 'effect/Function';
 import { sourceCommitSha, stableReleaseVersion } from '../shared/tooling-domain-values.mjs';
 // Secret-free native packages for PRs, and same-source manual installers for releases.
 import { execFileSync } from 'node:child_process';

@@ -1,4 +1,4 @@
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 import { actorSnapshotAt as snapshotAt, observedActorChoices, bindObservedActor } from './actor-predicate-ui-logic';
 import { evaluateActorPredicate, type ActorObservationSnapshot, type ActorPredicate, type ActorSelector } from './actor-observations';
 import { RESOURCE_OPERATORS, type ResourceOperator } from './actor-resources';

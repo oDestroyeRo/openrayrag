@@ -1,4 +1,4 @@
-import { filter, map, sort } from "remeda";
+import { filter, map, sort } from "effect/Array";
 import { publicOptionsValues } from "../shared/tooling-domain-values.mjs";
 
 // Pure public release metadata, workflow evidence and option contracts.

@@ -1,6 +1,6 @@
 import { fileBytes } from './release-policy.mjs';
 import { sourceCommitSha, gitTagObjectSha, releaseId, artifactDigest } from '../shared/tooling-domain-values.mjs';
-import { filter, map, sort } from "remeda";
+import { filter, map, sort } from "effect/Array";
 // CI-only entry point. Importing this module never reads signing keys or contacts GitHub.
 import { execFileSync } from "node:child_process";
 import {

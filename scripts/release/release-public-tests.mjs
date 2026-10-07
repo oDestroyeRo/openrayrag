@@ -108,14 +108,14 @@ async function validatorSnapshot(layout = "modules") {
   return { files, git };
 }
 
-test("isolated source tools share the root exact Remeda pin", async () => {
+test("isolated source tools share the root exact Effect pin", async () => {
   const root = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
   const tools = JSON.parse(await readFile(new URL("../../tools/release/package.json", import.meta.url), "utf8"));
-  assert.equal(tools.devDependencies.remeda, root.dependencies.remeda);
-  assert.match(tools.devDependencies.remeda, /^\d+\.\d+\.\d+$/);
+  assert.equal(tools.devDependencies.effect, root.dependencies.effect);
+  assert.match(tools.devDependencies.effect, /^\d+\.\d+\.\d+$/);
 });
 
-for (const layout of ["legacy", "modules"]) test(`reconstructed ${layout} source computes a nonempty plan with locked Remeda and no app install or lifecycle hooks`, async () => {
+for (const layout of ["legacy", "modules"]) test(`reconstructed ${layout} source computes a nonempty plan with its locked pure library and no app install or lifecycle hooks`, async () => {
   const parent = await createReportDirectory(), folder = join(parent, "source");
   try {
     const snapshot = await validatorSnapshot(layout);
@@ -136,7 +136,8 @@ for (const layout of ["legacy", "modules"]) test(`reconstructed ${layout} source
     assert.equal(planner.validatePlan(result.plan), result.plan);
     assert.equal(reservations.planRefName(result.plan), `refs/tags/rayrag-release-plan/${result.plan.tag}`);
     assert.equal(await realpath(join(folder, "node_modules")), await realpath(join(folder, "tools/release/node_modules")));
-    assert.equal(JSON.parse(await readFile(join(folder, "node_modules/remeda/package.json"), "utf8")).version, manifest.devDependencies.remeda);
+    const library = layout === "legacy" ? "remeda" : "effect";
+    assert.equal(JSON.parse(await readFile(join(folder, `node_modules/${library}/package.json`), "utf8")).version, manifest.devDependencies[library]);
     await assert.rejects(stat(join(folder, "tools/release/lifecycle-ran")), { code: "ENOENT" });
     await assert.rejects(stat(join(folder, "node_modules/esbuild")), { code: "ENOENT" });
     await assert.rejects(stat(join(folder, "package.json")), { code: "ENOENT" });
@@ -147,16 +148,16 @@ for (const layout of ["legacy", "modules"]) test(`reconstructed ${layout} source
   } finally { await rm(parent, { recursive: true, force: true }); }
 });
 
-test("source reconstruction rejects floating Remeda before installing and never replaces a root module path", async () => {
+test("source reconstruction rejects floating Effect before installing and never replaces a root module path", async () => {
   for (const floating of [true, false]) {
     const parent = await createReportDirectory(), folder = join(parent, "source");
     try {
       const snapshot = await validatorSnapshot();
       if (floating) {
         const manifest = JSON.parse(snapshot.files.get("tools/release/package.json"));
-        manifest.devDependencies.remeda = "^2.51.0";
+        manifest.devDependencies.effect = "^4.0.1";
         snapshot.files.set("tools/release/package.json", Buffer.from(JSON.stringify(manifest)));
-        await assert.rejects(loadSourceValidators(folder, sourceSha, snapshot.git), /exact Remeda version/);
+        await assert.rejects(loadSourceValidators(folder, sourceSha, snapshot.git), /exact Effect version/);
         await assert.rejects(stat(join(folder, "tools/release/node_modules")), { code: "ENOENT" });
       } else {
         await mkdir(join(folder, "node_modules"), { recursive: true });
@@ -168,7 +169,7 @@ test("source reconstruction rejects floating Remeda before installing and never 
   }
 });
 
-test("historical validators without Remeda retain their isolated tool layout", async () => {
+test("historical validators without a composition library retain their isolated tool layout", async () => {
   const parent = await createReportDirectory(), folder = join(parent, "source");
   try {
     const snapshot = await validatorSnapshot();
@@ -176,9 +177,10 @@ test("historical validators without Remeda retain their isolated tool layout", a
       if (name.startsWith("scripts/") && name.endsWith(".mjs")) snapshot.files.set(name, Buffer.from("export const historical = true;\n"));
     const manifest = JSON.parse(snapshot.files.get("tools/release/package.json"));
     delete manifest.devDependencies.remeda;
+    delete manifest.devDependencies.effect;
     snapshot.files.set("tools/release/package.json", Buffer.from(JSON.stringify(manifest)));
     snapshot.files.set("tools/release/bun.lock", Buffer.from(snapshot.files.get("tools/release/bun.lock")
-      .toString("utf8").replace(/^\s*"remeda":.*\n/gm, "")));
+      .toString("utf8").replace(/^\s*"(?:remeda|effect)":.*\n/gm, "")));
     const modules = await loadSourceValidators(folder, sourceSha, snapshot.git);
     for (const name of ["core", "planner", "reservations", "tags"]) assert.equal(modules[name].historical, true);
     await assert.rejects(stat(join(folder, "node_modules")), { code: "ENOENT" });

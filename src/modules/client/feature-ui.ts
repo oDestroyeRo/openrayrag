@@ -1,4 +1,4 @@
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 import { isTalkNpc } from '../world/actor-interaction-logic';
 import { signedExperience } from '../session/run-experience-logic';
 import { browserTextStorage } from '../../shared/storage-effects';

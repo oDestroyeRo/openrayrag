@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 import { smokeResultValues } from '../shared/tooling-domain-values.mjs';
 /** Launch only a CI-feature package with temporary data; never use a real account. */
 import { spawn } from 'node:child_process';

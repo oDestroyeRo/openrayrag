@@ -1,4 +1,4 @@
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 import type { InventoryItem } from '../protocol/protocol-feature';
 import type { BarterOffer, PartyMember, PricedRow, ShopEntry, VendingEntry } from '../protocol/world-protocol';
 export type NpcMode = 'idle' | 'dialog' | 'options' | 'shop' | 'storage' | 'barter' | 'refine' | 'vending';

@@ -30,7 +30,7 @@ const sourceValues = () => [
   JSON.stringify({ version: '0.1.0', identifier: IDENTIFIER }),
 ];
 
-test('Remeda environment projections preserve unusual own keys without prototype changes', () => {
+test('Effect environment projections preserve unusual own keys without prototype changes', () => {
   const environment = Object.fromEntries([
     ['__proto__', 'literal prototype key'], ['constructor', 'literal constructor'],
     ['toString', 'literal method name'], ['PATH', 'tools'], ['GH_TOKEN', 'synthetic'],
@@ -183,7 +183,7 @@ test('fixture configuration uses supplied directories and creates no output by i
   assert.match(config.stdin.contents, /Offline route planning/);
 });
 
-test('Git-source benchmark loaders bundle root Remeda into standalone node and browser artifacts', async () => {
+test('Git-source benchmark loaders bundle root Effect into standalone node and browser artifacts', async () => {
   const root = fileURLToPath(new URL('../..', import.meta.url));
   for (const [platform, format] of [['node', 'esm'], ['browser', 'esm'], ['browser', 'iife']]) {
     const result = await build({
@@ -193,12 +193,12 @@ test('Git-source benchmark loaders bundle root Remeda into standalone node and b
       // Like the real benchmark plugins, replace only source-file contents.
       plugins: [{ name: 'source-snapshot', setup(builder) {
         builder.onLoad({ filter: /[\\/]src[\\/]modules[\\/]automation[\\/]engine\.ts$/ }, () => ({
-          contents: "import { map, sort } from 'remeda'; export const projected = map(sort([3, 1, 2], (a, b) => a - b), n => n * 2);",
+          contents: "import { map, sort } from 'effect/Array'; export const projected = map(sort([3, 1, 2], (a, b) => a < b ? -1 : a > b ? 1 : 0), n => n * 2);",
           loader: 'ts',
         }));
       } }],
     });
-    assert.ok(Object.keys(result.metafile.inputs).some(name => name.includes('node_modules/remeda/')));
+    assert.ok(Object.keys(result.metafile.inputs).some(name => name.includes('node_modules/effect/')));
     const source = result.outputFiles[0].text;
     if (format === 'esm') {
       const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
@@ -211,7 +211,7 @@ test('Git-source benchmark loaders bundle root Remeda into standalone node and b
   }
 });
 
-test('renderer fixture bundles Remeda alongside offline native adapters without a browser', async () => {
+test('renderer fixture bundles Effect alongside offline native adapters without a browser', async () => {
   const result = await build({
     entryPoints: [fileURLToPath(new URL('../benchmarks/client-rendering-fixture.ts', import.meta.url))],
     bundle: true, format: 'esm', platform: 'browser', target: 'chrome120',
@@ -222,7 +222,7 @@ test('renderer fixture bundles Remeda alongside offline native adapters without 
       }));
     } }],
   });
-  assert.ok(Object.keys(result.metafile.inputs).some(name => name.includes('node_modules/remeda/')));
+  assert.ok(Object.keys(result.metafile.inputs).some(name => name.includes('node_modules/effect/')));
   assert.ok(result.outputFiles.some(file => file.path.endsWith('.js')));
 });
 

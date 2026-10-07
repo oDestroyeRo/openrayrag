@@ -1,7 +1,6 @@
 //! Settings document schema and persistence policy, without storage effects.
 use crate::settings::automation::Settings;
 use crate::shared::domain_values::{FormRevision, FormVersion, ProfileId};
-use frunk::{prelude::IntoValidated, HList, Validated};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const MAX_BYTES: u64 = 256_000;
@@ -25,37 +24,31 @@ enum MetadataField {
     Revision,
     SelectedProfile,
 }
-type MetadataValidation<'a> =
-    Validated<HList!(FormVersion, FormRevision, Option<ProfileId<'a>>), MetadataField>;
-
-#[derive(Debug, frunk::Generic)]
-struct FormMetadata<'a> {
-    version: FormVersion,
-    revision: FormRevision,
-    selected_profile_id: Option<ProfileId<'a>>,
-}
-
 impl FormDocument {
-    fn validated_metadata(&self) -> MetadataValidation<'_> {
-        FormVersion::try_from(self.version)
-            .map_err(|_| MetadataField::Version)
-            .into_validated()
-            + FormRevision::try_from(self.revision).map_err(|_| MetadataField::Revision)
-            + self
-                .selected_profile_id
+    fn validated_metadata(&self) -> Result<FormRevision, Vec<MetadataField>> {
+        match (
+            FormVersion::try_from(self.version).map_err(|_| MetadataField::Version),
+            FormRevision::try_from(self.revision).map_err(|_| MetadataField::Revision),
+            self.selected_profile_id
                 .as_deref()
                 .map(ProfileId::try_from)
                 .transpose()
-                .map_err(|_| MetadataField::SelectedProfile)
+                .map_err(|_| MetadataField::SelectedProfile),
+        ) {
+            (Ok(_), Ok(revision), Ok(_)) => Ok(revision),
+            (version, revision, selected_profile_id) => {
+                Err([version.err(), revision.err(), selected_profile_id.err()]
+                    .into_iter()
+                    .flatten()
+                    .collect())
+            }
+        }
     }
-    fn metadata(&self) -> Result<FormMetadata<'_>, String> {
-        self.validated_metadata()
-            .into_result()
-            .map(frunk::from_generic)
-            .map_err(|_| ERROR.into())
+    fn metadata(&self) -> Result<FormRevision, String> {
+        self.validated_metadata().map_err(|_| ERROR.into())
     }
     pub(crate) fn checked_revision(&self) -> Result<FormRevision, String> {
-        Ok(self.metadata()?.revision)
+        self.metadata()
     }
     pub fn validate(&self) -> Result<(), String> {
         // Settings validation remains behind metadata admission, so malformed
@@ -128,7 +121,7 @@ mod tests {
         malformed.revision = 9_007_199_254_740_992;
         malformed.selected_profile_id = Some("../profile".into());
         assert_eq!(
-            malformed.validated_metadata().into_result().unwrap_err(),
+            malformed.validated_metadata().unwrap_err(),
             [
                 MetadataField::Version,
                 MetadataField::Revision,

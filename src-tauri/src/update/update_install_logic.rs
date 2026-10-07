@@ -1,7 +1,5 @@
 //! Signed archive and bundle metadata policy, without filesystem effects.
 use base64::{engine::general_purpose::STANDARD, Engine};
-#[cfg(any(target_os = "macos", test))]
-use frunk::{hlist_pat, prelude::IntoValidated};
 use minisign_verify::{PublicKey, Signature};
 #[cfg(any(target_os = "macos", test))]
 use std::{
@@ -91,14 +89,16 @@ pub(crate) fn bundle_version(metadata: &plist::Value) -> Option<&str> {
 pub(crate) fn version_is_newer(candidate: &str, installed: &str) -> Option<bool> {
     // Both independent parsers were already evaluated together. Preserve that
     // contract while retaining their typed success values for comparison.
-    (semver::Version::parse(candidate).into_validated() + semver::Version::parse(installed))
-        .into_result()
-        .ok()
-        .map(|hlist_pat!(candidate, installed)| candidate > installed)
+    match (
+        semver::Version::parse(candidate),
+        semver::Version::parse(installed),
+    ) {
+        (Ok(candidate), Ok(installed)) => Some(candidate > installed),
+        _ => None,
+    }
 }
 
 #[cfg(any(target_os = "macos", test))]
-#[derive(frunk::Generic)]
 struct BundleMetadata<'a> {
     identifier: BundleIdentifier<'a>,
     short_version: &'a str,
@@ -143,19 +143,26 @@ impl<'a> BundleMetadata<'a> {
                 .and_then(plist::Value::as_string)
                 .ok_or(key)
         };
-        // This product validates independent identity fields. Version strings
-        // remain untrusted until `matches`; Generic cannot bypass that relation.
-        (text("CFBundleIdentifier")
-            .and_then(|value| BundleIdentifier::try_from(value).map_err(|_| "CFBundleIdentifier"))
-            .into_validated()
-            + text("CFBundleShortVersionString")
-            + text("CFBundleVersion")
-            + text("CFBundleExecutable").and_then(|value| {
+        // Validate identity components before comparing the version relationship
+        // in `matches`.
+        match (
+            text("CFBundleIdentifier").and_then(|value| {
+                BundleIdentifier::try_from(value).map_err(|_| "CFBundleIdentifier")
+            }),
+            text("CFBundleShortVersionString"),
+            text("CFBundleVersion"),
+            text("CFBundleExecutable").and_then(|value| {
                 BundleExecutable::try_from(value).map_err(|_| "CFBundleExecutable")
-            }))
-        .into_result()
-        .ok()
-        .map(frunk::from_generic)
+            }),
+        ) {
+            (Ok(identifier), Ok(short_version), Ok(build_version), Ok(executable)) => Some(Self {
+                identifier,
+                short_version,
+                build_version,
+                executable,
+            }),
+            _ => None,
+        }
     }
     fn matches(&self, version: &str) -> bool {
         self.identifier.0 == "com.rayrag.companion"

@@ -1,4 +1,5 @@
-import { filter, map, pipe, sort } from "remeda";
+import { filter, map, sort } from "effect/Array";
+import { pipe } from "effect/Function";
 // Deterministic release contracts. Inputs are bytes, metadata and source history.
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { sourceCommitSha, firstParentCount, fileDigest, releaseTagFor, artifactIdentityValues, platformReceiptValues, provenanceValues, releaseMetadataValues } from '../shared/tooling-domain-values.mjs';
@@ -640,7 +641,7 @@ export function validateBundle(files, id, publicKey) {
     requireValue(
       Array.isArray(p.platforms) &&
         p.platforms.length === 3 &&
-        map(p.platforms, (receipt) => receipt?.target).join("|") ===
+        p.platforms.map((receipt) => receipt?.target).join("|") ===
           sort([TARGET, WINDOWS_TARGET, LINUX_TARGET], compareNames).join("|"),
       "Release platform receipt set is incomplete or duplicated.",
     );

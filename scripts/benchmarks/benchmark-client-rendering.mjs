@@ -1,5 +1,5 @@
 import { benchmarkSourcePlugin } from './source-snapshot.mjs';
-import { fromEntries, map, sort } from 'remeda';
+import { map, sort } from 'effect/Array';
 // Offline renderer benchmark: bun scripts/benchmarks/benchmark-client-rendering.mjs
 //   [--ref HEAD] [--output /tmp/baseline.json] [--compare /tmp/baseline.json]
 //   [--samples 5] [--iterations 100] [--chrome /path/to/chrome]
@@ -64,7 +64,7 @@ class DevTools {
     return result.result.value;
   }
 }
-const metrics = async () => fromEntries(map((await cdp.send('Performance.getMetrics')).metrics, ({ name, value }) => [name, value]));
+const metrics = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(({ name, value }) => [name, value]));
 try {
   await build({ entryPoints: [join(root, 'scripts/benchmarks/client-rendering-fixture.ts')], bundle: true, format: 'esm', platform: 'browser', target: 'chrome120', loader: { '.svg': 'text' }, outfile: join(temporary, 'bundle.js'), logLevel: 'silent',
     plugins: [{ name: 'offline-native-and-source', setup(builder) {

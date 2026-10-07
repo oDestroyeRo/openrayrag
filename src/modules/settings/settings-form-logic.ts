@@ -1,4 +1,4 @@
-import { map } from 'remeda';
+import { map } from 'effect/Array';
 import type { FormDocument, FormDocumentInput } from './current-form';
 import type { FeatureUi } from '../client/feature-ui';
 import type { MapInfo, MapMonster } from '../navigation/map-data-logic';

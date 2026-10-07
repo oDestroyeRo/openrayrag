@@ -1,4 +1,4 @@
-import { map, sort } from "remeda";
+import { map, sort } from "effect/Array";
 // Pure transforms for source content. Reading and writing remain in release.mjs.
 import { stableVersion } from "./semantic-release-policy.mjs";
 import { requireValue, IDENTIFIER, ENDPOINT } from "./release-policy.mjs";

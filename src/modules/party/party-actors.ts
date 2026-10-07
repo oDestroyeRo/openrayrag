@@ -1,5 +1,5 @@
+import { filter } from 'effect/Array';
 import { partyMemberId, type PartyMemberId } from '../../shared/domain-values';
-import { filter } from 'remeda';
 import type { ActorObservations } from '../world/actor-observations';
 import { RESOURCE_STALE_MS } from '../world/actor-resources';
 import type { PartyMember, WorldEvent } from '../protocol/world-protocol';

@@ -1,4 +1,4 @@
-import { filter, map, sort } from "remeda";
+import { filter, map, sort } from "effect/Array";
 import { workflowRunId, workflowAttemptText, publicReleaseValues } from "../shared/tooling-domain-values.mjs";
 import { fileBytes } from "./release-policy.mjs";
 // Public artifact proof only. Never publishes, installs or starts the application.

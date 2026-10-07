@@ -1,4 +1,4 @@
-import { filter, find } from "remeda";
+import { filter } from "effect/Array";
 import { sourceCommitSha, gitTagObjectSha, firstParentCount as sourceCount } from "../shared/tooling-domain-values.mjs";
 // Reconstruct a published plan from anonymous Git and the selected source's
 // own locked validators. A later main or reservation does not invalidate it.
@@ -96,10 +96,11 @@ export async function loadSourceValidators(folder, sourceSha, git) {
   if (!dependencyFiles.includes("tools/release/bunfig.toml"))
     await writeFile(join(directory, "bunfig.toml"), "[install]\npeer = false\n", { flag: "wx", mode: 0o600 });
   const manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8"));
-  const remedaVersion = manifest.devDependencies?.remeda;
-  if (remedaVersion !== undefined)
-    requireValue(typeof remedaVersion === "string" && /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(remedaVersion),
-      "Selected source must pin an exact Remeda version.");
+  const compositionLibraries = [["effect", "Effect"], ["remeda", "Remeda"]]
+    .filter(([name]) => manifest.devDependencies?.[name] !== undefined);
+  for (const [name, label] of compositionLibraries)
+    requireValue(typeof manifest.devDependencies[name] === "string" && /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(manifest.devDependencies[name]),
+      `Selected source must pin an exact ${label} version.`);
   const options = { cwd: directory, env: privateEnvironment(dirname(folder)) };
   if (!dependencyFiles.includes("tools/release/bun.lock")) {
     const migration = bunInstallCommand(true);
@@ -107,12 +108,14 @@ export async function loadSourceValidators(folder, sourceSha, git) {
   }
   const install = bunInstallCommand();
   runReadOnly(install.file, install.args, options);
-  // New source policies import Remeda from the repository root. Provision only
-  // the selected source's isolated, frozen tools install; never install its app
-  // packages or execute lifecycle hooks. Historical sources need no root link.
-  if (remedaVersion !== undefined) {
-    const installed = JSON.parse(await readFile(join(directory, "node_modules/remeda/package.json"), "utf8"));
-    requireValue(installed.version === remedaVersion, "Installed source Remeda differs from its pin.");
+  // Provision the selected source's pure library from its own frozen tools
+  // install. Older sources retain Remeda; current policies use Effect. App
+  // packages and lifecycle hooks remain outside this reconstruction.
+  for (const [name, label] of compositionLibraries) {
+    const installed = JSON.parse(await readFile(join(directory, `node_modules/${name}/package.json`), "utf8"));
+    requireValue(installed.version === manifest.devDependencies[name], `Installed source ${label} differs from its pin.`);
+  }
+  if (compositionLibraries.length) {
     await symlink(resolve(directory, "node_modules"), join(folder, "node_modules"),
       process.platform === "win32" ? "junction" : "dir");
   }
@@ -190,7 +193,7 @@ export async function verifySource(options, io) {
     baseMarker.version === notesBase.version && baseCount > 0 && baseCount < firstParentCount &&
     (baseMarker.schemaVersion === 3 ? baseMarker.firstParentCount === baseCount : core.countOf(baseMarker.version) === baseCount), "Notes base differs from a published predecessor.");
   if (baseMarker.schemaVersion === 3) {
-    const basePlan = find(ledger, item => item.sourceSha === notesBase.sourceSha);
+    const basePlan = ledger.find(item => item.sourceSha === notesBase.sourceSha);
     requireValue(basePlan && planner.planSha256(basePlan) === baseMarker.planSha256, "Published notes base differs from its reservation.");
   }
   requireValue(await peelTag(api, notesBase.tag) === notesBase.sourceSha, "Published notes-base tag targets a different source.");
@@ -201,7 +204,7 @@ export async function verifySource(options, io) {
     notesCommits: commitsBetween(git, notesBase.sourceSha, options.sourceSha),
   });
   requireValue(recomputed.state === "release" && planner.serializePlan(recomputed.plan) === planner.serializePlan(plan), "Reserved plan differs from regenerated exact Git ranges.");
-  const selectedRef = find(prefix, ref => ref.ref === reservations.planRefName(plan));
+  const selectedRef = prefix.find(ref => ref.ref === reservations.planRefName(plan));
   requireValue(selectedRef, "Selected release reservation is missing or outside its historical prefix.");
   const selectedObject = objects.get(gitTagObjectSha(selectedRef.object.sha));
   requireValue(selectedObject, "Anonymous reservation object differs from metadata.");

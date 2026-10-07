@@ -1,4 +1,5 @@
-import { filter, map, pipe, sort } from 'remeda';
+import { filter, map } from 'effect/Array';
+import { pipe } from 'effect/Function';
 import { completePlanning, runPlanning, type PlanningOptions, type PlanningWork } from './route-planning';
 import { DEFAULT_MAP_POLICY, mapAllowed, PORTAL_COST, type MapPolicyInput as MapPolicy } from './map-policy-logic';
 import { GridNavigator, searchGrid } from './navigation';
@@ -286,7 +287,7 @@ export class TravelPlanner {
     }
     // Every base-safe cell is always available. Only the explicitly allowed
     // portal cells affect this navigator, so route suffixes can reuse it.
-    const portalCells = pipe([...allowed], filter(cell => source.tiles[cell] === 1), sort((a,b) => a - b));
+    const portalCells = pipe([...allowed], filter(cell => source.tiles[cell] === 1), items => [...items].sort((a,b) => a - b));
     const key = `${map}:${portalCells.join(',')}`;
     const cached = this.navigators.get(key);
     if (cached) { this.navigators.delete(key); this.navigators.set(key,cached); return cached.navigator; }

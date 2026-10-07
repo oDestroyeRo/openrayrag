@@ -221,6 +221,37 @@ function editor(store: Store | null = new Store()) {
 }
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe('unified Setup editor', () => {
+  it('preserves a selected profile when only settings property order and comments differ', () => {
+    const f = editor(), retained = f.settings(), entries = Object.entries(retained).reverse();
+    for (const [key] of entries) Reflect.deleteProperty(retained, key);
+    for (const [key, value] of entries) Reflect.set(retained, key, value);
+    f.change(f.input.value + '\n# keep the selected profile');
+    expect(f.hooks.apply).not.toHaveBeenCalled();
+    expect(f.ui.configured().settings).toEqual(retained);
+  });
+  it('compares current settings after the retained Form object changes in place', () => {
+    const f = editor();
+    f.change(f.input.value + '\n# first comparison');
+    f.settings().radius = 14;
+    f.ui.syncSettings(f.settings());
+    f.change(f.input.value + '\n# second comparison');
+    expect(f.hooks.apply).not.toHaveBeenCalled();
+    expect(f.ui.configured().settings.radius).toBe(14);
+  });
+  it('applies a target-order change instead of treating arrays as unordered settings', () => {
+    const f = editor();
+    f.settings().targets = [4000, 4012]; f.ui.syncSettings(f.settings());
+    f.change(f.input.value.replace('[4000,4012]', '[4012,4000]'));
+    expect(f.hooks.apply).toHaveBeenCalledTimes(1);
+    expect(f.settings().targets).toEqual([4012, 4000]);
+  });
+  it('distinguishes an own undefined optional field from an absent field', () => {
+    const f = editor();
+    Reflect.set(f.settings(), 'automation', undefined);
+    f.change(f.input.value + '\n# normalize optional fields');
+    expect(f.hooks.apply).toHaveBeenCalledTimes(1);
+    expect(Object.hasOwn(f.settings(), 'automation')).toBe(false);
+  });
   it('defers retained-form reading while mounting and has no second Start action', () => {
     vi.stubGlobal('document', { createElement: (tag: string) => new Node(tag) });
     const settings = vi.fn(() => { throw new Error('Form is still mounting'); });

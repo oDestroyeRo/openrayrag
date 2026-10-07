@@ -1,4 +1,4 @@
-import { reduce } from 'remeda';
+import { reduce } from 'effect/Array';
 import { bagId, itemId, quantity, type BagId, type ItemId, type Quantity } from '../../shared/domain-values';
 import type { Entity } from '../protocol/protocol';
 import type { InventoryItem, InventoryItemInput, PlayerStats, SkillLevel } from '../protocol/protocol-feature';
@@ -28,4 +28,4 @@ export function inventoryItemDraft(value: InventoryItemInput): InventoryItem {
 
 /** Count known inventory stacks without mutating or treating sparse slots as items. */
 export const inventoryItemCount = (id: ItemId) => (items: readonly Pick<InventoryItem, 'itemId' | 'count'>[]): Quantity =>
-  quantity(reduce(items, (total, item) => total + (item.itemId === id ? item.count : 0), 0));
+  quantity(reduce(items, 0, (total, item) => total + (item.itemId === id ? item.count : 0)));
