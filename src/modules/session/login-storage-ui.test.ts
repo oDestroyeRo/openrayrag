@@ -1425,6 +1425,7 @@ describe('updater waiting diagnostics', () => {
       reply = resolve;
     });
     const f = await fixture(saved, false, continuation.form, continuation);
+    await vi.waitFor(() => expect(f.calls('saved_login')).toHaveLength(1));
     expect(f.get('stop').disabled).toBe(false);
     await f.get('stop').emit('click');
     reply({ username: 'synthetic-user', characterSlot: 1, autoLogin: true, mode: 'botOnly' });
