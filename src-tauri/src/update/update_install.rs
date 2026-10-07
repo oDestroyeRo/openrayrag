@@ -252,7 +252,7 @@ pub(crate) fn install(
 fn install_at(bytes: &[u8], version: &str, current: &Path) -> io::Result<()> {
     if current
         .file_name()
-        .map_or(true, |n| n != "Rayrag Companion.app")
+        .is_none_or(|n| n != "Rayrag Companion.app")
         || fs::symlink_metadata(current)?.file_type().is_symlink()
     {
         return Err(invalid());

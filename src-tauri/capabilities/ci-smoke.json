@@ -16,6 +16,8 @@
     "allow-update-initialized",
     "allow-update-status",
     "allow-update-continuation",
-    "allow-update-startup-stopped"
+    "allow-update-startup-stopped",
+    "allow-mcp-set-enabled",
+    "allow-mcp-reply"
   ]
 }

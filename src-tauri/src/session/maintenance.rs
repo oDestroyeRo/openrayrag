@@ -256,7 +256,7 @@ impl Gate {
                 && (self.identity.is_none()
                     || self
                         .observed
-                        .map_or(true, |t| t.elapsed() > Duration::from_secs(2)))
+                        .is_none_or(|t| t.elapsed() > Duration::from_secs(2)))
         {
             return Err("Waiting for a fresh stopped client before updating.".into());
         }

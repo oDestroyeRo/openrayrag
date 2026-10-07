@@ -78,7 +78,7 @@ pub(crate) fn selected_character(bytes: &[u8], chosen: CharacterSlot) -> Result<
         }
         let slot =
             CharacterSlot::try_from(slot).map_err(|_| "Unknown character approval layout.")?;
-        if slots[slot.index()] || length > 256 || length % 4 != 0 {
+        if slots[slot.index()] || length > 256 || !length.is_multiple_of(4) {
             return Err("Unknown character approval layout.".into());
         }
         reader.skip(length)?;

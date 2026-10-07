@@ -1,9 +1,7 @@
 {
   "identifier": "controller",
   "description": "The bundled controller can open the fixed game URL and start or stop its bot.",
-  "webviews": [
-    "main"
-  ],
+  "webviews": ["main"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
@@ -31,6 +29,8 @@
     "allow-update-cancel",
     "allow-update-continuation",
     "allow-update-startup-stopped",
-    "allow-update-restore"
+    "allow-update-restore",
+    "allow-mcp-set-enabled",
+    "allow-mcp-reply"
   ]
 }

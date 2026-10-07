@@ -158,9 +158,7 @@ pub(crate) fn validate_runtime(value: &Value, at: u64) -> Result<(), String> {
         ],
     ) || value["version"] != 1
         || !number(&value["frozenAt"])
-        || value["frozenAt"]
-            .as_u64()
-            .map_or(true, |n| n == 0 || n > at)
+        || value["frozenAt"].as_u64().is_none_or(|n| n == 0 || n > at)
         || !value["status"].is_object()
         || value["status"]["connected"] != true
         || value["status"]["compatible"] != true
