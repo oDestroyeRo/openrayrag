@@ -14,6 +14,7 @@ import {
 } from './disposition';
 import { serviceByContractId } from './npc-services-logic';
 import { DEFAULT_SUPPLY, validateSupplySettings } from './supply-trip-logic';
+import { previewSupplySales } from './supply-sales-logic';
 import type {
   SupplyContext,
   SupplyGoal,
@@ -130,7 +131,17 @@ export function nextSupplyAction(
       rule.sell &&
       (world.npc.mode !== 'shop' || world.shop?.mode !== 'sell')
     )
-      return service(supply.sellService, 'sell');
+      return supply.merchantMode === 'automatic'
+        ? context.merchant?.contractId
+          ? service(context.merchant.contractId, 'sell')
+          : {
+              type: 'blocked',
+              reasons: [
+                context.merchant?.reason ||
+                  'Automatic merchant selection needs the verified arrival map and a permitted route.',
+              ],
+            }
+        : service(supply.sellService, 'sell');
   } else {
     if (rule.restock === 'storage' && (world.npc.mode !== 'storage' || !world.storageReady))
       return service(supply.storageService, 'storage');
@@ -189,7 +200,6 @@ export function previewSupplyTrip(
   const weight =
     supply.weightEnabled &&
     (inventory.weight / inventory.maxWeight) * 100 >= supply.weightStartPercent;
-  if (!goals.length && !weight) return 'No stock or weight trigger is active.';
   const next = nextSupplyAction(
     context,
     goals,
@@ -204,11 +214,34 @@ export function previewSupplyTrip(
     },
     supply,
   );
+  const sales = previewSupplySales(policy, context.disposition);
   return [
     `Preview only · ${goals.length} stock goals${weight ? ' · weight trigger' : ''}`,
+    ...(!goals.length && !weight ? ['No stock or weight trigger is active.'] : []),
     ...goals.map((goal) => `Item #${goal.itemId}: ${stock(goal.itemId)} → ${goal.desired}`),
     `Return: ${context.map || 'unknown map'} (${context.position?.x ?? '?'}, ${context.position?.y ?? '?'})`,
     `Limits: ${supply.maxTrips} trips · ${supply.maxActions} commands/trip · ${supply.maxDurationSeconds}s · ${supply.maxSpend}z reserved cap`,
+    `Auto sell: at ${supply.weightStartPercent}% → below ${supply.weightEndPercent}% · merchant ${supply.merchantMode ?? 'manual'}`,
+    (settings.automation?.limits.weightPercent ?? 0) > 0
+      ? `Hard weight stop: ${settings.automation!.limits.weightPercent}%${supply.weightStartPercent >= settings.automation!.limits.weightPercent ? ' · auto-sell trigger must be lower; the hard stop prevents departure.' : ' · stops departure at that limit, even during a weight jump.'}`
+      : 'Hard weight stop: off.',
+    (supply.transport ?? 'travel') === 'travel'
+      ? 'Transport: existing Database travel when available, otherwise a permitted portal route to the selected merchant; automatic selection is checked again at the actual arrival cell.'
+      : `Transport: ${supply.transport === 'butterfly' ? 'Butterfly Wing #602' : 'Return skill #54'} → expected save map ${supply.saveMap}. Merchant selection waits for confirmed living arrival; the save cell is not assumed.`,
+    ...(context.merchant?.preview ? [`Merchant: ${context.merchant.preview}`] : []),
+    ...sales.eligible.map(
+      (row) =>
+        `Eligible sale: item #${row.itemId} × ${row.count} · retain at least ${row.retained}`,
+    ),
+    ...sales.protectedItems,
+    ...(weight &&
+    sales.remainingWeight !== null &&
+    (sales.remainingWeight / inventory.maxWeight) * 100 >= supply.weightEndPercent
+      ? [
+          'Unmet weight target: permitted sales alone cannot lower weight below the recovery threshold. Protected items remain retained; the trip waits rather than repeating.',
+        ]
+      : []),
+    'Quotes: fresh shop overcharge and source prices are required for every sale; sales never replenish the spending cap. Return transport consumes one wing or the observed Return skill SP.',
     next.type === 'service'
       ? `Next verified service: ${next.contractId}`
       : next.type === 'action'

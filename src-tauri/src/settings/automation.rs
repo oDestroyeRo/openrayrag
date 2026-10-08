@@ -417,6 +417,23 @@ struct SupplySettings {
     storage_service: String,
     buy_service: String,
     sell_service: String,
+    #[serde(default = "default_supply_merchant")]
+    merchant_mode: String,
+    #[serde(default = "default_supply_transport")]
+    transport: String,
+    #[serde(default)]
+    save_map: String,
+    #[serde(default = "default_supply_reserve")]
+    return_min_stock: u16,
+}
+fn default_supply_merchant() -> String {
+    "manual".into()
+}
+fn default_supply_transport() -> String {
+    "travel".into()
+}
+fn default_supply_reserve() -> u16 {
+    1
 }
 fn deserialize_supply<'de, D>(deserializer: D) -> Result<Option<SupplySettings>, D::Error>
 where
@@ -444,6 +461,14 @@ impl SupplySettings {
             && contract(&self.storage_service)
             && contract(&self.buy_service)
             && contract(&self.sell_service)
+            && matches!(self.merchant_mode.as_str(), "manual" | "automatic")
+            && matches!(
+                self.transport.as_str(),
+                "travel" | "butterfly" | "returnSkill"
+            )
+            && map_code(&self.save_map, true)
+            && self.return_min_stock <= 9999
+            && (!self.enabled || self.transport == "travel" || !self.save_map.is_empty())
     }
 }
 #[derive(Debug, Deserialize, Serialize)]
@@ -2478,6 +2503,12 @@ mod tests {
         value["automation"] = automation();
         value["automation"]["supply"] = cases[0]["value"].clone();
         assert!(valid(value.clone()));
+        let legacy: SupplySettings = serde_json::from_value(cases[0]["value"].clone()).unwrap();
+        let normalized = serde_json::to_value(legacy).unwrap();
+        assert_eq!(normalized["merchantMode"], "manual");
+        assert_eq!(normalized["transport"], "travel");
+        assert_eq!(normalized["saveMap"], "");
+        assert_eq!(normalized["returnMinStock"], 1);
         value["automation"]["supply"] = Value::Null;
         assert!(!valid(value.clone()));
         value["automation"]

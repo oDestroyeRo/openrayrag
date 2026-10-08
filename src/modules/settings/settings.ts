@@ -758,7 +758,11 @@ export function validateAutomation(a: AutomationSettingsInput): ValidatedAutomat
     );
   }
   return admitAutomation(
-    structuredClone({ ...a, escape: a.escape ?? DEFAULT_ESCAPE }),
+    structuredClone({
+      ...a,
+      escape: a.escape ?? DEFAULT_ESCAPE,
+      ...(Object.hasOwn(a, 'supply') ? { supply: validateSupplySettings(a.supply) } : {}),
+    }),
     disposition,
   );
 }

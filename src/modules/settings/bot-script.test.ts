@@ -211,6 +211,10 @@ function populatedSettings(): Settings {
   a.supply = {
     ...DEFAULT_SUPPLY,
     enabled: true,
+    merchantMode: 'automatic',
+    transport: 'butterfly',
+    saveMap: 'prontera',
+    returnMinStock: 3,
     storageService: 'kafra-south-storage',
     buyService: 'tool-dealer-buy',
     maxSpend: 1000,

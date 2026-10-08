@@ -22,6 +22,10 @@ export interface SupplySettings {
   storageService: string;
   buyService: string;
   sellService: string;
+  merchantMode?: 'manual' | 'automatic';
+  transport?: 'travel' | 'butterfly' | 'returnSkill';
+  saveMap?: string;
+  returnMinStock?: number;
 }
 
 export const DEFAULT_SUPPLY: SupplySettings = {
@@ -38,6 +42,10 @@ export const DEFAULT_SUPPLY: SupplySettings = {
   storageService: '',
   buyService: '',
   sellService: '',
+  merchantMode: 'manual',
+  transport: 'travel',
+  saveMap: '',
+  returnMinStock: 1,
 };
 
 export interface SupplyGoal {
@@ -67,6 +75,7 @@ export interface SupplyContext {
   currencyRevision: Revision<'currency'>;
   economicUncertain: boolean;
   disposition: DispositionContext;
+  merchant?: { contractId: string | null; reason: string; preview: string };
 }
 
 export type SupplyNext =
@@ -88,6 +97,7 @@ export interface SupplyPorts<Receipt> {
 
 export type SupplyIntent =
   | { id: number; type: 'prepare' }
+  | { id: number; type: 'saveReturn'; map: string; method: 'item' | 'skill'; minStock: number }
   | { id: number; type: 'service'; contractId: string; reserved: number }
   | { id: number; type: 'action'; action: DispositionAction }
   | { id: number; type: 'close' }
@@ -98,6 +108,7 @@ export type SupplyPhase =
   | 'idle'
   | 'armed'
   | 'preparing'
+  | 'departing'
   | 'service'
   | 'planning'
   | 'confirming'
@@ -156,7 +167,12 @@ function record(value: unknown, keys: string[]): Record<string, unknown> {
 }
 
 export function validateSupplySettings(input: unknown): SupplySettings {
-  const value = record(input, Object.keys(DEFAULT_SUPPLY));
+  if (!input || typeof input !== 'object' || Array.isArray(input))
+    throw new Error('Invalid supply fields.');
+  const value = record(
+    { merchantMode: 'manual', transport: 'travel', saveMap: '', returnMinStock: 1, ...input },
+    Object.keys(DEFAULT_SUPPLY),
+  );
   if (
     ['enabled', 'stockEnabled', 'weightEnabled'].some((key) => typeof value[key] !== 'boolean') ||
     !integer(value.weightStartPercent, 1, 100) ||
@@ -172,6 +188,12 @@ export function validateSupplySettings(input: unknown): SupplySettings {
         typeof value[key] !== 'string' ||
         !/^(?:[a-zA-Z0-9_.-]{1,128})?$/.test(value[key] as string),
     ) ||
+    !['manual', 'automatic'].includes(value.merchantMode as string) ||
+    !['travel', 'butterfly', 'returnSkill'].includes(value.transport as string) ||
+    typeof value.saveMap !== 'string' ||
+    !/^(?:[a-zA-Z0-9_-]{1,64})?$/.test(value.saveMap) ||
+    !integer(value.returnMinStock, 0, 9999) ||
+    (value.enabled && value.transport !== 'travel' && !value.saveMap) ||
     (value.enabled && !value.stockEnabled && !value.weightEnabled)
   )
     throw new Error('Invalid supply triggers, limits or service IDs.');

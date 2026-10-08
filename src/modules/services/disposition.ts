@@ -287,6 +287,39 @@ function cloneWorld(world: WorkflowWorld): WorkflowWorld {
 }
 
 /** Pure suggestion only: no sender, RPC, timer, or executor is accepted here. */
+export function dispositionItemProtection(
+  context: DispositionContext,
+  item: InventoryItem,
+  name: ContainerName,
+  rule?: DispositionRuleView,
+): string | null {
+  if (name === 'inventory' && context.equipment?.includes(item.bagId)) return 'Equipped item';
+  if (name === 'inventory' && context.ammoId === item.bagId) return 'Selected ammunition';
+  if (context.workflow.protectedItemIds?.includes(item.itemId))
+    return 'Protected by transaction policy';
+  if (!rule) return 'No disposition rule: preserve';
+  if (item.type === 2) {
+    if (!rule.allowUnique) return 'Unique item: preserve by default';
+    if (
+      typeof item.guid !== 'string' ||
+      !item.guid ||
+      item.guid.length > 64 ||
+      !Number.isInteger(item.refine) ||
+      item.refine! < 0 ||
+      item.refine! > 255 ||
+      !Array.isArray(item.slots) ||
+      item.slots.length !== 4 ||
+      item.slots.some((id) => !safeNumber(id))
+    )
+      return 'Unique identity, refinement or cards not observed';
+    if (item.refine! > 0) return 'Refined item';
+    if (item.slots.some((id) => id !== 0)) return 'Carded item';
+  }
+  if (item.refine !== undefined && item.refine > 0) return 'Refined item';
+  if (item.slots?.some((id) => id !== 0)) return 'Carded item';
+  return null;
+}
+
 export function planDisposition(input: unknown, context: DispositionContext): DispositionPlan {
   return planAdmittedDisposition(validateDispositionPolicy(input), context);
 }
@@ -356,37 +389,8 @@ export function planAdmittedDisposition(
       ]),
     ),
   });
-  const protection = (
-    item: InventoryItem,
-    name: ContainerName,
-    rule?: DispositionRuleView,
-  ): string | null => {
-    if (name === 'inventory' && context.equipment!.includes(item.bagId)) return 'Equipped item';
-    if (name === 'inventory' && context.ammoId === item.bagId) return 'Selected ammunition';
-    if (context.workflow.protectedItemIds?.includes(item.itemId))
-      return 'Protected by transaction policy';
-    if (!rule) return 'No disposition rule: preserve';
-    if (item.type === 2) {
-      if (!rule.allowUnique) return 'Unique item: preserve by default';
-      if (
-        typeof item.guid !== 'string' ||
-        !item.guid ||
-        item.guid.length > 64 ||
-        !Number.isInteger(item.refine) ||
-        item.refine! < 0 ||
-        item.refine! > 255 ||
-        !Array.isArray(item.slots) ||
-        item.slots.length !== 4 ||
-        item.slots.some((id) => !safeNumber(id))
-      )
-        return 'Unique identity, refinement or cards not observed';
-      if (item.refine! > 0) return 'Refined item';
-      if (item.slots.some((id) => id !== 0)) return 'Carded item';
-    }
-    if (item.refine !== undefined && item.refine > 0) return 'Refined item';
-    if (item.slots?.some((id) => id !== 0)) return 'Carded item';
-    return null;
-  };
+  const protection = (item: InventoryItem, name: ContainerName, rule?: DispositionRuleView) =>
+    dispositionItemProtection(context, item, name, rule);
   const rules = [...policy.rules].sort((a, b) => a.itemId - b.itemId);
   for (const name of names)
     for (const item of ordered(containers[name].items ?? [])) {

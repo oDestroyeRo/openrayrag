@@ -60,6 +60,7 @@ export class SupplyTripRuntime<Receipt> {
   private sequence = 0;
   private pending: SupplyIntent | null = null;
   private prepared = false;
+  private departed = false;
   private receipt: {
     value: Receipt;
     sent: boolean;
@@ -146,6 +147,7 @@ export class SupplyTripRuntime<Receipt> {
     this.nextTripAt = 0;
     this.pending = null;
     this.prepared = false;
+    this.departed = false;
     this.goals = [];
     this.weightGoal = false;
     this.destination = null;
@@ -345,6 +347,12 @@ export class SupplyTripRuntime<Receipt> {
           )
         : [];
       const inventory = context.disposition.containers.inventory;
+      const hardWeight = this.settings?.automation?.limits.weightPercent ?? 0;
+      if (hardWeight && (inventory.weight! / Number(inventory.maxWeight)) * 100 >= hardWeight) {
+        this.reason =
+          'Configured hard weight stop reached before supply departure. Lower the auto-sell trigger below that stop.';
+        return null;
+      }
       const high =
         this.policy.weightEnabled &&
         (inventory.weight! / Number(inventory.maxWeight)) * 100 >= this.policy.weightStartPercent;
@@ -376,6 +384,7 @@ export class SupplyTripRuntime<Receipt> {
       this.committed = 0;
       this.held = 0;
       this.prepared = false;
+      this.departed = false;
       this.phase = 'preparing';
       this.reason = 'Preparing a bounded supply trip.';
     }
@@ -388,6 +397,16 @@ export class SupplyTripRuntime<Receipt> {
       if (!context.settled) {
         this.reason = 'Waiting for the field movement stop to settle.';
         return null;
+      }
+      if ((this.policy.transport ?? 'travel') !== 'travel' && !this.departed) {
+        this.phase = 'departing';
+        this.reason = 'Returning to the configured save map before selecting a fresh merchant.';
+        return this.intent({
+          type: 'saveReturn',
+          map: this.policy.saveMap!,
+          method: this.policy.transport === 'butterfly' ? 'item' : 'skill',
+          minStock: this.policy.returnMinStock ?? 1,
+        });
       }
       this.phase = 'planning';
     }
@@ -469,6 +488,21 @@ export class SupplyTripRuntime<Receipt> {
   accepts(id: number): boolean {
     return this.pending?.id === id && !this.interrupted;
   }
+  /** Before any NPC interaction, automatic selection may change after travel's
+   * actual landing cell is observed. It cannot increase the held opening fee. */
+  retargetService(id: number, contractId: string, fee: number): SupplyIntent {
+    if (
+      !this.accepts(id) ||
+      this.pending?.type !== 'service' ||
+      fee > this.pending.reserved ||
+      !integer(fee, 0, 2_000_000_000)
+    )
+      throw new Error(
+        'The automatic merchant cannot replace this owned service or increase its reservation.',
+      );
+    this.pending = { ...this.pending, contractId };
+    return structuredClone(this.pending);
+  }
   commandAllowed(): boolean {
     if (!this.ownsField) return true;
     if (this.interrupted || this.actions >= this.policy.maxActions || this.now() >= this.deadline) {
@@ -511,6 +545,18 @@ export class SupplyTripRuntime<Receipt> {
     if (intent.type === 'prepare') {
       this.prepared = true;
       this.pending = null;
+      return;
+    }
+    if (intent.type === 'saveReturn') {
+      if (context.map !== intent.map || !context.alive || !context.fresh || !context.settled) {
+        this.interrupt(
+          'Save-point arrival did not match the configured living character and map. No sale or repeat return is allowed.',
+        );
+        return;
+      }
+      this.departed = true;
+      this.pending = null;
+      this.phase = 'planning';
       return;
     }
     if (intent.type === 'service') {

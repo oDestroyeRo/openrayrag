@@ -14,7 +14,9 @@ import {
   type SupplyContext,
   type SupplyIntent,
 } from './supply-trip';
-import { nextSupplyAction } from './supply-plan';
+import { nextSupplyAction, previewSupplyTrip } from './supply-plan';
+import { previewSupplySales } from './supply-sales-logic';
+import { dispositionStockFloors } from './disposition-ui-logic';
 import { createSupplyReceipt, observeSupplyReceipt, confirmSupplyReceipt } from './supply-receipt';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from '../settings/settings';
 import { publishedDispositionMetadata } from './disposition-ui';
@@ -57,6 +59,25 @@ const configured: SupplyPolicySettings = {
     },
   },
 };
+it('admits portable auto-sell choices and requires a configured save map before departure', () => {
+  expect(
+    validateSupplySettings({
+      ...DEFAULT_SUPPLY,
+      merchantMode: 'automatic',
+      transport: 'butterfly',
+      saveMap: 'prontera',
+      returnMinStock: 1,
+    }),
+  ).toMatchObject({ merchantMode: 'automatic', transport: 'butterfly', saveMap: 'prontera' });
+  expect(() =>
+    validateSupplySettings({
+      ...DEFAULT_SUPPLY,
+      enabled: true,
+      transport: 'butterfly',
+      saveMap: '',
+    }),
+  ).toThrow();
+});
 function context(stock = 4): SupplyContext & {
   disposition: SupplyContext['disposition'] & {
     workflow: SupplyContext['disposition']['workflow'] & { world: WorldState };
@@ -122,6 +143,70 @@ function setStock(c: SupplyContext, n: number) {
   c.disposition.workflow.inventory = items;
   c.inventoryRevision = incrementRevision(c.inventoryRevision);
 }
+it('previews only permitted excess, retains shared recovery floors and explains an unmet weight target', () => {
+  const c = context(12),
+    saleRule = {
+      ...rule,
+      keep: 2,
+      minimum: 2,
+      desired: 2,
+      maximum: 2,
+      sell: true,
+      restock: 'off' as const,
+    },
+    salePolicy = validateDispositionPolicy({ maxSpend: 0, rules: [saleRule] });
+  c.disposition.containers.inventory.maxWeight = 1000;
+  c.disposition.minimumStock = [{ itemId: 501, count: 9 }];
+  expect(previewSupplySales(salePolicy, c.disposition)).toMatchObject({
+    eligible: [{ itemId: 501, count: 3, retained: 9 }],
+    remainingWeight: 630,
+  });
+  const value = {
+    ...configured,
+    automation: {
+      ...configured.automation!,
+      disposition: salePolicy,
+      supply: {
+        ...DEFAULT_SUPPLY,
+        enabled: true,
+        stockEnabled: false,
+        weightEnabled: true,
+        merchantMode: 'automatic' as const,
+      },
+      limits: { ...DEFAULT_AUTOMATION.limits, weightPercent: 80 },
+    },
+  };
+  const preview = previewSupplyTrip(value, c);
+  expect(preview).toContain('Eligible sale: item #501 × 3');
+  expect(preview).toContain('Unmet weight target');
+  expect(preview).toContain('hard stop prevents departure');
+  expect(preview).toContain('No commands sent');
+  c.disposition.equipment = [501];
+  expect(previewSupplySales(salePolicy, c.disposition)).toMatchObject({
+    eligible: [],
+    protectedItems: [expect.stringContaining('Equipped item')],
+  });
+  c.disposition.equipment = [];
+  c.disposition.ammoId = 501;
+  expect(previewSupplySales(salePolicy, c.disposition).eligible).toEqual([]);
+  c.disposition.ammoId = -1;
+  c.disposition.containers.inventory.items = [
+    { ...c.disposition.containers.inventory.items![0]!, type: 2 },
+  ];
+  expect(previewSupplySales(salePolicy, c.disposition).protectedItems[0]).toContain('Unique item');
+  expect(
+    dispositionStockFloors({
+      ...DEFAULT_AUTOMATION,
+      supply: {
+        ...DEFAULT_SUPPLY,
+        enabled: true,
+        transport: 'butterfly',
+        saveMap: 'prontera',
+        returnMinStock: 3,
+      },
+    }),
+  ).toContainEqual({ itemId: 602, count: 3 });
+});
 function setup(settings = configured) {
   let now = 100_000;
   const c = context();

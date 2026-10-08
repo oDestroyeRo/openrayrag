@@ -99,6 +99,8 @@ export function dispositionStockFloors(
   const escape = settings.escape;
   if (escape?.enabled && escape.method === 'item')
     floors.push({ itemId: escape.mode === 'random' ? 601 : 602, count: escape.minStock });
+  if (settings.supply?.enabled && settings.supply.transport === 'butterfly')
+    floors.push({ itemId: 602, count: settings.supply.returnMinStock ?? 1 });
   if (settings.loadout.enabled && settings.loadout.minAmmoStock > 0)
     floors.push(
       ...map(compatibleAmmoIds, withReserve({ minStock: settings.loadout.minAmmoStock })),

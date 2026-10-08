@@ -130,6 +130,7 @@ export function validateEscapeResumeGuard(guard: EscapeResumeGuard): void {
 }
 
 export interface Request {
+  purpose?: 'supply';
   action: EscapeAction;
   policy: EscapeSettings;
   identity: ActionIdentity;

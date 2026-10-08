@@ -72,6 +72,8 @@ import {
 import { MacroUi } from '../automation/macro-ui';
 import type { BotScriptDocument } from '../settings/bot-script';
 import { DEFAULT_SUPPLY } from '../services/supply-trip';
+import { SupplyMerchantResolver } from '../services/supply-merchant';
+import { supportsDatabaseTravel } from '../navigation/database-travel-protocol';
 import { previewSupplyTrip } from '../services/supply-plan';
 import {
   DEFAULT_DISPOSITION,
@@ -254,15 +256,63 @@ const fields: Record<Section, Field[]> = {
         ['weighted', 'Weighted walking + map penalties'],
       ],
     },
-    { path: 'supply.enabled', label: 'Enable bounded supply trips', kind: 'checkbox' },
+    { path: 'travel.destinationMap', label: 'Destination map code', kind: 'text' },
+    { path: 'travel.loop', label: 'Repeat waypoint route', kind: 'checkbox' },
+    {
+      path: 'follow.mode',
+      label: 'Follow selection',
+      options: [
+        ['name', 'Player name'],
+        ['partyLeader', 'Current party leader'],
+      ],
+    },
+    {
+      path: 'follow.rendezvous',
+      label: 'Allow one bounded trip to the leader map per Start',
+      kind: 'checkbox',
+    },
+    { path: 'follow.name', label: 'Follow player name', kind: 'text' },
+    { path: 'follow.distance', label: 'Follow distance, cells', min: 1, max: 20 },
+    { path: 'follow.lostSeconds', label: 'Wait when player lost, seconds', min: 1, max: 120 },
+  ],
+  inventory: [
+    { path: 'supply.enabled', label: 'Enable auto sell & supply trips', kind: 'checkbox' },
     {
       path: 'supply.stockEnabled',
       label: 'Trigger below protected stock minimum',
       kind: 'checkbox',
     },
-    { path: 'supply.weightEnabled', label: 'Trigger at carried weight', kind: 'checkbox' },
-    { path: 'supply.weightStartPercent', label: 'Supply above weight %', min: 1, max: 100 },
-    { path: 'supply.weightEndPercent', label: 'Return below weight %', min: 1, max: 99 },
+    {
+      path: 'supply.weightEnabled',
+      label: 'Auto sell when weight reaches the trigger',
+      kind: 'checkbox',
+    },
+    { path: 'supply.weightStartPercent', label: 'Start selling at weight %', min: 1, max: 100 },
+    { path: 'supply.weightEndPercent', label: 'Finish below weight %', min: 1, max: 99 },
+    {
+      path: 'supply.merchantMode',
+      label: 'Merchant selection',
+      options: [
+        ['manual', 'Choose map / NPC'],
+        ['automatic', 'Automatic nearest reachable verified merchant'],
+      ],
+    },
+    {
+      path: 'supply.transport',
+      label: 'Trip transport',
+      options: [
+        ['travel', 'Travel to selected merchant'],
+        ['butterfly', 'Return to save point · Butterfly Wing'],
+        ['returnSkill', 'Return to save point · Return skill'],
+      ],
+    },
+    { path: 'supply.saveMap', label: 'Expected save-point map code', kind: 'text' },
+    {
+      path: 'supply.returnMinStock',
+      label: 'Butterfly Wings to retain after return',
+      min: 0,
+      max: 9999,
+    },
     {
       path: 'supply.minimumIntervalSeconds',
       label: 'Minimum seconds between trips',
@@ -285,26 +335,6 @@ const fields: Record<Section, Field[]> = {
         [string, string]
       >,
     })),
-    { path: 'travel.destinationMap', label: 'Destination map code', kind: 'text' },
-    { path: 'travel.loop', label: 'Repeat waypoint route', kind: 'checkbox' },
-    {
-      path: 'follow.mode',
-      label: 'Follow selection',
-      options: [
-        ['name', 'Player name'],
-        ['partyLeader', 'Current party leader'],
-      ],
-    },
-    {
-      path: 'follow.rendezvous',
-      label: 'Allow one bounded trip to the leader map per Start',
-      kind: 'checkbox',
-    },
-    { path: 'follow.name', label: 'Follow player name', kind: 'text' },
-    { path: 'follow.distance', label: 'Follow distance, cells', min: 1, max: 20 },
-    { path: 'follow.lostSeconds', label: 'Wait when player lost, seconds', min: 1, max: 120 },
-  ],
-  inventory: [
     {
       path: 'loadout.enabled',
       label: 'Own conditional loadouts and restore them',
@@ -559,6 +589,7 @@ export class FeatureUi {
   private manualLocked = true;
   private serviceLocked = true;
   private status: Record<string, unknown> = {};
+  private readonly supplyMerchants = new SupplyMerchantResolver(supportsDatabaseTravel);
   private dispositionEditor!: RuleEditor;
   private dispositionPlan: DispositionPlan | null = null;
   private attackStrategiesPresent = false;
@@ -903,7 +934,14 @@ export class FeatureUi {
         idColumn('itemId', 'Item ID'),
         ...['keep', 'minimum', 'desired', 'maximum'].map((key) => ({
           key,
-          label: key[0]!.toUpperCase() + key.slice(1),
+          label:
+            key === 'maximum'
+              ? 'Retained quantity'
+              : key === 'minimum'
+                ? 'Refill minimum'
+                : key === 'desired'
+                  ? 'Refill target'
+                  : 'Keep protected',
           min: 0,
           max: 32767,
         })),
@@ -995,11 +1033,67 @@ export class FeatureUi {
     panel.append(output);
   }
   private supplyPanel(): void {
-    const panel = this.panel('travel'),
+    const owner = this.panels.get('inventory')!,
+      panel = document.createElement('section'),
+      heading = document.createElement('h3'),
+      grid = document.createElement('div'),
+      advanced = document.createElement('details'),
+      advancedHeading = document.createElement('summary'),
+      advancedGrid = document.createElement('div'),
       button = document.createElement('button');
+    panel.className = 'auto-sell-setup';
+    heading.textContent = 'Auto sell';
+    grid.className = 'form-grid';
+    advancedGrid.className = 'form-grid';
+    advancedHeading.textContent = 'Optional refill, storage and trip budgets';
+    const optional = new Set([
+      'supply.stockEnabled',
+      'supply.storageService',
+      'supply.buyService',
+      'supply.maxSpend',
+      'supply.maxActions',
+      'supply.maxDurationSeconds',
+    ]);
+    for (const field of fields.inventory.filter((field) => field.path.startsWith('supply.')))
+      (optional.has(field.path) ? advancedGrid : grid).append(
+        this.host.querySelector(`[data-setting="${field.path}"]`)!.parentElement!,
+      );
+    advanced.append(advancedHeading, advancedGrid);
+    panel.append(heading, grid, this.dispositionEditor.root, advanced);
+    owner.insertBefore(panel, owner.querySelector('.setup-advanced'));
+    const unavailable = document.createElement('option');
+    unavailable.value = 'unstuck';
+    unavailable.textContent = 'Unstuck / return command · unavailable';
+    unavailable.disabled = true;
+    panel
+      .querySelector<HTMLSelectElement>('[data-setting="supply.transport"]')!
+      .append(unavailable);
+    const help = document.createElement('p');
+    help.className = 'hint';
+    help.textContent =
+      'Choose sale items below: Allow Sell excess and set Retained quantity. Keep protected and recovery/return reserves remain protected; unlisted items are retained. Refill minimum/target are optional. Unstuck is unavailable: the deployed alive-return contract is unverified; /return is death-only in the pinned source. Save-point item/skill arrival must match your configured save map. Saving and previewing send no commands; edits use Apply / Next run.';
+    panel.append(help);
+    panel
+      .querySelector<HTMLInputElement>('[data-setting="supply.enabled"]')!
+      .addEventListener('change', (event) => {
+        if (!(event.target as HTMLInputElement).checked) return;
+        const storage = panel.querySelector<HTMLSelectElement>(
+            '[data-setting="supply.storageService"]',
+          )!,
+          buy = panel.querySelector<HTMLSelectElement>('[data-setting="supply.buyService"]')!;
+        if (!storage.value && !buy.value) {
+          panel.querySelector<HTMLInputElement>('[data-setting="supply.stockEnabled"]')!.checked =
+            false;
+          panel.querySelector<HTMLInputElement>('[data-setting="supply.weightEnabled"]')!.checked =
+            true;
+          if (!panel.querySelector<HTMLSelectElement>('[data-setting="supply.sellService"]')!.value)
+            panel.querySelector<HTMLSelectElement>('[data-setting="supply.merchantMode"]')!.value =
+              'automatic';
+        }
+      });
     button.type = 'button';
     button.className = 'secondary compact';
-    button.textContent = 'Preview supply trip';
+    button.textContent = 'Preview auto sell & supply trip';
     const output = document.createElement('div');
     output.id = 'supply-preview';
     output.className = 'telemetry-summary';
@@ -1034,6 +1128,22 @@ export class FeatureUi {
             currencyRevision: 0,
             economicUncertain: false,
             disposition,
+            merchant:
+              (a.supply?.transport ?? 'travel') !== 'travel' &&
+              a.supply?.saveMap !== text(this.status.map)
+                ? {
+                    contractId: null,
+                    reason:
+                      'Merchant selection waits for the confirmed save-point arrival and actual cell.',
+                    preview: '',
+                  }
+                : this.supplyMerchants.resolve(
+                    { ...this.hooks.settings(), automation: a },
+                    text(this.status.map),
+                    typeof p.x === 'number' && typeof p.y === 'number'
+                      ? { x: Math.floor(p.x), y: Math.floor(p.y) }
+                      : null,
+                  ),
           },
         );
       } catch (error) {
@@ -1042,7 +1152,7 @@ export class FeatureUi {
     });
     panel.append(button, output);
     this.note(
-      'travel',
+      'inventory',
       'Supply trips use your protected stock rules. Each shop batch opens a fresh verified service. Stop, manual input, death or an uncertain transaction pauses the trip and prevents automatic field resume. The captured return map and cell appear in status.',
     );
   }
@@ -1624,7 +1734,7 @@ export class FeatureUi {
     automation = {
       ...automation,
       mapPolicy: automation.mapPolicy ?? structuredClone(DEFAULT_MAP_POLICY),
-      supply: automation.supply ?? structuredClone(DEFAULT_SUPPLY),
+      supply: { ...DEFAULT_SUPPLY, ...automation.supply },
     };
     this.partyHealPresent = Object.hasOwn(automation, 'partyHeal');
     automation = { ...automation, partyHeal: automation.partyHeal ?? { ...DEFAULT_PARTY_HEAL } };
