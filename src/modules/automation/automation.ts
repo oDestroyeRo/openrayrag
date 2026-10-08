@@ -43,6 +43,7 @@ import {
   actionConfirmationTimeout,
   effectiveSkillLevel,
   distanceBetween,
+  itemConfirmationDiagnostic,
 } from './automation-logic';
 
 export {
@@ -295,6 +296,15 @@ export class AutomationScheduler {
       stats: state.statsRevision,
       skills: state.skillsRevision,
       count,
+      ...(action.type === 'useItem'
+        ? {
+            itemObservation: {
+              count: state.inventoryKnown ? count : null,
+              inventoryAdvanced: false,
+              removalObserved: false,
+            },
+          }
+        : {}),
       skillLevel,
       attributes: (state.stats?.attributes?.slice() as Attributes) ?? null,
     };
@@ -361,6 +371,13 @@ export class AutomationScheduler {
           event.type === 'sit' && event.id === playerId && event.sitting === action.sitting;
         break;
       case 'useItem':
+        pending.itemObservation = {
+          count: state.inventoryKnown ? state.count(domainItemId(action.itemId)) : null,
+          inventoryAdvanced: state.inventoryRevision > pending.inventory,
+          removalObserved:
+            pending.itemObservation?.removalObserved === true ||
+            (event.type === 'inventoryDelta' && !event.add),
+        };
         confirmed =
           event.type === 'inventoryDelta' &&
           !event.add &&
@@ -420,14 +437,26 @@ export class AutomationScheduler {
   }
   timeout(): string | null {
     if (this.pending && this.now() >= this.pending.deadline) {
-      const type = this.pending.action.type;
+      const pending = this.pending,
+        action = pending.action;
+      const diagnostic =
+        action.type === 'useItem' && pending.itemObservation
+          ? ` ${itemConfirmationDiagnostic({
+              id: domainItemId(action.itemId),
+              before: pending.count,
+              observation: pending.itemObservation,
+            })}`
+          : '';
       this.pending = null;
       this.outcome = {
         sequence: this.sequence,
         status: 'failed',
-        failure: { type: 'timeout', reason: `No server confirmation for ${type}.` },
+        failure: {
+          type: 'timeout',
+          reason: `No server confirmation for ${action.type}.${diagnostic}`,
+        },
       };
-      return `No server confirmation for ${type}; stopped to avoid duplicate actions.`;
+      return `No server confirmation for ${action.type}; stopped to avoid duplicate actions.${diagnostic}`;
     }
     return null;
   }

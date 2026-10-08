@@ -683,6 +683,107 @@ describe('captured action receipts', () => {
     };
   }
   it.each([
+    {
+      name: 'no updates',
+      events: [] as FeatureEvent[],
+      stock: '4 → 4',
+      missing: [
+        'inventory removal update missing',
+        'inventory did not advance',
+        'item stock did not decrease',
+      ],
+    },
+    {
+      name: 'HP recovery only',
+      events: [{ type: 'stats', hp: 100, maxHp: 100 }] as FeatureEvent[],
+      stock: '4 → 4',
+      missing: [
+        'inventory removal update missing',
+        'inventory did not advance',
+        'item stock did not decrease',
+      ],
+    },
+    {
+      name: 'an unrelated removal',
+      events: [
+        { type: 'inventoryDelta', add: false, bagId: 502, change: 1, weight: 10 },
+      ] as FeatureEvent[],
+      stock: '4 → 4',
+      missing: ['item stock did not decrease'],
+    },
+    {
+      name: 'decreased stock from a full inventory',
+      events: [inventory(3)],
+      stock: '4 → 3',
+      missing: ['inventory removal update missing'],
+    },
+    {
+      name: 'an invalid removal',
+      events: [
+        { type: 'inventoryDelta', add: false, bagId: 999, change: 1, weight: 10 },
+      ] as FeatureEvent[],
+      stock: '4 → unavailable',
+      missing: ['verified inventory unavailable', 'inventory did not advance'],
+    },
+    {
+      name: 'separate removal and decreased-stock observations',
+      events: [
+        { type: 'inventoryDelta', add: false, bagId: 502, change: 1, weight: 10 },
+        inventory(3),
+      ] as FeatureEvent[],
+      stock: '4 → 3',
+      missing: ['inventory removal and decreased item stock were not observed together'],
+    },
+  ])(
+    'reports missing item confirmation after $name without retrying',
+    ({ events, stock, missing }) => {
+      let now = 1000;
+      const state = new CharacterState();
+      state.apply(
+        {
+          type: 'inventory',
+          items: [
+            { bagId: 501, itemId: 501, count: 4, type: 1 },
+            { bagId: 502, itemId: 502, count: 4, type: 1 },
+          ],
+          equipment: [],
+          ammoId: -1,
+        },
+        1,
+      );
+      const sent: Action[] = [];
+      const scheduler = new AutomationScheduler(
+        (action) => sent.push(action),
+        () => now,
+      );
+      scheduler.submit({ type: 'useItem', itemId: 501 }, state);
+      for (const event of events) {
+        state.apply(event, 1);
+        expect(scheduler.observe(event, state, 1).state).toBe('ignored');
+      }
+      now += 6000;
+      const timeout = scheduler.timeout();
+      expect(timeout).toContain('stopped to avoid duplicate actions');
+      expect(timeout).toContain('Red Potion (#501)');
+      expect(timeout).toContain(`stock ${stock}`);
+      for (const evidence of [
+        'inventory removal update missing',
+        'inventory did not advance',
+        'item stock did not decrease',
+        'verified inventory unavailable',
+        'inventory removal and decreased item stock were not observed together',
+      ]) {
+        if (missing.includes(evidence)) expect(timeout).toContain(evidence);
+        else expect(timeout).not.toContain(evidence);
+      }
+      expect(scheduler.result.reason).toContain('Consumption remains unconfirmed.');
+      expect(scheduler.retireReceipt(true)).toBe('uncertain');
+      expect(scheduler.receipt?.action).toEqual({ type: 'useItem', itemId: 501 });
+      expect(scheduler.timeout()).toBeNull();
+      expect(sent).toEqual([{ type: 'useItem', itemId: 501 }]);
+    },
+  );
+  it.each([
     [{ type: 'requestFailure', reason: 3 }, 'Server rejected useItem (code 3).'],
     [{ type: 'skillFailure', reason: 4 }, 'Server rejected useItem (code 4).'],
     [
@@ -737,7 +838,7 @@ describe('captured action receipts', () => {
         cause === 'cancel'
           ? 'Action canceled.'
           : cause === 'timeout'
-            ? 'No server confirmation for useItem.'
+            ? expect.stringContaining('No server confirmation for useItem.')
             : 'Connection failed while sending action.';
       expect(scheduler.result).toEqual({ sequence: 1, status: 'failed', reason });
       scheduler.result.reason = 'Server rejected useItem (code 3).';

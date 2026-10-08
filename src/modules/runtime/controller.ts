@@ -5072,6 +5072,10 @@ export class CompanionController {
       snapshot.reason = this.blockedReason || this.waitingReason || snapshot.reason;
     if (this.runRequested && this.now() < this.yieldUntil && !this.blockedReason)
       snapshot.reason = this.waitingReason;
+    if (snapshot.player?.dead && this.blockedReason) {
+      const respawn = automationSettings(this.requestedSettings ?? this.engine.settings).respawn;
+      snapshot.reason = `Character is dead. Automatic respawn is ${respawn.enabled ? 'enabled' : 'disabled'}. ${snapshot.reason}`;
+    }
     return {
       ...snapshot,
       runExperience: this.runExperience ? { ...this.runExperience } : null,

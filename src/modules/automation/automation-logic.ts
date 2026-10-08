@@ -25,7 +25,7 @@ import {
   type ActorObservationSnapshot,
 } from '../world/actor-observations-logic';
 import type { CharacterState } from '../world/character-state';
-import { SKILL_CATALOG } from '../catalog/game-catalog';
+import { SKILL_CATALOG, itemName } from '../catalog/game-catalog';
 import type { ExpandedAction, Attributes } from '../protocol/protocol-feature';
 export function monsterRule(
   a: Pick<AutomationSettings, 'combat'>,
@@ -110,10 +110,36 @@ export interface PendingFeature {
   stats: Revision<'stats'>;
   skills: Revision<'skills'>;
   count: Quantity;
+  itemObservation?: ItemConfirmationObservation;
   skillLevel: number;
   attributes: Attributes | null;
   equipmentReceipt?: (state: CharacterState) => boolean;
   skillReceipt?: typeof matchesSkillExecution;
+}
+
+export interface ItemConfirmationObservation {
+  count: Quantity | null;
+  inventoryAdvanced: boolean;
+  removalObserved: boolean;
+}
+
+/** Bounded observations explain missing confirmation without asserting consumption. */
+export function itemConfirmationDiagnostic({
+  id,
+  before,
+  observation,
+}: {
+  id: ItemId;
+  before: Quantity;
+  observation: ItemConfirmationObservation;
+}): string {
+  const missing: string[] = [];
+  if (observation.count === null) missing.push('verified inventory unavailable');
+  if (!observation.removalObserved) missing.push('inventory removal update missing');
+  if (!observation.inventoryAdvanced) missing.push('inventory did not advance');
+  if (observation.count !== null && observation.count >= before)
+    missing.push('item stock did not decrease');
+  return `${itemName(id)} (#${id}), stock ${before} → ${observation.count ?? 'unavailable'}. Missing evidence: ${missing.join('; ') || 'inventory removal and decreased item stock were not observed together'}. Consumption remains unconfirmed.`;
 }
 
 export type ActionReceipts = Pick<
