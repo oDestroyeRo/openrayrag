@@ -144,6 +144,7 @@ import {
   type SupplyResumeGuard,
 } from '../services/supply-trip';
 import { nextSupplyAction, type SupplyPhaseEvidence } from '../services/supply-plan';
+import { SupplyMerchantResolver } from '../services/supply-merchant';
 import { observeSupplyReceipt } from '../services/supply-receipt';
 import {
   createSupplyReceipt,
@@ -355,6 +356,9 @@ export class CompanionController {
   private supplyServiceContract: string | null = null;
   private supplyStorageFull: SupplyPhaseEvidence['storageFull'] = null;
   private sendingSupply = false;
+  private readonly supplyMerchants = new SupplyMerchantResolver(
+    (map) => this.databaseTravel?.supported(map) ?? false,
+  );
   private readonly dispositionMetadata = publishedDispositionMetadata();
   readonly socket: ManualSocket;
   private socketFloors: ReadonlyMap<ItemId, Quantity> | null = null;
@@ -543,9 +547,15 @@ export class CompanionController {
     this.supply = new SupplyTripRuntime(
       {
         next: (context, goals, policy) =>
-          nextSupplyAction(context, goals, policy, this.requestedSettings?.automation?.supply!, {
-            storageFull: this.supplyStorageFull,
-          }),
+          nextSupplyAction(
+            this.supplyMerchantContext(context),
+            goals,
+            policy,
+            this.requestedSettings?.automation?.supply!,
+            {
+              storageFull: this.supplyStorageFull,
+            },
+          ),
         confirm: confirmSupplyReceipt,
       },
       now,
@@ -1355,6 +1365,8 @@ export class CompanionController {
       throw new Error('Waiting for the previous refine transaction to reconcile.');
     if (this.supply.uncertain)
       throw new Error('Waiting for the previous supply transaction to reconcile.');
+    if (this.escape.supplyOwned && this.escape.busy)
+      throw new Error('Waiting for the owned supply save-point return to reconcile before Start.');
     if (
       this.warp.blocked ||
       this.socket.busy ||
@@ -2778,6 +2790,7 @@ export class CompanionController {
     const escapeRefresh = escapeRefreshOwned && this.escape.snapshot().state === 'refreshing';
     if (
       escaped &&
+      this.supplyIntent?.type !== 'saveReturn' &&
       this.runRequested &&
       automationSettings(this.requestedSettings!).travel.returnToLockMap &&
       this.engine.map !== this.requestedSettings!.map
@@ -2868,7 +2881,8 @@ export class CompanionController {
       this.supply.ownsField &&
       events.some((event) => event.type === 'map' || event.type === 'clear') &&
       !this.service.active &&
-      !this.travel.active
+      !this.travel.active &&
+      !(this.supplyIntent?.type === 'saveReturn' && (escaped || escapeRefreshOwned))
     ) {
       this.supplyStorageFull = null;
       this.supply.interrupt('Unexpected world transition interrupted the supply trip.');
@@ -3111,6 +3125,7 @@ export class CompanionController {
       !this.travel.active &&
       !this.unresolvedWorld &&
       !this.featureReceipt &&
+      !this.escape.busy &&
       this.now() >= this.fencedUntil;
     const settled = this.engine.idleForActions() && noOwner;
     return {
@@ -3120,7 +3135,9 @@ export class CompanionController {
       position: p ? { x: Math.floor(p.x), y: Math.floor(p.y) } : null,
       connected: this.engine.connected && this.engine.compatible,
       alive: !!p && !p.dead,
-      loading: this.travel.active && this.travel.snapshot().state === 'transition',
+      loading:
+        (this.travel.active && this.travel.snapshot().state === 'transition') ||
+        (this.supplyIntent?.type === 'saveReturn' && this.escape.sent),
       fresh:
         this.now() - this.lastFrame <= 15000 &&
         this.supplyInventoryFresh &&
@@ -3163,6 +3180,17 @@ export class CompanionController {
       },
     };
   }
+  private supplyMerchantContext(context: SupplyContext): SupplyContext {
+    if (
+      this.requestedSettings?.automation?.supply?.merchantMode !== 'automatic' ||
+      context.disposition.workflow.world.shop?.mode === 'sell'
+    )
+      return context;
+    return {
+      ...context,
+      merchant: this.supplyMerchants.resolve(this.requestedSettings, context.map, context.position),
+    };
+  }
   private supplyFailure(reason: string): void {
     this.supplyStorageFull = null;
     this.supply.interrupt(reason);
@@ -3170,6 +3198,7 @@ export class CompanionController {
     this.service.cancel(reason);
     this.workflow.cancel(reason);
     this.travel.cancel(reason);
+    if (this.escape.supplyOwned) this.escape.cancel(reason);
     this.engine.stop(reason);
     this.waitingReason = reason;
   }
@@ -3220,6 +3249,21 @@ export class CompanionController {
               }
             : null;
       const player = this.engine.player;
+      const hardWeight = this.requestedSettings?.automation?.limits.weightPercent ?? 0;
+      const weight = context.disposition.containers.inventory;
+      if (
+        this.supply.ownsField &&
+        this.supply.snapshot().actions === 0 &&
+        hardWeight &&
+        typeof weight.weight === 'number' &&
+        typeof weight.maxWeight === 'number' &&
+        (weight.weight / weight.maxWeight) * 100 >= hardWeight
+      ) {
+        this.supplyFailure(
+          'Configured hard weight stop reached before departure. Lower the auto-sell trigger below that stop.',
+        );
+        return true;
+      }
       if (
         this.supply.ownsField &&
         player &&
@@ -3271,10 +3315,82 @@ export class CompanionController {
           this.service.start(definition, this.serviceContext(), mapPolicy(this.requestedSettings!));
           this.supplyServiceStarted = true;
         }
+        const originalService = serviceByContractId(intent.contractId);
+        if (
+          this.requestedSettings?.automation?.supply?.merchantMode === 'automatic' &&
+          originalService?.outcome.type === 'shopOpened' &&
+          originalService.outcome.mode === 'sell' &&
+          state.state === 'travel' &&
+          this.travel.snapshot().state === 'complete' &&
+          context.fresh &&
+          context.position
+        ) {
+          const choice = this.supplyMerchants.resolve(
+            this.requestedSettings,
+            context.map,
+            context.position,
+            true,
+          );
+          if (!choice.contractId) throw new Error(choice.reason);
+          if (choice.contractId !== intent.contractId) {
+            const definition = serviceByContractId(choice.contractId)!;
+            const fee = definition.workflow.steps.reduce(
+              (sum, step) => sum + ('expectedCost' in step ? (step.expectedCost ?? 0) : 0),
+              0,
+            );
+            this.service.cancel(
+              'Selecting the nearest verified merchant from the actual arrival cell.',
+            );
+            intent = this.supply.retargetService(intent.id, definition.contractId, fee);
+            this.supplyIntent = intent;
+            this.service.start(
+              definition,
+              this.serviceContext(),
+              mapPolicy(this.requestedSettings),
+            );
+          }
+        }
         const action = this.service.tick(this.serviceContext());
         if (action) this.send(action);
         if (['failed', 'cancelled'].includes(this.service.snapshot().state))
           throw new Error(this.service.snapshot().reason);
+        return true;
+      }
+      if (intent.type === 'saveReturn') {
+        if (!this.supplyServiceStarted) {
+          if (!mapAllowed(mapPolicy(this.requestedSettings!), intent.map))
+            throw new Error('The configured save map is excluded by the map restrictions.');
+          if (!this.gridFor(intent.map))
+            throw new Error('Verified walkability is unavailable for the configured save map.');
+          const reserve = Math.max(
+            intent.minStock,
+            ...dispositionStockFloors(automationSettings(this.requestedSettings!))
+              .filter((row) => row.itemId === 602)
+              .map((row) => row.count),
+          );
+          this.escape.beginReturn(
+            this.requestedSettings!,
+            intent.method,
+            reserve,
+            this.escapeContext(),
+          );
+          this.supplyServiceStarted = true;
+        }
+        const state = this.escape.snapshot();
+        if (state.state === 'confirmed') {
+          if (this.engine.map !== intent.map)
+            throw new Error(
+              'Save-point return arrived on a different map. Check the configured save map before restarting.',
+            );
+          this.supply.acknowledge(intent.id, 'confirmed', this.supplyContext());
+          this.supplyIntent = null;
+          return true;
+        }
+        if (['rejected', 'uncertain', 'canceled'].includes(state.state))
+          throw new Error(state.reason);
+        const action = this.escape.takeAction(this.escapeContext());
+        if (action) this.send(action);
+        this.waitingReason = this.escape.snapshot().reason;
         return true;
       }
       if (intent.type === 'action') {
@@ -3282,7 +3398,7 @@ export class CompanionController {
         const action = intent.action.command;
         // Recompute immediately before creating a workflow or transport receipt.
         const next = nextSupplyAction(
-          context,
+          this.supplyMerchantContext(context),
           this.supply.snapshot().goals,
           {
             ...this.requestedSettings!.automation!.disposition!,
@@ -3549,6 +3665,7 @@ export class CompanionController {
     };
   }
   private escapeTick(): boolean {
+    if (this.escape.supplyOwned && this.supply.ownsField) return false;
     if (
       this.engine.retreatOwned &&
       this.requestedSettings &&

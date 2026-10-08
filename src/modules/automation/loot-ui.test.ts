@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FeatureUi } from '../client/feature-ui';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, DEFAULT_RETREAT } from '../settings/settings';
+import { DEFAULT_SUPPLY } from '../services/supply-trip';
 
 // Exercise the actual field creation/read/write/lock paths. Unrelated feature
 // panels are stubbed so this fixture needs no browser or account-bearing main.
@@ -64,6 +65,9 @@ class Element {
     },
   };
   constructor(readonly tag: string) {}
+  get childElementCount(): number {
+    return this.children.length;
+  }
   get previousElementSibling(): Element | null {
     return this.parentElement?.children[this.parentElement.children.indexOf(this) - 1] ?? null;
   }
@@ -79,6 +83,10 @@ class Element {
       this.children.push(child);
     }
   }
+  replaceChildren(...children: Element[]) {
+    for (const child of [...this.children]) child.remove();
+    this.append(...children);
+  }
   prepend(...children: Element[]) {
     for (const child of [...children].reverse()) {
       child.remove();
@@ -92,14 +100,21 @@ class Element {
     const index = before ? this.children.indexOf(before) : -1;
     this.children.splice(index < 0 ? this.children.length : index, 0, child);
   }
-  addEventListener() {}
+  listeners = new Map<string, Array<(event: { target: Element }) => void>>();
+  addEventListener(name: string, listener: (event: { target: Element }) => void) {
+    this.listeners.set(name, [...(this.listeners.get(name) ?? []), listener]);
+  }
+  emit(name: string) {
+    for (const listener of this.listeners.get(name) ?? []) listener({ target: this });
+  }
+  setAttribute() {}
   all(): Element[] {
     return [this, ...this.children.flatMap((child) => child.all())];
   }
   matches(selector: string): boolean {
     if (selector.startsWith('#')) return this.id === selector.slice(1);
     if (selector.startsWith('.')) return this.className.split(/\s+/).includes(selector.slice(1));
-    const data = selector.match(/^\[data-(setting|config)(?:="([^"]+)")?\]$/);
+    const data = selector.match(/^\[data-(setting|config|column)(?:="([^"]+)")?\]$/);
     if (data)
       return (
         this.dataset[data[1]!] !== undefined && (!data[2] || this.dataset[data[1]!] === data[2])
@@ -115,8 +130,9 @@ class Element {
     return this.querySelectorAll(selector)[0] ?? null;
   }
 }
-function setup() {
+function setup(autoSell = false, realDisposition = false) {
   vi.stubGlobal('document', { createElement: (tag: string) => new Element(tag) });
+  vi.stubGlobal('HTMLInputElement', Element);
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} });
   const host = new Element('main'),
     combat = new Element('section');
@@ -149,22 +165,29 @@ function setup() {
     | 'dispositionPanel'
     | 'mapPolicyPanel';
   const prototype = FeatureUi.prototype as unknown as Record<PanelMethod, () => void>;
-  for (const name of ['rules', 'servicePanel', 'profilePanel', 'supplyPanel'] as const)
+  for (const name of ['rules', 'servicePanel', 'profilePanel'] as const)
     vi.spyOn(prototype, name).mockImplementation(() => {});
+  if (!autoSell) vi.spyOn(prototype, 'supplyPanel').mockImplementation(() => {});
   vi.spyOn(prototype, 'setup').mockImplementation(() => {});
   vi.spyOn(prototype, 'workflows').mockImplementation(function (this: unknown) {
     Object.assign(this as object, { macroUi: { render: () => {}, lock: () => {}, dirty: false } });
   });
-  vi.spyOn(prototype, 'dispositionPanel').mockImplementation(function (this: unknown) {
-    const input = new Element('input');
-    input.dataset.setting = 'disposition.maxSpend';
-    const output = new Element('div');
-    output.id = 'disposition-preview';
-    host.append(input, output);
-    Object.assign(this as object, {
-      dispositionEditor: { read: () => [], write: () => {}, lock: () => {} },
+  if (!realDisposition)
+    vi.spyOn(prototype, 'dispositionPanel').mockImplementation(function (this: unknown) {
+      const input = new Element('input');
+      input.dataset.setting = 'disposition.maxSpend';
+      const output = new Element('div');
+      output.id = 'disposition-preview';
+      host.append(input, output);
+      Object.assign(this as object, {
+        dispositionEditor: {
+          root: new Element('div'),
+          read: () => [],
+          write: () => {},
+          lock: () => {},
+        },
+      });
     });
-  });
   vi.spyOn(prototype, 'mapPolicyPanel').mockImplementation(() => {
     for (const key of ['allow', 'deny', 'area', 'map', 'minX', 'minY', 'maxX', 'maxY']) {
       const input = new Element('input');
@@ -191,11 +214,93 @@ function setup() {
     manualTools,
     sessionDetails,
   } as unknown as ConstructorParameters<typeof FeatureUi>[2]);
-  return { ui, host, combat, master, sections, manualTools, sessionDetails };
+  return { ui, host, combat, master, sections, manualTools, sessionDetails, hooks };
 }
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+it('adds a valid sale rule through the real editor and saves retained quantities without sending commands', () => {
+  const { ui, sections, hooks } = setup(true, true);
+  const panel = sections.inventory.querySelector('.auto-sell-setup')!;
+  panel.querySelector(`[data-setting="supply.enabled"]`)!.checked = true;
+  panel.querySelector(`[data-setting="supply.enabled"]`)!.emit('change');
+  const editor = panel.querySelector('.rule-editor')!;
+  editor.querySelector('button')!.emit('click');
+  editor.querySelector('[data-column="itemId"]')!.value = '909';
+  editor.querySelector('[data-column="sell"]')!.value = '1';
+  const retained = editor.querySelector('[data-column="maximum"]')!;
+  retained.value = '4';
+  expect(ui.read().disposition!.rules).toEqual([
+    {
+      itemId: 909,
+      keep: 1,
+      minimum: 1,
+      desired: 1,
+      maximum: 4,
+      store: false,
+      cart: false,
+      sell: true,
+      restock: 'off',
+      allowUnique: false,
+    },
+  ]);
+  expect(ui.read().supply).toMatchObject({
+    enabled: true,
+    weightEnabled: true,
+    merchantMode: 'automatic',
+  });
+  for (const name of ['apply', 'command', 'workflow', 'routine', 'service'] as const)
+    expect(hooks[name]).not.toHaveBeenCalled();
+  ui.lock(true, true);
+  expect(retained.disabled).toBe(true);
+});
+it('mounts canonical auto-sell controls in Loot & supplies and keeps saving/preview sender-free', () => {
+  const { ui, host, sections, hooks } = setup(true);
+  const panel = sections.inventory.querySelector('.auto-sell-setup')!;
+  expect(panel).not.toBeNull();
+  const input = (path: string) => panel.querySelector(`[data-setting="supply.${path}"]`)!;
+  for (const path of [
+    'enabled',
+    'merchantMode',
+    'transport',
+    'saveMap',
+    'returnMinStock',
+    'sellService',
+  ]) {
+    expect(host.querySelectorAll(`[data-setting="supply.${path}"]`)).toHaveLength(1);
+    expect(sections.travel.querySelector(`[data-setting="supply.${path}"]`)).toBeNull();
+  }
+  ui.write(structuredClone(DEFAULT_AUTOMATION));
+  expect(input('enabled').checked).toBe(false);
+  const unavailable = input('transport').children.find((option) => option.value === 'unstuck')!;
+  expect(unavailable.disabled).toBe(true);
+  expect(panel.querySelector('details')!.all()).toContain(input('storageService'));
+  input('enabled').checked = true;
+  input('enabled').emit('change');
+  expect(input('merchantMode').value).toBe('automatic');
+  expect(input('stockEnabled').checked).toBe(false);
+  expect(input('weightEnabled').checked).toBe(true);
+  const configured = {
+    ...structuredClone(DEFAULT_AUTOMATION),
+    supply: {
+      ...DEFAULT_SUPPLY,
+      enabled: true,
+      stockEnabled: false,
+      weightEnabled: true,
+      merchantMode: 'automatic' as const,
+      transport: 'butterfly' as const,
+      saveMap: 'prontera',
+      returnMinStock: 3,
+    },
+  };
+  ui.write(configured);
+  expect(ui.read().supply).toEqual(configured.supply);
+  panel.querySelector('button')!.emit('click');
+  for (const name of ['apply', 'command', 'workflow', 'routine', 'service'] as const)
+    expect(hooks[name]).not.toHaveBeenCalled();
+  ui.lock(true, true);
+  expect(input('enabled').disabled).toBe(true);
 });
 it('uses the supplied mounts once and separates manual roots from Bot and profiles', () => {
   const { ui, host, sections, manualTools } = setup();

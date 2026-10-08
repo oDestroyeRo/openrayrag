@@ -18,7 +18,10 @@ import {
   dispositionStockFloors,
 } from '../services/disposition-ui-logic';
 import { previewSupplyTrip } from '../services/supply-plan';
+import { SupplyMerchantResolver } from '../services/supply-merchant';
+import { supportsDatabaseTravel } from '../navigation/database-travel-protocol';
 import { isTalkNpc } from '../world/actor-interaction-logic';
+const supplyMerchants = new SupplyMerchantResolver(supportsDatabaseTravel);
 
 /** Existing preview owners, with explicit stale evidence and a bounded planning lifetime. */
 export async function mcpPreview(
@@ -88,6 +91,22 @@ export async function mcpPreview(
         currencyRevision: 0,
         economicUncertain: false,
         disposition,
+        merchant:
+          (automation.supply?.transport ?? 'travel') !== 'travel' &&
+          automation.supply?.saveMap !== current?.map
+            ? {
+                contractId: null,
+                reason:
+                  'Merchant selection waits for confirmed save-point arrival and the actual cell.',
+                preview: '',
+              }
+            : supplyMerchants.resolve(
+                settings,
+                current?.map ?? '',
+                current?.player
+                  ? { x: Math.floor(current.player.x), y: Math.floor(current.player.y) }
+                  : null,
+              ),
       }),
       sendsCommands: false,
     };

@@ -63,6 +63,44 @@ export class EmergencyEscape {
   get sent(): boolean {
     return this.request !== null && this.request.sentAt !== null;
   }
+  get supplyOwned(): boolean {
+    return this.request?.purpose === 'supply';
+  }
+  /** The supply owner shares this adapter's resource/arrival receipt and cooldown.
+   * It does not create a danger episode or an emergency recovery latch. */
+  beginReturn(
+    settings: Settings,
+    method: 'item' | 'skill',
+    minStock: number,
+    context: EscapeContext,
+  ): void {
+    this.update(context);
+    const policy = {
+      ...escapeSettings(settings),
+      enabled: true,
+      mode: 'save' as const,
+      method,
+      minStock,
+    };
+    const reason = context.blocker || this.resourceBlocker(escapeAction(policy), policy, context);
+    if (
+      this.blocked ||
+      this.now() < this.cooldownUntil ||
+      !context.ready ||
+      !context.identity ||
+      !context.player ||
+      context.player.dead ||
+      !context.fresh ||
+      reason
+    )
+      throw new Error(
+        reason ||
+          'Save-point return is unavailable while an escape receipt, recovery or cooldown is active.',
+      );
+    this.begin({ ...settings, automation: { ...settings.automation!, escape: policy } }, context);
+    this.request!.purpose = 'supply';
+    this.reason = 'Preparing the owned supply return to the save point.';
+  }
   get blocked(): boolean {
     return this.busy || (this.latched && !this.recovered);
   }
@@ -279,14 +317,17 @@ export class EmergencyEscape {
       context.playerId !== r.id ||
       context.player?.name !== r.name ||
       !sameActionIdentity(r.identity, context.identity) ||
-      !this.triggered(r.policy, context)
+      (r.purpose !== 'supply' && !this.triggered(r.policy, context))
     ) {
       this.cancel('Emergency escape canceled before sending.');
       return null;
     }
     const hp = this.hp(context);
     const hpTriggered =
-      r.policy.hpEnabled !== false && hp !== null && hp <= r.policy.hpBelowPercent;
+      r.purpose !== 'supply' &&
+      r.policy.hpEnabled !== false &&
+      hp !== null &&
+      hp <= r.policy.hpBelowPercent;
     // HP keeps its existing emergency preemption. A newly observed-threat-only
     // trigger must drain accepted or unacknowledged movement after Stop.
     this.reason =
@@ -309,7 +350,7 @@ export class EmergencyEscape {
     // Claim before sending: even a transport exception cannot authorize a retry.
     r.sentAt = this.now();
     r.deadline = this.now() + 30_000;
-    this.latched = true;
+    if (r.purpose !== 'supply') this.latched = true;
     this.recovery = { ...r.recovery };
     this.lastHealth = null;
     this.quietSince = null;

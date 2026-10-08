@@ -5,6 +5,7 @@ import {
   DEFAULT_AUTOMATION,
   DEFAULT_SETTINGS,
   DEFAULT_ESCAPE,
+  settingsDraft,
   type Settings,
 } from '../settings/settings';
 import { DEFAULT_SUPPLY } from './supply-trip';
@@ -13,6 +14,9 @@ import { OP, type Entity } from '../protocol/protocol';
 import { FEATURE_OP } from '../protocol/protocol-feature';
 import { WORLD_OP, type WorldAction } from '../protocol/world-protocol';
 import type { Action } from '../automation/engine';
+import type { DatabaseTravelTransport } from '../navigation/travel-controller';
+import { DEFAULT_MAP_POLICY } from '../navigation/map-policy-logic';
+import { PersistentFieldRun } from '../session/reconnect';
 const player: Entity = {
   id: 1,
   classId: 1,
@@ -33,7 +37,7 @@ const npc: Entity = {
   x: 290,
   y: 221,
 };
-function spawn(e: Entity) {
+function spawn(e: Entity, entryType = 0) {
   const name = new TextEncoder().encode(e.name);
   const body = new BitWriter()
     .u8(15)
@@ -56,9 +60,13 @@ function spawn(e: Entity) {
     .i32(-1)
     .u8(e.id === 1 ? 1 : 0)
     .finish();
-  return new BitWriter().u8(OP.spawn).u8(0).i32(body.length).take(body).finish();
+  return new BitWriter().u8(OP.spawn).u8(entryType).i32(body.length).take(body).finish();
 }
-function stats(count = 4, zeny = 1000) {
+function stats(
+  count = 4,
+  zeny = 1000,
+  options: { maxWeight?: number; wings?: number; returnSkill?: boolean; sp?: number } = {},
+) {
   const w = new BitWriter().u8(FEATURE_OP.stats);
   for (const n of [
     10,
@@ -75,24 +83,26 @@ function stats(count = 4, zeny = 1000) {
     0,
     100,
     100,
-    100,
+    options.sp ?? 100,
     100,
     ...Array(16).fill(0),
-    10000,
+    options.maxWeight ?? 10000,
   ])
     w.i32(n);
   w.f32(0.4)
     .i32(count * 70)
     .i32(0)
     .bool(true)
+    .i16(options.returnSkill ? 2 : 1)
     .i16(1)
-    .i16(1)
-    .u8(5)
-    .i16(0)
+    .u8(5);
+  if (options.returnSkill) w.i16(54).u8(1);
+  w.i16(0)
     .bool(true)
     .u8(1)
-    .i32(count ? 1 : 0);
+    .i32((count ? 1 : 0) + (options.wings ? 1 : 0));
   if (count) w.i32(501).i16(count);
+  if (options.wings) w.i32(602).i16(options.wings);
   w.i32(0).u8(0);
   for (let i = 0; i < 10; i++) w.i32(0);
   return w.i32(-1).finish();
@@ -129,17 +139,33 @@ const settings = {
     },
   },
 };
-function setup(runSettings: Settings = settings, map = 'prt_fild05', position = player) {
+function setup(
+  runSettings: Settings = settings,
+  map = 'prt_fild05',
+  position = player,
+  database?: DatabaseTravelTransport,
+) {
   let now = 100_000,
-    throwBuy = false;
+    throwBuy = false,
+    throwReturn = false;
   const sent: Array<Action | WorldAction> = [];
   const c = new CompanionController(
     (a) => {
       sent.push(a);
       if (throwBuy && a.type === 'shop' && a.rows.length)
         throw Error('Synthetic transport exception');
+      if (throwReturn && (a.type === 'useItem' || (a.type === 'skill' && a.skillId === 54)))
+        throw Error('Synthetic return transport exception');
     },
     () => now,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    database,
   );
   c.connect(true);
   const packet = (p: Uint8Array) => c.receive(p);
@@ -219,9 +245,379 @@ function setup(runSettings: Settings = settings, map = 'prt_fild05', position = 
     setThrow: () => {
       throwBuy = true;
     },
+    setThrowReturn: () => {
+      throwReturn = true;
+    },
     buy: () => sent.filter((a) => a.type === 'shop' && a.rows.length),
   };
 }
+function autoSellFixture(
+  transport: 'travel' | 'butterfly' | 'returnSkill' = 'butterfly',
+  hardStop = 95,
+) {
+  const configured: Settings = {
+    ...settings,
+    map: 'prt_fild08',
+    automation: {
+      ...structuredClone(settings.automation),
+      combat: { ...settings.automation.combat, mode: 'off' },
+      loot: { ...settings.automation.loot, defaultAction: 'ignore' },
+      limits: { minutes: 10, kills: 20, pickups: 30, weightPercent: hardStop },
+      supply: {
+        ...DEFAULT_SUPPLY,
+        enabled: true,
+        stockEnabled: false,
+        weightEnabled: true,
+        merchantMode: 'automatic',
+        transport,
+        saveMap: 'prontera',
+        maxTrips: 2,
+      },
+      disposition: {
+        maxSpend: 0,
+        rules: [
+          {
+            ...settings.automation.disposition.rules[0]!,
+            keep: 2,
+            minimum: 2,
+            desired: 2,
+            maximum: 2,
+            sell: true,
+            restock: 'off',
+          },
+        ],
+      },
+    },
+  };
+  const f = setup(configured, 'prt_fild08', { ...player, x: 156, y: 374 });
+  const observations = (count = 12, zeny = 1000, wings = 2, sp = 100) =>
+    f.packet(stats(count, zeny, { maxWeight: 1000, wings, returnSkill: true, sp }));
+  observations();
+  const start = () => {
+    f.c.start(configured);
+    f.advance(900);
+  };
+  const arrival = (map = 'prontera', withNpc = true) => {
+    f.packet(
+      new BitWriter()
+        .u8(FEATURE_OP.inventoryDelta)
+        .bool(false)
+        .i32(602)
+        .i16(1)
+        .i32(840)
+        .bool(false)
+        .finish(),
+    );
+    f.packet(new BitWriter().u8(OP.map).string(map).finish());
+    f.packet(spawn({ ...player, x: 103, y: 48 }));
+    if (withNpc) f.packet(spawn({ ...npc, name: 'Fruit Gardener', x: 104, y: 49 }));
+    observations(12, 1000, 1);
+    f.advance(900);
+  };
+  const openSale = (menu = ['Buy', 'Sell', 'Cancel'], overcharge = 0) => {
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(20).bool(true).finish());
+    const w = new BitWriter().u8(WORLD_OP.npc).u8(2).i32(menu.length);
+    for (const label of menu) w.string(label);
+    f.packet(w.finish());
+    f.advance(500);
+    if (menu[1] === 'Sell') {
+      expect(f.sent).toContainEqual({ type: 'npcOption', index: 1 });
+      f.packet(new BitWriter().u8(WORLD_OP.shop).u8(0).i32(overcharge).finish());
+      f.advance(600);
+    }
+  };
+  const walkUntil = (predicate: () => boolean) => {
+    for (let i = 0; i < 180 && !predicate(); i++) {
+      if (f.c.travel.snapshot().leg.length > 1) f.settleWalk();
+      else f.step();
+    }
+    expect(predicate(), f.c.supply.snapshot().reason + ' ' + f.c.travel.snapshot().reason).toBe(
+      true,
+    );
+  };
+  const sales = () => f.sent.filter((a) => a.type === 'shop' && a.mode === 'sell' && a.rows.length);
+  return { ...f, configured, observations, start, arrival, openSale, walkUntil, sales };
+}
+
+describe('owned auto-sell save-point trips', () => {
+  it.each(['buy', 'storage'] as const)(
+    'preserves an explicit remote %s service while automatic selling is enabled',
+    (mode) => {
+      const contractId =
+        mode === 'buy' ? 'trader.prt-fild05.tool-dealer.buy.v1' : 'kafra.prontera-south.storage.v1';
+      const definition = BUILTIN_SERVICES.find((service) => service.contractId === contractId)!;
+      const configured = {
+        ...settings,
+        map: 'prt_fild08',
+        automation: {
+          ...settings.automation,
+          supply: {
+            ...settings.automation.supply,
+            merchantMode: 'automatic' as const,
+            storageService: mode === 'storage' ? contractId : '',
+          },
+          disposition: {
+            ...settings.automation.disposition,
+            rules: [
+              {
+                ...settings.automation.disposition.rules[0]!,
+                restock: mode === 'storage' ? ('storage' as const) : ('buy' as const),
+              },
+            ],
+          },
+        },
+      };
+      const requests: string[] = [];
+      const f = setup(
+        configured,
+        'prt_fild08',
+        { ...player, x: 156, y: 374 },
+        { supported: (map) => map === definition.map, send: (map) => requests.push(map) },
+      );
+      f.c.start(configured);
+      f.advance(1000);
+      expect(requests).toEqual([definition.map]);
+      f.packet(new BitWriter().u8(OP.remove).i32(player.id).u8(0).finish());
+      f.packet(new BitWriter().u8(OP.map).string(definition.map).finish());
+      f.c.observeOfficialPacket(new Uint8Array([2]));
+      f.packet(spawn({ ...player, x: definition.approach.x, y: definition.approach.y }, 1));
+      f.packet(
+        spawn({
+          ...npc,
+          name: definition.identity.name,
+          x: definition.identity.anchor!.x,
+          y: definition.identity.anchor!.y,
+        }),
+      );
+      f.packet(stats());
+      f.advance(1200);
+      expect(Reflect.get(f.c, 'supplyIntent').contractId).toBe(contractId);
+      expect(f.sent).toContainEqual({ type: 'npcTalk', id: 20 });
+      expect(requests).toHaveLength(1);
+      expect(f.c.supply.snapshot().remainingTrips).toBe(1);
+    },
+  );
+  it.each(['prt_fild08', 'iz_dun00'])(
+    'reselects the nearest merchant from an actual Database landing departing %s',
+    (origin) => {
+      const requests: string[] = [];
+      const configured = autoSellFixture('travel').configured;
+      configured.map = origin;
+      configured.automation!.mapPolicy = { ...DEFAULT_MAP_POLICY, allow: [origin, 'prontera'] };
+      const position = origin === 'prt_fild08' ? { x: 156, y: 374 } : { x: 281, y: 47 };
+      const f = setup(
+        configured,
+        origin,
+        { ...player, ...position },
+        { supported: (map) => map === 'prontera', send: (map) => requests.push(map) },
+      );
+      f.packet(stats(12, 1000, { maxWeight: 1000 }));
+      f.c.start(configured);
+      f.advance(1000);
+      expect(requests).toEqual(['prontera']);
+      const planned = Reflect.get(f.c, 'supplyIntent').contractId;
+      expect(planned).not.toContain('milk-ranch');
+      f.packet(new BitWriter().u8(OP.remove).i32(player.id).u8(0).finish());
+      f.packet(new BitWriter().u8(OP.map).string('prontera').finish());
+      f.c.observeOfficialPacket(new Uint8Array([2]));
+      f.packet(spawn({ ...player, x: 72, y: 133 }, 1));
+      f.packet(spawn({ ...npc, name: 'Vendor from Milk Ranch', x: 73, y: 134 }));
+      f.packet(stats(12, 1000, { maxWeight: 1000 }));
+      f.advance(1200);
+      expect(f.c.supply.snapshot().state, f.c.supply.snapshot().reason).toBe('service');
+      expect(Reflect.get(f.c, 'supplyIntent').contractId).toBe(
+        'trader.prontera.milk-ranch-vendor.sell.v1',
+      );
+      expect(f.sent).toContainEqual({ type: 'npcTalk', id: 20 });
+      expect(requests).toHaveLength(1);
+      expect(f.c.supply.snapshot()).toMatchObject({
+        remainingTrips: 1,
+        returnDestination: { map: origin, position },
+      });
+    },
+  );
+  it('returns alive, selects a fresh merchant, confirms one protected sale and returns to the captured field cell without renewing the run', () => {
+    const f = autoSellFixture();
+    f.start();
+    expect(f.sent).toContainEqual({ type: 'useItem', itemId: 602 });
+    expect(f.c.supply.snapshot()).toMatchObject({
+      state: 'departing',
+      remainingTrips: 1,
+      actions: 1,
+    });
+    expect(f.sent.some((a) => a.type === 'respawn' || a.type === 'npcTalk')).toBe(false);
+    f.arrival();
+    expect(f.sent).toContainEqual({ type: 'npcTalk', id: 20 });
+    expect(f.c.escape.snapshot().latched).toBe(false);
+    f.openSale();
+    expect(f.sales()).toEqual([{ type: 'shop', mode: 'sell', rows: [{ id: 501, count: 10 }] }]);
+    expect(f.c.engine.running).toBe(false);
+    f.end();
+    f.observations(2, 1250, 1);
+    f.walkUntil(() => f.c.travel.snapshot().state === 'transition');
+    f.packet(new BitWriter().u8(OP.map).string('prt_fild08').finish());
+    f.packet(spawn({ ...player, x: 170, y: 375 }));
+    f.walkUntil(() => f.c.supply.snapshot().state === 'complete');
+    f.advance(600);
+    expect(f.c.engine.running).toBe(true);
+    expect(f.c.engine.player).toMatchObject({ x: 156, y: 374 });
+    expect(f.c.supply.snapshot()).toMatchObject({
+      remainingTrips: 1,
+      spent: 0,
+      reserved: 0,
+      returnDestination: { map: 'prt_fild08', position: { x: 156, y: 374 } },
+    });
+    expect(f.c.engine.settings.automation?.limits).toEqual(f.configured.automation?.limits);
+    expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(1);
+  });
+  it.each([80, 75])('honors hard weight stop %s before departure', (hardStop) => {
+    const f = autoSellFixture('butterfly', hardStop);
+    f.start();
+    expect(f.sent.some((a) => a.type === 'useItem' || a.type === 'npcTalk')).toBe(false);
+    expect(f.c.supply.snapshot().remainingTrips).toBe(2);
+    expect(f.c.engine.running).toBe(false);
+  });
+  it('rechecks the hard stop while the first return is preparing', () => {
+    const f = autoSellFixture('butterfly', 90);
+    f.c.start(f.configured);
+    f.step();
+    f.step();
+    f.observations(14);
+    f.advance(1000);
+    expect(f.sent.some((a) => a.type === 'useItem')).toBe(false);
+    expect(f.c.supply.snapshot().reason).toContain('hard weight stop');
+  });
+  it.each(['stop', 'timeout', 'rejection', 'death', 'disconnect', 'send-throw'] as const)(
+    'never repeats a sent save return after %s',
+    (boundary) => {
+      const f = autoSellFixture();
+      if (boundary === 'send-throw') f.setThrowReturn();
+      f.start();
+      expect(f.c.supply.snapshot().remainingTrips).toBe(1);
+      if (boundary === 'stop') f.c.stop();
+      if (boundary === 'timeout') f.advance(31_000);
+      if (boundary === 'rejection')
+        f.packet(new BitWriter().u8(FEATURE_OP.requestFailure).u8(1).finish());
+      if (boundary === 'death') f.packet(new BitWriter().u8(OP.death).i32(1).finish());
+      if (boundary === 'disconnect') f.c.connect(false);
+      f.advance(1000);
+      expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(1);
+      expect(f.sales()).toHaveLength(0);
+      expect(f.c.engine.running).toBe(false);
+      if (boundary === 'stop') {
+        expect(() => f.c.start(f.configured)).toThrow(/save-point return/);
+        f.arrival();
+        expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(1);
+        expect(f.sent.some((a) => a.type === 'npcTalk')).toBe(false);
+        expect(f.c.engine.running).toBe(false);
+      }
+    },
+  );
+  it('rejects the wrong save map and never sells there', () => {
+    const f = autoSellFixture();
+    f.start();
+    f.arrival('izlude');
+    expect(f.c.supply.snapshot().reason).toContain('different map');
+    expect(f.sales()).toHaveLength(0);
+  });
+  it.each(['stock', 'skill', 'sp'] as const)('waits when return %s is unavailable', (boundary) => {
+    const f = autoSellFixture(boundary === 'stock' ? 'butterfly' : 'returnSkill');
+    if (boundary === 'stock') f.observations(12, 1000, 1);
+    if (boundary === 'skill') f.packet(stats(12, 1000, { maxWeight: 1000, wings: 2 }));
+    if (boundary === 'sp') f.observations(12, 1000, 2, 0);
+    f.start();
+    expect(f.sent.some((a) => a.type === 'useItem' || a.type === 'skill')).toBe(false);
+    expect(f.c.supply.snapshot().state).toBe('waiting');
+  });
+  it('uses the separate learned Return skill while alive and never sends Respawn', () => {
+    const f = autoSellFixture('returnSkill');
+    f.start();
+    expect(f.sent).toContainEqual({ type: 'skill', mode: 'self', skillId: 54, level: 1 });
+    expect(f.sent.some((a) => a.type === 'respawn' || a.type === 'useItem')).toBe(false);
+    f.observations(12, 1000, 2, 90);
+    f.advance(500);
+    expect(f.c.supply.snapshot().state).toBe('departing');
+    expect(f.sent.some((a) => a.type === 'npcTalk')).toBe(false);
+    f.arrival();
+    f.openSale();
+    expect(f.sales()).toHaveLength(1);
+    expect(f.sent.filter((a) => a.type === 'skill')).toHaveLength(1);
+  });
+  it('disarms a page-reloaded supply return with emergency escape off and retains the spent trip allowance', () => {
+    const f = autoSellFixture();
+    expect(f.configured.automation!.escape!.enabled).toBe(false);
+    const run = new PersistentFieldRun(() => 100000);
+    run.begin(f.configured, 'Tester', 'old');
+    f.start();
+    run.observe({
+      sessionId: 'old',
+      connected: true,
+      compatible: true,
+      map: 'prt_fild08',
+      player: { name: 'Tester', dead: false },
+      supplyGuard: f.c.supply.guard(),
+      escape: f.c.escape.snapshot(),
+    });
+    const restored = new PersistentFieldRun(() => 100000);
+    restored.restore(run.checkpoint());
+    const request = restored.resumeFor({
+      sessionId: 'new',
+      connected: true,
+      compatible: true,
+      map: 'prontera',
+      player: { name: 'Tester', dead: false },
+    })!;
+    expect(request.supplyGuard).toMatchObject({
+      interrupted: true,
+      uncertain: true,
+      remainingTrips: 1,
+    });
+    const next = setup(settingsDraft(request.settings), 'prontera', { ...player, x: 103, y: 48 });
+    next.packet(stats(12, 1000, { maxWeight: 1000, wings: 1 }));
+    next.c.start(
+      settingsDraft(request.settings),
+      request.escapeGuard,
+      request.supplyGuard,
+      request.deathRecoveryGuard,
+    );
+    next.advance(2000);
+    expect(next.sent).toEqual([]);
+    expect(next.c.engine.running).toBe(false);
+    expect(next.c.supply.snapshot().remainingTrips).toBe(1);
+  });
+  it.each(['menu', 'missing npc'] as const)(
+    'waits with no sale when %s changes at arrival',
+    (boundary) => {
+      const f = autoSellFixture();
+      f.start();
+      f.arrival('prontera', boundary !== 'missing npc');
+      if (boundary === 'menu') f.openSale(['Buy', 'Different', 'Cancel']);
+      else
+        for (let i = 0; i < 8; i++) {
+          f.observations(12, 1000, 1);
+          f.advance(5000);
+        }
+      expect(f.sales()).toHaveLength(0);
+      expect(f.c.engine.running).toBe(false);
+      expect(f.c.supply.snapshot().state).toBe('waiting');
+    },
+  );
+  it('retains an uncertain sale through Stop and drains only an exact late inventory/zeny receipt', () => {
+    const f = autoSellFixture();
+    f.start();
+    f.arrival();
+    f.openSale();
+    f.c.stop();
+    f.end();
+    f.observations(2, 1249, 1);
+    expect(f.c.supply.uncertain).toBe(true);
+    f.observations(2, 1250, 1);
+    f.advance(1000);
+    expect(f.c.supply.uncertain).toBe(false);
+    expect(f.sales()).toHaveLength(1);
+    expect(f.c.engine.running).toBe(false);
+  });
+});
 describe('controller supply repair regressions', () => {
   it('does not reserve low-stock supply on the departure map before configured field entry', () => {
     const value = { ...settings, map: 'prt_fild08' };

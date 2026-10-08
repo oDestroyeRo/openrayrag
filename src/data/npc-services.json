@@ -5,8 +5,10 @@
     "path": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Kafra.txt",
     "notes": "Baseline source verified; deployed storage menu variant and opening are separately observed below. Other deployed service contracts remain unverified. TeleportCase DropZeny is commented out at this pin; baseline declared fee is zero.",
     "additionalPaths": [
-      "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:52-61",
-      "RoRebuildServer/RoRebuildServer/EntityComponents/Npcs/NpcTraderBase.cs:7-26"
+      "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:48-57",
+      "RoRebuildServer/RoRebuildServer/EntityComponents/Npcs/NpcTraderBase.cs:7-26",
+      "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:2-47,71-87",
+      "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/IzludeShop.txt:2-13"
     ]
   },
   "contracts": [
@@ -804,6 +806,666 @@
         "timeoutMs": 10000
       },
       "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Vendor from Milk Ranch",
+        "anchor": {
+          "x": 73,
+          "y": 134
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 72,
+        "y": 133,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "prontera-milk-ranch-vendor-sell",
+      "name": "prontera · Milk Ranch vendor · Sell items",
+      "contractId": "trader.prontera.milk-ranch-vendor.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:2"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Fruit Gardener",
+        "anchor": {
+          "x": 104,
+          "y": 49
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 103,
+        "y": 48,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "prontera-fruit-gardener-sell",
+      "name": "prontera · Fruit Gardener · Sell items",
+      "contractId": "trader.prontera.fruit-gardener.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:6"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Vegetable Gardener",
+        "anchor": {
+          "x": 48,
+          "y": 58
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 48,
+        "y": 57,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "prontera-vegetable-gardener-sell",
+      "name": "prontera · Vegetable Gardener · Sell items",
+      "contractId": "trader.prontera.vegetable-gardener.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:11"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Butcher",
+        "anchor": {
+          "x": 64,
+          "y": 125
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 63,
+        "y": 124,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "prontera-butcher-sell",
+      "name": "prontera · Butcher · Sell items",
+      "contractId": "trader.prontera.butcher.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:17"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Flower Girl",
+        "anchor": {
+          "x": 58,
+          "y": 182
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 57,
+        "y": 181,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "prontera-flower-girl-west-sell",
+      "name": "prontera · Flower Girl West · Sell items",
+      "contractId": "trader.prontera.flower-girl-west.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:21"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Flower Girl",
+        "anchor": {
+          "x": 113,
+          "y": 42
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 112,
+        "y": 41,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "prontera-flower-girl-south-sell",
+      "name": "prontera · Flower Girl South · Sell items",
+      "contractId": "trader.prontera.flower-girl-south.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:26"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Gift Merchant",
+        "anchor": {
+          "x": 105,
+          "y": 87
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 104,
+        "y": 86,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "prontera-gift-merchant-sell",
+      "name": "prontera · Gift Merchant · Sell items",
+      "contractId": "trader.prontera.gift-merchant.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:31"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Doll Supplier",
+        "anchor": {
+          "x": 248,
+          "y": 153
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 247,
+        "y": 152,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "prontera-doll-supplier-sell",
+      "name": "prontera · Doll Supplier · Sell items",
+      "contractId": "trader.prontera.doll-supplier.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:38"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prontera",
+      "identity": {
+        "kind": 2,
+        "name": "Pet Groomer",
+        "anchor": {
+          "x": 218,
+          "y": 211
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 217,
+        "y": 210,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "prontera-pet-groomer-sell",
+      "name": "prontera · Pet Groomer · Sell items",
+      "contractId": "trader.prontera.pet-groomer.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:44"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "prt_in",
+      "identity": {
+        "kind": 2,
+        "name": "Tool Dealer",
+        "anchor": {
+          "x": 126,
+          "y": 76
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 125,
+        "y": 75,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "prt_in-tool-dealer-sell",
+      "name": "prt_in · Tool Dealer · Sell items",
+      "contractId": "trader.prt_in.tool-dealer.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/PronteraShop.txt:71"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "izlude",
+      "identity": {
+        "kind": 2,
+        "name": "Fruit gardener",
+        "anchor": {
+          "x": 94,
+          "y": 98
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 95,
+        "y": 98,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "izlude-fruit-gardener-sell",
+      "name": "Izlude · Fruit gardener · Sell items",
+      "contractId": "trader.izlude.fruit-gardener.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/IzludeShop.txt:2"
+    },
+    {
+      "version": 1,
+      "sourcePin": "4099e2c000c3c550516760b9c1241595aac9aceb",
+      "map": "izlude",
+      "identity": {
+        "kind": 2,
+        "name": "Butcher",
+        "anchor": {
+          "x": 105,
+          "y": 99
+        },
+        "maxDisplacement": 0
+      },
+      "approach": {
+        "x": 104,
+        "y": 99,
+        "halfWidth": 0,
+        "halfHeight": 0,
+        "interactionRange": 3
+      },
+      "basicSkillLevel": 0,
+      "workflow": {
+        "maxSpend": 0,
+        "minStock": [],
+        "timeoutMs": 10000,
+        "steps": [
+          {
+            "type": "talk",
+            "expectedCost": 0
+          },
+          {
+            "type": "option",
+            "index": 1,
+            "expectedLabel": "Sell",
+            "expectedOptions": [
+              [
+                "Buy",
+                "Sell",
+                "Cancel"
+              ]
+            ],
+            "expectedCost": 0
+          }
+        ]
+      },
+      "id": "izlude-butcher-sell",
+      "name": "Izlude · Butcher · Sell items",
+      "contractId": "trader.izlude.butcher.sell.v1",
+      "outcome": {
+        "type": "shopOpened",
+        "mode": "sell",
+        "timeoutMs": 10000
+      },
+      "sourcePath": "RoRebuildServer/GameConfig/ServerData/Script/Npcs/Shops/IzludeShop.txt:9"
     }
   ],
   "observedVariants": [

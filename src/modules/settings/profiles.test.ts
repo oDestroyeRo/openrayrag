@@ -4,6 +4,7 @@ import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, DEFAULT_ESCAPE } from './settings
 import { MAX_PROFILES, PROFILE_STORAGE_KEY, ProfileStore } from './profiles';
 import { checkedProfile, checkedProfileResult, parseProfileDocumentResult } from './profiles-logic';
 import { CurrentForm, formDocument } from './current-form';
+import { DEFAULT_SUPPLY, type SupplySettings } from '../services/supply-trip';
 
 const settings = () => ({ ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [1002] });
 function fixture() {
@@ -26,6 +27,50 @@ function fixture() {
   };
 }
 describe('named profiles', () => {
+  it('preserves portable auto-sell choices through profile export/import and current-form admission', () => {
+    const f = fixture(),
+      value = {
+        ...settings(),
+        automation: {
+          ...structuredClone(DEFAULT_AUTOMATION),
+          supply: {
+            ...DEFAULT_SUPPLY,
+            enabled: true,
+            stockEnabled: false,
+            weightEnabled: true,
+            merchantMode: 'automatic' as const,
+            transport: 'returnSkill' as const,
+            saveMap: 'prontera',
+            returnMinStock: 3,
+          },
+        },
+      };
+    const saved = f.store.save('Auto sell', 'Tester', value);
+    const imported = fixture().store.import(f.store.export(saved.id))[0]!;
+    expect(imported.settings.automation!.supply).toEqual(value.automation.supply);
+    expect(
+      formDocument({
+        version: 1,
+        revision: 0,
+        selectedProfileId: null,
+        settings: imported.settings,
+      }).settings.automation!.supply,
+    ).toEqual(value.automation.supply);
+    const legacy = {
+      ...value,
+      automation: { ...value.automation, supply: { ...value.automation.supply } as SupplySettings },
+    };
+    delete legacy.automation.supply.merchantMode;
+    delete legacy.automation.supply.transport;
+    delete legacy.automation.supply.saveMap;
+    delete legacy.automation.supply.returnMinStock;
+    expect(f.store.save('Legacy', 'Tester', legacy).settings.automation!.supply).toMatchObject({
+      merchantMode: 'manual',
+      transport: 'travel',
+      saveMap: '',
+      returnMinStock: 1,
+    });
+  });
   it('keeps failed metadata from reading settings and detaches admitted profiles', () => {
     let reads = 0;
     const rejected = {

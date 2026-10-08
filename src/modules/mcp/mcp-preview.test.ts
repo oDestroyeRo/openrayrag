@@ -7,7 +7,10 @@ import { macroExample } from '../automation/macro-ui-logic';
 import { BUILTIN_SERVICES } from '../services/npc-services-logic';
 import type { McpQuery, McpReadContext } from './mcp-logic';
 const planning = vi.hoisted(() => ({ route: vi.fn(async () => []) }));
-vi.mock('../navigation/travel', () => ({ routeBetweenMapsAsync: planning.route }));
+vi.mock('../navigation/travel', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../navigation/travel')>()),
+  routeBetweenMapsAsync: planning.route,
+}));
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();

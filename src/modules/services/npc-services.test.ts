@@ -139,8 +139,8 @@ describe('portable pinned NPC contracts', () => {
     expect(serviceByContractId(storage.contractId)).toEqual(storage);
     expect(serviceByContractId('unverified.v1')).toBeNull();
   });
-  it('has nine verified fee-zero contracts and no transient IDs', () => {
-    expect(BUILTIN_SERVICES).toHaveLength(9);
+  it('has source-backed fee-zero contracts and no transient IDs', () => {
+    expect(BUILTIN_SERVICES).toHaveLength(21);
     for (const s of BUILTIN_SERVICES) {
       expect(validateServiceRequest(s)).toEqual(s);
       expect(
