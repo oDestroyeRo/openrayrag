@@ -23,6 +23,8 @@ import type { WalkGrid } from '../navigation/navigation';
 import { dispositionContextFromStatus } from '../services/disposition-ui';
 import { planDisposition } from '../services/disposition';
 import type { MacroScript, MacroStep } from '../automation/macros';
+import { clientStatus } from '../client/client-status';
+import { clientAttention } from '../client/client-attention-logic';
 
 const player: Entity = {
   id: 1,
@@ -2016,6 +2018,71 @@ describe('persistent field run ownership', () => {
     advance(1000);
     expect(sent.filter((action) => action.type === 'useItem')).toHaveLength(1);
   });
+  it.each([false, true])(
+    'shows item confirmation evidence together with death and respawn enabled=%s',
+    (respawnEnabled) => {
+      const { controller, receive, sent, advance } = setup();
+      const automation = policy();
+      automation.respawn.enabled = respawnEnabled;
+      automation.items = [
+        { itemId: 501, resource: 'hp', belowPercent: 100, minStock: 0, cooldownSeconds: 1 },
+      ];
+      receive({
+        type: 'inventory',
+        items: [{ bagId: 501, itemId: 501, type: 1, count: 4 }],
+        equipment: [],
+        ammoId: -1,
+      });
+      controller.start({ ...settings, automation });
+      advance(7000);
+      const timeout = controller.snapshot();
+      expect(timeout.actionResult.reason).toContain('Red Potion (#501)');
+      expect(timeout.actionResult.reason).toContain('stock 4 → 4');
+      expect(timeout.actionResult.reason).toContain('inventory removal update missing');
+      expect(timeout.actionResult.reason).toContain('item stock did not decrease');
+      receive({ type: 'death', id: 1 });
+      advance(1000);
+      const dead = controller.snapshot();
+      const before = structuredClone(dead);
+      const context = {
+        fieldRequested: true,
+        held: true,
+        limitReason: '',
+        loginBusy: false,
+      };
+      const view = clientStatus(dead, context);
+      expect(view.state).toBe('WAITING');
+      expect(view.reason).toContain('Character is dead.');
+      expect(view.reason).toContain(
+        `Automatic respawn is ${respawnEnabled ? 'enabled' : 'disabled'}.`,
+      );
+      expect(view.reason).toContain('Red Potion (#501)');
+      expect(view.reason).toContain('Waiting for a confirmed result');
+      const draft = {
+        ...settings,
+        automation: { ...automation, respawn: { ...automation.respawn, enabled: !respawnEnabled } },
+      };
+      const attention = clientAttention(dead, { ...context, fresh: true, setupReason: '' }, draft);
+      expect(attention).toContainEqual(
+        expect.objectContaining({
+          id: 'death',
+          title: 'Character is dead',
+          detail: view.reason,
+          action: 'recovery',
+        }),
+      );
+      expect(attention).toContainEqual(
+        expect.objectContaining({
+          id: 'action',
+          detail: timeout.actionResult.reason,
+        }),
+      );
+      expect(dead).toEqual(before);
+      expect(sent.filter((action) => action.type === 'useItem')).toHaveLength(1);
+      expect(sent.some((action) => action.type === 'respawn')).toBe(false);
+      expect(dead).toMatchObject({ runRequested: true, deaths: 1, state: 'waiting' });
+    },
+  );
   it('waits for revival when automatic respawn is disabled and retains the death budget', () => {
     const { controller, receive, sent, step } = setup();
     controller.start(settings);
