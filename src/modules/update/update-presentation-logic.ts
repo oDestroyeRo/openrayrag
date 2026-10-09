@@ -1,7 +1,14 @@
 import type { LogEntry } from '../automation/engine';
 import type { UpdateStep } from './update-continuation-logic';
 
-export type UpdateTransition = UpdateStep | 'retry' | 'deferred' | 'cancelled' | 'complete';
+export type UpdateTransition =
+  | UpdateStep
+  | 'retry'
+  | 'deferred'
+  | 'cancelled'
+  | 'restore'
+  | 'recovered'
+  | 'complete';
 export interface UpdateDiagnostic {
   readonly stage: UpdateTransition;
   readonly installedVersion: string | null;

@@ -233,7 +233,7 @@ describe('Bot-only catalogue startup', () => {
     expect(owner.canInstall('0.18.0', true)).toBe(true);
     expect(f.runtime.snapshot().elapsedSeconds).toBeGreaterThan(60);
   });
-  it('completes the owner/native acknowledgement handoff through the actual entry before heartbeat expiry', async () => {
+  it('reaches final native acknowledgement through the actual entry while installation stays pending until restart', async () => {
     const f = await fixture(async () => assets);
     await enterGame(f.runtime);
     await vi.advanceTimersByTimeAsync(1200);
@@ -254,6 +254,10 @@ describe('Bot-only catalogue startup', () => {
     const id = 'a'.repeat(32),
       nonce = 'b'.repeat(32);
     let final = false;
+    let failRestart!: (error: Error) => void;
+    const restart = new Promise<never>((_resolve, reject) => {
+      failRestart = reject;
+    });
     const original = f.invoke.getMockImplementation()!;
     let owner: UpdateContinuationOwner;
     f.invoke.mockImplementation(async (command, args) => {
@@ -272,13 +276,14 @@ describe('Bot-only catalogue startup', () => {
       if (command === 'update_install') {
         bridge.maintenance(nonce, 'commit');
         await flush();
-        return final;
+        // Native installation does not resolve on final ACK: restart exits the old process.
+        return final ? restart : false;
       }
       if (command === 'update_release') bridge.maintenance(nonce, false);
       return undefined;
     });
     owner = new UpdateContinuationOwner(native, () => id);
-    const installed = owner.install(
+    const installation = owner.install(
       field,
       {
         flush: async () =>
@@ -299,9 +304,11 @@ describe('Bot-only catalogue startup', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(native).toHaveBeenCalledWith('update_reserve', expect.anything());
     expect(final).toBe(true);
-    await installed;
-    expect(owner.presentation().reason).toContain('complete');
-    expect(f.runtime.controller.preparingUpdate).toBe(false);
+    expect(owner.presentation()).toMatchObject({ active: true });
+    expect(owner.presentation().reason).toContain('· confirmation ·');
+    expect(owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
+    expect(native.mock.calls.some(([command]) => command === 'update_release')).toBe(false);
+    expect(native.mock.calls.some(([command]) => command === 'update_cancel')).toBe(false);
     expect(field.metrics.deaths).toBe(0);
     expect(f.runtime.snapshot().elapsedSeconds).toBeLessThan(6);
     expect(
@@ -309,6 +316,10 @@ describe('Bot-only catalogue startup', () => {
         .snapshot()
         .log.some((entry) => entry.text.includes('Waiting for the client connection')),
     ).toBe(false);
+    failRestart(new Error('synthetic restart failure'));
+    await installation;
+    expect(owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
+    expect(f.runtime.controller.preparingUpdate).toBe(false);
   });
   it('exposes the updater lifecycle through the actual Bot-only page entry', async () => {
     const f = await fixture(async () => assets);

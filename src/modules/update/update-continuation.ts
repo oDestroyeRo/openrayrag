@@ -43,6 +43,7 @@ export {
 /** Own update installation and its one-shot claim. Stop invalidates every outstanding reply. */
 export class UpdateContinuationOwner {
   private continuation: UpdateContinuation | null = null;
+  private continuationSource: 'startup' | 'recovery' | null = null;
   private reply: Reply | null = null;
   private epoch = 0;
   private restoring = false;
@@ -120,6 +121,7 @@ export class UpdateContinuationOwner {
       fieldRun.observe(continuation.runtime.status, continuation.runtime.frozenAt);
     }
     this.continuation = continuation;
+    this.continuationSource = null;
     this.blocked = false;
     return structuredClone(continuation);
   }
@@ -133,7 +135,15 @@ export class UpdateContinuationOwner {
     if (epoch !== this.epoch || this.stoppedByUser || input === null) return null;
     const continuation = validateUpdateContinuation(input);
     if (retired) fieldRun.stop();
-    return this.claim(continuation, fieldRun);
+    const claimed = this.claim(continuation, fieldRun);
+    if (retired && claimed) {
+      this.continuationSource = 'recovery';
+      this.transition(
+        'restore',
+        'Update restart was not confirmed. Waiting for the same character to restore the interrupted run.',
+      );
+    }
+    return claimed;
   }
   async startup(fieldRun: PersistentFieldRun): Promise<UpdateContinuation | null> {
     const stopped = await this.invoke('update_startup_stopped').catch((error) => {
@@ -142,7 +152,17 @@ export class UpdateContinuationOwner {
     });
     this.stoppedByUser ||= stopped === true;
     if (this.stoppedByUser) return null;
-    return this.claimFrom(this.invoke('update_continuation'), fieldRun);
+    const epoch = this.epoch;
+    const claimed = await this.claimFrom(this.invoke('update_continuation'), fieldRun);
+    if (epoch === this.epoch && claimed && this.continuation) {
+      // Only native startup consumes the version- and launch-bound restart checkpoint.
+      this.continuationSource = 'startup';
+      this.transition(
+        'restore',
+        'Verified update restart claimed. Waiting for character continuation.',
+      );
+    }
+    return claimed;
   }
   /** Own the entire update transaction; the window adapter only presents it. */
   async install(
@@ -230,8 +250,8 @@ export class UpdateContinuationOwner {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       if (!installed) throw new Error('Update confirmation is still pending.');
-      this.deferrals = 0;
-      this.transition('complete', 'Verified update installation completed.');
+      // Successful native restart exits this process while update_install stays pending.
+      // A truthy compatibility reply alone cannot prove installation or continuation.
     } catch (error) {
       if (epoch === this.epoch) {
         const message = deferredReason(step, error);
@@ -366,7 +386,17 @@ export class UpdateContinuationOwner {
       });
       if (epoch !== this.epoch || this.continuation !== c) return false;
       if (request) fieldRun.completeResume(request, true);
+      if (this.continuationSource === 'startup') {
+        this.deferrals = 0;
+        this.transition('complete', 'Verified update restart and run continuation completed.');
+      } else if (this.continuationSource === 'recovery') {
+        this.transition(
+          'recovered',
+          'Interrupted run continuation confirmed. Update restart was not confirmed.',
+        );
+      }
       this.continuation = null;
+      this.continuationSource = null;
       return true;
     } catch (error) {
       if (request && epoch === this.epoch) fieldRun.completeResume(request, false);
@@ -386,6 +416,7 @@ export class UpdateContinuationOwner {
     }
     this.epoch++;
     this.continuation = null;
+    this.continuationSource = null;
     this.blocked = false;
     if (this.reply) {
       clearTimeout(this.reply.timer);

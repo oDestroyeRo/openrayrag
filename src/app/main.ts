@@ -266,9 +266,7 @@ function presentUpdateContinuation(continuation: UpdateContinuation | null): voi
   form.restore(continuation.form);
   selectUpdateAccount();
   accountBaseline = accountFields();
-  message(
-    'Update complete. Settings restored. Waiting for the same account and character to continue.',
-  );
+  message('Settings restored. Waiting for the same account and character to continue.');
   updateButtons();
 }
 function runActive(): boolean {
@@ -1290,7 +1288,7 @@ function render(s: ValidatedGameStatus): void {
       .then((resumed) => {
         if (resumed) {
           configureReconnect();
-          message('Update complete. Continuing with the same settings and remaining limits.');
+          message('Continuing with the same settings and remaining limits.');
           updateButtons();
         }
       })
@@ -1635,10 +1633,7 @@ if (native) {
           !updateContinuation.stopped
         )
           await signIn();
-        else
-          message(
-            'Update complete. Settings restored. Sign in to the same account and character to continue.',
-          );
+        else message('Settings restored. Sign in to the same account and character to continue.');
       }
     } catch {
       element<HTMLButtonElement>('forget-login').hidden = false;

@@ -92,6 +92,44 @@ function fixture() {
 }
 afterEach(() => vi.useRealTimers());
 describe('one-shot updater continuation owner', () => {
+  it('records completion only after a native startup claim and matching successful restore acknowledgement', async () => {
+    const f = fixture();
+    f.invoke.mockImplementation(async (command) =>
+      command === 'update_continuation' ? f.continuation : false,
+    );
+    expect(await f.owner.startup(f.field)).not.toBeNull();
+    expect(f.owner.presentation().reason).toContain('restore');
+    expect(f.owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
+    const resumed = f.owner.resume(f.fresh, account, f.field);
+    f.owner.restored({ requestId: 'b'.repeat(32), success: true });
+    expect(f.owner.pending).toBe(true);
+    expect(f.owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
+    f.owner.restored({ requestId, success: true });
+    expect(await resumed).toBe(true);
+    expect(f.owner.presentation().reason).toContain('Verified update restart');
+    expect(f.owner.history.filter((entry) => entry.text.includes('· complete ·'))).toHaveLength(1);
+    expect(await f.owner.resume(f.fresh, account, f.field)).toBe(false);
+    expect(f.owner.history.filter((entry) => entry.text.includes('· complete ·'))).toHaveLength(1);
+  });
+  it.each(['rejected', 'timeout', 'Stop'])(
+    'does not record completion after %s restoration',
+    async (failure) => {
+      vi.useFakeTimers();
+      const f = fixture();
+      f.invoke.mockImplementation(async (command) =>
+        command === 'update_continuation' ? f.continuation : false,
+      );
+      await f.owner.startup(f.field);
+      const resumed = f.owner.resume(f.fresh, account, f.field);
+      const rejected = expect(resumed).rejects.toThrow();
+      if (failure === 'rejected') f.owner.restored({ requestId, success: false });
+      else if (failure === 'timeout') await vi.advanceTimersByTimeAsync(500);
+      else await f.owner.cancel(true);
+      await rejected;
+      f.owner.restored({ requestId, success: true });
+      expect(f.owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
+    },
+  );
   it('does not invent updater activity for an ordinary bot Stop', async () => {
     const f = fixture();
     await f.owner.cancel(true);
@@ -146,6 +184,7 @@ describe('one-shot updater continuation owner', () => {
     f.owner.restored({ requestId, success: true });
     expect(await resumed).toBe(true);
     expect(f.owner.pending).toBe(false);
+    expect(f.owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
     expect(await f.owner.resume(f.fresh, account, f.field)).toBe(false);
   });
   it('does not auto-login without a saved matching account', () => {
@@ -563,7 +602,7 @@ describe('update installation transaction', () => {
     f.adapter.game.mockReturnValue({ open: false, status: f.fresh });
     f.invoke.mockImplementation(async (command) => {
       if (command === 'update_reserve') return f.nonce;
-      if (command === 'update_install') return true;
+      if (command === 'update_install') throw new Error('synthetic restart failure');
       if (command === 'update_continuation') return recovery.promise;
       return undefined;
     });
@@ -585,6 +624,8 @@ describe('update installation transaction', () => {
     const resumed = f.owner.resume(f.fresh, account, f.field);
     f.owner.restored({ requestId, success: true });
     expect(await resumed).toBe(true);
+    expect(f.owner.presentation().reason).toContain('· recovered ·');
+    expect(f.owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
   });
   it('releases even when release fails, retires failed recovery and cancels the remaining native ownership', async () => {
     const f = installationFixture();
