@@ -433,7 +433,7 @@ export class CompanionController {
   }
 
   constructor(
-    private readonly transport: (action: Action | WorldAction) => void,
+    private readonly transport: (action: Action | WorldAction) => unknown,
     private readonly now = Date.now,
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid,
     sendSocial: (action: ManualSocialAction) => void = () => {
@@ -468,6 +468,7 @@ export class CompanionController {
           ? this.world.partyActors.get(partyMemberId(members[0]!.memberId))
           : null;
       },
+      () => this.connectionEpoch,
     );
     this.partyFollow = new PartyFollowRuntime(now);
     this.engine.partyFollowBinding = () =>
@@ -566,7 +567,7 @@ export class CompanionController {
     this.refine = new ManualRefine(sendRefine, now);
     this.warp = new ManualWarp(sendWarp, now, warpStore);
   }
-  private send(action: Action | WorldAction): void {
+  private send(action: Action | WorldAction): unknown {
     if (action.type !== 'stop' && this.travel?.teleportPending)
       throw new Error('Waiting for the sent Database teleport to settle or reconnect.');
     if (
@@ -600,7 +601,7 @@ export class CompanionController {
           : null;
     }
     if (action.type !== 'respawn') this.quietUntil = Math.max(this.quietUntil, this.now() + 2_000);
-    this.transport(action);
+    return this.transport(action);
   }
   private partyHealTick(): boolean {
     if (this.updateSuspended) return false;
@@ -814,7 +815,8 @@ export class CompanionController {
     this.supplyCurrencyFresh = false;
     this.connectionEpoch++;
     try {
-      this.pause('Waiting for the game to reconnect.');
+      // The transport is already closed; retain receipts without another send.
+      this.pause('Waiting for the game to reconnect.', 0, false);
     } finally {
       this.travel.connectionChanged();
       this.partyFollow.resetEvidence(
@@ -915,7 +917,7 @@ export class CompanionController {
     this.pause(reason);
   }
   /** Retain the requested field run while yielding ownership of commands. */
-  pause(reason: string, durationMs = 0): void {
+  pause(reason: string, durationMs = 0, sendStop = true): void {
     this.partyHeal.cancel(reason);
     this.supply.interrupt(reason);
     this.supplyIntent = null;
@@ -932,11 +934,12 @@ export class CompanionController {
     this.escape.cancel(reason);
     this.captureActionFailure();
     this.cancelOwners(reason);
-    this.engine.stop(reason);
+    this.engine.stop(reason, sendStop);
     this.captureActionFailure();
     this.yieldUntil = Math.max(this.yieldUntil, this.now() + durationMs);
     this.waitingReason = reason;
-    if (externalActive && !engineStops && this.engine.connected) this.send({ type: 'stop' });
+    if (sendStop && externalActive && !engineStops && this.engine.connected)
+      this.send({ type: 'stop' });
   }
   /** Only trusted input in the official game document calls this hook. */
   manualInput(): void {

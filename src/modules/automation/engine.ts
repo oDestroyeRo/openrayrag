@@ -72,7 +72,12 @@ import {
   type SettingsInput as Settings,
   type AutomationSettingsInput as AutomationSettings,
 } from '../settings/settings';
-import { admitDrop, type DomainDrop } from './automation-logic';
+import {
+  admitDrop,
+  ITEM_DIAGNOSTIC_STATUSES,
+  type DomainDrop,
+  type ItemAttemptDiagnostic,
+} from './automation-logic';
 import {
   acceptsMonster,
   acceptsLoot,
@@ -179,6 +184,7 @@ export interface Snapshot {
   runIntent: boolean;
   lootStats: Array<{ itemId: number; count: number }>;
   actionResult: ActionResult;
+  itemAttempt?: ItemAttemptDiagnostic | null;
 }
 export type Action =
   | { type: 'attack' | 'pickup'; id: number }
@@ -427,16 +433,65 @@ export class BotEngine {
     this.automation.reconcileSkill(sequence, motion, 1);
   }
   constructor(
-    private readonly send: (action: Action) => void,
+    private readonly send: (action: Action) => unknown,
     private readonly now = Date.now,
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid,
     private readonly partyBinding: (entityId: number) => PartyActorBinding | null = () => null,
+    private readonly connectionGeneration: () => number = () => 0,
   ) {
     this.castAvailability = new CastAvailability(this.now);
     this.automation = new AutomationScheduler(
       (a) => this.send(a),
       this.now,
       (a) => this.actionIdentity(a),
+      {
+        connection: this.connectionGeneration,
+        context: () => {
+          const p = this.player;
+          const conditions: ActorPredicate[] = ITEM_DIAGNOSTIC_STATUSES.map(({ id }) => ({
+            field: 'actorStatus',
+            actor: { scope: 'self' },
+            statusId: id,
+            operator: 'eq',
+            value: true,
+          }));
+          const evaluate = actorPredicateEvaluator(this.actorObservation(conditions));
+          return {
+            connection: this.connectionGeneration(),
+            connected: this.connected,
+            compatible: this.compatible,
+            life: !p ? 'unavailable' : p.dead || p.hp <= 0 ? 'dead' : 'alive',
+            posture:
+              this.character.sitting === null
+                ? 'unknown'
+                : this.character.sitting
+                  ? 'sitting'
+                  : 'standing',
+            cast: this.observedOwnCast
+              ? 'observed'
+              : this.observedOwnCastSettled()
+                ? 'none-observed'
+                : 'settling',
+            statuses: ITEM_DIAGNOSTIC_STATUSES.map(({ id }, index) => {
+              const state = evaluate(conditions[index]!).state;
+              return {
+                id,
+                state:
+                  state === 'matched'
+                    ? 'observed'
+                    : state === 'unmatched'
+                      ? 'not-observed'
+                      : 'unknown',
+              };
+            }),
+            serverFrameAgeMs:
+              this.lastFrame > 0 && this.now() >= this.lastFrame
+                ? Math.min(60_000, this.now() - this.lastFrame)
+                : null,
+          };
+        },
+        note: (text) => this.note(text),
+      },
     );
     this.actionReceipts = this.automation;
     this.observations = new ActorObservations(this.now);
@@ -982,6 +1037,12 @@ export class BotEngine {
     }
   }
   private apply(e: GameEvent | FeatureEvent): void {
+    if (
+      ['heal', 'hit', 'death', 'resurrection', 'map', 'enter', 'clear', 'spawn', 'remove'].includes(
+        e.type,
+      )
+    )
+      this.automation.observeItemEvent(e, this.playerId);
     this.observations.apply(e, undefined, this.player?.id ?? null);
     if (
       this.retreatTask &&
@@ -4348,6 +4409,7 @@ export class BotEngine {
       runIntent: this.runIntent,
       lootStats: [...this.lootStats].slice(0, 128).map(([itemId, count]) => ({ itemId, count })),
       actionResult: { ...this.automation.result },
+      itemAttempt: this.automation.itemAttempt,
     };
   }
 }

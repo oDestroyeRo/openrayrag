@@ -45,13 +45,13 @@ function spawn(e = player, entryType = 1) {
     .finish();
   return new BitWriter().u8(OP.spawn).u8(entryType).i32(body.length).take(body).finish();
 }
-function resources(full = true) {
+function resources(full = true, itemId = 717) {
   const f = new BitWriter().u8(56);
   for (const v of [15, 15, 10000, 1, 1, 1, 1, 1, 1, 0, 0, 0]) f.i32(v);
   for (const v of [100, 100, 200, 200, ...Array(16).fill(1), 2000]) f.i32(v);
   f.f32(0.5).i32(100).i32(0);
   if (!full) return f.bool(false).bool(false).finish();
-  f.bool(true).i16(1).i16(55).u8(4).i16(0).bool(true).u8(1).i32(1).i32(717).i16(3).i32(0).u8(0);
+  f.bool(true).i16(1).i16(55).u8(4).i16(0).bool(true).u8(1).i32(1).i32(itemId).i16(3).i32(0).u8(0);
   for (let i = 0; i < 10; i++) f.i32(0);
   return f.i32(-1).finish();
 }
@@ -125,6 +125,70 @@ function deferred<T>() {
   return { promise, resolve };
 }
 describe('clientless shared-controller runtime', () => {
+  it('distinguishes an unsettled native item write from accepted send without consumption', async () => {
+    const f = fixture();
+    await f.ready();
+    await f.frame(resources(true, 501));
+    const write = deferred<unknown>();
+    const invoke = f.invoke.getMockImplementation()!;
+    f.invoke.mockImplementation((name, args) =>
+      name === 'direct_send' ? write.promise : invoke(name, args),
+    );
+    f.runtime.perform('command', { type: 'useItem', itemId: 501 });
+    expect(f.runtime.snapshot().itemAttempt).toMatchObject({ send: 'pending', outcome: 'waiting' });
+    write.resolve(undefined);
+    await flush();
+    expect(f.runtime.snapshot().itemAttempt).toMatchObject({
+      send: 'accepted',
+      outcome: 'waiting',
+    });
+    f.step(6000);
+    await f.runtime.cycle();
+    const attempt = f.runtime.snapshot().itemAttempt;
+    expect(attempt).toMatchObject({ send: 'accepted', outcome: 'cancelled' });
+    expect(f.runtime.snapshot().actionResult.status).toBe('failed');
+    expect(f.writes().filter((packet) => packet[0] === FEATURE_OP.useItem)).toHaveLength(1);
+    await f.frame(new BitWriter().u8(OP.death).i32(0).finish());
+    expect(f.runtime.snapshot().itemAttempt).toMatchObject({
+      context: { life: 'alive' },
+      received: { ownState: 1 },
+      outcome: 'cancelled',
+    });
+    expect(attempt?.context?.life).toBe('alive');
+  });
+  it('reports uncertain native item dispatch without retaining private transport errors', async () => {
+    const f = fixture();
+    await f.ready();
+    await f.frame(resources(true, 501));
+    const invoke = f.invoke.getMockImplementation()!;
+    f.invoke.mockImplementation((name, args) =>
+      name === 'direct_send'
+        ? Promise.reject(new Error('private-account-token-and-native-path'))
+        : invoke(name, args),
+    );
+    f.runtime.perform('command', { type: 'useItem', itemId: 501 });
+    await flush();
+    const snapshot = f.runtime.snapshot();
+    expect(snapshot.itemAttempt?.send).toBe('uncertain');
+    expect(JSON.stringify(snapshot)).not.toContain('private-account-token-and-native-path');
+    expect(f.writes().filter((packet) => packet[0] === FEATURE_OP.useItem)).toHaveLength(1);
+    expect(f.runtime.controller.engine.actionReceipts.receipt?.action.type).toBe('useItem');
+  });
+  it('settles a failed non-item native write without trying Stop on the closed connection', async () => {
+    const f = fixture();
+    await f.ready();
+    const invoke = f.invoke.getMockImplementation()!;
+    f.invoke.mockImplementation((name, args) =>
+      name === 'direct_send'
+        ? Promise.reject(new Error('private-transport-failure'))
+        : invoke(name, args),
+    );
+    f.runtime.perform('command', { type: 'sit', sitting: true });
+    await flush();
+    expect(f.runtime.snapshot()).toMatchObject({ connected: false, itemAttempt: null });
+    expect(f.writes().filter((packet) => packet[0] === FEATURE_OP.sit)).toHaveLength(1);
+    expect(f.writes().filter((packet) => packet[0] === OP.stop)).toHaveLength(0);
+  });
   it('attributes an automatic Stop to its limit and rejects invalid action/cause pairs before controller effects', async () => {
     const f = fixture();
     await f.ready();

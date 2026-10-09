@@ -13,7 +13,7 @@ import {
 
 /** Both transport modes use this controller and exactly these action encoders. */
 export function wireController(
-  send: (packet: Uint8Array) => void,
+  send: (packet: Uint8Array) => unknown,
   store: ConstructorParameters<typeof CompanionController>[8],
   now = Date.now,
 ): CompanionController {

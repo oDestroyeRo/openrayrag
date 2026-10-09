@@ -85,7 +85,9 @@ export class DirectRuntime {
       (packet) => {
         this.lease.assertDispatch();
         if (!this.opened || this.ended) throw new Error('Bot connection closed.');
-        void this.send(packet).catch(() => {});
+        const write = this.send(packet);
+        void write.catch(() => {});
+        return write;
       },
       {
         read: () => port.store?.read() ?? false,

@@ -52,11 +52,17 @@ const monster: Entity = {
 };
 const grid: WalkGrid = { width: 200, height: 200, walkable: () => true };
 const settings = { ...DEFAULT_SETTINGS, map: 'prt_fild08', targets: [4000] };
-function setup(walkGrid = grid) {
+function setup(
+  walkGrid = grid,
+  transport?: (action: Action | ControllerAction) => void | Promise<unknown>,
+) {
   let now = 100_000;
   const sent: Array<Action | ControllerAction> = [];
   const controller = new CompanionController(
-    (action) => sent.push(action),
+    (action) => {
+      sent.push(action);
+      return transport?.(action);
+    },
     () => now,
     (map) => (map === 'unknown' ? null : walkGrid),
   );
@@ -2036,6 +2042,108 @@ describe('persistent field run ownership', () => {
     receive({ type: 'inventoryDelta', add: false, bagId: 501, change: 1, weight: 10 });
     advance(1000);
     expect(sent.filter((action) => action.type === 'useItem')).toHaveLength(1);
+  });
+  it('retains bounded dispatch and receive evidence for an unconfirmed item', () => {
+    const f = setup();
+    const automation = policy();
+    automation.items = [
+      { itemId: 501, resource: 'hp', belowPercent: 100, minStock: 0, cooldownSeconds: 1 },
+    ];
+    f.receive({
+      type: 'inventory',
+      items: [{ bagId: 501, itemId: 501, type: 1, count: 4 }],
+      equipment: [],
+      ammoId: -1,
+    });
+    f.controller.start({ ...settings, automation });
+    f.advance(1000);
+    f.receive({ type: 'heal', id: 1, hp: 95, maxHp: 100 });
+    f.receive({ type: 'heal', id: 2, hp: 9, maxHp: 10 });
+    f.advance(6000);
+    const attempt = f.controller.snapshot().itemAttempt;
+    expect(attempt).toMatchObject({
+      sequence: 1,
+      itemId: 501,
+      send: 'accepted',
+      outcome: 'unconfirmed',
+      context: {
+        connection: f.controller.connectionGeneration,
+        connected: true,
+        compatible: true,
+        life: 'alive',
+        cast: 'none-observed',
+        statuses: [2, 3, 4, 10, 26, 28].map((id) => ({ id, state: 'unknown' })),
+      },
+      received: { inventory: 0, removals: 0, ownResources: 1, ownState: 0, rejections: 0 },
+    });
+    expect(JSON.stringify(attempt)).not.toContain(player.name);
+    expect(
+      f.controller.snapshot().log.some((entry) => entry.text.includes('Local send accepted')),
+    ).toBe(true);
+    expect(f.sent.filter((action) => action.type === 'useItem')).toHaveLength(1);
+    f.packet(
+      new BitWriter().u8(FEATURE_OP.inventoryDelta).bool(false).i32(501).i16(1).i32(10).bool(false),
+    );
+    expect(f.controller.snapshot().itemAttempt?.outcome).toBe('late-confirmed');
+    expect(f.sent.filter((action) => action.type === 'useItem')).toHaveLength(1);
+  });
+  it.each([0, 1100])('keeps observed status hints distinct from unknown after %sms', (elapsed) => {
+    const f = setup();
+    const automation = policy();
+    automation.items = [
+      { itemId: 501, resource: 'hp', belowPercent: 100, minStock: 0, cooldownSeconds: 1 },
+    ];
+    f.receive({ type: 'spawn', entity: { ...player, statuses: [] } });
+    f.receive({ type: 'status', id: 1, statusId: 26, seconds: 1 });
+    f.receive({
+      type: 'inventory',
+      items: [{ bagId: 501, itemId: 501, type: 1, count: 4 }],
+      equipment: [],
+      ammoId: -1,
+    });
+    f.advance(elapsed);
+    f.controller.start({ ...settings, automation });
+    f.step();
+    const attempt = f.controller.snapshot().itemAttempt!;
+    expect(attempt.context?.statuses).toContainEqual({
+      id: 26,
+      state: elapsed === 0 ? 'observed' : 'unknown',
+    });
+    expect(attempt.context?.statuses).toContainEqual({ id: 28, state: 'not-observed' });
+    attempt.context!.statuses[0]!.state = 'observed';
+    attempt.received.removals = 999;
+    expect(f.controller.snapshot().itemAttempt?.context?.statuses[0]?.state).toBe('not-observed');
+    expect(f.controller.snapshot().itemAttempt?.received.removals).toBe(0);
+  });
+  it('does not count a replacement connection as responses to the former item dispatch', () => {
+    const f = setup();
+    const automation = policy();
+    automation.items = [
+      { itemId: 501, resource: 'hp', belowPercent: 100, minStock: 0, cooldownSeconds: 1 },
+    ];
+    const inventory: FeatureEvent = {
+      type: 'inventory',
+      items: [{ bagId: 501, itemId: 501, type: 1, count: 4 }],
+      equipment: [],
+      ammoId: -1,
+    };
+    f.receive(inventory);
+    f.controller.start({ ...settings, automation });
+    f.advance(7000);
+    const prior = f.controller.snapshot().itemAttempt!;
+    f.controller.disconnect();
+    f.controller.connect(true);
+    f.receive(
+      { type: 'enter', id: 1, map: 'prt_fild08' },
+      { type: 'spawn', entity: { ...player } },
+    );
+    f.receive(inventory, { type: 'sp', sp: 10, maxSp: 20 });
+    f.receive({ type: 'inventoryDelta', add: false, bagId: 501, change: 1, weight: 10 });
+    const current = f.controller.snapshot().itemAttempt!;
+    expect(current.context?.connection).toBe(prior.context?.connection);
+    expect(current.context?.connection).not.toBe(f.controller.connectionGeneration);
+    expect(current.received).toEqual(prior.received);
+    expect(f.sent.filter((action) => action.type === 'useItem')).toHaveLength(1);
   });
   it.each([false, true])(
     'shows item confirmation evidence together with death and respawn enabled=%s',

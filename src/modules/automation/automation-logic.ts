@@ -19,7 +19,7 @@ import type {
   AutomationPolicy as AutomationSettings,
   AutomationSettingsInput,
 } from '../settings/settings';
-import type { Entity, Drop } from '../protocol/protocol';
+import type { Entity, Drop, GameEvent } from '../protocol/protocol';
 import {
   actorPredicateEvaluator,
   type ActorObservationSnapshot,
@@ -121,6 +121,84 @@ export interface ItemConfirmationObservation {
   count: Quantity | null;
   inventoryAdvanced: boolean;
   removalObserved: boolean;
+}
+
+/** Observed client hints, never the server's private action-readiness flags. */
+export const ITEM_DIAGNOSTIC_STATUSES = [
+  { id: 2, name: 'Stun' },
+  { id: 3, name: 'Sleep' },
+  { id: 4, name: 'Frozen' },
+  { id: 10, name: 'Stone' },
+  { id: 26, name: 'Hiding' },
+  { id: 28, name: 'Cloaking' },
+] as const;
+
+export interface ItemDispatchContext {
+  connection: number;
+  connected: boolean;
+  compatible: boolean;
+  life: 'alive' | 'dead' | 'unavailable';
+  posture: 'sitting' | 'standing' | 'unknown';
+  cast: 'observed' | 'settling' | 'none-observed';
+  statuses: Array<{
+    id: (typeof ITEM_DIAGNOSTIC_STATUSES)[number]['id'];
+    state: 'observed' | 'not-observed' | 'unknown';
+  }>;
+  serverFrameAgeMs: number | null;
+}
+
+export interface ItemAttemptDiagnostic {
+  sequence: number;
+  itemId: ItemId;
+  since: Milliseconds;
+  context: ItemDispatchContext | null;
+  send: 'pending' | 'accepted' | 'uncertain';
+  outcome: 'waiting' | 'confirmed' | 'late-confirmed' | 'rejected' | 'unconfirmed' | 'cancelled';
+  received: {
+    inventory: number;
+    removals: number;
+    ownResources: number;
+    ownState: number;
+    rejections: number;
+  };
+}
+
+export function itemEvidenceCategory(
+  event: GameEvent | { type: 'map' | 'resurrection' },
+  playerId: number | null,
+): keyof ItemAttemptDiagnostic['received'] | null {
+  if (event.type === 'inventory' || event.type === 'inventoryItem') return 'inventory';
+  if (event.type === 'inventoryDelta') return event.add ? 'inventory' : 'removals';
+  if (['featureError', 'requestFailure', 'skillFailure'].includes(event.type)) return 'rejections';
+  if (event.type === 'stats' || event.type === 'sp') return 'ownResources';
+  if (playerId === null) return null;
+  if ((event.type === 'heal' || event.type === 'hit') && event.id === playerId)
+    return 'ownResources';
+  if (
+    event.type === 'map' ||
+    event.type === 'clear' ||
+    (event.type === 'spawn' && event.entity.id === playerId) ||
+    ([
+      'death',
+      'resurrection',
+      'remove',
+      'castStart',
+      'castExtend',
+      'castStop',
+      'status',
+      'sit',
+    ].includes(event.type) &&
+      'id' in event &&
+      event.id === playerId)
+  )
+    return 'ownState';
+  return null;
+}
+
+/** Closed fields keep account names, raw frames and private transport errors out of history. */
+export function itemAttemptSummary(attempt: ItemAttemptDiagnostic): string {
+  const context = attempt.context;
+  return `Item attempt #${attempt.sequence}, ${itemName(attempt.itemId)} (#${attempt.itemId}): Local send ${attempt.send}; outcome ${attempt.outcome}. ${context ? `Connection ${context.connection}, ${context.connected && context.compatible ? 'verified transport' : 'transport unavailable'}, ${context.life}, posture ${context.posture}, cast ${context.cast}, server frame age ${context.serverFrameAgeMs ?? 'unknown'}ms; ${context.statuses.map((status) => `${ITEM_DIAGNOSTIC_STATUSES.find((row) => row.id === status.id)!.name} ${status.state}`).join(', ')}. ` : ''}Received inventory ${attempt.received.inventory}, removals ${attempt.received.removals}, own resources ${attempt.received.ownResources}, own state ${attempt.received.ownState}, rejections ${attempt.received.rejections}. Local send acceptance does not confirm consumption.`;
 }
 
 /** Bounded observations explain missing confirmation without asserting consumption. */

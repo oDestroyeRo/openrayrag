@@ -682,6 +682,108 @@ describe('captured action receipts', () => {
       ammoId: -1,
     };
   }
+  it('keeps native write completion separate from an earlier server consumption receipt', async () => {
+    let resolve!: () => void;
+    const write = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const state = new CharacterState();
+    state.apply(inventory(), 1);
+    const scheduler = new AutomationScheduler(
+      () => write,
+      () => 1000,
+    );
+    scheduler.submit({ type: 'useItem', itemId: 501 }, state);
+    const event: FeatureEvent = {
+      type: 'inventoryDelta',
+      add: false,
+      bagId: 501,
+      change: 1,
+      weight: 10,
+    };
+    state.apply(event, 1);
+    expect(scheduler.observe(event, state, 1).state).toBe('confirmed');
+    expect(scheduler.itemAttempt).toMatchObject({
+      send: 'pending',
+      outcome: 'confirmed',
+      received: { removals: 1 },
+    });
+    resolve();
+    await write;
+    expect(scheduler.itemAttempt).toMatchObject({ send: 'accepted', outcome: 'confirmed' });
+    expect(scheduler.result.status).toBe('confirmed');
+    expect(scheduler.receipt).toBeNull();
+  });
+  it.each(['timeout', 'stop', 'connection'] as const)(
+    'does not confirm a retired receipt when a write settles after %s',
+    async (retirement) => {
+      let now = 1000;
+      let resolve!: () => void;
+      const write = new Promise<void>((done) => {
+        resolve = done;
+      });
+      const state = new CharacterState();
+      state.apply(inventory(), 1);
+      let sends = 0;
+      const scheduler = new AutomationScheduler(
+        () => (++sends === 1 ? write : undefined),
+        () => now,
+      );
+      scheduler.submit({ type: 'useItem', itemId: 501 }, state);
+      if (retirement === 'timeout') {
+        now += 6000;
+        scheduler.timeout();
+      } else scheduler.reset(retirement === 'connection');
+      expect(scheduler.retireReceipt(true)).toBe('uncertain');
+      const result = scheduler.result;
+      resolve();
+      await write;
+      expect(scheduler.result).toEqual(result);
+      expect(scheduler.receipt?.sequence).toBe(1);
+      expect(sends).toBe(1);
+    },
+  );
+  it('ignores a former write completion after a new explicit item attempt', async () => {
+    let resolve!: () => void;
+    const write = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const state = new CharacterState();
+    state.apply(inventory(), 1);
+    let sends = 0;
+    const scheduler = new AutomationScheduler(
+      () => (++sends === 1 ? write : undefined),
+      () => 1000,
+    );
+    scheduler.submit({ type: 'useItem', itemId: 501 }, state);
+    scheduler.reset(true);
+    scheduler.discardReceipt();
+    scheduler.submit({ type: 'useItem', itemId: 501 }, state);
+    const newer = scheduler.itemAttempt;
+    resolve();
+    await write;
+    expect(scheduler.itemAttempt).toEqual(newer);
+    expect(scheduler.itemAttempt).toMatchObject({
+      sequence: 2,
+      send: 'accepted',
+      outcome: 'waiting',
+    });
+    expect(scheduler.receipt?.sequence).toBe(2);
+    expect(sends).toBe(2);
+  });
+  it('bounds relevant observations while an item outcome remains unknown', () => {
+    const state = new CharacterState();
+    state.apply(inventory(), 1);
+    const scheduler = new AutomationScheduler(
+      () => {},
+      () => 1000,
+    );
+    scheduler.submit({ type: 'useItem', itemId: 501 }, state);
+    for (let i = 0; i < 1010; i++) scheduler.observe({ type: 'sp', sp: 10, maxSp: 20 }, state, 1);
+    expect(scheduler.itemAttempt?.received.ownResources).toBe(1000);
+    expect(scheduler.result.status).toBe('pending');
+    expect(scheduler.receipt?.sequence).toBe(1);
+  });
   it.each([
     {
       name: 'no updates',
