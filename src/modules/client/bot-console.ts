@@ -149,7 +149,7 @@ export class BotConsole {
           );
         this.itemRequest = { world: this.world() };
         this.get('console-item-result').textContent =
-          `${itemName(item.itemId)} requested · outcome unconfirmed. Latest action receipts below are shared controller observations.`;
+          `${itemName(item.itemId)} use requested. Shared action receipts below show observed outcomes.`;
         try {
           await this.hooks.command({ type: 'useItem', itemId: item.itemId });
         } catch (error) {
@@ -412,7 +412,7 @@ export class BotConsole {
       result = status?.actionResult;
     if (request && request.world !== this.world()) {
       this.get('console-item-result').textContent =
-        'Connection changed. The previous item outcome is not confirmed here.';
+        'Previous item request. Shared action receipts below show observed outcomes.';
       this.itemRequest = null;
     }
     this.get('console-latest-action').textContent =

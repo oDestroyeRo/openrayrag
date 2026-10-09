@@ -878,14 +878,56 @@ describe('bot console inventory and monitoring', () => {
     await f.get('console-use-item').emit('click');
     expect(f.command).not.toHaveBeenCalled();
   });
+  it('keeps item feedback neutral after a confirmed map-changing use', async () => {
+    const f = fixture(),
+      inventory = f.engine.snapshot().character.inventory;
+    f.engine.receive([
+      {
+        type: 'inventory',
+        items: [...inventory, { itemId: 602, bagId: 602, count: 5, type: 1 }],
+        equipment: Array(10).fill(0),
+        ammoId: -1,
+      },
+    ]);
+    f.render();
+    f.get('console-item').value = '602';
+    await f.get('console-item').emit('change');
+    await f.get('console-use-item').emit('click');
+    const receipt = {
+      sequence: 4,
+      status: 'confirmed' as const,
+      reason: 'useItem confirmed by the server.',
+    };
+    f.view.render({ ...f.engine.snapshot(), actionResult: receipt });
+    f.engine.receive([
+      { type: 'map', map: 'iz_dun00' },
+      { type: 'spawn', entity: { ...player } },
+      {
+        type: 'inventory',
+        items: [...inventory, { itemId: 602, bagId: 602, count: 4, type: 1 }],
+        equipment: Array(10).fill(0),
+        ammoId: -1,
+      },
+    ]);
+    f.view.render({ ...f.engine.snapshot(), actionResult: receipt });
+    expect(f.get('console-item-result').textContent).toContain('Shared action receipts');
+    expect(f.get('console-item-result').textContent).not.toMatch(/connection changed|unconfirmed/i);
+    expect(f.get('console-item-result').textContent).not.toContain('receipt confirmed');
+    expect(f.get('console-latest-action').textContent).toBe(
+      'Latest controller action #4: receipt confirmed · useItem confirmed by the server.',
+    );
+    expect(f.get('console-item').value).toBe('');
+    expect(f.command).toHaveBeenCalledExactlyOnceWith({ type: 'useItem', itemId: 602 });
+  });
   it('routes untargeted use through the existing command without attributing shared receipts', async () => {
     const f = fixture();
     f.get('console-item').value = '501';
     await f.get('console-item').emit('change');
     await f.get('console-use-item').emit('click');
     expect(f.command).toHaveBeenCalledWith({ type: 'useItem', itemId: 501 });
-    expect(f.get('console-item-result').textContent).toContain('outcome unconfirmed');
-    expect(f.get('console-item-result').textContent).not.toContain('Confirmed');
+    expect(f.get('console-item-result').textContent).toContain('Red Potion use requested');
+    expect(f.get('console-item-result').textContent).toContain('Shared action receipts');
+    expect(f.get('console-item-result').textContent).not.toMatch(/confirmed/i);
     const s = f.engine.snapshot();
     f.view.render({
       ...s,
@@ -902,7 +944,8 @@ describe('bot console inventory and monitoring', () => {
       actionResult: { sequence: 1, status: 'confirmed', reason: 'Observed item decrement.' },
     });
     expect(f.get('console-latest-action').textContent).toContain('receipt confirmed');
-    expect(f.get('console-item-result').textContent).toContain('outcome unconfirmed');
+    expect(f.get('console-item-result').textContent).toContain('Shared action receipts');
+    expect(f.get('console-item-result').textContent).not.toMatch(/confirmed/i);
     f.view.render({
       ...s,
       actionResult: { sequence: 2, status: 'pending', reason: 'Another command.' },
@@ -922,9 +965,55 @@ describe('bot console inventory and monitoring', () => {
       ...snapshot,
       actionResult: { sequence: 8, status: 'confirmed', reason: 'An unrelated skill receipt.' },
     });
-    expect(f.get('console-item-result').textContent).toContain('outcome unconfirmed');
+    f.engine.receive([{ type: 'clear' }]);
+    f.view.render({
+      ...f.engine.snapshot(),
+      actionResult: { sequence: 8, status: 'confirmed', reason: 'An unrelated skill receipt.' },
+    });
+    expect(f.get('console-item-result').textContent).toContain('Shared action receipts');
+    expect(f.get('console-item-result').textContent).not.toContain('unrelated skill receipt');
     expect(f.get('console-item-result').textContent).not.toContain('receipt confirmed');
     expect(f.get('console-latest-action').textContent).toContain('unrelated skill receipt');
+  });
+  it.each(['same-map refresh', 'disconnect'] as const)(
+    'keeps unresolved receipt guidance separate after a %s without repeating the item request',
+    async (change) => {
+      const f = fixture();
+      f.get('console-item').value = '501';
+      await f.get('console-item').emit('change');
+      await f.get('console-use-item').emit('click');
+      const receipt = { sequence: 1, status: 'failed' as const, reason: 'Receipt timed out.' };
+      f.view.render({ ...f.engine.snapshot(), actionResult: receipt });
+      if (change === 'same-map refresh') f.engine.receive([{ type: 'clear' }]);
+      else f.engine.disconnect();
+      f.view.render({ ...f.engine.snapshot(), actionResult: receipt });
+      expect(f.get('console-item-result').textContent).toContain('Shared action receipts');
+      expect(f.get('console-item-result').textContent).not.toMatch(/confirmed|connection changed/i);
+      expect(f.get('console-latest-action').textContent).toBe(
+        'Latest controller action #1: failed or unresolved · Receipt timed out.',
+      );
+      f.view.render(null);
+      expect(f.get('console-latest-action').textContent).toBe(
+        'No controller action receipt observed.',
+      );
+      expect(f.get('console-use-item').disabled).toBe(true);
+      expect(f.command).toHaveBeenCalledExactlyOnceWith({ type: 'useItem', itemId: 501 });
+    },
+  );
+  it('preserves an item request error after a world change and unrelated confirmation', async () => {
+    const f = fixture();
+    f.command.mockRejectedValue(new Error('Item admission rejected.'));
+    f.get('console-item').value = '501';
+    await f.get('console-item').emit('change');
+    await f.get('console-use-item').emit('click');
+    f.engine.receive([{ type: 'clear' }]);
+    f.view.render({
+      ...f.engine.snapshot(),
+      actionResult: { sequence: 8, status: 'confirmed', reason: 'An unrelated skill receipt.' },
+    });
+    expect(f.get('console-item-result').textContent).toBe('Item admission rejected.');
+    expect(f.get('console-latest-action').textContent).toContain('unrelated skill receipt');
+    expect(f.command).toHaveBeenCalledExactlyOnceWith({ type: 'useItem', itemId: 501 });
   });
   it('keeps prior bounded-command telemetry separate from a newly requested walk', async () => {
     const f = fixture(),
