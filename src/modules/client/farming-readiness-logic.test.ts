@@ -194,6 +194,26 @@ describe('farming readiness', () => {
       'usable stock unobserved',
     );
   });
+  it('warns when inventory is unknown even with fresh HP/SP observations', () => {
+    const s = settings();
+    s.automation!.hpPotions = { ...DEFAULT_RECOVERY_ITEMS, mode: 'any' };
+    s.automation!.spPotions = { ...DEFAULT_SP_ITEMS, mode: 'selected', itemIds: [505] };
+    const snapshot = {
+      connected: true,
+      player: { hp: 100, maxHp: 200 },
+      character: { inventoryKnown: false, stats: { sp: 20, maxSp: 100 } },
+    };
+    for (const resource of ['hp', 'sp']) {
+      expect(row(s, resource, context, snapshot)).toMatchObject({
+        severity: 'warning',
+        action: 'recovery',
+      });
+      expect(row(s, resource, context, snapshot)?.detail).toContain('usable stock unobserved');
+      expect(row(s, resource, context, snapshot)?.detail).not.toContain(
+        `${resource.toUpperCase()} unobserved`,
+      );
+    }
+  });
   it('explains unavailable reconnect without creating a new run or claiming all automation is ready', () => {
     expect(row(settings(), 'reconnect', { ...context, reconnectAvailable: false })).toMatchObject({
       severity: 'warning',

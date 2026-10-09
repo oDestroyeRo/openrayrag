@@ -117,7 +117,7 @@ export function farmingReadiness(
       `${resource.toUpperCase()} recovery`,
       `${enabled ? `${reserves.join(' + ')} · ${usable === null ? 'usable stock unobserved' : usable ? 'usable stock observed above protected reserves' : 'no usable stock above protected reserves'}${observed ? '' : ` · ${resource.toUpperCase()} unobserved`}` : 'Items off'} · sitting ${a.recovery.enabled ? 'on' : 'off'}. Stock and server confirmation determine continued recovery.`,
       'recovery',
-      enabled && (usable === false || !observed) ? 'warning' : 'info',
+      enabled && (usable !== true || !observed) ? 'warning' : 'info',
     );
   }
   if (a.recovery.enabled) {
@@ -221,9 +221,17 @@ export function farmingReadiness(
       return definition?.map ?? '';
     };
     const merchantMap =
-      supply.weightEnabled && supply.merchantMode !== 'automatic'
+      rules.some((rule) => rule.sell) && supply.merchantMode !== 'automatic'
         ? service('sell', supply.sellService)
         : '';
+    // A triggered trip disposes permitted excess before receiving stock. These
+    // paths also run on stock-triggered trips; storage/cart can fall back to a
+    // permitted sale when the preferred destination is full.
+    if (
+      rules.some((rule) => rule.store) ||
+      (supply.stockEnabled && rules.some((rule) => rule.restock === 'storage'))
+    )
+      service('storage', supply.storageService);
     if (supply.stockEnabled) {
       const refills = rules.filter((rule) => rule.restock !== 'off');
       add(
@@ -236,8 +244,6 @@ export function farmingReadiness(
         refills.length ? 'info' : 'warning',
       );
       if (refills.some((rule) => rule.restock === 'buy')) service('buy', supply.buyService);
-      if (refills.some((rule) => rule.restock === 'storage'))
-        service('storage', supply.storageService);
     }
     add(
       'route',
