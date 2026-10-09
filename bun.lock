@@ -10,7 +10,7 @@
       },
       "devDependencies": {
         "@effect/tsgo": "0.51.0",
-        "@tabler/icons": "3.48.0",
+        "@tabler/icons": "3.49.0",
         "@tauri-apps/cli": "2.12.1",
         "@types/node": "26.6.4",
         "esbuild": "0.28.2",
@@ -220,7 +220,7 @@
 
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.1", "", {}, "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="],
 
-    "@tabler/icons": ["@tabler/icons@3.48.0", "", {}, "sha512-lQk06gVHNVBnJp0UOgtth54mcZBJM7rdYKsAxKOProj1bbSAx+/xiuOWfHlyvgdL3M+Y+I0HINrjHa3ygp8eXQ=="],
+    "@tabler/icons": ["@tabler/icons@3.49.0", "", {}, "sha512-l+GnSkFETx0U26icxv1VUFnxxiTqXfCcVRiRAnyMwibupM2S2L/hSaZ9gmSgz01rkrsH/93NvLsxykqdanc6lw=="],
 
     "@tauri-apps/api": ["@tauri-apps/api@2.12.1", "", {}, "sha512-DeyFHa3wynpyoqTDikDEDGTJIq4LQ5USfolQGRmGIWT6JMADyxZBTDa5cAdT3tDg73rUXufPaCwN7aXBos4OnQ=="],
 
