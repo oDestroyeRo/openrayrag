@@ -129,6 +129,8 @@
   "src/modules/client/client-dashboard.ts": "logic",
   "src/modules/client/client-shell.ts": "orchestration",
   "src/modules/client/client-status.ts": "logic",
+  "src/modules/client/farming-readiness-logic.ts": "logic",
+  "src/modules/client/farming-readiness.ts": "orchestration",
   "src/modules/client/feature-ui-logic.ts": "logic",
   "src/modules/client/feature-ui.ts": "orchestration",
   "src/modules/client/game-status.ts": "logic",

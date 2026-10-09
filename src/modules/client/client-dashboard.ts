@@ -8,6 +8,7 @@ import {
   type RecoveryResource,
 } from '../recovery/recovery-items';
 import { recoveryInventory } from '../recovery/recovery-item-ui-logic';
+import { respawnAllowanceSummary } from './farming-readiness-logic';
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
@@ -24,7 +25,11 @@ const resourceObserved = (
   Number(value[maximum]) > 0;
 
 /** Configuration stays visible even when its current stock or prerequisites are unavailable. */
-function recoverySummary(value: unknown, automation: AutomationSettingsInput | undefined): string {
+function recoverySummary(
+  value: unknown,
+  automation: AutomationSettingsInput | undefined,
+  active = false,
+): string {
   const snapshot = record(value),
     character = record(snapshot.character),
     player = record(snapshot.player),
@@ -80,7 +85,14 @@ function recoverySummary(value: unknown, automation: AutomationSettingsInput | u
   const sitting = automation?.recovery.enabled
     ? `Sitting on${prerequisites.length ? ` (${prerequisites.join('; ')})` : ''}`
     : 'Sitting off';
-  return `${sitting} · ${items('hp')} · ${items('sp')} · Respawn ${automation?.respawn.enabled ? 'on' : 'off'}`;
+  const deaths =
+    active &&
+    typeof snapshot.deaths === 'number' &&
+    Number.isInteger(snapshot.deaths) &&
+    snapshot.deaths >= 0
+      ? snapshot.deaths
+      : undefined;
+  return `${sitting} · ${items('hp')} · ${items('sp')} · ${respawnAllowanceSummary(automation?.respawn, deaths)}`;
 }
 
 const targetName = (monsters: MapInfo['monsters']) => (id: number) =>
@@ -109,7 +121,7 @@ export function dashboardTaskLabel(value: unknown): string {
 /** Display-only projection. Neither target presence nor log text proves an action. */
 export function clientDashboard(
   value: unknown,
-  context: Parameters<typeof clientStatus>[1] & { fresh?: boolean },
+  context: Parameters<typeof clientStatus>[1] & { fresh?: boolean; activeRun?: boolean },
   settings: SettingsInput | null,
   mapInfo?: MapInfo,
 ) {
@@ -158,6 +170,10 @@ export function clientDashboard(
     : settings.automation?.loot.ownership === 'all'
       ? 'All drops'
       : 'Own drops';
-  const recovery = recoverySummary(value, settings.automation);
+  const recovery = recoverySummary(
+    value,
+    settings.automation,
+    context.activeRun ?? context.fieldRequested,
+  );
   return { ...status, headline, setup: `${targeting} · ${loot} · ${recovery}` };
 }

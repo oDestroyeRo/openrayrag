@@ -15,6 +15,24 @@ const settings = {
 const recoveryOff = 'Sitting off · HP items off · SP items off · Respawn off';
 
 describe('Run dashboard presentation', () => {
+  it('shows configured and remaining respawn allowance without borrowing active deaths for the saved draft', () => {
+    const active = { ...settings, automation: structuredClone(settings.automation) };
+    active.automation.respawn = { enabled: true, maxDeaths: 2 };
+    const snapshot = { runRequested: true, deaths: 1 };
+    expect(clientDashboard(snapshot, { ...context, fieldRequested: true }, active).setup).toContain(
+      'Respawn on · 2 deaths · 1 remaining',
+    );
+    const saved = {
+      ...active,
+      automation: { ...active.automation, respawn: { enabled: true, maxDeaths: 5 } },
+    };
+    expect(clientDashboard(snapshot, context, saved).setup).toContain('Respawn on · 5 deaths');
+    expect(clientDashboard(snapshot, context, saved).setup).not.toContain('remaining');
+    saved.automation.respawn.maxDeaths = 0;
+    expect(clientDashboard(snapshot, context, saved).setup).toContain(
+      'legacy: no counted death allowance',
+    );
+  });
   it('describes failed current-field admission without claiming readiness or retained target eligibility', () => {
     const current = { ...settings, map: 'prt_fild08', targets: [] };
     expect(

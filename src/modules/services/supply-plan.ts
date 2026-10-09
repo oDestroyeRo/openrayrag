@@ -27,7 +27,11 @@ import type {
 export type SupplyPlanningContext = Omit<
   SupplyContext,
   'inventoryRevision' | 'currencyRevision'
-> & { readonly inventoryRevision?: number; readonly currencyRevision?: number };
+> & {
+  readonly inventoryRevision?: number;
+  readonly currencyRevision?: number;
+  readonly remainingTrips?: number | null;
+};
 
 /** One authoritative phase only. Other service prerequisites cannot invalidate
  * this phase, and no unknown preferred destination authorizes a fallback sale. */
@@ -220,7 +224,7 @@ export function previewSupplyTrip(
     ...(!goals.length && !weight ? ['No stock or weight trigger is active.'] : []),
     ...goals.map((goal) => `Item #${goal.itemId}: ${stock(goal.itemId)} → ${goal.desired}`),
     `Return: ${context.map || 'unknown map'} (${context.position?.x ?? '?'}, ${context.position?.y ?? '?'})`,
-    `Limits: ${supply.maxTrips} trips · ${supply.maxActions} commands/trip · ${supply.maxDurationSeconds}s · ${supply.maxSpend}z reserved cap`,
+    `Limits: ${typeof context.remainingTrips === 'number' && Number.isInteger(context.remainingTrips) && context.remainingTrips >= 0 && context.remainingTrips <= 100 ? `${Math.min(supply.maxTrips, context.remainingTrips)} trips remaining (configured cap ${supply.maxTrips})` : `retained trip capacity unobserved (configured cap ${supply.maxTrips})`} · ${supply.maxActions} commands/trip · ${supply.maxDurationSeconds}s · ${supply.maxSpend}z reserved cap. Stop/Start does not replenish spent trips.`,
     `Auto sell: at ${supply.weightStartPercent}% → below ${supply.weightEndPercent}% · merchant ${supply.merchantMode ?? 'manual'}`,
     (settings.automation?.limits.weightPercent ?? 0) > 0
       ? `Hard weight stop: ${settings.automation!.limits.weightPercent}%${supply.weightStartPercent >= settings.automation!.limits.weightPercent ? ' · auto-sell trigger must be lower; the hard stop prevents departure.' : ' · stops departure at that limit, even during a weight jump.'}`

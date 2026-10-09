@@ -28,6 +28,7 @@ import {
 } from './disposition';
 import type { SupplyPolicySettings } from './supply-trip-logic';
 import type { WorkflowReceipt } from './workflows';
+import { farmingReadiness } from '../client/farming-readiness-logic';
 const rule = {
   itemId: 501,
   keep: 0,
@@ -143,6 +144,90 @@ function setStock(c: SupplyContext, n: number) {
   c.disposition.workflow.inventory = items;
   c.inventoryRevision = incrementRevision(c.inventoryRevision);
 }
+describe('readiness follows reachable supply planner service paths', () => {
+  const review = (settings: SupplyPolicySettings) =>
+    farmingReadiness(settings, null, {
+      active: false,
+      fresh: false,
+      remainingSupplyTrips: 1,
+      reconnectEnabled: false,
+      reconnectAvailable: true,
+    });
+  it('requires storage before an automatic weight sale even when refill is off', () => {
+    const c = context(12);
+    const rules = validateDispositionPolicy({
+      maxSpend: 0,
+      rules: [{ ...rule, store: true, sell: true, restock: 'off' }],
+    });
+    const settings = {
+      ...configured,
+      automation: {
+        ...configured.automation!,
+        disposition: rules,
+        supply: {
+          ...DEFAULT_SUPPLY,
+          enabled: true,
+          stockEnabled: false,
+          weightEnabled: true,
+          merchantMode: 'automatic' as const,
+        },
+      },
+    };
+    expect(nextSupplyAction(c, [], rules, settings.automation.supply)).toEqual({
+      type: 'blocked',
+      reasons: ['A verified storage service must be selected.'],
+    });
+    expect(review(settings)).toContainEqual(
+      expect.objectContaining({ id: 'service-storage', severity: 'error' }),
+    );
+    expect(review(settings).find((row) => row.id === 'service-sell')).toBeUndefined();
+    settings.automation.supply.storageService = 'kafra.prontera-south.storage.v1';
+    expect(nextSupplyAction(c, [], rules, settings.automation.supply)).toMatchObject({
+      type: 'service',
+      contractId: settings.automation.supply.storageService,
+    });
+    expect(review(settings).find((row) => row.id === 'service-storage')).toBeUndefined();
+  });
+  it('requires a manual sell service before disposing excess on a stock-triggered refill trip', () => {
+    const c = context(12);
+    const rules = validateDispositionPolicy({
+      maxSpend: 1000,
+      rules: [
+        { ...rule, sell: true, restock: 'off' },
+        { ...rule, itemId: 502 },
+      ],
+    });
+    const shortage = rules.rules.find((rule) => rule.itemId === 502)!;
+    const goals = [{ itemId: shortage.itemId, desired: shortage.desired }];
+    const settings = {
+      ...configured,
+      automation: {
+        ...configured.automation!,
+        disposition: rules,
+        supply: {
+          ...DEFAULT_SUPPLY,
+          enabled: true,
+          stockEnabled: true,
+          weightEnabled: false,
+          buyService: 'trader.prt-fild05.tool-dealer.buy.v1',
+        },
+      },
+    };
+    expect(nextSupplyAction(c, goals, rules, settings.automation.supply)).toEqual({
+      type: 'blocked',
+      reasons: ['A verified sell service must be selected.'],
+    });
+    expect(review(settings)).toContainEqual(
+      expect.objectContaining({ id: 'service-sell', severity: 'error' }),
+    );
+    settings.automation.supply.sellService = 'trader.prt-fild05.tool-dealer.sell.v1';
+    expect(nextSupplyAction(c, goals, rules, settings.automation.supply)).toMatchObject({
+      type: 'service',
+      contractId: settings.automation.supply.sellService,
+    });
+    expect(review(settings).find((row) => row.id === 'service-sell')).toBeUndefined();
+  });
+});
 it('previews only permitted excess, retains shared recovery floors and explains an unmet weight target', () => {
   const c = context(12),
     saleRule = {
@@ -177,6 +262,13 @@ it('previews only permitted excess, retains shared recovery floors and explains 
     },
   };
   const preview = previewSupplyTrip(value, c);
+  expect(previewSupplyTrip(value, { ...c, remainingTrips: 0 })).toContain(
+    '0 trips remaining (configured cap 1)',
+  );
+  expect(previewSupplyTrip(value, { ...c, remainingTrips: 0 })).toContain(
+    'Stop/Start does not replenish spent trips.',
+  );
+  expect(preview).toContain('retained trip capacity unobserved (configured cap 1)');
   expect(preview).toContain('Eligible sale: item #501 × 3');
   expect(preview).toContain('Unmet weight target');
   expect(preview).toContain('hard stop prevents departure');
@@ -508,6 +600,35 @@ describe('bounded supply runtime', () => {
   });
 });
 describe('supply direct configuration allowance', () => {
+  it('publishes exhausted retained capacity instead of waiting for a trigger or renewing it on configure', () => {
+    const f = setup();
+    const retained = {
+      version: 1 as const,
+      character: f.c.character,
+      latched: false,
+      remainingTrips: 0,
+      actions: 0,
+      spent: 0,
+      reserved: 0,
+      intervalSeconds: 0,
+      deadlineSeconds: 0,
+      interrupted: false,
+      uncertain: false,
+      returnDestination: null,
+    };
+    f.runtime.configure(configured, f.c, retained);
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.snapshot()).toMatchObject({
+      remainingTrips: 0,
+      reason:
+        'Supply trip allowance exhausted. Stop/Start and unlimited farming time do not replenish spent trips.',
+    });
+    f.runtime.stop();
+    f.runtime.configure(configured, f.c);
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.snapshot().remainingTrips).toBe(0);
+    expect(f.runtime.snapshot().reason).toContain('exhausted');
+  });
   it('keeps consumed allowance when a disabled runtime is configured without window telemetry', () => {
     const f = setup();
     f.prepare();

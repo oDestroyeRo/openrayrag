@@ -938,6 +938,30 @@ export class PersistentFieldRun {
   get metrics(): Readonly<typeof this.totals> {
     return { ...this.totals };
   }
+  /** Display-only observations; review must not prepare Start or renew allowances. */
+  readinessFor(character: string): {
+    remainingSupplyTrips: number | null;
+    used: { elapsedSeconds: number; kills: number; pickups: number; deaths: number } | undefined;
+  } {
+    character ||= this.character;
+    const supply = this.supplyGuards.get(character);
+    return {
+      remainingSupplyTrips: supply
+        ? supply.guard.remainingTrips
+        : this.supplyOverflow || this.supplyGuards.size >= 64
+          ? 0
+          : null,
+      used:
+        this.desired && this.character === character
+          ? {
+              elapsedSeconds: Math.max(0, Math.floor((this.now() - this.startedAt) / 1000)),
+              kills: this.totals.kills,
+              pickups: this.totals.looted,
+              deaths: this.totals.deaths,
+            }
+          : undefined,
+    };
+  }
   registerSettingsApply(id: string, status: RunSession): boolean {
     if (
       !validSettingsApplyId(id) ||

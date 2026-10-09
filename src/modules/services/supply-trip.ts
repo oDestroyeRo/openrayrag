@@ -324,11 +324,15 @@ export class SupplyTripRuntime<Receipt> {
       return null;
     }
     if (this.phase === 'armed' || this.phase === 'complete') {
+      if (!this.remainingTrips) {
+        this.reason =
+          'Supply trip allowance exhausted. Stop/Start and unlimited farming time do not replenish spent trips.';
+        return null;
+      }
       if (
         (this.phase === 'complete' && !this.resumed) ||
         this.latched ||
-        this.now() < this.nextTripAt ||
-        !this.remainingTrips
+        this.now() < this.nextTripAt
       )
         return null;
       const executionPolicy = mapPolicy(this.settings!);
