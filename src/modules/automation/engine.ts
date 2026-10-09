@@ -4,6 +4,10 @@ import { skillId as domainSkillId } from '../../shared/domain-values';
 import { manualActionBlocker } from './engine-action-policy';
 import { ObservedThreats, type ThreatSnapshot } from '../world/observed-threats';
 import { CastAvailability, type ObservedCast } from '../combat/cast-availability';
+import {
+  RECOVERY_ITEM_CONDITIONS,
+  recoveryItemStatusWait,
+} from '../recovery/recovery-item-admission-logic';
 import { matchesSkillExecution, matchesPartyHealExecution } from '../combat/skill-execution';
 import { PartyEngagements, type PartyEngagementSnapshot } from '../party/party-engagement';
 import type { PartyActorBinding } from '../party/party-actors';
@@ -438,6 +442,7 @@ export class BotEngine {
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid,
     private readonly partyBinding: (entityId: number) => PartyActorBinding | null = () => null,
     private readonly connectionGeneration: () => number = () => 0,
+    private readonly recoveryInputAvailable: () => boolean = () => true,
   ) {
     this.castAvailability = new CastAvailability(this.now);
     this.automation = new AutomationScheduler(
@@ -1980,6 +1985,7 @@ export class BotEngine {
       }
       if (!!this.ownMotion() || now - this.lastAction < ACTION_DELAY) return;
       if (recoveryItem.action) {
+        if (!this.automaticRecoveryAdmitted()) return;
         this.automation.submit(recoveryItem.action, this.character);
         this.reason = this.automation.task().label;
         return;
@@ -2094,6 +2100,7 @@ export class BotEngine {
         return;
       }
       if (!!this.ownMotion() || now - this.lastAction < ACTION_DELAY) return;
+      if (next.action.type === 'useItem' && !this.automaticRecoveryAdmitted()) return;
       this.automation.submit(next.action, this.character);
       this.reason = this.automation.task().label;
       return;
@@ -4042,6 +4049,14 @@ export class BotEngine {
       !this.ownMotion() &&
       this.loadout.equipmentSettled
     );
+  }
+  private automaticRecoveryAdmitted(): boolean {
+    const reason = recoveryItemStatusWait(this.actorObservation(RECOVERY_ITEM_CONDITIONS));
+    if (reason || !this.recoveryInputAvailable()) {
+      this.reason = reason ?? 'Waiting briefly for accumulated input to settle before recovery.';
+      return false;
+    }
+    return true;
   }
   /** Death recovery owns only the existing posture scheduler, never field decisions. */
   recoveryOnly(settings: RunSettings): { complete: boolean; reason: string } {

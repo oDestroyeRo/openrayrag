@@ -125,6 +125,83 @@ function deferred<T>() {
   return { promise, resolve };
 }
 describe('clientless shared-controller runtime', () => {
+  it('paces repeated automatic zero-cooldown HP use through completed native writes', async () => {
+    const f = fixture();
+    await f.ready(0, { ...player, x: 124, y: 90, hp: 200, maxHp: 1000 });
+    f.step(1200);
+    await f.runtime.cycle();
+    f.runtime.controller.engine.receive([
+      { type: 'heal', id: 0, hp: 200, maxHp: 1000 },
+      {
+        type: 'inventory',
+        items: [{ bagId: 501, itemId: 501, type: 1, count: 30 }],
+        equipment: [],
+        ammoId: -1,
+      },
+    ]);
+    const automation = structuredClone(DEFAULT_AUTOMATION);
+    automation.combat.mode = 'off';
+    automation.recovery.enabled = false;
+    automation.hpPotions = {
+      mode: 'any',
+      itemIds: [],
+      belowPercent: 80,
+      minStock: 10,
+      cooldownSeconds: 0,
+    };
+    f.runtime.control('start', {
+      ...DEFAULT_SETTINGS,
+      map: 'prt_fild08',
+      targets: [4000],
+      route_randomWalk: 0,
+      loot: false,
+      automation,
+    });
+    let processed = 0,
+      hp = 200,
+      debt = 0,
+      accepted = 0,
+      rejected = 0;
+    for (let elapsed = 0; elapsed < 8000; elapsed += 50) {
+      debt = Math.max(0, debt - 50);
+      f.step(50);
+      f.runtime.control('heartbeat', DEFAULT_SETTINGS);
+      await f.runtime.cycle();
+      await flush();
+      const writes = f.writes().filter((p) => p[0] === FEATURE_OP.useItem);
+      const batch = writes.slice(processed);
+      processed = writes.length;
+      for (const _ of batch) {
+        if (debt > 1000) {
+          rejected++;
+          continue;
+        }
+        debt += 200;
+        accepted++;
+        hp += 50;
+        await f.frame(new BitWriter().u8(OP.heal).i32(0).i32(0).i32(hp).i32(1000).finish());
+        await f.frame(
+          new BitWriter()
+            .u8(FEATURE_OP.inventoryDelta)
+            .bool(false)
+            .i32(501)
+            .i16(1)
+            .i32(0)
+            .bool(false)
+            .finish(),
+        );
+      }
+    }
+    expect({ accepted, rejected, reason: f.runtime.snapshot().reason }).toEqual({
+      accepted: 13,
+      rejected: 0,
+      reason: expect.any(String),
+    });
+    expect(f.runtime.snapshot()).toMatchObject({
+      itemAttempt: { send: 'accepted', outcome: 'confirmed' },
+    });
+    expect(f.runtime.snapshot().character.inventory.find((i) => i.itemId === 501)?.count).toBe(17);
+  });
   it('distinguishes an unsettled native item write from accepted send without consumption', async () => {
     const f = fixture();
     await f.ready();

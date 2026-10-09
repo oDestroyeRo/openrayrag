@@ -183,6 +183,8 @@ import {
   type SettingsApplySnapshot,
 } from '../settings/live-settings-logic';
 import { reachedRunLimit, runLimitReason } from '../session/run-limit-logic';
+import { InputAdmission } from './input-admission';
+import { actionInputCost, opcodeInputCost } from './input-admission-logic';
 
 export type ControllerAction = ExpandedAction | WorldAction;
 export type { ControllerUpdateCheckpoint } from '../update/controller-update';
@@ -434,12 +436,14 @@ export class CompanionController {
   private updateSuspended = false;
   private updateTravel: DatabaseTravelCheckpoint | null = null;
   private retainedDatabaseTravel: DatabaseTravelCheckpoint | null = null;
+  private readonly inputAdmission: InputAdmission;
+  private readonly transport: (action: Action | WorldAction) => unknown;
   get preparingUpdate(): boolean {
     return this.updateSuspended;
   }
 
   constructor(
-    private readonly transport: (action: Action | WorldAction) => unknown,
+    transport: (action: Action | WorldAction) => unknown,
     private readonly now = Date.now,
     private readonly gridFor: (map: string) => WalkGrid | null = searchGrid,
     sendSocial: (action: ManualSocialAction) => void = () => {
@@ -460,6 +464,13 @@ export class CompanionController {
     warpStore?: WarpGuardStore,
     private readonly databaseTravel?: DatabaseTravelTransport,
   ) {
+    this.inputAdmission = new InputAdmission(now);
+    // Supply transactions and stationary Look intentionally bypass send()'s
+    // side effects, but every ordinary transport path must account input once.
+    this.transport = (action) => {
+      this.observeInput();
+      return this.inputAdmission.dispatch(actionInputCost(action), () => transport(action));
+    };
     this.partyHeal = new PartyHealPolicy(now);
     this.engine = new BotEngine(
       (action) => this.send(action),
@@ -475,6 +486,7 @@ export class CompanionController {
           : null;
       },
       () => this.connectionEpoch,
+      () => this.inputAdmission.recoveryAvailable(this.now(), this.inputActive()),
     );
     this.partyFollow = new PartyFollowRuntime(now);
     this.engine.partyFollowBinding = () =>
@@ -525,7 +537,10 @@ export class CompanionController {
                 this.databaseTeleportUntil,
                 this.now() + DATABASE_TELEPORT_COOLDOWN_MS,
               );
-              databaseTravel.send(map);
+              this.observeInput();
+              this.inputAdmission.dispatch(this.engine.map === map ? 500 : 1_000, () =>
+                databaseTravel.send(map),
+              );
             },
           }
         : undefined,
@@ -764,6 +779,7 @@ export class CompanionController {
     return this.runRequested || this.executing;
   }
   connect(compatible: boolean): void {
+    this.inputAdmission.connectionChanged();
     if (this.engine.character.experience) {
       this.reconnectExperience = { ...this.engine.character.experience };
       this.reconnectExperienceCharacter = this.engine.player?.name ?? null;
@@ -800,6 +816,7 @@ export class CompanionController {
     this.retryAt = 0;
   }
   disconnect(): void {
+    this.inputAdmission.observe(this.now(), false);
     if (this.engine.character.experience) {
       this.reconnectExperience = { ...this.engine.character.experience };
       this.reconnectExperienceCharacter = this.engine.player?.name ?? null;
@@ -990,6 +1007,46 @@ export class CompanionController {
     this.quietUntil = Math.max(this.quietUntil, this.now() + 2_000);
     this.manualInput();
     this.engine.castAvailability.cancel('Official Look input stopped automatic cast recovery.');
+  }
+  /** Opcode only, after the verified official socket actually forwarded input. */
+  officialInputSent(data: unknown, generation = this.connectionEpoch): void {
+    if (generation !== this.connectionEpoch) return;
+    const bytes =
+      data instanceof ArrayBuffer
+        ? new Uint8Array(data, 0, Math.min(1, data.byteLength))
+        : ArrayBuffer.isView(data)
+          ? new Uint8Array(data.buffer, data.byteOffset, Math.min(1, data.byteLength))
+          : null;
+    const cost = opcodeInputCost(bytes?.[0]);
+    if (cost === 0) return;
+    this.observeInput();
+    this.inputAdmission.dispatch(cost, () => undefined);
+  }
+  private inputActive(): boolean {
+    const now = this.now(),
+      p = this.engine.player;
+    const pending = this.engine.pendingFeatureAction;
+    const transfer =
+      this.travel?.teleportPending ||
+      this.escape?.sent ||
+      pending?.type === 'respawn' ||
+      (pending?.type === 'useItem' && (pending.itemId === 601 || pending.itemId === 602)) ||
+      (pending?.type === 'skill' && (pending.skillId === 53 || pending.skillId === 54));
+    return (
+      this.engine.connected &&
+      this.engine.compatible &&
+      !!p &&
+      !p.dead &&
+      p.hp > 0 &&
+      !transfer &&
+      this.engine.actorActionIdentity() !== null &&
+      now >= this.lastFrame &&
+      now - this.lastFrame <= 15_000 &&
+      (!this.lastTick || now - this.lastTick <= 5_000)
+    );
+  }
+  private observeInput(): void {
+    this.inputAdmission.observe(this.now(), this.inputActive());
   }
   /** The bridge observes only official opcode 80, before forwarding it. */
   officialRefineCommand(character: string | null): void {
@@ -2566,6 +2623,18 @@ export class CompanionController {
     const observation = packetObservation(data[0]!, events);
     beforeApply?.(observation);
     if (connectionGeneration !== this.connectionEpoch) return null;
+    if (
+      events.some(
+        (event) =>
+          event.type === 'enter' ||
+          event.type === 'map' ||
+          event.type === 'clear' ||
+          ((event.type === 'remove' || event.type === 'death') &&
+            event.id === this.engine.playerId),
+      )
+    )
+      this.inputAdmission.observe(this.now(), false);
+    else this.observeInput();
     if (this.databaseTravel)
       for (const event of events) {
         const wait = databaseTeleportWait(event);
@@ -4836,6 +4905,7 @@ export class CompanionController {
     }
   }
   tick(): void {
+    this.observeInput();
     if (this.updateSuspended) {
       this.updateTick();
       return;
