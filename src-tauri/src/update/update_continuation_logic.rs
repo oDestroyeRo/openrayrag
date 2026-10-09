@@ -74,12 +74,12 @@ fn exact(value: &Value, keys: &[&str]) -> bool {
         .as_object()
         .is_some_and(|o| o.len() == keys.len() && keys.iter().all(|k| o.contains_key(*k)))
 }
-fn exact_with_live_guard(value: &Value, keys: &[&str]) -> bool {
+fn exact_with_guards(value: &Value, keys: &[&str], optional: &[&str]) -> bool {
     value.as_object().is_some_and(|object| {
         keys.iter().all(|key| object.contains_key(*key))
             && object
                 .keys()
-                .all(|key| keys.contains(&key.as_str()) || key == "liveSettingsGuard")
+                .all(|key| keys.contains(&key.as_str()) || optional.contains(&key.as_str()))
     })
 }
 fn validate_live_guard(value: &Value, at: u64, name: &str) -> Result<(), String> {
@@ -144,8 +144,70 @@ fn validate_settings(value: &Value) -> Result<(), String> {
     let settings: Settings = serde_json::from_value(value.clone()).map_err(|_| ERROR)?;
     settings.validate().map_err(|_| ERROR.into())
 }
+fn validate_database_travel(value: &Value) -> Result<(), String> {
+    let Some(trip) = value.get("databaseTravel").filter(|trip| !trip.is_null()) else {
+        return Ok(());
+    };
+    let settings = &value["settings"];
+    let destination = settings["automation"]["mapPolicy"]["lockArea"]["map"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            settings["automation"]["travel"]["destinationMap"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+        })
+        .or_else(|| settings["map"].as_str());
+    let frozen = value["frozenAt"].as_u64().ok_or(ERROR)?;
+    if !exact(
+        trip,
+        &[
+            "destination",
+            "purpose",
+            "preparedAt",
+            "deadline",
+            "teleportUntil",
+            "quietUntil",
+            "failed",
+        ],
+    ) || !trip["destination"]
+        .as_str()
+        .is_some_and(crate::game::catalog_logic::supported_map)
+        || trip["destination"].as_str() != destination
+        || value["status"]["runRequested"] != true
+        || !value["macro"].is_null()
+        || !trip["failed"].is_boolean()
+        || trip["failed"] != (value["status"]["travel"]["state"] == "failed")
+        || value["status"]["travel"]["destination"] != trip["destination"]
+        || !matches!(
+            value["status"]["travel"]["state"].as_str(),
+            Some("walking" | "failed")
+        )
+        || !matches!(
+            trip["purpose"].as_str(),
+            Some("travel" | "return" | "field-entry")
+        )
+        || !["preparedAt", "deadline", "teleportUntil", "quietUntil"]
+            .iter()
+            .all(|key| number(&trip[*key]))
+        || trip["preparedAt"].as_u64().is_none_or(|n| n > frozen)
+        || trip["deadline"].as_u64()
+            != trip["preparedAt"]
+                .as_u64()
+                .and_then(|n| n.checked_add(60_000))
+        || trip["teleportUntil"]
+            .as_u64()
+            .is_none_or(|n| n > frozen.saturating_add(61_000))
+        || trip["quietUntil"]
+            .as_u64()
+            .is_none_or(|n| n > frozen.saturating_add(2_000))
+    {
+        return invalid();
+    }
+    Ok(())
+}
 pub(crate) fn validate_runtime(value: &Value, at: u64) -> Result<(), String> {
-    if !exact_with_live_guard(
+    if !exact_with_guards(
         value,
         &[
             "version",
@@ -156,6 +218,7 @@ pub(crate) fn validate_runtime(value: &Value, at: u64) -> Result<(), String> {
             "partyHeal",
             "run",
         ],
+        &["liveSettingsGuard", "databaseTravel"],
     ) || value["version"] != 1
         || !number(&value["frozenAt"])
         || value["frozenAt"].as_u64().is_none_or(|n| n == 0 || n > at)
@@ -176,6 +239,7 @@ pub(crate) fn validate_runtime(value: &Value, at: u64) -> Result<(), String> {
     if !value["settings"].is_null() {
         validate_settings(&value["settings"])?;
     }
+    validate_database_travel(value)?;
     validate_live_guard(
         value,
         value["frozenAt"].as_u64().ok_or(ERROR)?,
@@ -319,7 +383,7 @@ pub(crate) fn validate_field(value: &Value) -> Result<(), String> {
             return invalid();
         }
     }
-    if !exact_with_live_guard(value, &keys)
+    if !exact_with_guards(value, &keys, &["liveSettingsGuard"])
         || value["version"] != 1
         || !bounded(value, 0)
         || !["generation", "startedAt"]
@@ -655,6 +719,42 @@ mod tests {
         assert!(validate_runtime(&value, 1000).is_err());
         value["liveSettingsGuard"]["cooldowns"][0]["at"] = json!(1000);
         value["liveSettingsGuard"]["character"] = json!("Other");
+        assert!(validate_runtime(&value, 1000).is_err());
+    }
+
+    #[test]
+    fn unsent_database_intent_retains_destination_and_bounded_original_clocks() {
+        let mut value = runtime();
+        value["settings"] = serde_json::to_value(checkpoint().continuation.form.settings).unwrap();
+        value["settings"]["map"] = json!("prt_fild08");
+        value["settings"]["targets"] = json!([4000]);
+        value["status"]["runRequested"] = json!(true);
+        value["status"]["travel"] = json!({"state":"walking","destination":"prt_fild08"});
+        value["run"] = json!({"startedAt":1000,"kills":0,"pickups":0,"deaths":0});
+        value["databaseTravel"] = json!({"destination":"prt_fild08","purpose":"travel",
+            "preparedAt":1000,"deadline":61000,"teleportUntil":31000,"quietUntil":3000,"failed":false});
+        assert!(validate_runtime(&value, 1000).is_ok());
+        assert!(validate_runtime(&value, 70000).is_ok());
+        let mut failed = value.clone();
+        failed["databaseTravel"]["failed"] = json!(true);
+        failed["status"]["travel"]["state"] = json!("failed");
+        assert!(validate_runtime(&failed, 1000).is_ok());
+        failed["databaseTravel"]["failed"] = json!(false);
+        assert!(validate_runtime(&failed, 1000).is_err());
+        for (key, invalid) in [
+            ("destination", json!("prontera")),
+            ("purpose", json!("service")),
+            ("preparedAt", json!(1001)),
+            ("deadline", json!(61001)),
+            ("teleportUntil", json!(62001)),
+            ("quietUntil", json!(3001)),
+            ("sent", json!(true)),
+        ] {
+            let mut malformed = value.clone();
+            malformed["databaseTravel"][key] = invalid;
+            assert!(validate_runtime(&malformed, 1000).is_err(), "{key}");
+        }
+        value["status"]["travel"]["state"] = json!("transition");
         assert!(validate_runtime(&value, 1000).is_err());
     }
 

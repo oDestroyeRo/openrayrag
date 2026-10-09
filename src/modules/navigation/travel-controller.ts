@@ -29,6 +29,8 @@ import {
   type TravelPlanningOptions,
   type PlanningRequest,
   cell,
+  type DatabaseTravelCheckpoint,
+  type DatabaseTravelInput,
 } from './travel-controller-logic';
 
 export {
@@ -101,6 +103,40 @@ export class TravelController {
   }
   get databasePreparing(): boolean {
     return this.active && !!this.databaseTrip && !this.databaseTrip.sent;
+  }
+  databaseCheckpoint(): DatabaseTravelInput | null {
+    if (!this.databasePreparing || this.purpose === 'service' || this.purpose === 'party-follow')
+      return null;
+    // Admission happens with the controller's cooldown clocks at the checkpoint owner.
+    return {
+      destination: this.destination,
+      purpose: this.purpose,
+      preparedAt: this.since,
+      deadline: this.deadline,
+      failed: false,
+    };
+  }
+  /** Advance only the existing deadline while maintenance freezes every new send. */
+  tickMaintenance(): void {
+    if (!this.databasePreparing) return;
+    if (this.now() > this.deadline) {
+      this.cancel('Database travel preparation timed out before sending a request.', true);
+      return;
+    }
+    this.reason =
+      'Unsent Database travel is paused for update confirmation. Stop cancels continuation.';
+  }
+  restoreDatabaseDeadline(checkpoint: DatabaseTravelCheckpoint): void {
+    if (!this.databasePreparing || this.destination !== checkpoint.destination)
+      throw new Error('Unsent Database travel does not match its captured destination.');
+    this.since = checkpoint.preparedAt;
+    this.deadline = checkpoint.deadline;
+    if (checkpoint.failed)
+      this.cancel(
+        'Captured Database travel was cancelled before sending. Press Stop before starting a new run.',
+        true,
+      );
+    else this.tickMaintenance();
   }
   officialGameplay(): void {
     if (this.active && !this.databaseTrip?.sent) this.officialInputUntil = this.now() + 4_000;
@@ -367,7 +403,7 @@ export class TravelController {
       this.installedStart = null;
       this.executionIdentity = context.identity;
       this.since = this.now();
-      this.deadline = this.now() + 60_000;
+      this.deadline = this.since + 60_000;
       this.databaseTrip = {
         trip: this.trip,
         fromMap: map,
@@ -900,7 +936,9 @@ export class TravelController {
       context = this.planningOptions.context?.();
     if (this.active && this.now() > this.deadline)
       this.cancel(
-        'Database teleport was not confirmed before its deadline. No retry will be sent.',
+        trip.sent
+          ? 'Database teleport was not confirmed before its deadline. No retry will be sent.'
+          : 'Database travel preparation timed out before sending a request.',
         true,
       );
     if (!trip.sent) {

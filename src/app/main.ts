@@ -48,6 +48,7 @@ import {
 import { clientDashboard } from '../modules/client/client-dashboard';
 import { FarmingReadiness, navigateFarmingReadiness } from '../modules/client/farming-readiness';
 import { farmingReadiness } from '../modules/client/farming-readiness-logic';
+import { updateActivity } from '../modules/update/update-presentation-logic';
 import { liveSettingLabel, planLiveSettings } from '../modules/settings/live-settings-logic';
 import { mountMcp } from '../modules/mcp/mcp-client';
 import {
@@ -265,9 +266,7 @@ function presentUpdateContinuation(continuation: UpdateContinuation | null): voi
   form.restore(continuation.form);
   selectUpdateAccount();
   accountBaseline = accountFields();
-  message(
-    'Update complete. Settings restored. Waiting for the same account and character to continue.',
-  );
+  message('Settings restored. Waiting for the same account and character to continue.');
   updateButtons();
 }
 function runActive(): boolean {
@@ -500,6 +499,10 @@ async function pollUpdate(requested = false): Promise<void> {
     if (closeBusy || closeStatus) return;
     element('update-status').textContent = state.message;
     if (state.phase !== 'waiting') return;
+    if (!updateContinuation.canInstall(state.availableVersion, requested)) {
+      element('update-status').textContent = updateContinuation.presentation().reason;
+      return;
+    }
     const waiting = mainUpdateWaitReason();
     if (waiting) {
       element('update-status').textContent = waiting;
@@ -514,14 +517,22 @@ async function pollUpdate(requested = false): Promise<void> {
       saveTimer = undefined;
     }
     try {
-      const installation = updateContinuation.install(fieldRun, {
-        flush: () => currentForm.flush(),
-        game: () => ({ open: gameOpen, status: latest }),
-        interrupted: () => closeBusy,
-        status: (text) => {
-          if (!closeStatus) element('update-status').textContent = text;
+      const installation = updateContinuation.install(
+        fieldRun,
+        {
+          flush: () => currentForm.flush(),
+          game: () => ({ open: gameOpen, status: latest }),
+          interrupted: () => closeBusy,
+          status: (text) => {
+            if (!closeStatus)
+              element('update-status').textContent =
+                updateContinuation.presentation().reason || text;
+            activityLog.render(updateActivity(latest?.log ?? [], updateContinuation.history));
+            updateButtons();
+          },
         },
-      });
+        { installedVersion: state.version, targetVersion: state.availableVersion, requested },
+      );
       updateButtons();
       const result = await installation;
       presentUpdateContinuation(result.continuation);
@@ -531,6 +542,9 @@ async function pollUpdate(requested = false): Promise<void> {
     } finally {
       updateBusy = false;
       updateFinished();
+      if (!closeStatus)
+        element('update-status').textContent = updateContinuation.presentation().reason;
+      activityLog.render(updateActivity(latest?.log ?? [], updateContinuation.history));
       updateButtons();
       if (
         updateContinuation.pending &&
@@ -729,6 +743,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
       fresh,
       setupReason: ready && !runActive() ? setupReason : '',
       activeRun: !!activeSettings,
+      updater: updateContinuation.presentation(),
     },
     activeSettings ?? (scripted ? dashboardSettings : (startSettings ?? dashboardSettings)),
     latest?.mapInfo,
@@ -737,6 +752,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   element('status').classList.toggle('active', dashboard.state === 'RUNNING');
   element('status').dataset.state = dashboard.state;
   element('client-run-title').textContent = dashboard.headline;
+  activityLog.render(updateActivity(latest?.log ?? [], updateContinuation.history));
   attention.render(
     clientAttention(
       latest,
@@ -747,6 +763,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
         limitReason: fieldRun.limitReason,
         loginBusy,
         setupReason: !runActive() && (ready || !dashboardSettings) ? setupReason : '',
+        updater: updateContinuation.presentation(),
       },
       activeSettings ?? dashboardSettings,
     ),
@@ -760,6 +777,10 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   for (const button of navigation)
     if (button.dataset.clientNavigation !== 'setup-step') button.disabled = false;
   if (dashboard.state === 'LIMIT') message(dashboard.reason);
+  else if (updateContinuation.presentation().active) {
+    message(dashboard.reason);
+    if (!closeStatus) element('update-status').textContent = dashboard.reason;
+  }
   const entryDestination = startSettings ? farmingDestination(startSettings) : '';
   const entrySummary =
     !activeSettings &&
@@ -1267,7 +1288,7 @@ function render(s: ValidatedGameStatus): void {
       .then((resumed) => {
         if (resumed) {
           configureReconnect();
-          message('Update complete. Continuing with the same settings and remaining limits.');
+          message('Continuing with the same settings and remaining limits.');
           updateButtons();
         }
       })
@@ -1325,7 +1346,7 @@ function render(s: ValidatedGameStatus): void {
     fieldRun.settingsApplyWaitReason(s.sessionId) || reason,
     s.login.phase === 'failed' || (s.connected && !s.compatible),
   );
-  activityLog.render(s.log);
+  activityLog.render(updateActivity(s.log, updateContinuation.history));
   botConsole.render(s);
   updateButtons(projection);
   resumeFieldRun(s);
@@ -1556,7 +1577,10 @@ if (native) {
       for (const id of ['attacks', 'kills', 'looted', 'nearby']) element(id).textContent = '0';
       element('map-label').textContent = 'WAITING';
       element('target-label').textContent = 'No active target';
-      activityLog.render([], 'Session activity will appear after connection.');
+      activityLog.render(
+        updateContinuation.history,
+        'Session activity will appear after connection.',
+      );
       message('Disconnected. Select an account and character to connect again.');
       botConsole.render(null);
       updateButtons();
@@ -1609,10 +1633,7 @@ if (native) {
           !updateContinuation.stopped
         )
           await signIn();
-        else
-          message(
-            'Update complete. Settings restored. Sign in to the same account and character to continue.',
-          );
+        else message('Settings restored. Sign in to the same account and character to continue.');
       }
     } catch {
       element<HTMLButtonElement>('forget-login').hidden = false;

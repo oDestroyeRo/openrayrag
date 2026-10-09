@@ -92,6 +92,50 @@ function fixture() {
 }
 afterEach(() => vi.useRealTimers());
 describe('one-shot updater continuation owner', () => {
+  it('records completion only after a native startup claim and matching successful restore acknowledgement', async () => {
+    const f = fixture();
+    f.invoke.mockImplementation(async (command) =>
+      command === 'update_continuation' ? f.continuation : false,
+    );
+    expect(await f.owner.startup(f.field)).not.toBeNull();
+    expect(f.owner.presentation().reason).toContain('restore');
+    expect(f.owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
+    const resumed = f.owner.resume(f.fresh, account, f.field);
+    f.owner.restored({ requestId: 'b'.repeat(32), success: true });
+    expect(f.owner.pending).toBe(true);
+    expect(f.owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
+    f.owner.restored({ requestId, success: true });
+    expect(await resumed).toBe(true);
+    expect(f.owner.presentation().reason).toContain('Verified update restart');
+    expect(f.owner.history.filter((entry) => entry.text.includes('· complete ·'))).toHaveLength(1);
+    expect(await f.owner.resume(f.fresh, account, f.field)).toBe(false);
+    expect(f.owner.history.filter((entry) => entry.text.includes('· complete ·'))).toHaveLength(1);
+  });
+  it.each(['rejected', 'timeout', 'Stop'])(
+    'does not record completion after %s restoration',
+    async (failure) => {
+      vi.useFakeTimers();
+      const f = fixture();
+      f.invoke.mockImplementation(async (command) =>
+        command === 'update_continuation' ? f.continuation : false,
+      );
+      await f.owner.startup(f.field);
+      const resumed = f.owner.resume(f.fresh, account, f.field);
+      const rejected = expect(resumed).rejects.toThrow();
+      if (failure === 'rejected') f.owner.restored({ requestId, success: false });
+      else if (failure === 'timeout') await vi.advanceTimersByTimeAsync(500);
+      else await f.owner.cancel(true);
+      await rejected;
+      f.owner.restored({ requestId, success: true });
+      expect(f.owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
+    },
+  );
+  it('does not invent updater activity for an ordinary bot Stop', async () => {
+    const f = fixture();
+    await f.owner.cancel(true);
+    expect(f.owner.history).toEqual([]);
+    expect(f.owner.presentation()).toEqual({ active: false, reason: '' });
+  });
   it('loads legacy form, field and runtime cutoffs without restoring them in continuation settings', () => {
     const f = fixture();
     const input = JSON.parse(JSON.stringify(f.continuation));
@@ -140,6 +184,7 @@ describe('one-shot updater continuation owner', () => {
     f.owner.restored({ requestId, success: true });
     expect(await resumed).toBe(true);
     expect(f.owner.pending).toBe(false);
+    expect(f.owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
     expect(await f.owner.resume(f.fresh, account, f.field)).toBe(false);
   });
   it('does not auto-login without a saved matching account', () => {
@@ -325,6 +370,47 @@ function installationFixture() {
   return { ...f, adapter, nonce, calls, install: () => f.owner.install(f.field, adapter) };
 }
 describe('update installation transaction', () => {
+  it('backs off unchanged candidates after a preparation timeout and retains safe history', async () => {
+    vi.useFakeTimers();
+    const f = installationFixture();
+    f.field.restore(f.continuation.field);
+    const options = { installedVersion: '0.17.1', targetVersion: '0.18.0' };
+    const installation = f.owner.install(f.field, f.adapter, options);
+    await settle();
+    await vi.advanceTimersByTimeAsync(501);
+    await installation;
+    expect(f.owner.canInstall('0.18.0')).toBe(false);
+    expect(f.owner.canInstall('0.18.0', true)).toBe(true);
+    expect(f.owner.canInstall('0.18.1')).toBe(true);
+    expect(f.owner.presentation().reason).toContain('preparation timed out');
+    expect(f.owner.presentation().reason).toContain('0.18.0');
+    expect(f.owner.history.map((entry) => entry.text).join('\n')).toContain('0.17.1');
+    const count = f.owner.history.length;
+    await f.owner.install(f.field, f.adapter, options);
+    expect(f.calls('update_prepare')).toHaveLength(1);
+    expect(f.owner.history).toHaveLength(count);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(f.owner.canInstall('0.18.0')).toBe(true);
+  });
+  it('retains cancellation uncertainty until a later explicit Stop succeeds', async () => {
+    const f = installationFixture();
+    const original = f.invoke.getMockImplementation()!;
+    f.invoke.mockImplementation((command, args) =>
+      command === 'update_cancel'
+        ? Promise.reject(new Error('private/native/path'))
+        : original(command, args),
+    );
+    await f.install();
+    expect(f.owner.confirmationLost).toBe(true);
+    expect(f.owner.canInstall('0.18.1', true)).toBe(false);
+    expect(f.owner.presentation().reason).toContain('cancellation could not be confirmed');
+    expect(f.owner.presentation().reason).not.toContain('retries now');
+    expect(JSON.stringify(f.owner.history)).not.toContain('private/native');
+    f.invoke.mockImplementation(original);
+    await f.owner.cancel(true);
+    expect(f.owner.confirmationLost).toBe(false);
+    expect(f.owner.canInstall('0.18.1', true)).toBe(true);
+  });
   it.each([null, undefined, '', 0, 7, { opaque: 'native-handle' }])(
     'forwards opaque native reservation %j and preserves its cleanup truthiness',
     async (nonce) => {
@@ -368,7 +454,7 @@ describe('update installation transaction', () => {
     expect(f.calls('update_release')).toEqual([['update_release', { nonce: f.nonce }]]);
     expect(f.calls('update_cancel')).toEqual([['update_cancel', { stop: false }]]);
     expect(f.adapter.status).toHaveBeenLastCalledWith(
-      'Update waits for game confirmation that all actions have stopped. It will retry automatically.',
+      'Update deferred. The game did not acknowledge update confirmation in time. It will retry automatically.',
     );
     expect(JSON.stringify(f.adapter.status.mock.calls)).not.toContain(f.nonce);
   });
@@ -516,7 +602,7 @@ describe('update installation transaction', () => {
     f.adapter.game.mockReturnValue({ open: false, status: f.fresh });
     f.invoke.mockImplementation(async (command) => {
       if (command === 'update_reserve') return f.nonce;
-      if (command === 'update_install') return true;
+      if (command === 'update_install') throw new Error('synthetic restart failure');
       if (command === 'update_continuation') return recovery.promise;
       return undefined;
     });
@@ -538,6 +624,8 @@ describe('update installation transaction', () => {
     const resumed = f.owner.resume(f.fresh, account, f.field);
     f.owner.restored({ requestId, success: true });
     expect(await resumed).toBe(true);
+    expect(f.owner.presentation().reason).toContain('· recovered ·');
+    expect(f.owner.history.some((entry) => entry.text.includes('· complete ·'))).toBe(false);
   });
   it('releases even when release fails, retires failed recovery and cancels the remaining native ownership', async () => {
     const f = installationFixture();

@@ -10,6 +10,15 @@ const context: AttentionContext = {
   limitReason: '',
   setupReason: '',
 };
+it('retains updater stage and Stop guidance prominently while field telemetry continues', () => {
+  const updater = { active: true, reason: 'Update to v0.18.0 · prepare · 12s.' };
+  expect(clientAttention(null, { ...context, updater }, null)[0]).toMatchObject({
+    id: 'update',
+    title: 'Client update in progress',
+    detail: updater.reason,
+    nextStep: 'Wait for the confirmed action boundary. Stop cancels continuation.',
+  });
+});
 const settings = () => ({
   ...DEFAULT_SETTINGS,
   automation: {

@@ -10,6 +10,7 @@ interface StatusContext {
   limitReason: string;
   loginBusy: boolean;
   setupReason?: string;
+  updater?: { active: boolean; reason: string };
 }
 
 function heldReason(status: Record<string, unknown>): string {
@@ -63,23 +64,26 @@ export function clientStatus(
     login = record(status.login);
   const state = context.limitReason
     ? 'LIMIT'
-    : status.running === true
-      ? 'RUNNING'
-      : context.fieldRequested ||
-          status.runRequested === true ||
-          context.held ||
-          record(status.warp).blocked === true
-        ? 'WAITING'
-        : status.player && status.compatible === true
-          ? context.setupReason
-            ? 'SETUP'
-            : 'READY'
-          : status.connected === true
-            ? 'CONNECTED'
-            : 'OFFLINE';
+    : context.updater?.active
+      ? 'WAITING'
+      : status.running === true
+        ? 'RUNNING'
+        : context.fieldRequested ||
+            status.runRequested === true ||
+            context.held ||
+            record(status.warp).blocked === true
+          ? 'WAITING'
+          : status.player && status.compatible === true
+            ? context.setupReason
+              ? 'SETUP'
+              : 'READY'
+            : status.connected === true
+              ? 'CONNECTED'
+              : 'OFFLINE';
   const loginMessage = login.phase === 'failed' || login.phase === 'cancelled' || context.loginBusy;
   const reason =
     context.limitReason ||
+    (context.updater?.active ? context.updater.reason : '') ||
     (loginMessage
       ? text(login.message) || 'Loading the game for automatic sign-in…'
       : heldReason(status) || (state === 'SETUP' ? context.setupReason! : text(status.reason)));

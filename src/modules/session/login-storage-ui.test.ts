@@ -1456,12 +1456,20 @@ describe('updater waiting diagnostics', () => {
     await f.main.emit('input', f.get('radius'));
     ipc.invoke.mockImplementation(async (command: string) => {
       if (command === 'update_status')
-        return { version: '0.2.27', platform: 'macos', phase: 'waiting', message: 'Update ready' };
+        return {
+          version: '0.2.27',
+          availableVersion: '0.18.0',
+          platform: 'macos',
+          phase: 'waiting',
+          message: 'Update ready',
+        };
     });
     await vi.advanceTimersByTimeAsync(15000);
-    expect(f.get('update-status').textContent).toBe(
+    expect(f.get('update-status').textContent).toContain(
       'Update deferred. Current settings could not be saved. Check the settings form. It will retry automatically.',
     );
+    expect(f.get('update-status').textContent).toContain('to v0.18.0 (installed v0.2.27)');
+    expect(f.get('update-status').textContent).toContain('Next automatic attempt');
     expect(f.calls('update_reserve')).toEqual([]);
     expect(f.calls('update_install')).toEqual([]);
   });

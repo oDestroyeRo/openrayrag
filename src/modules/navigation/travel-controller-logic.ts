@@ -2,6 +2,67 @@ import type { PlanningOptions } from './route-planning';
 import type { MapPolicyInput as MapPolicy } from './map-policy-logic';
 import type { Entity, GameEvent, Position } from '../protocol/protocol';
 import type { routeBetweenMapsAsync } from './travel';
+import { mapCode, milliseconds, type MapCode, type Milliseconds } from '../../shared/domain-values';
+import { supportsDatabaseTravel } from './database-travel-protocol';
+
+/** An unsent field trip carries intent and clock debt, never transport authority. */
+export interface DatabaseTravelInput {
+  destination: string;
+  purpose: 'travel' | 'return' | 'field-entry';
+  preparedAt: number;
+  deadline: number;
+  failed: boolean;
+}
+export interface DatabaseTravelCheckpoint {
+  readonly destination: MapCode;
+  readonly purpose: 'travel' | 'return' | 'field-entry';
+  readonly preparedAt: Milliseconds;
+  readonly deadline: Milliseconds;
+  readonly teleportUntil: Milliseconds;
+  readonly quietUntil: Milliseconds;
+  readonly failed: boolean;
+}
+export function validateDatabaseTravelCheckpoint(
+  value: unknown,
+  frozenAt: number,
+): DatabaseTravelCheckpoint {
+  const c = value as DatabaseTravelCheckpoint;
+  if (
+    !c ||
+    typeof c !== 'object' ||
+    Array.isArray(c) ||
+    Object.keys(c).length !== 7 ||
+    ![
+      'destination',
+      'purpose',
+      'preparedAt',
+      'deadline',
+      'teleportUntil',
+      'quietUntil',
+      'failed',
+    ].every((key) => Object.hasOwn(c, key)) ||
+    !supportsDatabaseTravel(c.destination) ||
+    typeof c.failed !== 'boolean' ||
+    !['travel', 'return', 'field-entry'].includes(c.purpose) ||
+    ![c.preparedAt, c.deadline, c.teleportUntil, c.quietUntil].every(
+      (n) => Number.isSafeInteger(n) && n >= 0,
+    ) ||
+    c.preparedAt > frozenAt ||
+    c.deadline !== c.preparedAt + 60_000 ||
+    c.teleportUntil > frozenAt + 61_000 ||
+    c.quietUntil > frozenAt + 2_000
+  )
+    throw new Error('Invalid unsent Database travel checkpoint.');
+  return {
+    destination: mapCode(c.destination),
+    purpose: c.purpose,
+    preparedAt: milliseconds(c.preparedAt),
+    deadline: milliseconds(c.deadline),
+    teleportUntil: milliseconds(c.teleportUntil),
+    quietUntil: milliseconds(c.quietUntil),
+    failed: c.failed,
+  };
+}
 export interface TravelSnapshot {
   state: 'idle' | 'planning' | 'walking' | 'transition' | 'complete' | 'failed' | 'cancelled';
   destination: string;

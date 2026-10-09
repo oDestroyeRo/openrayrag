@@ -119,6 +119,10 @@ import {
   type DatabaseTravelTransport,
 } from '../navigation/travel-controller';
 import {
+  validateDatabaseTravelCheckpoint,
+  type DatabaseTravelCheckpoint,
+} from '../navigation/travel-controller-logic';
+import {
   DATABASE_TELEPORT_COOLDOWN_MS,
   databaseTeleportWait,
 } from '../navigation/database-travel-protocol';
@@ -428,6 +432,8 @@ export class CompanionController {
   private unresolvedWorld: Pending | null = null;
   private workflowOutstanding: Pending | null = null;
   private updateSuspended = false;
+  private updateTravel: DatabaseTravelCheckpoint | null = null;
+  private retainedDatabaseTravel: DatabaseTravelCheckpoint | null = null;
   get preparingUpdate(): boolean {
     return this.updateSuspended;
   }
@@ -903,6 +909,8 @@ export class CompanionController {
     this.pendingSettings = null;
     this.engine.cancelUpdate();
     this.updateSuspended = false;
+    this.updateTravel = null;
+    this.retainedDatabaseTravel = null;
     this.endMacro(reason);
     this.engine.castAvailability.stop(reason);
     this.supply.stop(reason);
@@ -1115,7 +1123,8 @@ export class CompanionController {
       !this.featureReceipt &&
       !this.workflowOutstanding &&
       !this.unresolvedWorld &&
-      !this.travel.active &&
+      (!this.travel.active ||
+        (this.updateSuspended && this.updateTravel !== null && this.travel.databasePreparing)) &&
       !this.service.active &&
       !this.workflow.snapshot().running &&
       !['running', 'waiting'].includes(this.routine.snapshot().state) &&
@@ -1140,14 +1149,44 @@ export class CompanionController {
   }
   prepareUpdate(): void {
     this.updateSuspended = true;
+    this.updateTravel ??= this.retainedDatabaseTravel;
+    const trip = this.travel.databaseCheckpoint();
+    if (
+      !this.updateTravel &&
+      trip &&
+      this.requestedSettings &&
+      !this.macro.active &&
+      !this.service.active &&
+      !this.supply.ownsField &&
+      trip.destination === farmingDestination(this.requestedSettings)
+    )
+      this.updateTravel = validateDatabaseTravelCheckpoint(
+        { ...trip, teleportUntil: this.databaseTeleportUntil, quietUntil: this.quietUntil },
+        this.now(),
+      );
     this.engine.prepareUpdate();
     this.updateTick();
   }
   updateCheckpoint(): ControllerUpdateCheckpoint | null {
+    if (this.updateTravel && this.travel.snapshot().state === 'complete') {
+      this.updateTravel = null;
+      this.retainedDatabaseTravel = null;
+    }
     if (!this.updateSuspended || !this.settledForMaintenance()) return null;
     const macro = this.macro.active ? this.macro.checkpoint() : null,
       partyHeal = this.partyHeal.checkpoint();
     if ((this.macro.active && !macro) || !partyHeal) return null;
+    const databaseTravel = this.updateTravel
+      ? validateDatabaseTravelCheckpoint(
+          {
+            ...this.updateTravel,
+            teleportUntil: this.databaseTeleportUntil,
+            quietUntil: this.quietUntil,
+            failed: this.travel.snapshot().state === 'failed',
+          },
+          this.now(),
+        )
+      : null;
     return {
       version: 1,
       frozenAt: this.now(),
@@ -1156,6 +1195,7 @@ export class CompanionController {
       macro,
       partyHeal,
       liveSettingsGuard: this.liveSettingsProtection(),
+      ...(databaseTravel ? { databaseTravel } : {}),
       run:
         this.runRequested || this.macro.active
           ? {
@@ -1168,6 +1208,18 @@ export class CompanionController {
     };
   }
   cancelUpdate(): void {
+    if (this.updateTravel) {
+      this.travel.tickMaintenance();
+      if (this.travel.snapshot().state === 'failed')
+        this.blockedReason = this.travel.snapshot().reason;
+    }
+    this.retainedDatabaseTravel = this.updateTravel
+      ? validateDatabaseTravelCheckpoint(
+          { ...this.updateTravel, failed: this.travel.snapshot().state === 'failed' },
+          this.now(),
+        )
+      : this.retainedDatabaseTravel;
+    this.updateTravel = null;
     this.updateSuspended = false;
     this.engine.cancelUpdate();
     this.lastTick = this.now();
@@ -1191,6 +1243,16 @@ export class CompanionController {
     )
       throw new Error('Update continuation requires a fresh settled entry of the same character.');
     const settings = remainingSettings ? validateSettings(remainingSettings) : checkpoint.settings;
+    if (
+      checkpoint.databaseTravel &&
+      (!settings || farmingDestination(settings) !== checkpoint.databaseTravel.destination)
+    )
+      throw new Error('Update continuation changed the captured Database destination.');
+    if (
+      checkpoint.databaseTravel &&
+      !this.databaseTravel?.supported(checkpoint.databaseTravel.destination)
+    )
+      throw new Error('Update continuation requires the existing Database transport.');
     if (checkpoint.macro && settings)
       for (const rule of checkpoint.macro.script.rules)
         for (const step of rule.steps)
@@ -1279,6 +1341,29 @@ export class CompanionController {
       this.partyFollow.start(followSettings, this.partyFollowContext());
     }
     this.partyHeal.restore(checkpoint.partyHeal);
+    if (
+      checkpoint.databaseTravel &&
+      settings &&
+      this.engine.map !== checkpoint.databaseTravel.destination
+    ) {
+      const trip = checkpoint.databaseTravel;
+      this.databaseTeleportUntil = Math.max(this.databaseTeleportUntil, trip.teleportUntil);
+      this.quietUntil = Math.max(this.quietUntil, trip.quietUntil);
+      this.travel.start(
+        this.engine.map,
+        this.engine.player!,
+        trip.destination,
+        settings.route_step,
+        settings.route_avoidWalls,
+        mapPolicy(settings),
+        trip.purpose,
+      );
+      this.travel.restoreDatabaseDeadline(trip);
+      this.travelSettings = settings;
+      this.retainedDatabaseTravel = trip;
+      if (this.travel.snapshot().state === 'failed')
+        this.blockedReason = this.travel.snapshot().reason;
+    }
     if (checkpoint.macro) {
       this.macroBase = structuredClone(settings!);
       this.macroPredicates = routineActorPredicates(checkpoint.macro.script.rules);
@@ -1301,6 +1386,15 @@ export class CompanionController {
     this.socket.tick(this.socketContext());
     this.refine.tick(this.refineContext());
     if (this.travel.teleportPending) this.travel.tick(this.engine.map, this.engine.player);
+    if (this.updateTravel) {
+      this.travel.tickMaintenance();
+      if (this.travel.snapshot().state === 'complete') {
+        this.updateTravel = null;
+        this.retainedDatabaseTravel = null;
+      }
+      if (this.travel.snapshot().state === 'failed')
+        this.blockedReason = this.travel.snapshot().reason;
+    }
     this.partyHeal.resourcesReadBack(this.engine.actorObservation([]));
     if (this.pending?.engineSequence !== undefined) {
       const result = this.engine.actionResult;
@@ -4746,6 +4840,22 @@ export class CompanionController {
       this.updateTick();
       return;
     }
+    if (this.retainedDatabaseTravel) {
+      if (
+        this.travel.teleportPending ||
+        this.engine.map === this.retainedDatabaseTravel.destination
+      )
+        this.retainedDatabaseTravel = null;
+      else if (
+        this.travel.snapshot().state === 'failed' ||
+        this.now() > this.retainedDatabaseTravel.deadline
+      ) {
+        this.travel.tickMaintenance();
+        this.blockedReason =
+          this.travel.snapshot().reason ||
+          'Database travel preparation timed out before sending a request.';
+      }
+    }
     this.applySettledSettings();
     const now = this.now();
     // Macro duration and step deadlines cannot be renewed by another owner's wait.
@@ -5176,6 +5286,9 @@ export class CompanionController {
       const respawn = automationSettings(this.requestedSettings ?? this.engine.settings).respawn;
       snapshot.reason = `Character is dead. Automatic respawn is ${respawn.enabled ? 'enabled' : 'disabled'}. ${snapshot.reason}`;
     }
+    if (this.updateSuspended)
+      snapshot.reason =
+        'Update preparation is waiting for a confirmed action boundary. Stop cancels continuation.';
     return {
       ...snapshot,
       runExperience: this.runExperience ? { ...this.runExperience } : null,

@@ -28,6 +28,9 @@ if (page.__TAURI_INTERNALS__ && !page.__RAYRAG__) {
         control: runtime.control.bind(runtime),
         perform: runtime.perform.bind(runtime),
         maintenance: runtime.maintenance.bind(runtime),
+        prepareUpdate: runtime.prepareUpdate.bind(runtime),
+        cancelUpdate: runtime.cancelUpdate.bind(runtime),
+        restoreUpdate: runtime.restoreUpdate.bind(runtime),
         snapshot: runtime.snapshot.bind(runtime),
       };
       void runtime.connect().then(() => {

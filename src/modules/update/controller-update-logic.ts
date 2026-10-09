@@ -13,6 +13,11 @@ import type { EscapeResumeGuard } from '../recovery/escape-logic';
 import type { SupplyResumeGuard } from '../services/supply-trip-logic';
 import type { DeathRecoveryGuard } from '../recovery/death-recovery';
 import { validateLiveSettingsGuard, type LiveSettingsGuard } from '../settings/live-settings-logic';
+import {
+  validateDatabaseTravelCheckpoint,
+  type DatabaseTravelCheckpoint,
+} from '../navigation/travel-controller-logic';
+import { farmingDestination } from '../recovery/death-recovery';
 export interface ControllerUpdateCheckpoint {
   version: 1;
   frozenAt: number;
@@ -21,6 +26,7 @@ export interface ControllerUpdateCheckpoint {
   macro: MacroCheckpoint | null;
   partyHeal: PartyHealCheckpoint;
   liveSettingsGuard?: LiveSettingsGuard | null;
+  databaseTravel?: DatabaseTravelCheckpoint | null;
   run: { startedAt: number; kills: number; pickups: number; deaths: number } | null;
 }
 
@@ -39,6 +45,7 @@ export interface ValidatedControllerUpdateCheckpoint {
   readonly partyHeal: PartyHealCheckpoint;
   readonly run: ValidatedControllerRunAllowance | null;
   readonly liveSettingsGuard: LiveSettingsGuard | null;
+  readonly databaseTravel?: DatabaseTravelCheckpoint;
 }
 
 export interface ControllerUpdateRestore {
@@ -71,6 +78,7 @@ export function validateControllerUpdateCheckpoint(
           'partyHeal',
           'run',
           'liveSettingsGuard',
+          'databaseTravel',
         ].includes(key),
     ) ||
     c.version !== 1 ||
@@ -93,6 +101,21 @@ export function validateControllerUpdateCheckpoint(
   )
     throw new Error('Invalid controller update checkpoint.');
   const settings = c.settings === null ? null : validateSettings(c.settings);
+  const databaseTravel =
+    c.databaseTravel == null
+      ? null
+      : validateDatabaseTravelCheckpoint(c.databaseTravel, c.frozenAt);
+  if (
+    databaseTravel &&
+    (!settings ||
+      !c.status.runRequested ||
+      c.macro !== null ||
+      databaseTravel.destination !== farmingDestination(settings) ||
+      c.status.travel?.destination !== databaseTravel.destination ||
+      !['walking', 'failed'].includes(c.status.travel.state) ||
+      databaseTravel.failed !== (c.status.travel.state === 'failed'))
+  )
+    throw new Error('Unsent Database travel does not match the captured field intent.');
   if (
     c.status.runExperience !== undefined &&
     c.status.runExperience !== null &&
@@ -146,6 +169,7 @@ export function validateControllerUpdateCheckpoint(
     macro,
     partyHeal,
     liveSettingsGuard,
+    ...(databaseTravel ? { databaseTravel } : {}),
     run:
       run === null
         ? null

@@ -17,6 +17,8 @@ import type { MacroStep } from '../automation/macros';
 import { BUILTIN_SERVICES } from '../services/npc-services';
 import { DEFAULT_SUPPLY } from '../services/supply-trip';
 import { FEATURE_OP } from '../protocol/protocol-feature';
+import { validateControllerUpdateCheckpoint } from '../update/controller-update';
+import { validateDatabaseTravelCheckpoint } from './travel-controller-logic';
 
 const own: Entity = {
   id: 0,
@@ -168,6 +170,34 @@ function travelFixture(sendFailure = false, reserve = () => true) {
     },
   };
 }
+
+it('keeps an internally captured Database deadline valid when clock reads advance', () => {
+  let clock = 100_000;
+  const send = vi.fn();
+  const travel = new TravelController(
+    () => {},
+    () => clock++,
+    undefined,
+    {
+      context: () => ({
+        identity: 'source lifetime',
+        connection: 'connection 1',
+        map: 'prt_fild08',
+        player: own,
+      }),
+      databaseTravel: { supported: supportsDatabaseTravel, send, ready: () => false },
+    },
+  );
+  travel.start('prt_fild08', own, 'prontera', 10, true);
+  const captured = travel.databaseCheckpoint();
+  expect(captured).not.toBeNull();
+  const checkpoint = validateDatabaseTravelCheckpoint(
+    { ...captured, teleportUntil: 0, quietUntil: 0 },
+    clock,
+  );
+  expect(checkpoint.deadline - checkpoint.preparedAt).toBe(60_000);
+  expect(send).not.toHaveBeenCalled();
+});
 
 describe('Database travel wire contract', () => {
   it('accepts only bounded, exact server teleport cooldown messages', () => {
@@ -413,8 +443,9 @@ function controllerFixture(
   map = 'prt_fild08',
   player = own,
   initialWait = DATABASE_TELEPORT_COOLDOWN_MS,
+  at = 100_000,
 ) {
-  let now = 100_000;
+  let now = at;
   const packets: Uint8Array[] = [];
   const c = wireController(
       (packet) => packets.push(packet),
@@ -505,10 +536,140 @@ function controllerFixture(
     settings,
     macro,
     teleports: () => packets.filter((p) => p[0] === 64),
+    time: () => now,
   };
 }
 
 describe('production shared-controller Database travel', () => {
+  it.each([false, true])(
+    'checkpoints unsent Database cooldown without dispatch, traffic=%s',
+    (traffic) => {
+      const f = controllerFixture('prt_fild08', own, 0);
+      f.c.start({ ...f.settings, map: 'prt_fild05' });
+      f.step();
+      expect(f.c.travel.databasePreparing).toBe(true);
+      f.c.prepareUpdate();
+      const checkpoint = f.c.updateCheckpoint();
+      expect(checkpoint).not.toBeNull();
+      expect(checkpoint?.databaseTravel).toMatchObject({
+        destination: 'prt_fild05',
+        preparedAt: 100_000,
+        deadline: 160_000,
+      });
+      f.advance(30_000, traffic);
+      expect(f.teleports()).toHaveLength(0);
+      expect(f.c.updateCheckpoint()).not.toBeNull();
+      f.c.cancelUpdate();
+      f.fresh();
+      f.step();
+      expect(f.teleports()).toEqual([databaseTravelCommand('prt_fild05')]);
+    },
+  );
+  it.each([false, true])(
+    'expires paused unsent travel at its original deadline, traffic=%s',
+    (traffic) => {
+      const f = controllerFixture('prt_fild08', own, 0);
+      f.c.start({ ...f.settings, map: 'prt_fild05' });
+      f.c.prepareUpdate();
+      f.advance(60_100, traffic);
+      expect(f.c.travel.snapshot().state).toBe('failed');
+      expect(f.c.updateCheckpoint()?.databaseTravel?.deadline).toBe(160_000);
+      f.c.cancelUpdate();
+      f.advance(31_000);
+      expect(f.teleports()).toHaveLength(0);
+      expect(f.c.snapshot().reason).toContain('timed out before sending');
+    },
+  );
+  it.each([110_000, 160_100])('restores unsent destination and original clocks at %i', (at) => {
+    const f = controllerFixture('prt_fild08', own, 0);
+    f.c.start({ ...f.settings, map: 'prt_fild05' });
+    f.c.prepareUpdate();
+    const checkpoint = f.c.updateCheckpoint()!;
+    const next = controllerFixture('prt_fild08', own, 0, at);
+    next.c.restoreUpdate(checkpoint);
+    expect(next.c.snapshot().elapsedSeconds).toBe(Math.floor((at - 100_000) / 1000));
+    next.advance(30_100);
+    expect(next.teleports()).toEqual(at < 160_000 ? [databaseTravelCommand('prt_fild05')] : []);
+    if (at > 160_000) expect(next.c.snapshot().reason).toContain('timed out before sending');
+    expect(f.teleports()).toHaveLength(0);
+  });
+  it('retains a longer server cooldown through installation and rejects altered checkpoint authority', () => {
+    const f = controllerFixture('prt_fild08', own, 0);
+    f.c.start({ ...f.settings, map: 'prt_fild05' });
+    f.c.prepareUpdate();
+    f.receive(
+      new BitWriter()
+        .u8(FEATURE_OP.featureError)
+        .string('You need to wait 60 more seconds before you can teleport again.'),
+    );
+    const checkpoint = f.c.updateCheckpoint()!;
+    expect(checkpoint.databaseTravel?.teleportUntil).toBe(161_000);
+    for (const patch of [
+      { destination: 'prontera' },
+      { deadline: 160_001 },
+      { preparedAt: 100_001 },
+      { teleportUntil: 161_001 },
+      { quietUntil: 102_001 },
+      { purpose: 'service' },
+      { sent: true },
+    ]) {
+      expect(() =>
+        validateControllerUpdateCheckpoint(
+          { ...checkpoint, databaseTravel: { ...checkpoint.databaseTravel, ...patch } },
+          f.time(),
+        ),
+      ).toThrow();
+    }
+    const next = controllerFixture('prt_fild08', own, 0, 110_000);
+    next.c.restoreUpdate(checkpoint);
+    next.advance(50_100);
+    expect(next.teleports()).toHaveLength(0);
+    expect(next.c.snapshot().reason).toContain('timed out before sending');
+  });
+  it('keeps an unsent source cancellation terminal through installation', () => {
+    const f = controllerFixture('prt_fild08', own, 0);
+    f.c.start({ ...f.settings, map: 'prt_fild05' });
+    f.c.prepareUpdate();
+    f.receive(new BitWriter().u8(OP.death).i32(own.id));
+    f.step();
+    expect(f.c.travel.snapshot().state).toBe('failed');
+    const checkpoint = f.c.updateCheckpoint()!;
+    expect(checkpoint.databaseTravel?.failed).toBe(true);
+    const next = controllerFixture('prt_fild08', own, 0, 110_000);
+    next.c.restoreUpdate(checkpoint);
+    next.advance(31_000);
+    expect(next.teleports()).toHaveLength(0);
+    expect(next.c.snapshot().reason).toContain('cancelled before sending');
+  });
+  it('drops unsent intent after authoritative official arrival during update preparation', () => {
+    const f = controllerFixture('prt_fild08', own, 0);
+    f.c.start({ ...f.settings, map: 'prt_fild05' });
+    f.c.prepareUpdate();
+    f.transition('prt_fild05', { x: 170, y: 370 });
+    f.step();
+    expect(f.c.travel.snapshot().state).toBe('complete');
+    const checkpoint = f.c.updateCheckpoint()!;
+    expect(checkpoint.databaseTravel).toBeUndefined();
+    expect(() => validateControllerUpdateCheckpoint(checkpoint, f.time())).not.toThrow();
+    expect(f.teleports()).toHaveLength(0);
+  });
+  it('keeps a sent Database transfer blocking and Stop revokes an unsent checkpoint', () => {
+    const sent = controllerFixture();
+    sent.c.start({ ...sent.settings, map: 'prt_fild05' });
+    sent.step();
+    sent.c.prepareUpdate();
+    expect(sent.c.updateCheckpoint()).toBeNull();
+    sent.advance(30_000);
+    expect(sent.teleports()).toHaveLength(1);
+    expect(sent.c.updateCheckpoint()).toBeNull();
+    const unsent = controllerFixture('prt_fild08', own, 0);
+    unsent.c.start({ ...unsent.settings, map: 'prt_fild05' });
+    unsent.c.prepareUpdate();
+    unsent.c.stop();
+    unsent.advance(31_000);
+    expect(unsent.c.updateCheckpoint()).toBeNull();
+    expect(unsent.teleports()).toHaveLength(0);
+  });
   it.each([false, true])('enters the configured field before combat with Stop=%s', (stopped) => {
     const f = controllerFixture();
     f.receive(spawn({ ...own, id: 2, classId: 4000, kind: 1, level: 1, x: 171 }, 0));
