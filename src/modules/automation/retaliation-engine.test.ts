@@ -446,14 +446,14 @@ describe('own-character monster defense', () => {
     expect(f.sent).toEqual([{ type: 'attack', id: selected.id }]);
   });
 
-  it('keeps the HP safety stop ahead of retaliation', () => {
+  it('allows retaliation at low HP while the character is living', () => {
     const f = setup();
     f.engine.start(f.settings);
     f.observeAttack();
     f.receive({ type: 'hit', id: player.id, damage: 60, position: { x: player.x, y: player.y } });
     f.step();
-    expect(f.engine.running).toBe(false);
-    expect(f.sent).toEqual([{ type: 'stop' }]);
+    expect(f.engine.running).toBe(true);
+    expect(f.sent).toEqual([{ type: 'attack', id: attacker.id }]);
   });
 
   it('preserves the original run kill budget while an attacker is waiting', () => {

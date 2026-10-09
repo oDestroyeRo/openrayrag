@@ -14,6 +14,7 @@ import { OP, decode, type Entity } from '../protocol/protocol';
 import { FEATURE_OP, featureCommand, validateExpandedAction } from '../protocol/protocol-feature';
 import type { WorldAction } from '../protocol/world-protocol';
 import { PersistentFieldRun } from '../session/reconnect';
+import { escapeRecovery } from './escape-logic';
 import { DEFAULT_MAP_POLICY } from '../navigation/map-policy';
 import { walkDuration } from '../navigation/movement';
 
@@ -203,15 +204,23 @@ describe('ordinary player escape contracts', () => {
 });
 
 describe('exclusive emergency escape owner', () => {
-  it('keeps default and disabled runs on their existing HP wait path', () => {
+  it('derives escape hysteresis from escape and rest settings without a legacy cutoff floor', () => {
+    const current = settings({ hpBelowPercent: 20 });
+    const legacy = { ...current, minHpPercent: 95 };
+    expect(escapeRecovery(legacy).hpPercent).toBe(30);
+    legacy.automation!.recovery.enabled = true;
+    legacy.automation!.recovery.hpEnd = 85;
+    expect(escapeRecovery(legacy).hpPercent).toBe(85);
+  });
+  it('keeps living low-HP runs active when escape is disabled', () => {
     const input = settings({ enabled: false });
     const f = setup(input);
     f.start();
     f.danger();
     expect(f.actions()).toEqual([]);
-    expect(f.controller.snapshot()).toMatchObject({ runRequested: true, state: 'waiting' });
+    expect(f.controller.snapshot()).toMatchObject({ runRequested: true, state: 'running' });
   });
-  it('preempts combat above the HP floor and lets Stop settle before sending once', () => {
+  it('preempts combat at the configured escape threshold and lets Stop settle before sending once', () => {
     const f = setup(settings({ hpBelowPercent: 70 }));
     f.start();
     f.step();
@@ -227,7 +236,7 @@ describe('exclusive emergency escape owner', () => {
     expect(f.sent).toHaveLength(count);
     expect(f.controller.engine.running).toBe(false);
   });
-  it('is reachable when Start initially waits below the ordinary HP floor', () => {
+  it('is reachable when Start begins at low HP', () => {
     const f = setup(settings(), 20);
     f.start();
     f.advance(250);
@@ -1043,7 +1052,7 @@ it('preserves healthy default HP-only reload behavior when fresh verified health
     map: 'prt_fild08',
     player: { name: 'Test' },
   })!;
-  expect(resumed.escapeGuard?.recovery).toEqual({ hpPercent: 46, threatCount: 0, quietSeconds: 0 });
+  expect(resumed.escapeGuard?.recovery).toEqual({ hpPercent: 30, threatCount: 0, quietSeconds: 0 });
   const f = setup(resumed.settings);
   f.controller.start(resumed.settings, resumed.escapeGuard);
   f.step();
@@ -1114,7 +1123,7 @@ describe('observed threat physical settlement and scheduling continuity', () => 
       expect(f.controller.snapshot().escape).toMatchObject({
         latched: true,
         state: 'confirmed',
-        recovery: { hpPercent: 46, threatCount: 1, quietSeconds: 2 },
+        recovery: { hpPercent: 30, threatCount: 1, quietSeconds: 2 },
       });
       expect(f.actions()).toHaveLength(1);
       // Fresh unrelated traffic cannot replace the invalidated own-health sample.
@@ -1348,7 +1357,7 @@ it('does not let a changed input profile enable HP preemption inside an already 
   f.advance(4750);
   expect(f.actions()).toHaveLength(1);
   expect(f.controller.snapshot().escape.recovery).toEqual({
-    hpPercent: 46,
+    hpPercent: 30,
     threatCount: 1,
     quietSeconds: 10,
   });

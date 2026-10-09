@@ -23,7 +23,6 @@ const state: FieldResumeState = {
   maxDeaths: 1,
   hp: 100,
   maxHp: 100,
-  minHpPercent: 40,
   npcMode: 'idle',
   npcId: null,
   vending: false,
@@ -68,7 +67,7 @@ describe('field resume decisions', () => {
       reason: 'Waiting for the canceled world request to settle or its interaction to close.',
     });
   });
-  it('waits at inclusive weight and HP limits but ignores weight when disabled', () => {
+  it('retains inclusive weight limits and allows low observed HP', () => {
     expect(fieldResumeDecision({ ...state, weight: undefined })).toEqual({
       type: 'wait',
       reason: 'Waiting for a confirmed weight update.',
@@ -80,11 +79,15 @@ describe('field resume decisions', () => {
     expect(
       fieldResumeDecision({ ...state, weightLimit: 0, weight: undefined, maxWeight: undefined }),
     ).toEqual({ type: 'resume' });
-    expect(fieldResumeDecision({ ...state, hp: 40 })).toEqual({
+    expect(fieldResumeDecision({ ...state, hp: 1 })).toEqual({ type: 'resume' });
+    expect(fieldResumeDecision({ ...state, hp: 0 })).toEqual({
       type: 'wait',
-      reason: 'Waiting for HP to recover above the configured limit.',
+      reason: 'Waiting for a living character with observed HP.',
     });
-    expect(fieldResumeDecision({ ...state, hp: 41 })).toEqual({ type: 'resume' });
+    expect(fieldResumeDecision({ ...state, maxHp: 0 })).toEqual({
+      type: 'wait',
+      reason: 'Waiting for a living character with observed HP.',
+    });
   });
   it('does not turn database preparation into a new field wait effect', () => {
     expect(fieldResumeDecision({ ...state, lastFrame: 5000 })).toEqual({ type: 'resume' });

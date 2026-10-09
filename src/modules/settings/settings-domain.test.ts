@@ -87,11 +87,9 @@ describe('settings domain admission', () => {
     invalid.automation!.recovery = {
       ...DEFAULT_AUTOMATION.recovery,
       enabled: true,
-      hpStart: invalid.minHpPercent,
+      hpStart: 1,
     };
-    expect(() => validateSettings(invalid)).toThrow(
-      'Rest below HP % (45%) must be above Emergency HP stop (45%).',
-    );
+    expect(validateSettings(invalid).automation!.recovery.hpStart).toBe(1);
   });
 });
 
@@ -111,7 +109,7 @@ function typeContracts(
   // @ts-expect-error A structural manual settings copy must pass its own aggregate admission.
   engine.settings = { ...manual };
   // @ts-expect-error Unrelated policy edits cannot forge manual settings admission at the real engine consumer.
-  engine.settings = { ...manual, minHpPercent: percentage(0) };
+  engine.settings = { ...manual, route_step: 0 };
   const acceptsRun = (_value: RunSettings) => undefined;
   const acceptsForm = (_value: ValidatedFormSettings) => undefined;
   const acceptsAutomation = (_value: ValidatedAutomationSettings) => undefined;
@@ -139,10 +137,10 @@ function typeContracts(
   const structural: AutomationSettingsInput = automation;
   // @ts-expect-error A structural input must still pass aggregate admission.
   acceptsAutomation(structural);
-  acceptsPercentage(run.minHpPercent);
+  acceptsPercentage(automation.recovery.hpStart);
   acceptsSeconds(run.attackMaxRouteTime);
   // @ts-expect-error Percentages cannot be used as durations.
-  acceptsSeconds(run.minHpPercent);
+  acceptsSeconds(automation.recovery.hpStart);
   // @ts-expect-error Wire durations cannot be used as percentages.
   acceptsPercentage(seconds(45));
   acceptsItem(automation.items[0]!.itemId);

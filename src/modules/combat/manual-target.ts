@@ -49,8 +49,8 @@ export function previewManualTarget(
     area = policy.mapPolicy ?? DEFAULT_MAP_POLICY;
   if (request.map !== c.map || !sameActionIdentity(request.owner, c.owner))
     throw new Error('Character or world changed. Preview the command again.');
-  if (!p || p.dead || p.hp <= 0 || p.maxHp <= 0 || (p.hp / p.maxHp) * 100 <= policy.minHpPercent)
-    throw new Error('A living character above the HP stop limit is required.');
+  if (!p || p.dead || p.hp <= 0 || p.maxHp <= 0)
+    throw new Error('A living character with observed HP is required.');
   const blocker = manualStateBlocker(request.command.type, c);
   if (blocker) throw new Error(blocker);
   if (!mapAllowed(area, request.map) || !insideLockArea(area, request.map, p))

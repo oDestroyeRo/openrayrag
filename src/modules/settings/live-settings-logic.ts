@@ -242,7 +242,6 @@ export function planLiveSettings(
   next.targets = [...draft.targets];
   next.radius = draft.radius;
   next.loot = draft.loot;
-  next.minHpPercent = draft.minHpPercent;
   policy.combat = desired.combat;
   policy.loot = desired.loot;
   policy.recovery = { ...desired.recovery, timeoutSeconds: previous.recovery.timeoutSeconds };
@@ -308,7 +307,6 @@ export function acknowledgedLiveSettings(
   next.targets = [...applied.targets];
   next.radius = applied.radius;
   next.loot = applied.loot;
-  next.minHpPercent = applied.minHpPercent;
   policy.combat = value.combat;
   policy.loot = value.loot;
   policy.recovery = { ...value.recovery, timeoutSeconds: policy.recovery.timeoutSeconds };
@@ -349,7 +347,6 @@ const labels: Record<string, string> = {
   targets: 'Combat targets',
   radius: 'Scan radius',
   loot: 'Pickup enabled',
-  minHpPercent: 'HP stop threshold',
   'automation.combat': 'Combat policy',
   'automation.loot': 'Loot policy',
   'automation.recovery': 'Rest recovery',
@@ -365,7 +362,6 @@ const fieldLabels: Record<string, string> = {
   hpEnd: 'HP end',
   spStart: 'SP start',
   spEnd: 'SP end',
-  minHpPercent: 'HP stop threshold',
   route_randomWalk: 'Random walk',
   route_step: 'Route step',
   route_avoidWalls: 'Avoid walls',

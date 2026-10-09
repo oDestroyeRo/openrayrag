@@ -134,7 +134,7 @@ describe('bounded manual UI', () => {
     expect(f.command).not.toHaveBeenCalled();
     f.element('manual-walk-x').value = '100';
     f.element('manual-walk-y').value = '100';
-    f.settings.minHpPercent = NaN;
+    f.settings.route_step = NaN;
     await f.element('manual-preview-walk').click();
     expect(f.element('manual-target-output').textContent).toContain('Invalid');
     expect(f.command).not.toHaveBeenCalled();

@@ -98,6 +98,7 @@ function ruleKeys(value: Record<string, unknown>, expected: string[], path: stri
 function checkedSettings(value: unknown): RunSettings {
   const expected = [
     ...Object.keys(DEFAULT_SETTINGS),
+    ...(record(value) && Object.hasOwn(value, 'minHpPercent') ? ['minHpPercent'] : []),
     ...(record(value) && Object.hasOwn(value, 'automation') ? ['automation'] : []),
   ];
   if (!record(value) || !keys(value, expected))

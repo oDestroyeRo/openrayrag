@@ -92,6 +92,22 @@ function fixture() {
 }
 afterEach(() => vi.useRealTimers());
 describe('one-shot updater continuation owner', () => {
+  it('loads legacy form, field and runtime cutoffs without restoring them in continuation settings', () => {
+    const f = fixture();
+    const input = JSON.parse(JSON.stringify(f.continuation));
+    input.form.settings.minHpPercent = 95;
+    input.field.desired.minHpPercent = 95;
+    input.runtime.settings.minHpPercent = 95;
+    const restored = f.owner.claim(input, f.field)!;
+    expect(restored.form.settings).not.toHaveProperty('minHpPercent');
+    expect(restored.field!.desired).not.toHaveProperty('minHpPercent');
+    expect(restored.runtime.settings).not.toHaveProperty('minHpPercent');
+    expect(f.field.resumeFor(f.fresh, { settledUpdate: true })!.settings).not.toHaveProperty(
+      'minHpPercent',
+    );
+    input.runtime.settings.unrelatedCutoff = 95;
+    expect(() => validateUpdateContinuation(input)).toThrow();
+  });
   it.each([true, false, undefined])(
     'transfers initial field entry from frozen telemetry pending=%s',
     (pending) => {

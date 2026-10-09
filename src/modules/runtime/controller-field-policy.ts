@@ -34,7 +34,6 @@ export interface FieldResumeState {
   maxDeaths: number;
   hp: number;
   maxHp: number;
-  minHpPercent: number;
   npcMode: string;
   npcId: number | null;
   vending: boolean;
@@ -65,8 +64,8 @@ export function fieldResumeDecision(state: FieldResumeState): FieldResumeDecisio
         ? `Death limit reached. ${deathLimitGuidance(state.deaths, state.maxDeaths)}`
         : 'Waiting for revival.',
     );
-  if (!state.dead && (!state.maxHp || (state.hp / state.maxHp) * 100 <= state.minHpPercent))
-    return wait('Waiting for HP to recover above the configured limit.');
+  if (!state.dead && (state.hp <= 0 || !state.maxHp))
+    return wait('Waiting for a living character with observed HP.');
   if (state.npcMode !== 'idle' || state.npcId !== null || state.vending)
     return wait('Waiting for the current NPC or vending interaction to finish.');
   return { type: state.now < state.retryAt ? 'hold' : 'resume' };

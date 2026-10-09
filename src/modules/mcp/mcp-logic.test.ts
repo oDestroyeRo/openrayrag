@@ -190,11 +190,12 @@ describe('MCP read-only projection', () => {
       startReady: true,
       normalized: { settings: { radius: 6 } },
     });
-    const invalid = 'script "Test"\nset emergency-hp = 60%\nset automation.recovery.enabled = true';
+    const invalid =
+      'script "Test"\nset automation.recovery.hpStart = 85%\nset automation.recovery.hpEnd = 60%';
     expect(mcpReadResult(query('validate_script', { script: invalid }), context)).toMatchObject({
       valid: false,
       normalized: null,
-      diagnostics: [{ message: expect.stringContaining('Emergency HP stop') }],
+      diagnostics: [{ message: expect.stringContaining('Invalid automation settings') }],
     });
     expect(JSON.stringify(context)).toBe(before);
     expect(actions).toEqual([]);

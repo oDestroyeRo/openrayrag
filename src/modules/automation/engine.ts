@@ -634,10 +634,10 @@ export class BotEngine {
     if (!respawnOnly && validated.map !== this.map)
       throw new Error('Map changed. Choose monsters on the current map before starting.');
     if (
-      (!p.dead && (p.maxHp <= 0 || (p.hp / p.maxHp) * 100 <= settings.minHpPercent)) ||
+      (!p.dead && (p.hp <= 0 || p.maxHp <= 0)) ||
       (p.dead && (!continuing || !automationSettings(validated).respawn.enabled))
     )
-      throw new Error('Recover above the HP stop limit before starting.');
+      throw new Error('A living character with observed HP is required before starting.');
     this.advanceMovement();
     if (respawnOnly && this.deaths > automationSettings(validated).respawn.maxDeaths)
       throw new Error(
@@ -1700,13 +1700,8 @@ export class BotEngine {
       this.character.stats.maxHp = this.player.maxHp;
       this.character.stats.level = this.player.level;
     }
-    if (
-      this.running &&
-      this.player &&
-      !this.player.dead &&
-      (this.player.hp / this.player.maxHp) * 100 <= this.settings.minHpPercent
-    )
-      this.stop('HP reached the stop limit. Recover manually.');
+    if (this.running && this.player && !this.player.dead && this.player.hp <= 0)
+      this.stop('Waiting for a living character with observed HP.');
   }
   tick(dispatchDecisions = true): void {
     if (this.updateSuspended) dispatchDecisions = false;
@@ -1787,8 +1782,8 @@ export class BotEngine {
       this.runIntent = intent;
       return;
     }
-    if (p.maxHp <= 0 || (p.hp / p.maxHp) * 100 <= this.settings.minHpPercent) {
-      this.stop('HP reached the stop limit. Recover manually.');
+    if (p.hp <= 0 || p.maxHp <= 0) {
+      this.stop('Waiting for a living character with observed HP.');
       return;
     }
     if (a.limits.weightPercent) {
@@ -3859,14 +3854,8 @@ export class BotEngine {
       );
       return;
     }
-    if (
-      !p ||
-      p.dead ||
-      p.hp <= 0 ||
-      p.maxHp <= 0 ||
-      (p.hp / p.maxHp) * 100 <= request.policy.minHpPercent
-    ) {
-      this.finishManual('failed', 'Character reached the manual HP stop limit.');
+    if (!p || p.dead || p.hp <= 0 || p.maxHp <= 0) {
+      this.finishManual('failed', 'A living character with observed HP is required.');
       return;
     }
     // A cast waits at dispatch without canceling this already admitted finite task.

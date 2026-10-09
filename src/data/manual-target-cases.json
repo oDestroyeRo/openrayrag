@@ -19,7 +19,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -52,7 +51,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -84,7 +82,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -116,7 +113,6 @@
       },
       "timeoutSeconds": 120,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -148,7 +144,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -196,7 +191,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -230,7 +224,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -262,7 +255,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -294,7 +286,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -326,7 +317,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -358,7 +348,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -390,7 +379,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -423,7 +411,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -455,7 +442,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -487,7 +473,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -519,7 +504,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -551,7 +535,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -583,7 +566,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -616,7 +598,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -653,7 +634,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -685,7 +665,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -738,7 +717,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -771,7 +749,6 @@
       },
       "timeoutSeconds": 0,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -803,7 +780,6 @@
       },
       "timeoutSeconds": 121,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -835,7 +811,6 @@
       },
       "timeoutSeconds": 1.5,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -867,7 +842,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -899,7 +873,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -938,7 +911,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -981,7 +953,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -1029,7 +1000,6 @@
       },
       "timeoutSeconds": 30,
       "policy": {
-        "minHpPercent": 45,
         "routeStep": 10,
         "avoidWalls": true,
         "walkSeconds": 75,
@@ -1051,6 +1021,38 @@
             "maxY": 10
           }
         }
+      }
+    }
+  },
+  {
+    "name": "legacy emergency cutoff is ignored",
+    "valid": true,
+    "request": {
+      "type": "manualTarget",
+      "map": "prt_fild08",
+      "owner": {
+        "world": "12345678-1234-1234-1234-123456789abc",
+        "id": 0,
+        "incarnation": 1
+      },
+      "command": {
+        "type": "walk",
+        "destination": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "timeoutSeconds": 30,
+      "policy": {
+        "routeStep": 10,
+        "avoidWalls": true,
+        "walkSeconds": 75,
+        "approachSeconds": 4,
+        "maxPathDistance": 20,
+        "levelDifference": 1,
+        "monsterRules": [],
+        "minAmmoStock": 0,
+        "minHpPercent": 95
       }
     }
   }

@@ -858,7 +858,6 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
   if (features.setupDraftDirty())
     for (const id of [
       'radius',
-      'min-hp',
       'loot',
       'random-walk',
       'route-step',

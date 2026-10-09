@@ -889,7 +889,6 @@ it('registers before startup restoration and keeps its settings, profile and tar
       map: 'prt_fild08',
       targets: [4000],
       radius: 17,
-      minHpPercent: 60,
       loot: false,
       route_randomWalk: 2,
       route_step: 7,
@@ -923,7 +922,6 @@ it('registers before startup restoration and keeps its settings, profile and tar
   const reopened = await fixture(null, false, document);
   for (const [id, value] of Object.entries({
     radius: '17',
-    'min-hp': '60',
     'random-walk': '2',
     'route-step': '7',
     'route-time': '120',

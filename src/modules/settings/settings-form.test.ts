@@ -106,7 +106,6 @@ function settings(): Settings {
     map: map.code,
     targets: [4000, 4007],
     radius: 17,
-    minHpPercent: 55,
     loot: false,
     route_randomWalk: 2,
     route_step: 3,
@@ -133,7 +132,6 @@ function setup() {
   const host = new Element('main');
   for (const id of [
     'radius',
-    'min-hp',
     'loot',
     'random-walk',
     'route-step',
@@ -142,7 +140,6 @@ function setup() {
     'attack-time',
     'avoid-walls',
     'radius-value',
-    'hp-value',
     'select-targets',
     'clear-targets',
     'targets',
@@ -463,7 +460,6 @@ describe('settings form interface', () => {
     expect(f.form.runSettings()).toMatchObject({ ...value, targets: [4000] });
     expect(f.form.snapshot().settings.targets).toEqual([4000]);
     expect(f.field('radius-value').textContent).toBe('17 cells');
-    expect(f.field('hp-value').textContent).toBe('55%');
     expect(f.form.snapshot().settings.automation).toMatchObject({
       limits: value.automation!.limits,
       respawn: { enabled: true, maxDeaths: 1 },
@@ -663,9 +659,9 @@ describe('settings form interface', () => {
     f.observe();
     const input = f.target('Poring');
     f.host.addEventListener('input', () => f.form.refresh());
-    f.field('min-hp').value = '63';
-    f.field('min-hp').emit('input');
-    expect(f.field('hp-value').textContent).toBe('63%');
+    f.field('radius').value = '13';
+    f.field('radius').emit('input');
+    expect(f.field('radius-value').textContent).toBe('13 cells');
     f.observe({ controlsLocked: true, targetsLocked: true });
     expect(f.field('radius').disabled).toBe(true);
     expect(input.disabled).toBe(true);

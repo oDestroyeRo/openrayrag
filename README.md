@@ -55,7 +55,7 @@ These controls keep the common Start and Stop controls available:
 | Section | Controls |
 | --- | --- |
 | **Combat** | Selected targets, retaliation, combat off, level difference, species ignore/attack rules and priority. Ignore rules take precedence. |
-| **Recovery** | HP/SP rest thresholds, optional wing/skill escape with stock and cooldown guards, emergency HP threshold, respawn and death allowance. Sitting requires the game's skill prerequisites. |
+| **Recovery** | HP/SP rest thresholds, optional wing/skill escape with stock and cooldown guards, respawn and death allowance. Sitting requires the game's skill prerequisites. |
 | **Travel & follow** | Optional map allow/deny lists and inclusive field lock area; server Database teleport to supported destinations, optional return after respawn or escape, current-map waypoints, repeat route, named-player follow and routing limits. Party rendezvous retains verified portal routes and their optional weighted costs. |
 | **Inventory & skills** | Own-kill or all-drop pickup policy, item filters and priority, recovery consumables with retained quantities, self/enemy skills, conditional equipment and ordered stat/skill allocation. |
 | **Run limits** | Daily hours and session/kill/pickup/weight limits. NPC workflows, condition routines and social controls are available under **Tools**. |
@@ -112,7 +112,7 @@ Emergency escape is disabled by default. In **Recovery**, enable it and choose a
 
 One danger episode permits one escape request. The app stops field movement, lets input settle for 250 ms, and waits for a world refresh followed by your alive character arrival. Consumption or SP loss alone cannot confirm escape. Stop cancels preparation; a sent request retains its receipt until arrival or verified reconnect reconciliation. An uncertain result fences further actions and is never retried automatically. Reconnect retains the cooldown and disarms escape until fresh character resources and HP reconcile.
 
-After arrival, the field run stays requested and waits for HP recovery above the ordinary stop floor and escape hysteresis (trigger + 10 points, capped at 100%, or the configured recovery end if higher). Returning to a save point does not heal you. The episode rearms only after a real self HP recovery update and the cooldown; continuously low HP cannot spend wings repeatedly. Known map collision and the configured return-to-start-map policy still apply. Map teleport restrictions and other server action gates remain authoritative; a rejected escape is reported without a fallback.
+After arrival, the field run stays requested and waits for HP recovery to the escape hysteresis threshold (trigger + 10 points, capped at 100%, or the configured recovery end if higher). Returning to a save point does not heal you. The episode rearms only after a real self HP recovery update and the cooldown; continuously low HP cannot spend wings repeatedly. Known map collision and the configured return-to-start-map policy still apply. Map teleport restrictions and other server action gates remain authoritative; a rejected escape is reported without a fallback.
 
 ## Client updates
 

@@ -1859,37 +1859,56 @@ describe('persistent field run ownership', () => {
       expect(sent.filter((a) => a.type === 'skill')).toHaveLength(1);
     },
   );
-  it('keeps a low HP run waiting and resumes only after authoritative recovery', () => {
+  it('keeps a living low-HP run active after authoritative damage', () => {
     const { controller, sent, receive, step } = setup();
     controller.start(settings);
     step();
-    receive({ type: 'hit', id: 1, damage: 80, position: { x: 100, y: 100 } });
-    expect(controller.snapshot()).toMatchObject({
-      runRequested: true,
-      running: false,
-      state: 'waiting',
-    });
-    const count = sent.length;
-    step();
-    expect(sent).toHaveLength(count);
-    receive({ type: 'heal', id: 1, hp: 100, maxHp: 100 });
+    receive({ type: 'hit', id: 1, damage: 99, position: { x: 100, y: 100 } });
     step();
     expect(controller.snapshot()).toMatchObject({
       runRequested: true,
       running: true,
       state: 'running',
     });
-    expect(sent.filter((action) => action.type === 'attack')).toHaveLength(2);
+    expect(sent.filter((action) => action.type === 'stop')).toEqual([]);
+    expect(sent.filter((action) => action.type === 'attack')).toHaveLength(1);
   });
-  it('starts a low HP request in waiting instead of dropping its intent', () => {
-    const { controller, receive, step } = setup();
-    receive({ type: 'hit', id: 1, damage: 80, position: { x: 100, y: 100 } });
+  it.each(['stats', 'heal'] as const)(
+    'fences zero HP from %s until living HP or death is observed',
+    (type) => {
+      const f = setup();
+      f.controller.start(settings);
+      f.step();
+      const sample =
+        type === 'stats'
+          ? { type: 'stats' as const, level: 7, hp: 0, maxHp: 100 }
+          : { type: 'heal' as const, id: 1, hp: 0, maxHp: 100 };
+      f.controller.engine.receive([sample]);
+      expect(f.sent.at(-1)).toEqual({ type: 'stop' });
+      expect(f.controller.engine.player!.dead).toBe(false);
+      expect(f.controller.engine.running).toBe(false);
+      const actions = f.sent.length;
+      f.step();
+      expect(f.sent).toHaveLength(actions);
+      f.receive({ type: 'heal', id: 1, hp: 1, maxHp: 100 });
+      f.step(5000);
+      expect(f.controller.engine.running).toBe(true);
+      const g = setup();
+      g.receive(sample);
+      g.controller.start(settings);
+      g.step();
+      expect(g.controller.engine.running).toBe(false);
+      expect(g.sent).toEqual([]);
+    },
+  );
+  it('starts a living low-HP request immediately', () => {
+    const { controller, receive, step, sent } = setup();
+    receive({ type: 'hit', id: 1, damage: 99, position: { x: 100, y: 100 } });
     controller.start(settings);
-    expect(controller.runRequested).toBe(true);
-    expect(controller.engine.running).toBe(false);
-    receive({ type: 'heal', id: 1, hp: 100, maxHp: 100 });
     step();
+    expect(controller.runRequested).toBe(true);
     expect(controller.engine.running).toBe(true);
+    expect(sent.filter((action) => action.type === 'attack')).toHaveLength(1);
   });
   it('rebinds the map while preserving selected species and ignoring unselected monsters', () => {
     const { controller, receive, sent, step } = setup();
@@ -3776,18 +3795,16 @@ describe('macro controller supervision', () => {
     expect(f.controller.engine.running).toBe(false);
     expect(f.controller.settledForMaintenance()).toBe(true);
   });
-  it('leaves farm activation unconfirmed while the HP guard blocks the field', () => {
+  it('activates a macro farm while the living character has low HP', () => {
     const f = fixture();
     f.controller.engine.player!.hp = 40;
     macro(f);
     expect(f.controller.macro.snapshot()).toMatchObject({
-      actionsCompleted: 0,
-      pendingActionId: 1,
+      actionsCompleted: 1,
+      pendingActionId: null,
     });
-    expect(f.controller.engine.running).toBe(false);
-    f.advance(30000);
-    expect(f.controller.macro.snapshot().state).toBe('failed');
-    expect(f.controller.runRequested).toBe(false);
+    expect(f.controller.engine.running).toBe(true);
+    expect(f.controller.runRequested).toBe(true);
   });
   it('reacts to level changes while a field is running and preserves the run counters across farms', () => {
     const f = fixture(),

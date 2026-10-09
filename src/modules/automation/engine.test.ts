@@ -98,11 +98,18 @@ describe('combat and looting behavior', () => {
     engine.compatible = false;
     expect(() => engine.start(settings)).toThrow();
     engine.compatible = true;
-    engine.player!.hp = 10;
+    engine.player!.hp = 0;
     expect(() => engine.start(settings)).toThrow();
     engine.player!.hp = 70;
+    engine.player!.maxHp = 0;
+    expect(() => engine.start(settings)).toThrow();
+    engine.player!.maxHp = 70;
     engine.player!.dead = true;
     expect(() => engine.start(settings)).toThrow();
+    engine.player!.dead = false;
+    engine.player!.hp = 1;
+    expect(() => engine.start(settings)).not.toThrow();
+    expect(engine.running).toBe(true);
   });
   it('does not attack another player, a distant monster, a stronger monster or an unlisted monster', () => {
     const { engine, sent, step } = setup();
@@ -125,15 +132,19 @@ describe('combat and looting behavior', () => {
     step();
     expect(sent).toEqual([]);
   });
-  it('stops immediately at the HP limit and does not double-count visual attacks', () => {
+  it('continues at low HP, stops at zero HP and does not double-count visual attacks', () => {
     const { engine, sent, step } = setup();
     engine.start(settings);
     step();
     engine.receive([{ type: 'attack', source: 2, target: 1, position: { x: 102, y: 100 } }]);
     expect(engine.player!.hp).toBe(70);
     engine.receive([{ type: 'hit', id: 1, damage: 40, position: { x: 100, y: 100 } }]);
-    expect(engine.running).toBe(false);
+    expect(engine.running).toBe(true);
     expect(engine.player!.hp).toBe(30);
+    expect(sent.some((action) => action.type === 'stop')).toBe(false);
+    engine.receive([{ type: 'hit', id: 1, damage: 30, position: { x: 100, y: 100 } }]);
+    expect(engine.running).toBe(false);
+    expect(engine.player!.hp).toBe(0);
     expect(sent.at(-1)).toEqual({ type: 'stop' });
   });
   it('counts server-confirmed kills and pickups', () => {

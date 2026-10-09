@@ -104,6 +104,20 @@ function setup(grid: WalkGrid = { width: 200, height: 200, walkable: () => true 
   };
 }
 describe('bounded manual target owner', () => {
+  it.each(['walk', 'attack'] as const)(
+    'admits and continues manual %s at one living HP',
+    (kind) => {
+      const f = setup();
+      f.engine.player!.hp = 1;
+      const request = f.request(kind);
+      expect(f.engine.previewManual(request).length).toBeGreaterThan(0);
+      f.engine.startManual(request);
+      f.step();
+      expect(f.engine.manualTargetActive).toBe(true);
+      expect(f.sent[0]?.type).toBe(kind);
+      expect(f.sent.some((action) => action.type === 'stop')).toBe(false);
+    },
+  );
   it('admits observed monster class zero without making it a configured species selection', () => {
     const f = setup();
     f.receive([{ type: 'spawn', entity: { ...enemy, classId: 0 } }]);
@@ -314,7 +328,9 @@ describe('bounded manual target owner', () => {
     'removed',
     'outside',
     'unreachable',
-    'hp',
+    'dead',
+    'zeroHp',
+    'unknownHp',
     'map',
     'clear',
     'disconnect',
@@ -333,8 +349,13 @@ describe('bounded manual target owner', () => {
       f.engine.entities.get(2)!.x = 199;
       f.step();
     }
-    if (variant === 'hp') {
-      f.engine.player!.hp = 1;
+    if (variant === 'dead') f.engine.receive([{ type: 'death', id: 1 }]);
+    if (variant === 'zeroHp') {
+      f.engine.player!.hp = 0;
+      f.step();
+    }
+    if (variant === 'unknownHp') {
+      f.engine.player!.maxHp = 0;
       f.step();
     }
     if (variant === 'map') f.engine.receive([{ type: 'map', map: 'prontera' }]);
@@ -417,8 +438,11 @@ describe('bounded manual target owner', () => {
 
 describe('strict command-only manual schema', () => {
   it.each(cases)('$name', ({ valid, request }) => {
-    if (valid) expect(validateManualTargetRequest(request)).toEqual(request);
-    else expect(() => validateManualTargetRequest(request)).toThrow();
+    if (valid) {
+      const expected = structuredClone(request);
+      if (expected.policy) Reflect.deleteProperty(expected.policy, 'minHpPercent');
+      expect(validateManualTargetRequest(request)).toEqual(expected);
+    } else expect(() => validateManualTargetRequest(request)).toThrow();
     expect(validControllerAction(request)).toBe(false);
     expect(() =>
       validateRoutineSpec(

@@ -115,6 +115,15 @@ mod tests {
     }
 
     #[test]
+    fn legacy_cutoff_is_dropped_when_current_form_is_saved_again() {
+        let d = document(53);
+        let encoded = encode(&d).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        assert!(value["settings"].get("minHpPercent").is_none());
+        assert_eq!(value["revision"], 53);
+        assert!(parse(&encoded).is_ok());
+    }
+    #[test]
     fn metadata_failures_accumulate_with_the_existing_external_error() {
         let mut malformed = document(0);
         malformed.version = 2;

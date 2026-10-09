@@ -175,8 +175,7 @@ function setupDom() {
 function widget(resource: RecoveryResource = 'hp') {
   const createElement = setupDom(),
     changed = vi.fn();
-  const settings = { minHpPercent: 45 };
-  const ui = new RecoveryItemUi(changed, () => settings.minHpPercent, resource),
+  const ui = new RecoveryItemUi(changed, resource),
     root = ui.root as unknown as Element;
   ui.update({
     inventoryKnown: true,
@@ -193,7 +192,7 @@ function widget(resource: RecoveryResource = 'hp') {
     choice.checked = checked;
     choice.emit('change');
   };
-  return { ui, root, changed, createElement, settings, field, mode, row, select };
+  return { ui, root, changed, createElement, field, mode, row, select };
 }
 
 function featureUi(settingsUnavailable = false) {
@@ -211,10 +210,6 @@ function featureUi(settingsUnavailable = false) {
   const manualTools = new Element('section'),
     sessionDetails = new Element('div');
   host.append(...Object.values(sections), manualTools, sessionDetails);
-  const stopLimit = new Element('input');
-  stopLimit.id = 'min-hp';
-  stopLimit.value = '45';
-  host.append(stopLimit);
   const hooks = {
     settings: () => {
       if (settingsUnavailable) throw new Error('Settings form is not ready.');
@@ -387,7 +382,7 @@ describe('HP potion selection', () => {
     ).toEqual([514, 505]);
     f.mode('selected');
     expect(f.ui.read().itemIds).toEqual([514]);
-    expect(f.root.querySelector('.notice')!.hidden).toBe(true);
+    expect(f.root.querySelector('.notice')).toBeNull();
     expect(f.field('belowPercent').ariaLabel).toBe('Use below SP %');
   });
   it('starts off and displays only carried items that restore HP', () => {
@@ -408,15 +403,6 @@ describe('HP potion selection', () => {
       ['selected', 'Choose items'],
     ]);
     expect(f.changed).not.toHaveBeenCalled();
-  });
-
-  it('does not read a not-yet-constructed settings owner while Off', () => {
-    setupDom();
-    const stopLimit = vi.fn(() => {
-      throw new Error('Settings not ready.');
-    });
-    expect(() => new RecoveryItemUi(() => {}, stopLimit)).not.toThrow();
-    expect(stopLimit).not.toHaveBeenCalled();
   });
 
   it('defaults an explicit first Choose opt-in to a carried item and retains preference order across modes', () => {
@@ -560,24 +546,13 @@ describe('HP potion selection', () => {
     expect(stock.textContent).toBe('Carried: unknown');
   });
 
-  it('warns when the potion threshold cannot precede the HP stop guard and never alters either setting', () => {
+  it('accepts a low item threshold without an emergency stop warning', () => {
     const f = widget();
     f.mode('any');
-    const warning = f.root.querySelector('.notice')!;
-    expect(warning.hidden).toBe(true);
-    f.field('belowPercent').value = '45';
+    f.field('belowPercent').value = '1';
     f.field('belowPercent').emit('input');
-    expect(warning.hidden).toBe(false);
-    expect(warning.textContent).toContain('stops at 45% HP before using recovery items');
-    expect(f.ui.read().belowPercent).toBe(45);
-    expect(f.settings.minHpPercent).toBe(45);
-    f.settings.minHpPercent = 40;
-    f.ui.update(undefined);
-    expect(warning.hidden).toBe(true);
-    f.mode('off');
-    f.settings.minHpPercent = 80;
-    f.ui.update(undefined);
-    expect(warning.hidden).toBe(true);
+    expect(f.ui.read().belowPercent).toBe(1);
+    expect(f.root.querySelector('.notice')).toBeNull();
   });
 
   it('rejects empty or fractional numeric controls through normal settings validation', () => {
@@ -633,7 +608,7 @@ describe('FeatureUi HP potion policy integration', () => {
     f.ui.write(DEFAULT_AUTOMATION);
     expect(f.ui.read()).not.toHaveProperty('spPotions');
   });
-  it('uses the independently mounted HP stop limit before form initialization and during invalid drafts', () => {
+  it('edits recovery before form initialization and tolerates invalid drafts', () => {
     const f = featureUi(true),
       mode = f.host.querySelector('#hp-potion-mode')!;
     f.ui.render({ character: { inventoryKnown: true, inventory: [{ itemId: 501, count: 3 }] } });
@@ -642,7 +617,7 @@ describe('FeatureUi HP potion policy integration', () => {
     const threshold = f.host.querySelector('#hp-potion-belowPercent')!;
     threshold.value = '40';
     expect(() => threshold.emit('input')).not.toThrow();
-    expect(f.host.querySelector('.notice')!.hidden).toBe(false);
+    expect(f.host.querySelector('#hp-potions')!.querySelector('.notice')).toBeNull();
     const red = f.host.querySelector('[data-potion="501"]')!;
     red.checked = false;
     expect(() => red.emit('change')).not.toThrow();

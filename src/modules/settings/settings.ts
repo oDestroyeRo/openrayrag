@@ -190,7 +190,6 @@ export interface Settings {
   map: string;
   targets: number[];
   radius: number;
-  minHpPercent: number;
   loot: boolean;
   route_randomWalk: 0 | 2;
   route_step: number;
@@ -347,16 +346,10 @@ export type AutomationPolicy = ReadonlyData<Omit<DomainAutomation, 'disposition'
 export type ValidatedAutomationSettings = AutomationPolicy & AutomationAdmission;
 type DomainSettings = Omit<
   Settings,
-  | 'map'
-  | 'targets'
-  | 'minHpPercent'
-  | 'route_randomWalk_maxRouteTime'
-  | 'attackMaxRouteTime'
-  | 'automation'
+  'map' | 'targets' | 'route_randomWalk_maxRouteTime' | 'attackMaxRouteTime' | 'automation'
 > & {
   map: MapCode | '';
   targets: SpeciesId[];
-  minHpPercent: Percentage;
   route_randomWalk_maxRouteTime: Seconds;
   attackMaxRouteTime: Seconds;
   automation?: ValidatedAutomationSettings;
@@ -374,7 +367,9 @@ export type RunSettings = ValidatedFormSettings & RunAdmission;
 
 /** Mutable editor projections are detached; admitted models remain read-only. */
 export function settingsDraft(value: SettingsInput): Settings {
-  return structuredClone(value) as Settings;
+  const draft = structuredClone(value) as Settings & { minHpPercent?: unknown };
+  delete draft.minHpPercent;
+  return draft;
 }
 export function automationDraft(value: AutomationSettingsInput): AutomationSettings {
   return structuredClone(value) as AutomationSettings;
@@ -407,7 +402,6 @@ export const DEFAULT_SETTINGS: Settings = {
   map: '',
   targets: [],
   radius: 12,
-  minHpPercent: 45,
   loot: true,
   route_randomWalk: 0,
   route_step: 10,
@@ -917,7 +911,6 @@ function checkSettings(value: SettingsInput, form: boolean): ReadonlyData<Domain
   ]);
   if (
     !bounded(value.radius, 1, 20) ||
-    !bounded(value.minHpPercent, 20, 95) ||
     ![0, 2].includes(value.route_randomWalk) ||
     !bounded(value.route_step, 1, 20) ||
     typeof value.route_avoidWalls !== 'boolean' ||
@@ -951,22 +944,12 @@ function checkSettings(value: SettingsInput, form: boolean): ReadonlyData<Domain
       (automation.travel.destinationMap && automation.travel.destinationMap !== value.map))
   )
     throw new Error('The field lock map, rectangle map and field destination must match.');
-  if (automation?.recovery.enabled && automation.recovery.hpStart <= value.minHpPercent) {
-    const hpStart = automation.recovery.hpStart;
-    const remedy =
-      value.minHpPercent === 95
-        ? 'Rest below HP % cannot exceed 95%; lower Emergency HP stop below 95% and set Rest below HP % above it, keeping Resume above HP % higher'
-        : `Raise Rest below HP % to ${value.minHpPercent + 1}–95% and keep Resume above HP % higher${hpStart > 20 ? `, lower Emergency HP stop below ${hpStart}%` : ''}`;
-    throw new Error(
-      `Rest below HP % (${hpStart}%) must be above Emergency HP stop (${value.minHpPercent}%). ${remedy}, or turn off Sit to recover HP and SP.`,
-    );
-  }
-  const { automation: _automation, ...base } = value;
+  // The removed cutoff is accepted only for loading older saved settings.
+  const { automation: _automation, ...base } = settingsDraft(value);
   return {
     ...base,
     map: value.map === '' ? '' : mapCode(value.map),
     targets: value.targets.map((value) => speciesId(value)),
-    minHpPercent: percentage(value.minHpPercent),
     route_randomWalk_maxRouteTime: seconds(value.route_randomWalk_maxRouteTime),
     attackMaxRouteTime: seconds(value.attackMaxRouteTime),
     ...(automation ? { automation } : {}),

@@ -10,7 +10,9 @@ pub(crate) struct Settings {
     map: String,
     targets: Vec<u32>,
     radius: u8,
-    min_hp_percent: u8,
+    // Compatibility sink for settings saved before the emergency cutoff was removed.
+    #[serde(default, rename = "minHpPercent", skip_serializing)]
+    _legacy_min_hp_percent: serde::de::IgnoredAny,
     loot: bool,
     #[serde(rename = "route_randomWalk")]
     route_random_walk: u8,
@@ -151,7 +153,6 @@ impl Settings {
     }
     fn validate_for(&self, form: bool) -> Result<(), String> {
         if !(1..=20).contains(&self.radius)
-            || !(20..=95).contains(&self.min_hp_percent)
             || !(form && self.map.is_empty()
                 || crate::game::catalog_logic::supported_map(&self.map))
             || !map_code(&self.map, form)
@@ -199,23 +200,6 @@ impl Settings {
                 .any(|rule| rule.action == MonsterAction::Attack)
         {
             return Err("Choose selected monsters or disable selected combat.".into());
-        }
-        if automation.recovery.enabled && !automation.recovery.starts_above(self.min_hp_percent) {
-            let hp_start = automation.recovery.hp_start;
-            let remedy = if self.min_hp_percent == 95 {
-                "Rest below HP % cannot exceed 95%; lower Emergency HP stop below 95% and set Rest below HP % above it, keeping Resume above HP % higher".into()
-            } else {
-                let lower_stop = if hp_start > 20 {
-                    format!(", lower Emergency HP stop below {hp_start}%")
-                } else {
-                    String::new()
-                };
-                format!(
-                    "Raise Rest below HP % to {}–95% and keep Resume above HP % higher{lower_stop}",
-                    self.min_hp_percent + 1
-                )
-            };
-            return Err(format!("Rest below HP % ({hp_start}%) must be above Emergency HP stop ({}%). {remedy}, or turn off Sit to recover HP and SP.", self.min_hp_percent));
         }
         Ok(())
     }
@@ -921,14 +905,7 @@ enum RecoveryError {
 }
 // A policy is constructed only after both range and cross-field checks; no
 // unchecked deserialization can rebuild an inverted hysteresis pair.
-struct RecoveryPolicy {
-    hp_start: Percentage,
-}
-impl RecoveryPolicy {
-    fn starts_above(&self, emergency: Percentage) -> bool {
-        self.hp_start > emergency
-    }
-}
+struct RecoveryPolicy;
 
 fn recovery_percentage(
     value: u8,
@@ -977,17 +954,10 @@ impl Recovery {
         if bounds.hp_start >= bounds.hp_end || bounds.sp_start >= bounds.sp_end {
             return Err(RecoveryError::Hysteresis);
         }
-        Ok(RecoveryPolicy {
-            hp_start: bounds.hp_start,
-        })
+        Ok(RecoveryPolicy)
     }
     fn valid(&self) -> bool {
         self.policy().is_ok()
-    }
-    fn starts_above(&self, emergency: u8) -> bool {
-        self.policy().is_ok_and(|policy| {
-            Percentage::try_from(emergency).is_ok_and(|threshold| policy.starts_above(threshold))
-        })
     }
 }
 
@@ -1579,7 +1549,7 @@ mod tests {
     fn settings() -> Value {
         json!({
             "map": "prt_fild08", "targets": [4000], "radius": 12,
-            "minHpPercent": 45, "loot": true, "route_randomWalk": 0,
+            "loot": true, "route_randomWalk": 0,
             "route_step": 10, "route_avoidWalls": true,
             "route_randomWalk_maxRouteTime": 75,
             "attackRouteMaxPathDistance": 20, "attackMaxRouteTime": 4
@@ -2294,7 +2264,7 @@ mod tests {
     }
 
     #[test]
-    fn enforces_empty_target_modes_and_recovery_emergency_limit() {
+    fn enforces_empty_target_modes_without_a_recovery_cutoff_floor() {
         let mut value = settings();
         value["targets"] = json!([]);
         assert!(!valid(value.clone()));
@@ -2313,88 +2283,43 @@ mod tests {
         assert!(valid(value.clone()));
         value["automation"]["recovery"]["enabled"] = true.into();
         value["automation"]["recovery"]["hpStart"] = 45.into();
-        assert!(!valid(value));
+        assert!(valid(value));
     }
 
     #[test]
-    fn explains_conflicting_recovery_controls_at_form_and_run_boundaries() {
-        for hp_start in [2, 45] {
-            let mut value = settings();
-            value["automation"] = automation();
-            value["automation"]["recovery"]["enabled"] = true.into();
-            value["automation"]["recovery"]["hpStart"] = hp_start.into();
-            let settings: Settings = serde_json::from_value(value).unwrap();
-            for result in [settings.validate(), settings.validate_form()] {
-                let error = result.unwrap_err();
+    fn accepts_independent_recovery_thresholds_and_drops_legacy_cutoff() {
+        for hp_start in [1, 2, 45, 95] {
+            for cutoff in [
+                json!(45),
+                json!(95),
+                Value::Null,
+                json!("obsolete"),
+                json!({"ignored":true}),
+            ] {
+                let mut value = settings();
+                value["minHpPercent"] = cutoff;
+                value["automation"] = automation();
+                value["automation"]["recovery"]["enabled"] = true.into();
+                value["automation"]["recovery"]["hpStart"] = hp_start.into();
+                value["automation"]["recovery"]["hpEnd"] = 100.into();
+                let settings: Settings = serde_json::from_value(value).unwrap();
+                assert!(settings.validate().is_ok());
+                assert!(settings.validate_form().is_ok());
+                let encoded = serde_json::to_value(&settings).unwrap();
+                assert!(encoded.get("minHpPercent").is_none());
+                assert_eq!(encoded["automation"]["recovery"]["hpStart"], hp_start);
                 assert!(
-                    error.contains(&format!(
-                        "Rest below HP % ({hp_start}%) must be above Emergency HP stop (45%)."
-                    )),
-                    "{error}"
+                    serde_json::to_value(RunSettings::try_from(&settings).unwrap())
+                        .unwrap()
+                        .get("minHpPercent")
+                        .is_none()
                 );
-                assert!(
-                    error.contains(
-                        "Raise Rest below HP % to 46–95% and keep Resume above HP % higher"
-                    ),
-                    "{error}"
-                );
-                assert!(
-                    error.contains("turn off Sit to recover HP and SP"),
-                    "{error}"
-                );
-                if hp_start == 45 {
-                    assert!(
-                        error.contains("lower Emergency HP stop below 45%"),
-                        "{error}"
-                    );
-                }
             }
         }
-    }
-
-    #[test]
-    fn explains_recovery_ceiling_at_the_maximum_emergency_stop() {
-        let mut value = settings();
-        value["minHpPercent"] = 95.into();
-        value["automation"] = automation();
-        value["automation"]["recovery"]["enabled"] = true.into();
-        value["automation"]["recovery"]["hpStart"] = 95.into();
-        value["automation"]["recovery"]["hpEnd"] = 100.into();
-        let settings: Settings = serde_json::from_value(value).unwrap();
-        for result in [settings.validate(), settings.validate_form()] {
-            let error = result.unwrap_err();
-            assert!(
-                error.contains("Rest below HP % (95%) must be above Emergency HP stop (95%)."),
-                "{error}"
-            );
-            assert!(
-                error.contains("Rest below HP % cannot exceed 95%"),
-                "{error}"
-            );
-            assert!(
-                error.contains("lower Emergency HP stop below 95%"),
-                "{error}"
-            );
-            assert!(
-                error.contains("turn off Sit to recover HP and SP"),
-                "{error}"
-            );
-        }
-    }
-
-    #[test]
-    fn admits_corrected_recovery_and_disabled_conflicting_thresholds_unchanged() {
-        for (enabled, hp_start) in [(true, 46), (false, 2)] {
-            let mut value = settings();
-            value["automation"] = automation();
-            value["automation"]["recovery"]["enabled"] = enabled.into();
-            value["automation"]["recovery"]["hpStart"] = hp_start.into();
-            let settings: Settings = serde_json::from_value(value.clone()).unwrap();
-            let original = serde_json::to_value(&settings).unwrap();
-            assert!(settings.validate().is_ok());
-            assert!(settings.validate_form().is_ok());
-            assert_eq!(serde_json::to_value(&settings).unwrap(), original);
-        }
+        let mut current = settings();
+        current.as_object_mut().unwrap().remove("minHpPercent");
+        let settings: Settings = serde_json::from_value(current).unwrap();
+        assert!(settings.validate().is_ok());
     }
 
     #[test]
@@ -2403,7 +2328,6 @@ mod tests {
         value["automation"] = automation();
         for (path, invalid) in [
             ("/radius", json!(21)),
-            ("/minHpPercent", json!(19)),
             ("/route_randomWalk", json!(1)),
             ("/route_step", json!(0)),
             ("/route_randomWalk_maxRouteTime", json!(601)),

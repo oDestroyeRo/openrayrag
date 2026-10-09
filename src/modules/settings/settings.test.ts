@@ -81,59 +81,38 @@ describe('automation settings boundary', () => {
     value.automation!.combat.mode = 'selected';
     expect(() => validateSettings(value)).toThrow('Choose selected');
   });
-  it('requires recovery hysteresis above the emergency stop floor', () => {
+  it('allows low recovery thresholds while preserving recovery hysteresis', () => {
     const value = settings();
     value.automation!.recovery.enabled = true;
     value.automation!.recovery.hpStart = 45;
-    expect(() => validateSettings(value)).toThrow('above');
+    expect(validateSettings(value).automation!.recovery.hpStart).toBe(45);
     value.automation!.recovery.hpStart = 60;
     value.automation!.recovery.hpEnd = 60;
     expect(() => validateSettings(value)).toThrow();
   });
-  it.each([2, 45])('explains the conflicting recovery controls at rest HP %i', (hpStart) => {
+  it.each([1, 2, 45, 95])('admits independent recovery at rest HP %i', (hpStart) => {
     const value = settings();
-    value.automation!.recovery = { ...value.automation!.recovery, enabled: true, hpStart };
-    for (const validate of [validateSettings, validateFormSettings]) {
-      expect(() => validate(value)).toThrow(
-        `Rest below HP % (${hpStart}%) must be above Emergency HP stop (45%).`,
-      );
-      expect(() => validate(value)).toThrow(
-        'Raise Rest below HP % to 46–95% and keep Resume above HP % higher',
-      );
-      expect(() => validate(value)).toThrow('turn off Sit to recover HP and SP');
-      if (hpStart === 45)
-        expect(() => validate(value)).toThrow('lower Emergency HP stop below 45%');
-    }
-  });
-  it('explains the recovery ceiling when the emergency stop is already at 95%', () => {
-    const value = settings();
-    value.minHpPercent = 95;
     value.automation!.recovery = {
       ...value.automation!.recovery,
       enabled: true,
-      hpStart: 95,
+      hpStart,
       hpEnd: 100,
     };
-    for (const validate of [validateSettings, validateFormSettings]) {
-      expect(() => validate(value)).toThrow(
-        'Rest below HP % (95%) must be above Emergency HP stop (95%).',
-      );
-      expect(() => validate(value)).toThrow('Rest below HP % cannot exceed 95%');
-      expect(() => validate(value)).toThrow('lower Emergency HP stop below 95%');
-      expect(() => validate(value)).toThrow('turn off Sit to recover HP and SP');
-    }
+    for (const validate of [validateSettings, validateFormSettings])
+      expect(validate(value).automation!.recovery).toEqual(value.automation!.recovery);
   });
-  it('admits corrected recovery and disabled conflicting thresholds without changing them', () => {
-    for (const [enabled, hpStart] of [
-      [true, 46],
-      [false, 2],
-    ] as const) {
-      const value = settings();
-      value.automation!.recovery = { ...value.automation!.recovery, enabled, hpStart };
-      for (const validate of [validateSettings, validateFormSettings])
-        expect(validate(value)).toEqual(value);
-    }
-  });
+  it.each([45, 95, null, 'obsolete', { ignored: true }])(
+    'drops the obsolete cutoff %j from legacy settings',
+    (minHpPercent) => {
+      const value = { ...settings(), minHpPercent };
+      value.automation!.recovery = { ...value.automation!.recovery, enabled: true, hpStart: 1 };
+      for (const validate of [validateSettings, validateFormSettings]) {
+        expect(validate(value)).not.toHaveProperty('minHpPercent');
+        expect(validate(value).automation!.recovery.hpStart).toBe(1);
+      }
+      expect(value.minHpPercent).toEqual(minHpPercent);
+    },
+  );
   it('accepts zero remaining death allowance and rejects values outside the bounded range', () => {
     const value = settings();
     value.automation!.respawn = { enabled: true, maxDeaths: 0 };
