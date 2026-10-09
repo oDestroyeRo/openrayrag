@@ -166,20 +166,34 @@ export interface UpdateInstallationResult {
 
 export type UpdateStep = 'settings' | 'prepare' | 'reserve' | 'confirmation';
 
+export interface UpdateInstallationOptions {
+  installedVersion?: unknown;
+  targetVersion?: unknown;
+  requested?: boolean;
+}
+
 export function deferredReason(step: UpdateStep, error: unknown): string {
   // Native errors may contain private paths or account details. Only these
   // known generic messages cross the presentation seam.
   const restartFailure =
     'The update was installed, but the app could not restart. Quit and reopen Rayrag Companion. Your saved settings are preserved.';
-  if (error === restartFailure) return restartFailure;
+  const known = error instanceof Error ? error.message : error;
+  if (known === restartFailure) return restartFailure;
   const reasons: Record<string, string> = {
     'No verified update is ready.': 'The verified update is no longer ready.',
+    'Update handoff confirmation timed out. Press Stop before starting again.':
+      'Action preparation timed out before a confirmed boundary.',
+    'Update handoff is unavailable.': 'The game could not be reached for action preparation.',
+    'Update confirmation is still pending.':
+      'The game did not acknowledge update confirmation in time.',
     'Waiting for login to settle.': 'Sign-in has not finished.',
     'Save current settings before updating.': 'Current settings need to be saved.',
     'Current settings changed before update settlement.':
       'Current settings changed while preparing the update.',
     'Waiting for a fresh stopped client before updating.':
       'The connection has not confirmed a fresh stopped state.',
+    'Update waits because a replaced game page may have unresolved actions. Quit and reopen Companion when safe, or use the release download.':
+      'A replaced game page may have unresolved actions. Quit and reopen Companion when safe, or use the release download.',
     'Game update settlement is unavailable.':
       'The game could not be reached for update confirmation.',
     'Update settlement expired.': 'The game confirmation expired.',
@@ -187,7 +201,7 @@ export function deferredReason(step: UpdateStep, error: unknown): string {
     'Login settlement changed.': 'Sign-in activity changed during update confirmation.',
     'Game settlement changed before replacement.': 'Game activity changed before installation.',
   };
-  const reason = typeof error === 'string' && Object.hasOwn(reasons, error) ? reasons[error] : null;
+  const reason = typeof known === 'string' && Object.hasOwn(reasons, known) ? reasons[known] : null;
   const fallback = {
     settings: 'Current settings could not be saved. Check the settings form.',
     prepare: 'The current game action has not reached a confirmed boundary.',

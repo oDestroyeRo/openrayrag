@@ -14,6 +14,23 @@ const ready = {
 };
 
 describe('current owner presentation', () => {
+  it('identifies updater-owned pauses before stale field or connection reasons', () => {
+    const updater = {
+      active: true,
+      reason:
+        'Update to v0.18.0 · prepare · 12s. Waiting for confirmation. Stop cancels continuation.',
+    };
+    expect(
+      clientStatus(
+        { ...ready, running: true, reason: 'Searching · walking…' },
+        { ...context, updater },
+      ),
+    ).toEqual({ state: 'WAITING', reason: updater.reason });
+    expect(clientStatus(ready, { ...context, updater: { ...updater, active: false } })).toEqual({
+      state: 'READY',
+      reason: ready.reason,
+    });
+  });
   it('presents current-field admission failure as setup work without replacing an active owner', () => {
     const setupReason = 'Choose selected monsters or disable selected combat.';
     expect(clientStatus(ready, { ...context, setupReason })).toEqual({

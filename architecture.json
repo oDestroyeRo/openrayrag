@@ -271,6 +271,7 @@
   "src/modules/update/controller-update.ts": "orchestration",
   "src/modules/update/update-continuation-logic.ts": "logic",
   "src/modules/update/update-continuation.ts": "orchestration",
+  "src/modules/update/update-presentation-logic.ts": "logic",
   "src/modules/warp/warp-logic.ts": "logic",
   "src/modules/warp/warp-protocol.ts": "logic",
   "src/modules/warp/warp-ui-logic.ts": "logic",

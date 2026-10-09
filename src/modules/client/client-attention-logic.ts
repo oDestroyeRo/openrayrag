@@ -24,6 +24,7 @@ export interface AttentionContext {
   readonly loginBusy: boolean;
   readonly limitReason: string;
   readonly setupReason: string;
+  readonly updater?: { readonly active: boolean; readonly reason: string };
 }
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
@@ -40,6 +41,15 @@ export function clientAttention(
   const status = record(value),
     login = record(status.login);
   const items: AttentionItem[] = [];
+  if (context.updater?.active)
+    items.push({
+      id: 'update',
+      severity: 'info',
+      title: 'Client update in progress',
+      detail: context.updater.reason,
+      nextStep: 'Wait for the confirmed action boundary. Stop cancels continuation.',
+      action: null,
+    });
   if (context.limitReason)
     items.push({
       id: 'limit',

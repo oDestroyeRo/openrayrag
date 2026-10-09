@@ -2,6 +2,13 @@ import { validateControllerUpdateCheckpoint } from './controller-update';
 import type { ValidatedControllerUpdateCheckpoint } from './controller-update-logic';
 import { validStatus, type GameStatus } from '../client/game-status';
 import type { PersistentFieldRun } from '../session/reconnect';
+import type { LogEntry } from '../automation/engine';
+import {
+  updatePresentation,
+  updateVersion,
+  type UpdateDiagnostic,
+  type UpdateTransition,
+} from './update-presentation-logic';
 
 import {
   type UpdateAccount,
@@ -19,6 +26,7 @@ import {
   type Reply,
   type InstallationAdapter,
   type UpdateInstallationResult,
+  type UpdateInstallationOptions,
   type UpdateStep,
   deferredReason,
 } from './update-continuation-logic';
@@ -41,11 +49,49 @@ export class UpdateContinuationOwner {
   private blocked = false;
   private installing = false;
   private stoppedByUser = false;
+  private diagnostic: UpdateDiagnostic | null = null;
+  private activity: LogEntry[] = [];
+  private deferrals = 0;
   constructor(
     private readonly invoke: Invoke,
     private readonly id = () => crypto.randomUUID().replaceAll('-', ''),
     private readonly timeoutMs = 30_000,
+    private readonly now = Date.now,
   ) {}
+  get history(): readonly LogEntry[] {
+    return this.activity.map((entry) => ({ ...entry }));
+  }
+  presentation(): { active: boolean; reason: string } {
+    return updatePresentation(this.diagnostic, this.installing, this.now(), !this.blocked);
+  }
+  canInstall(targetVersion: unknown, requested = false): boolean {
+    if (this.blocked) return false;
+    return (
+      requested ||
+      this.diagnostic?.stage !== 'deferred' ||
+      this.diagnostic.targetVersion !== updateVersion(targetVersion) ||
+      this.now() >= this.diagnostic.retryAt
+    );
+  }
+  private transition(stage: UpdateTransition, message: string, retryAt = 0): void {
+    const previous = this.diagnostic;
+    this.diagnostic = {
+      installedVersion: previous?.installedVersion ?? null,
+      targetVersion: previous?.targetVersion ?? null,
+      startedAt: previous?.startedAt ?? this.now(),
+      stage,
+      at: this.now(),
+      message,
+      retryAt,
+    };
+    if (previous?.stage === stage && previous.message === message && previous.retryAt === retryAt)
+      return;
+    this.activity.unshift({
+      at: this.now(),
+      text: updatePresentation(this.diagnostic, false, this.now(), !this.blocked).reason,
+    });
+    this.activity.length = Math.min(this.activity.length, 50);
+  }
   get pending(): boolean {
     return this.continuation !== null;
   }
@@ -102,21 +148,43 @@ export class UpdateContinuationOwner {
   async install(
     fieldRun: PersistentFieldRun,
     adapter: InstallationAdapter,
+    options: UpdateInstallationOptions = {},
   ): Promise<UpdateInstallationResult> {
     if (this.installing || this.pending) throw new Error('An update handoff is already pending.');
-    this.installing = true;
-    this.stoppedByUser = false;
-    const epoch = this.epoch;
-    const preparing = () => epoch === this.epoch && !adapter.interrupted();
     const result: UpdateInstallationResult = {
       continuation: null,
       retired: false,
       recoveryFailed: false,
     };
+    if (!this.canInstall(options.targetVersion, options.requested)) {
+      adapter.status(this.presentation().reason);
+      return result;
+    }
+    const targetVersion = updateVersion(options.targetVersion);
+    if (this.diagnostic?.targetVersion !== targetVersion) this.deferrals = 0;
+    const retry = this.diagnostic?.stage === 'deferred';
+    this.diagnostic = {
+      stage: 'settings',
+      installedVersion: updateVersion(options.installedVersion),
+      targetVersion,
+      startedAt: this.now(),
+      at: this.now(),
+      message: '',
+      retryAt: 0,
+    };
+    if (retry) this.transition('retry', 'Retrying update preparation. Stop cancels continuation.');
+    this.installing = true;
+    this.stoppedByUser = false;
+    const epoch = this.epoch;
+    const preparing = () => epoch === this.epoch && !adapter.interrupted();
+    const present = (stage: UpdateStep, message: string) => {
+      this.transition(stage, message);
+      adapter.status(message);
+    };
     let reservation: NativeUpdateReservation | null = null;
     let step: UpdateStep = 'settings';
     try {
-      adapter.status('Saving current settings before updating.');
+      present('settings', 'Saving current settings before updating.');
       const document = await adapter.flush();
       if (!preparing()) return result;
       const game = adapter.game();
@@ -127,7 +195,8 @@ export class UpdateContinuationOwner {
           ['running', 'waiting', 'monitoring'].includes(game.status.macro.state));
       if (game.open && active) {
         step = 'prepare';
-        adapter.status(
+        present(
+          'prepare',
           'Pausing new decisions and waiting for the current action to finish. Stop cancels continuation.',
         );
         const checkpoint = await this.prepare();
@@ -138,7 +207,7 @@ export class UpdateContinuationOwner {
         active = fieldRun.requested || checkpoint.settings !== null || checkpoint.macro !== null;
       }
       step = 'reserve';
-      adapter.status('Preparing the connection for update confirmation.');
+      present('reserve', 'Preparing the connection for update confirmation.');
       reservation = nativeUpdateReservation(
         await this.invoke('update_reserve', {
           document,
@@ -147,16 +216,33 @@ export class UpdateContinuationOwner {
       );
       if (!preparing()) return result;
       step = 'confirmation';
-      adapter.status(
+      present(
+        'confirmation',
         'Update waits for game confirmation that all actions have stopped. It will retry automatically.',
       );
+      let installed = false;
       for (let attempt = 0; attempt < 20; attempt++) {
         if (epoch !== this.epoch) return result;
-        if (await this.invoke('update_install', { nonce: reservation.rawNonce })) break;
+        if (await this.invoke('update_install', { nonce: reservation.rawNonce })) {
+          installed = true;
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
+      if (!installed) throw new Error('Update confirmation is still pending.');
+      this.deferrals = 0;
+      this.transition('complete', 'Verified update installation completed.');
     } catch (error) {
-      adapter.status(deferredReason(step, error));
+      if (epoch === this.epoch) {
+        const message = deferredReason(step, error);
+        this.deferrals++;
+        this.transition(
+          'deferred',
+          message,
+          this.now() + Math.min(30 * 60_000, 5 * 60_000 * 2 ** Math.min(this.deferrals - 1, 3)),
+        );
+        adapter.status(message);
+      }
     } finally {
       if (reservation?.rawNonce)
         await this.invoke('update_release', { nonce: reservation.rawNonce }).catch(() => {});
@@ -290,7 +376,14 @@ export class UpdateContinuationOwner {
     }
   }
   cancel(stop = false, mcpOperation?: string): Promise<unknown> {
-    if (stop) this.stoppedByUser = true;
+    if (stop) {
+      this.stoppedByUser = true;
+      if (this.installing || this.pending || this.reply)
+        this.transition(
+          'cancelled',
+          'Stop cancelled update continuation. Automatic checks remain available.',
+        );
+    }
     this.epoch++;
     this.continuation = null;
     this.blocked = false;
@@ -299,7 +392,17 @@ export class UpdateContinuationOwner {
       this.reply.reject(new Error('Update continuation cancelled by Stop.'));
       this.reply = null;
     }
-    return this.invoke('update_cancel', { stop, ...(mcpOperation ? { mcpOperation } : {}) });
+    return this.invoke('update_cancel', { stop, ...(mcpOperation ? { mcpOperation } : {}) }).catch(
+      (error: unknown) => {
+        this.blocked = true;
+        this.transition(
+          'deferred',
+          'Update cancellation could not be confirmed. Press Stop before starting again.',
+          this.now() + 30 * 60_000,
+        );
+        throw error;
+      },
+    );
   }
 }
 

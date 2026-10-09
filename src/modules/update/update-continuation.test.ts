@@ -92,6 +92,12 @@ function fixture() {
 }
 afterEach(() => vi.useRealTimers());
 describe('one-shot updater continuation owner', () => {
+  it('does not invent updater activity for an ordinary bot Stop', async () => {
+    const f = fixture();
+    await f.owner.cancel(true);
+    expect(f.owner.history).toEqual([]);
+    expect(f.owner.presentation()).toEqual({ active: false, reason: '' });
+  });
   it('loads legacy form, field and runtime cutoffs without restoring them in continuation settings', () => {
     const f = fixture();
     const input = JSON.parse(JSON.stringify(f.continuation));
@@ -325,6 +331,47 @@ function installationFixture() {
   return { ...f, adapter, nonce, calls, install: () => f.owner.install(f.field, adapter) };
 }
 describe('update installation transaction', () => {
+  it('backs off unchanged candidates after a preparation timeout and retains safe history', async () => {
+    vi.useFakeTimers();
+    const f = installationFixture();
+    f.field.restore(f.continuation.field);
+    const options = { installedVersion: '0.17.1', targetVersion: '0.18.0' };
+    const installation = f.owner.install(f.field, f.adapter, options);
+    await settle();
+    await vi.advanceTimersByTimeAsync(501);
+    await installation;
+    expect(f.owner.canInstall('0.18.0')).toBe(false);
+    expect(f.owner.canInstall('0.18.0', true)).toBe(true);
+    expect(f.owner.canInstall('0.18.1')).toBe(true);
+    expect(f.owner.presentation().reason).toContain('preparation timed out');
+    expect(f.owner.presentation().reason).toContain('0.18.0');
+    expect(f.owner.history.map((entry) => entry.text).join('\n')).toContain('0.17.1');
+    const count = f.owner.history.length;
+    await f.owner.install(f.field, f.adapter, options);
+    expect(f.calls('update_prepare')).toHaveLength(1);
+    expect(f.owner.history).toHaveLength(count);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(f.owner.canInstall('0.18.0')).toBe(true);
+  });
+  it('retains cancellation uncertainty until a later explicit Stop succeeds', async () => {
+    const f = installationFixture();
+    const original = f.invoke.getMockImplementation()!;
+    f.invoke.mockImplementation((command, args) =>
+      command === 'update_cancel'
+        ? Promise.reject(new Error('private/native/path'))
+        : original(command, args),
+    );
+    await f.install();
+    expect(f.owner.confirmationLost).toBe(true);
+    expect(f.owner.canInstall('0.18.1', true)).toBe(false);
+    expect(f.owner.presentation().reason).toContain('cancellation could not be confirmed');
+    expect(f.owner.presentation().reason).not.toContain('retries now');
+    expect(JSON.stringify(f.owner.history)).not.toContain('private/native');
+    f.invoke.mockImplementation(original);
+    await f.owner.cancel(true);
+    expect(f.owner.confirmationLost).toBe(false);
+    expect(f.owner.canInstall('0.18.1', true)).toBe(true);
+  });
   it.each([null, undefined, '', 0, 7, { opaque: 'native-handle' }])(
     'forwards opaque native reservation %j and preserves its cleanup truthiness',
     async (nonce) => {
@@ -368,7 +415,7 @@ describe('update installation transaction', () => {
     expect(f.calls('update_release')).toEqual([['update_release', { nonce: f.nonce }]]);
     expect(f.calls('update_cancel')).toEqual([['update_cancel', { stop: false }]]);
     expect(f.adapter.status).toHaveBeenLastCalledWith(
-      'Update waits for game confirmation that all actions have stopped. It will retry automatically.',
+      'Update deferred. The game did not acknowledge update confirmation in time. It will retry automatically.',
     );
     expect(JSON.stringify(f.adapter.status.mock.calls)).not.toContain(f.nonce);
   });
