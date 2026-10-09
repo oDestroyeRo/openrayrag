@@ -408,6 +408,22 @@ describe('field run updater checkpoints', () => {
   }
   const roundtrip = (checkpoint: FieldRunCheckpoint) =>
     JSON.parse(JSON.stringify(checkpoint)) as FieldRunCheckpoint;
+  it('observes retained readiness without preparing Start, renewing trips or mutating checkpoints', () => {
+    const f = fixture();
+    f.advance(60_000);
+    const before = f.run.checkpoint();
+    expect(f.run.readinessFor('Test')).toEqual({
+      remainingSupplyTrips: 2,
+      used: { elapsedSeconds: 60, kills: 3, pickups: 4, deaths: 1 },
+    });
+    expect(f.run.readinessFor('Other')).toEqual({ remainingSupplyTrips: null, used: undefined });
+    expect(f.run.checkpoint()).toEqual(before);
+    f.run.stop();
+    expect(f.run.readinessFor('Test')).toEqual({ remainingSupplyTrips: 2, used: undefined });
+    f.run.begin(settings(), 'Test', 'new');
+    expect(f.run.readinessFor('Test').remainingSupplyTrips).toBe(2);
+    expect(f.run.readinessFor('Test').used?.deaths).toBe(0);
+  });
 
   it('returns a defensive data-only checkpoint only for active intent and restores without begin resets', () => {
     const f = fixture(),
@@ -873,6 +889,7 @@ describe('field run updater checkpoints', () => {
     saved.deathOverflow = true;
     const restored = new PersistentFieldRun(f.now);
     restored.restore(saved);
+    expect(restored.readinessFor('Test').remainingSupplyTrips).toBe(0);
     const request = restored.resumeFor(ready('new'), { settledUpdate: true })!;
     expect(request.escapeGuard).toMatchObject({ latched: true, cooldownSeconds: 3600 });
     expect(request.supplyGuard).toMatchObject({ remainingTrips: 0, uncertain: true });

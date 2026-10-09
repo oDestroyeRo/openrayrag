@@ -118,6 +118,7 @@ interface Hooks {
   refineAdvance?(promptToken: string): Promise<unknown>;
   notify(text: string, error?: boolean): void;
   changed(): void;
+  remainingSupplyTrips?(): number | null;
   stop?(): void;
 }
 type Field = {
@@ -126,6 +127,7 @@ type Field = {
   kind?: 'text' | 'checkbox';
   min?: number;
   max?: number;
+  hint?: string;
   options?: Array<[string, string]>;
 };
 type Column = {
@@ -240,7 +242,13 @@ const fields: Record<Section, Field[]> = {
       max: 3600,
     },
     { path: 'respawn.enabled', label: 'Auto respawn at the save point', kind: 'checkbox' },
-    { path: 'respawn.maxDeaths', label: 'Maximum deaths before waiting', min: 1, max: 100 },
+    {
+      path: 'respawn.maxDeaths',
+      label: 'Maximum deaths before waiting',
+      min: 1,
+      max: 100,
+      hint: 'A restored legacy 0 grants no counted death allowance. Choose 1–100 explicitly for automatic recovery. Zero time/kills/pickups means unlimited; this allowance stays finite.',
+    },
     {
       path: 'travel.returnToLockMap',
       label: 'Return to the captured farming map after revival or escape',
@@ -416,6 +424,12 @@ function fieldElement(field: Field): HTMLLabelElement {
   }
   input.dataset.setting = field.path;
   label.append(input);
+  if (field.hint) {
+    const help = document.createElement('small');
+    help.className = 'hint';
+    help.textContent = field.hint;
+    label.append(help);
+  }
   return label;
 }
 function getPath(value: unknown, path: string): unknown {
@@ -1101,6 +1115,7 @@ export class FeatureUi {
           {
             character: text(p.name),
             epoch: text(this.status.sessionId),
+            remainingTrips: this.hooks.remainingSupplyTrips?.() ?? null,
             map: text(this.status.map),
             position:
               typeof p.x === 'number' && typeof p.y === 'number'

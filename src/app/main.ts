@@ -46,6 +46,8 @@ import {
   clientDeathCap,
 } from '../modules/client/client-status';
 import { clientDashboard } from '../modules/client/client-dashboard';
+import { FarmingReadiness, navigateFarmingReadiness } from '../modules/client/farming-readiness';
+import { farmingReadiness } from '../modules/client/farming-readiness-logic';
 import { liveSettingLabel, planLiveSettings } from '../modules/settings/live-settings-logic';
 import { mountMcp } from '../modules/mcp/mcp-client';
 import {
@@ -115,6 +117,12 @@ editSetupButton.addEventListener('click', () => {
   shell.showBotSection('combat');
 });
 const activityLog = new ActivityLog(element('log'));
+const readiness = new FarmingReadiness(
+  element<HTMLDetailsElement>('console-readiness'),
+  element('console-readiness-summary'),
+  element('console-readiness-list'),
+  (action) => navigateFarmingReadiness(action, shell.main, shell),
+);
 const attention = new ClientAttention(
   element('console-attention'),
   element('console-attention-list'),
@@ -313,6 +321,8 @@ const features = new FeatureUi(
     apply: (value) => form.applyProfile(value),
     map: () => latest?.map ?? '',
     character: () => latest?.player?.name ?? '',
+    remainingSupplyTrips: () =>
+      fieldRun.readinessFor(latest?.player?.name ?? '').remainingSupplyTrips,
     macroSettings: () => form.snapshot().settings,
     applySetup: (value) => form.applySettings(value),
     setupChanged: () => {
@@ -718,6 +728,7 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
       loginBusy,
       fresh,
       setupReason: ready && !runActive() ? setupReason : '',
+      activeRun: !!activeSettings,
     },
     activeSettings ?? (scripted ? dashboardSettings : (startSettings ?? dashboardSettings)),
     latest?.mapInfo,
@@ -767,6 +778,36 @@ function updateButtons(projection: SettingsFormProjection = form.project()): voi
       dashboardSettings.targets.join(',') !== startSettings.targets.join(','));
   savedDraftSummary.hidden = !activeSettings && !retainedDiffers;
   savedDraftSummary.textContent = `${activeSettings ? 'Saved draft' : `Retained choices for ${dashboardSettings?.map || 'the configured field'}`}: ${clientDashboard(latest, { fieldRequested: false, held: false, limitReason: '', loginBusy: false }, dashboardSettings, latest?.mapInfo).setup}`;
+  const retainedReadiness = fieldRun.readinessFor(latest?.player?.name ?? '');
+  const readinessContext = {
+    fresh,
+    remainingSupplyTrips: retainedReadiness.remainingSupplyTrips,
+    reconnectEnabled: element<HTMLInputElement>('auto-reconnect').checked,
+    reconnectAvailable: sessionLoginAvailable,
+  };
+  readiness.render([
+    ...(activeSettings
+      ? [
+          {
+            label: 'Active run · retained remaining allowances',
+            rows: farmingReadiness(fieldRun.activeSettings ?? activeSettings, latest, {
+              ...readinessContext,
+              active: true,
+              used: retainedReadiness.used ?? {
+                elapsedSeconds: latest?.elapsedSeconds ?? 0,
+                kills: latest?.kills ?? 0,
+                pickups: latest?.looted ?? 0,
+                deaths: latest?.deaths ?? 0,
+              },
+            }),
+          },
+        ]
+      : []),
+    {
+      label: activeSettings ? 'Saved draft · next explicit Start' : 'Before Start · saved setup',
+      rows: farmingReadiness(dashboardSettings, latest, { ...readinessContext, active: false }),
+    },
+  ]);
   currentTargetsNeedAttention =
     !!ready &&
     !runActive() &&

@@ -767,6 +767,31 @@ body:has(.client-shell) {
   border-radius: 8px;
   background: var(--client-surface);
 }
+.client-shell .farming-readiness {
+  margin: 0 0 14px;
+  padding: 12px 16px;
+}
+.farming-readiness summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.readiness-list {
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.readiness-list li {
+  margin: 8px 0;
+}
+.readiness-list button {
+  margin-left: 8px;
+}
+.readiness-list [data-severity='warning'] strong {
+  color: var(--client-warning);
+}
+.readiness-list [data-severity='error'] strong {
+  color: var(--client-danger);
+}
 .client-shell #client-page-session > .console-setup-summary {
   margin-bottom: 16px;
 }

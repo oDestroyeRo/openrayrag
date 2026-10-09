@@ -177,6 +177,13 @@ it('previews only permitted excess, retains shared recovery floors and explains 
     },
   };
   const preview = previewSupplyTrip(value, c);
+  expect(previewSupplyTrip(value, { ...c, remainingTrips: 0 })).toContain(
+    '0 trips remaining (configured cap 1)',
+  );
+  expect(previewSupplyTrip(value, { ...c, remainingTrips: 0 })).toContain(
+    'Stop/Start does not replenish spent trips.',
+  );
+  expect(preview).toContain('retained trip capacity unobserved (configured cap 1)');
   expect(preview).toContain('Eligible sale: item #501 × 3');
   expect(preview).toContain('Unmet weight target');
   expect(preview).toContain('hard stop prevents departure');
@@ -508,6 +515,35 @@ describe('bounded supply runtime', () => {
   });
 });
 describe('supply direct configuration allowance', () => {
+  it('publishes exhausted retained capacity instead of waiting for a trigger or renewing it on configure', () => {
+    const f = setup();
+    const retained = {
+      version: 1 as const,
+      character: f.c.character,
+      latched: false,
+      remainingTrips: 0,
+      actions: 0,
+      spent: 0,
+      reserved: 0,
+      intervalSeconds: 0,
+      deadlineSeconds: 0,
+      interrupted: false,
+      uncertain: false,
+      returnDestination: null,
+    };
+    f.runtime.configure(configured, f.c, retained);
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.snapshot()).toMatchObject({
+      remainingTrips: 0,
+      reason:
+        'Supply trip allowance exhausted. Stop/Start and unlimited farming time do not replenish spent trips.',
+    });
+    f.runtime.stop();
+    f.runtime.configure(configured, f.c);
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.snapshot().remainingTrips).toBe(0);
+    expect(f.runtime.snapshot().reason).toContain('exhausted');
+  });
   it('keeps consumed allowance when a disabled runtime is configured without window telemetry', () => {
     const f = setup();
     f.prepare();

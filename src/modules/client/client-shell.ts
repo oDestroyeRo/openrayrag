@@ -67,6 +67,7 @@ export function mountClientShell(root: HTMLElement): ClientShell {
           <h2 id="client-page-session-title" class="client-visually-hidden" tabindex="-1">Bot console</h2>
           <div class="console-setup-summary"><span class="console-setup-copy">${UI_ICONS.settings}<span id="console-setup-summary">Review your bot setup</span></span><button id="console-edit-setup" type="button" class="text-button" data-client-navigation="setup">${UI_ICONS.pencil}Edit setup</button></div>
           <p id="console-saved-draft-summary" class="hint" hidden></p>
+          <details id="console-readiness" class="panel farming-readiness" hidden><summary id="console-readiness-summary">Farming readiness</summary><div id="console-readiness-list"></div></details>
           <section id="console-attention" class="panel console-attention" aria-labelledby="console-attention-title" hidden><div class="panel-title"><h3 id="console-attention-title">Needs attention</h3></div><ul id="console-attention-list"></ul></section>
           <div class="bot-console-grid">
             <div class="console-primary">
