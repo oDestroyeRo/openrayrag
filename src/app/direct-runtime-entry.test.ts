@@ -51,6 +51,22 @@ afterEach(() => {
   captured.runtime = null;
 });
 describe('Bot-only catalogue startup', () => {
+  it('exposes the updater lifecycle through the actual Bot-only page entry', async () => {
+    const f = await fixture(async () => assets);
+    const bridge = f.page.__RAYRAG__ as unknown as Pick<
+      DirectRuntime,
+      'prepareUpdate' | 'cancelUpdate' | 'restoreUpdate'
+    >;
+    const requestId = 'a'.repeat(32);
+    expect(typeof bridge.prepareUpdate).toBe('function');
+    bridge.prepareUpdate(requestId);
+    expect(f.runtime.controller.preparingUpdate).toBe(true);
+    bridge.cancelUpdate(requestId);
+    expect(f.runtime.controller.preparingUpdate).toBe(false);
+    bridge.restoreUpdate({ requestId, checkpoint: null });
+    await flush();
+    expect(f.invoke).toHaveBeenCalledWith('update_restored', { requestId, success: false });
+  });
   it('uses native asset admission and publishes offscreen species in the current map', async () => {
     const f = await fixture(async () => assets);
     expect(f.invoke).toHaveBeenCalledWith('map_database', {});
