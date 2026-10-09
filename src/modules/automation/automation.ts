@@ -15,7 +15,7 @@ import { matchesSkillExecution } from '../combat/skill-execution';
 import { recoveryItemCooldown } from '../recovery/hp-potions';
 import { skillAfterCastSeconds } from '../combat/cast-policy';
 import type { AutomationPolicy as AutomationSettings } from '../settings/settings';
-import type { Entity } from '../protocol/protocol';
+import type { Entity, GameEvent } from '../protocol/protocol';
 import {
   actorPredicateEvaluator,
   type ActorObservationSnapshot,
@@ -44,6 +44,10 @@ import {
   effectiveSkillLevel,
   distanceBetween,
   itemConfirmationDiagnostic,
+  itemAttemptSummary,
+  itemEvidenceCategory,
+  type ItemAttemptDiagnostic,
+  type ItemDispatchContext,
 } from './automation-logic';
 
 export {
@@ -85,6 +89,46 @@ export class AutomationScheduler {
   private settlingUntil = 0;
   private canceledUntil = 0;
   private outcome: AutomationOutcome = { sequence: 0, status: 'idle', reason: '' };
+  private latestItemAttempt: ItemAttemptDiagnostic | null = null;
+  get itemAttempt(): ItemAttemptDiagnostic | null {
+    const attempt = this.latestItemAttempt;
+    return attempt
+      ? {
+          ...attempt,
+          context: attempt.context
+            ? {
+                ...attempt.context,
+                statuses: attempt.context.statuses.map((status) => ({ ...status })),
+              }
+            : null,
+          received: { ...attempt.received },
+        }
+      : null;
+  }
+  observeItemEvent(
+    event: GameEvent | { type: 'map' | 'resurrection' },
+    playerId: number | null,
+  ): void {
+    const attempt = this.latestItemAttempt;
+    const captured = this.captured;
+    if (
+      !attempt ||
+      captured?.sequence !== attempt.sequence ||
+      (attempt.context && this.itemDiagnostics?.connection() !== attempt.context.connection) ||
+      (captured.identity &&
+        !sameActionIdentity(captured.identity, this.identity?.(captured.action)))
+    )
+      return;
+    const category = itemEvidenceCategory(event, playerId);
+    if (category) attempt.received[category] = Math.min(1000, attempt.received[category] + 1);
+  }
+  private itemOutcome(outcome: ItemAttemptDiagnostic['outcome']): void {
+    const attempt = this.latestItemAttempt;
+    if (!attempt || this.captured?.sequence !== attempt.sequence || attempt.outcome === outcome)
+      return;
+    attempt.outcome = outcome;
+    this.itemDiagnostics?.note(itemAttemptSummary(attempt));
+  }
   get result(): ActionResult {
     return publishedActionResult(this.outcome);
   }
@@ -92,9 +136,14 @@ export class AutomationScheduler {
   private recoverySince: number | null = null;
   private resting = false;
   constructor(
-    private readonly send: (action: ExpandedAction) => void,
+    private readonly send: (action: ExpandedAction) => unknown,
     private readonly now: () => number,
     private readonly identity?: (action: ExpandedAction) => ActionIdentity | null,
+    private readonly itemDiagnostics?: {
+      context: () => ItemDispatchContext;
+      connection: () => number;
+      note: (text: string) => void;
+    },
   ) {}
   get busy(): boolean {
     return (
@@ -177,7 +226,10 @@ export class AutomationScheduler {
           ? (policy.skills.find((rule) => rule.skillId === action.skillId)?.cooldownSeconds ??
             seconds(1))
           : seconds(0);
-    if (action.type === 'useItem') this.stampCooldown(action);
+    if (action.type === 'useItem') {
+      this.stampCooldown(action);
+      this.itemOutcome('late-confirmed');
+    }
     this.discardReceipt();
     return cooldown;
   }
@@ -200,12 +252,14 @@ export class AutomationScheduler {
       this.canceledUntil = 0;
     } else if (this.pending)
       this.canceledUntil = Math.max(this.canceledUntil, this.pending.deadline);
-    if (this.pending)
+    if (this.pending) {
+      this.itemOutcome('cancelled');
       this.outcome = {
         sequence: this.sequence,
         status: 'failed',
         failure: { type: 'cancel', reason: 'Action canceled.' },
       };
+    }
     this.pending = null;
     this.recoverySince = null;
     this.resting = false;
@@ -314,13 +368,44 @@ export class AutomationScheduler {
       status: 'pending',
       reason: `Waiting for ${action.type} confirmation.`,
     };
+    const itemAttempt: ItemAttemptDiagnostic | null =
+      action.type === 'useItem'
+        ? {
+            sequence: this.sequence,
+            itemId: domainItemId(action.itemId),
+            since,
+            context: this.itemDiagnostics?.context() ?? null,
+            send: 'pending',
+            outcome: 'waiting',
+            received: { inventory: 0, removals: 0, ownResources: 0, ownState: 0, rejections: 0 },
+          }
+        : null;
+    if (itemAttempt) {
+      this.latestItemAttempt = itemAttempt;
+      this.itemDiagnostics?.note(itemAttemptSummary(itemAttempt));
+    }
+    const sent = (result: ItemAttemptDiagnostic['send']) => {
+      if (!itemAttempt || this.latestItemAttempt !== itemAttempt) return;
+      itemAttempt.send = result;
+      this.itemDiagnostics?.note(itemAttemptSummary(itemAttempt));
+    };
     try {
       if (reservation) {
         if (!identity) throw new Error('Observed identity required.');
         reservation.reserved(this.sequence, identity);
       }
-      this.send(action);
+      const write = this.send(action);
+      // Async adapters return their existing write Promise; legacy synchronous
+      // callback return values remain ignored.
+      if (write instanceof Promise)
+        void write.then(
+          () => sent('accepted'),
+          () => sent('uncertain'),
+        );
+      else sent('accepted');
     } catch (error) {
+      sent('uncertain');
+      this.itemOutcome('unconfirmed');
       this.pending = null;
       this.outcome = {
         sequence: this.sequence,
@@ -336,6 +421,7 @@ export class AutomationScheduler {
     playerId: number | null,
     respawnTransition = false,
   ): ObserveSettlement {
+    this.observeItemEvent(event, playerId);
     const pending = this.pending;
     if (!pending || playerId === null) return { state: 'ignored' };
     const current = this.identity?.(pending.action);
@@ -359,6 +445,7 @@ export class AutomationScheduler {
             ? `Server rejected ${pending.action.type}: ${event.message.slice(0, 120)}`
             : `Server rejected ${pending.action.type} (code ${event.reason}).`,
       };
+      this.itemOutcome('rejected');
       this.pending = null;
       this.outcome = { sequence: this.sequence, status: 'failed', failure };
       return { state: 'rejected', failure: { ...failure } };
@@ -418,6 +505,7 @@ export class AutomationScheduler {
         break;
     }
     if (confirmed) {
+      if (action.type === 'useItem') this.itemOutcome('confirmed');
       if (event.type === 'skillResult')
         this.settleSkill(event.motionSeconds, pending.afterCastSeconds);
       this.pending = null;
@@ -447,6 +535,7 @@ export class AutomationScheduler {
               observation: pending.itemObservation,
             })}`
           : '';
+      this.itemOutcome('unconfirmed');
       this.pending = null;
       this.outcome = {
         sequence: this.sequence,

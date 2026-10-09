@@ -16,6 +16,8 @@ Selections and order are retained when switching resources or modes and closing/
 
 Advanced HP/SP item rules remain available in Inventory and take priority. An item configured there is exclusively governed by that rule's conditions, reserve and cooldown, even if it is also selected here. Recovery reserves are included in the existing transfer, supply and macro stock protections.
 
+When consumption remains unconfirmed, review **Activity** for the matching item-attempt number. It records the observed character state at dispatch, whether the local send settled, and a bounded summary of relevant responses. A local send marked accepted is separate from server-confirmed consumption; unknown status or missing inventory evidence stays unknown. Neither a timeout nor a zero cooldown authorizes another uncertain spend. The protocol cannot expose every server admission condition; see [the item diagnostic limitations](PROTOCOL.md#expanded-player-state-and-actions).
+
 ## Catalog and settings contract
 
 The shared catalog contains 69 HP and 25 SP items, with 18 items in both lists. Effects come from [Rebuild's pinned item scripts](https://github.com/Doddler/RagnarokRebuildTcp/blob/4099e2c000c3c550516760b9c1241595aac9aceb/RoRebuildServer/GameConfig/ServerData/Script/Items/ItemEffects.txt), resolved through `ItemsUsable.csv` and matched to the pinned client by ID, name, item class and untargeted use mode. Unimplemented food, status-only items, speed items and teleport items are excluded. Classification does not assert live server healing amounts. The generator and source hashes are in `scripts/catalogs/build-recovery-item-catalog.py` and `src/data/recovery-item-catalog.json`.
