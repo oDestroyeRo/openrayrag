@@ -41,7 +41,6 @@ export class RecoveryItemUi {
   private readonly cooldownSeconds: HTMLInputElement;
   private readonly list = document.createElement('div');
   private readonly guide = document.createElement('p');
-  private readonly stopWarning = document.createElement('p');
   private readonly inventoryMessage = document.createElement('p');
   private readonly rows = new Map<ItemId, PotionRow>();
   private readonly ids: readonly ItemId[];
@@ -51,7 +50,6 @@ export class RecoveryItemUi {
 
   constructor(
     private readonly changed: () => void,
-    private readonly stopLimit: () => number,
     private readonly resource: RecoveryResource = 'hp',
   ) {
     const name = resource.toUpperCase();
@@ -93,20 +91,10 @@ export class RecoveryItemUi {
     );
     this.guide.className = 'hint';
     this.guide.ariaLive = 'polite';
-    this.stopWarning.className = 'notice error';
-    this.stopWarning.ariaLive = 'polite';
     this.list.className = 'hp-potion-list';
     this.inventoryMessage.className = 'hint';
     this.inventoryMessage.ariaLive = 'polite';
-    this.root.append(
-      title,
-      scope,
-      grid,
-      this.guide,
-      this.stopWarning,
-      this.inventoryMessage,
-      this.list,
-    );
+    this.root.append(title, scope, grid, this.guide, this.inventoryMessage, this.list);
     for (const itemId of this.ids) this.addPotion(itemId);
     this.mode.addEventListener('change', () => {
       if (this.locked) return;
@@ -301,20 +289,5 @@ export class RecoveryItemUi {
         : `${carried ? '' : `No carried ${name} recovery items.`}${missing ? ` ${missing} saved selection${missing === 1 ? ' is' : 's are'} out of stock; choices are kept for restocking.` : ''}`.trim(),
     );
     this.inventoryMessage.hidden = this.inventoryMessage.textContent === '';
-    if (this.mode.value === 'off' || this.resource !== 'hp') {
-      this.stopWarning.hidden = true;
-      setText(this.stopWarning, '');
-      return;
-    }
-    const stop = this.stopLimit(),
-      threshold = inputNumber(this.belowPercent);
-    const warn = Number.isFinite(stop) && Number.isFinite(threshold) && threshold <= stop;
-    this.stopWarning.hidden = !warn;
-    setText(
-      this.stopWarning,
-      warn
-        ? `The bot stops at ${stop}% HP before using recovery items. Set “Use below HP %” above ${stop}% to heal before that limit. The stop limit remains unchanged.`
-        : '',
-    );
   }
 }

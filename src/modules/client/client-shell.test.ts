@@ -729,8 +729,6 @@ describe('client shell navigation', () => {
       'target-source',
       'radius',
       'radius-value',
-      'min-hp',
-      'hp-value',
       'random-walk',
       'route-step',
       'route-time',
@@ -763,7 +761,8 @@ describe('client shell navigation', () => {
     expect(html).toContain('<summary>Movement & approach limits</summary>');
     expect(html).not.toContain('<code>route_');
     expect(html).toContain('id="radius" type="range" min="1" max="20" value="12"');
-    expect(html).toContain('id="min-hp" type="range" min="20" max="95" value="45"');
+    expect(html).not.toContain('id="min-hp"');
+    expect(html).not.toContain('Emergency HP stop');
     expect(ids.filter((value) => value === 'update-check')).toHaveLength(1);
     expect(html).toContain('Check for updates');
     expect(html).toContain('Check anytime, including while the bot runs.');

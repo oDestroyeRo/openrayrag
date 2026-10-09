@@ -376,6 +376,21 @@ describe('named profiles', () => {
     expect(() => f.store.import(JSON.stringify(document))).toThrow();
     expect(f.data.get(PROFILE_STORAGE_KEY)).toBe(before);
   });
+  it('imports legacy cutoff settings without restoring the cutoff or accepting unrelated fields', () => {
+    const f = fixture();
+    const saved = f.store.save('Legacy', 'Test', settings());
+    const legacy = JSON.parse(f.store.export(saved.id));
+    legacy.profiles[0].settings.minHpPercent = 95;
+    const restored = fixture().store.import(JSON.stringify(legacy))[0]!;
+    expect(restored.settings).not.toHaveProperty('minHpPercent');
+    const current = fixture();
+    current.store.import(JSON.stringify(legacy));
+    expect(current.store.export(saved.id)).not.toContain('minHpPercent');
+    legacy.profiles[0].settings.unknownCutoff = 95;
+    expect(() => fixture().store.import(JSON.stringify(legacy))).toThrow(
+      'unknown or missing settings',
+    );
+  });
   it('round-trips detached settings without account or run state', () => {
     const f = fixture();
     const input = settings();

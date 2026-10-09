@@ -45,8 +45,7 @@ export class SettingsForm {
     this.element('clear-targets').addEventListener('click', () =>
       this.editTargets(() => this.targets.clear()),
     );
-    for (const id of ['radius', 'min-hp'])
-      this.element(id).addEventListener('input', () => this.labels());
+    this.element('radius').addEventListener('input', () => this.labels());
   }
 
   /** Project field settings; command owners still validate before admission. */
@@ -171,7 +170,6 @@ export class SettingsForm {
     this.renderTargets();
     for (const id of [
       'radius',
-      'min-hp',
       'loot',
       'random-walk',
       'route-step',
@@ -195,7 +193,6 @@ export class SettingsForm {
       map,
       targets,
       radius: Number(this.element<HTMLInputElement>('radius').value),
-      minHpPercent: Number(this.element<HTMLInputElement>('min-hp').value),
       loot: this.element<HTMLInputElement>('loot').checked,
       route_randomWalk: Number(this.element<HTMLSelectElement>('random-walk').value) as 0 | 2,
       route_step: Number(this.element<HTMLInputElement>('route-step').value),
@@ -211,7 +208,6 @@ export class SettingsForm {
     this.automation.write(automationDraft(value.automation ?? DEFAULT_AUTOMATION));
     const inputs: Record<string, number> = {
       radius: value.radius,
-      'min-hp': value.minHpPercent,
       'route-step': value.route_step,
       'route-time': value.route_randomWalk_maxRouteTime,
       'attack-distance': value.attackRouteMaxPathDistance,
@@ -228,7 +224,6 @@ export class SettingsForm {
   private labels(): void {
     this.element('radius-value').textContent =
       `${this.element<HTMLInputElement>('radius').value} cells`;
-    this.element('hp-value').textContent = `${this.element<HTMLInputElement>('min-hp').value}%`;
   }
 
   private editTargets(edit: () => void): void {

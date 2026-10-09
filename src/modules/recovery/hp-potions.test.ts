@@ -298,7 +298,7 @@ describe('automatic HP potion use', () => {
       ]);
     },
   );
-  it('uses the engine recovery path before sitting while retaining the HP safety stop', () => {
+  it('uses recovery items before sitting and keeps recovery available at low HP', () => {
     let now = 100_000;
     const sent: Action[] = [];
     const engine = new BotEngine(
@@ -338,7 +338,7 @@ describe('automatic HP potion use', () => {
     engine.player!.hp = 40;
     now += 1000;
     engine.tick();
-    expect(engine.running).toBe(false);
-    expect(sent.some((action) => action.type === 'useItem')).toBe(false);
+    expect(engine.running).toBe(true);
+    expect(sent.some((action) => action.type === 'useItem')).toBe(true);
   });
 });

@@ -641,11 +641,34 @@ describe('bot script diagnostics and boundaries', () => {
     expect(() => parseBotScript(source)).toThrow('Macro document is too large');
   });
 
+  it.each(['minHpPercent', 'emergency-hp'])(
+    'loads and drops legacy %s script assignments',
+    (key) => {
+      const source = `script "Legacy"\nset ${key} = 95% # retired cutoff\nset automation.recovery.enabled = true\nset automation.recovery.hpStart = 1%`;
+      const document = parseBotScript(source);
+      expect(document.settings).not.toHaveProperty('minHpPercent');
+      expect(document.settings.automation!.recovery.hpStart).toBe(1);
+      const canonical = formatBotScript(document);
+      expect(canonical).not.toMatch(/minHpPercent|emergency-hp/);
+      const synchronized = replaceBotScriptSettings(source, document.settings);
+      expect(synchronized).not.toMatch(/minHpPercent|emergency-hp/);
+      expect(synchronized).toContain('# retired cutoff');
+      expect(parseBotScript(synchronized).settings).toEqual(document.settings);
+    },
+  );
+  it('drops legacy JSON cutoff values from authoring without introducing optional sections', () => {
+    const input = { settings: { ...settings(), minHpPercent: 95 }, script: null };
+    const document = parseBotScript(JSON.stringify(macro()), input.settings);
+    expect(document.settings).not.toHaveProperty('minHpPercent');
+    expect(document.settings).not.toHaveProperty('automation');
+    expect(formatBotScript(input)).not.toContain('minHpPercent');
+  });
+
   it('applies existing cross-field setting safety and macro action bounds', () => {
     lineError(
-      'script "Test"\nset emergency-hp = 60%\nset automation.recovery.enabled = true',
+      'script "Test"\nset automation.recovery.hpStart = 85%\nset automation.recovery.hpEnd = 60%',
       3,
-      'Rest below HP % (60%) must be above Emergency HP stop (60%).',
+      'Invalid automation settings',
     );
     lineError(
       withRule(`when level >= 1\n${'use item 501\n'.repeat(17).trim()}`),

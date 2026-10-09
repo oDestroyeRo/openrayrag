@@ -706,6 +706,14 @@ mod tests {
     }
 
     #[test]
+    fn legacy_checkpoint_form_loads_without_restoring_emergency_cutoff() {
+        let checkpoint = checkpoint();
+        assert!(checkpoint.continuation.form.validate().is_ok());
+        let value = serde_json::to_value(&checkpoint.continuation.form).unwrap();
+        assert!(value["settings"].get("minHpPercent").is_none());
+    }
+
+    #[test]
     fn runtime_validation_uses_supplied_time_and_rejects_unsettled_or_sensitive_state() {
         let mut value = runtime();
         assert!(validate_runtime(&value, 999).is_err());

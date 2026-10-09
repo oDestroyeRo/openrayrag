@@ -404,7 +404,6 @@ const settingsSchema = object(
     map: string(),
     targets: array(id, 64),
     radius: number(1, 20),
-    minHpPercent: percent(20, 95),
     loot: boolean,
     route_randomWalk: { ...number(0, 2), choices: [0, 2] },
     route_step: number(1, 20),
@@ -923,7 +922,8 @@ function readBotScript(text: string): { document: BotScriptDocumentInput; line: 
     if (assignment) {
       if (rule) fail('Put settings outside rule blocks.', line);
       const parts = pathParts(assignment[1]!, line),
-        schema = schemaAt(parts, line);
+        legacyCutoff = parts.length === 1 && parts[0] === 'minHpPercent',
+        schema = legacyCutoff ? percent(20, 95) : schemaAt(parts, line);
       if (
         assignments.some((previous) => {
           const shorter = Math.min(parts.length, previous.parts.length);
@@ -933,7 +933,9 @@ function readBotScript(text: string): { document: BotScriptDocumentInput; line: 
         fail('A setting path may be assigned only once, without overlapping parent paths.', line);
       const reader = new LineReader(tokens(assignment[2]!, line), line);
       const predicateValue = parts.at(-1) === 'value' && parts.includes('conditions');
-      assignSetting(settings, parts, reader.scalar(schema, predicateValue));
+      const value = reader.scalar(schema, predicateValue);
+      // Old scripts retain their syntax checks, but no longer configure a cutoff.
+      if (!legacyCutoff) assignSetting(settings, parts, value);
       reader.done();
       assignments.push({ parts, line });
       lastSettingLine = line;

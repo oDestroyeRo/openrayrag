@@ -514,41 +514,35 @@ describe('bounded death episode and authoritative arrival', () => {
     expect(f.c.snapshot().deathRecoveryGuard?.phase).toBe('failed');
     expect(start).not.toHaveBeenCalled();
   });
-  it.each(['low', 'unknown'] as const)(
-    'stops automatic return at $health HP without another travel decision or a fresh return deadline',
-    (health) => {
-      const f = fixture('prt_fild08', { ...own, x: 170, y: 370 }, searchGrid),
-        s = settings();
-      s.automation!.recovery.enabled = false;
-      f.c.start(s);
-      f.step();
-      f.die();
-      f.packet(new BitWriter().u8(OP.map).string('prontera'));
-      f.packet(spawn({ ...own, x: 156, y: 26, hp: 100, sp: 0, maxSp: 0 }, 1));
-      expect(f.c.travel.active).toBe(true);
-      const deadline = f.c.snapshot().deathRecoveryGuard!.returnDeadline;
-      const tick = vi.spyOn(f.c.travel, 'tick'),
-        start = vi.spyOn(f.c.travel, 'start'),
-        walks = f.sent.filter((a) => a.type === 'walk').length;
-      if (health === 'low') f.heal(10);
-      else {
-        f.c.engine.player!.maxHp = 0;
-        f.step();
-      }
-      expect(tick).not.toHaveBeenCalled();
-      expect(f.sent.filter((a) => a.type === 'walk')).toHaveLength(walks);
-      expect(f.sent.at(-1)).toEqual({ type: 'stop' });
-      expect(f.c.snapshot().deathRecoveryGuard).toMatchObject({
-        phase: 'failed',
-        returnDeadline: deadline,
-      });
-      f.heal(100);
-      f.advance(4000);
-      expect(start).not.toHaveBeenCalled();
-      expect(f.c.engine.running).toBe(false);
-    },
-  );
-  it('stops an accepted return walk at low HP and never dispatches its next leg', () => {
+  it('stops automatic return when HP is unavailable without another travel decision or a fresh return deadline', () => {
+    const f = fixture('prt_fild08', { ...own, x: 170, y: 370 }, searchGrid),
+      s = settings();
+    s.automation!.recovery.enabled = false;
+    f.c.start(s);
+    f.step();
+    f.die();
+    f.packet(new BitWriter().u8(OP.map).string('prontera'));
+    f.packet(spawn({ ...own, x: 156, y: 26, hp: 100, sp: 0, maxSp: 0 }, 1));
+    expect(f.c.travel.active).toBe(true);
+    const deadline = f.c.snapshot().deathRecoveryGuard!.returnDeadline;
+    const tick = vi.spyOn(f.c.travel, 'tick'),
+      start = vi.spyOn(f.c.travel, 'start'),
+      walks = f.sent.filter((a) => a.type === 'walk').length;
+    f.c.engine.player!.maxHp = 0;
+    f.step();
+    expect(tick).not.toHaveBeenCalled();
+    expect(f.sent.filter((a) => a.type === 'walk')).toHaveLength(walks);
+    expect(f.sent.at(-1)).toEqual({ type: 'stop' });
+    expect(f.c.snapshot().deathRecoveryGuard).toMatchObject({
+      phase: 'failed',
+      returnDeadline: deadline,
+    });
+    f.heal(100);
+    f.advance(4000);
+    expect(start).not.toHaveBeenCalled();
+    expect(f.c.engine.running).toBe(false);
+  });
+  it('continues an accepted return walk at low HP with the original deadline', () => {
     const f = fixture('prt_fild08', { ...own, x: 170, y: 370 }, searchGrid),
       s = settings();
     s.automation!.recovery.enabled = false;
@@ -564,11 +558,11 @@ describe('bounded death episode and authoritative arrival', () => {
     const walks = f.sent.filter((a) => a.type === 'walk').length,
       deadline = f.c.snapshot().deathRecoveryGuard!.returnDeadline;
     f.heal(1);
-    expect(f.sent.at(-1)).toEqual({ type: 'stop' });
+    expect(f.sent.at(-1)?.type).toBe('walk');
     f.advance(trip.leg.length * 150 + 500);
-    expect(f.sent.filter((a) => a.type === 'walk')).toHaveLength(walks);
+    expect(f.sent.filter((a) => a.type === 'walk').length).toBeGreaterThan(walks);
     expect(f.c.snapshot().deathRecoveryGuard).toMatchObject({
-      phase: 'failed',
+      phase: 'return',
       returnDeadline: deadline,
     });
   });

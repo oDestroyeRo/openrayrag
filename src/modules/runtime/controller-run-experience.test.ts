@@ -212,15 +212,15 @@ describe('confirmed EXP gained in a controller run', () => {
       revision: 2,
     });
   });
-  it('counts new rewards and losses while the reconnected character waits for HP', () => {
+  it('counts new rewards and losses while the reconnected character continues at low HP', () => {
     const f = fixture();
     f.controller.start(settings);
     f.reward(100, 10, 200, 5);
     f.controller.disconnect();
     f.enter(20);
     f.reward(100, 10, 200, 5);
-    expect(f.controller.snapshot().reason).toContain('Waiting for HP');
-    expect(f.controller.snapshot().running).toBe(false);
+    expect(f.controller.engine.player!.hp).toBe(20);
+    expect(f.controller.snapshot().running).toBe(true);
     f.reward(120, 20, 207, 7);
     f.reward(110, -10, 205, -2);
     expect(f.controller.snapshot().runExperience).toMatchObject({

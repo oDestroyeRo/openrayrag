@@ -22,7 +22,6 @@ script "My field setup"
 set map = prt_fild08
 set targets = [4000, 4012]
 set radius = 12
-set minHpPercent = 45%
 set loot = true
 set route_randomWalk = 2
 set route_step = 10
@@ -65,7 +64,6 @@ This example starts a field once, then monitors First Aid:
 script "Farm and recover"
 set map = prt_fild08
 set targets = [4000]
-set minHpPercent = 45%
 
 # Whole-script limits. Each action still has a timeout.
 duration 1h

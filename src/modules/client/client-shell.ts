@@ -116,14 +116,13 @@ export function mountClientShell(root: HTMLElement): ClientShell {
             </fieldset>
             <div class="field-row"><label for="radius">Monster scan radius</label><output id="radius-value">12 cells</output></div><input id="radius" type="range" min="1" max="20" value="12" />
             <label class="toggle-row" for="loot"><div>Collect loot<small>Choose own drops or all nearby drops with Pickup scope</small></div><input id="loot" type="checkbox" checked role="switch" /></label>
-            <details class="setup-advanced"><summary>Advanced combat options & rules</summary><p class="footnote">The bot waits through low HP, map changes and connection loss. Stop cancels the run; manual console actions require a stopped bot.</p></details>
+            <details class="setup-advanced"><summary>Advanced combat options & rules</summary><p class="footnote">The bot waits through map changes and connection loss. Stop cancels the run; manual console actions require a stopped bot.</p></details>
           </section>
           <section id="client-bot-recovery" class="panel settings feature-panel" data-section="recovery" role="tabpanel" aria-labelledby="client-bot-tab-recovery" hidden>
             <div class="panel-title"><h3 id="client-bot-recovery-title" tabindex="-1">Recovery</h3></div>
-            <p class="setup-guidance">Choose recovery items and when to rest. Keep the emergency stop below your rest threshold.</p>
-            <div class="field-row"><label for="min-hp">Emergency HP stop</label><output id="hp-value">45%</output></div><input id="min-hp" type="range" min="20" max="95" value="45" />
+            <p class="setup-guidance">Choose recovery items and when to rest.</p>
             <div class="form-grid setup-basic-fields"></div>
-            <p class="hint">When rest is enabled: Emergency HP stop &lt; Rest below HP % &lt; Resume above HP %. Rest below HP % can be at most 95%.</p>
+            <p class="hint">When rest is enabled: Rest below HP % &lt; Resume above HP %. Rest below HP % can be at most 95%.</p>
             <div class="setup-potions"></div>
             <details class="setup-advanced"><summary>Advanced recovery, escape & revival</summary></details>
           </section>

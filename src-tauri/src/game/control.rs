@@ -1197,7 +1197,7 @@ fn validate_manual_target(value: &Value) -> Validation {
     let policy = object(
         field(request, "policy")?,
         &[
-            "minHpPercent",
+            "minHpPercent", // Ignored compatibility field from older command payloads.
             "routeStep",
             "avoidWalls",
             "walkSeconds",
@@ -1210,7 +1210,6 @@ fn validate_manual_target(value: &Value) -> Validation {
         ],
     )?;
     for (key, min, max) in [
-        ("minHpPercent", 20, 95),
         ("routeStep", 1, 20),
         ("walkSeconds", 1, 600),
         ("approachSeconds", 1, 60),

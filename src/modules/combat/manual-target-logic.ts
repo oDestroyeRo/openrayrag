@@ -31,7 +31,6 @@ import {
 } from '../settings/settings';
 /** Command-only policy. No automatic action, saved run, or selected-species list. */
 export interface ManualTargetPolicy {
-  minHpPercent: number;
   routeStep: number;
   avoidWalls: boolean;
   walkSeconds: number;
@@ -121,7 +120,7 @@ export function validateActionIdentity(value: unknown): UuidEngagementIdentity {
 
 export function validateManualTargetPolicy(value: unknown): ManualTargetPolicy {
   const v = keys(value, [
-    'minHpPercent',
+    'minHpPercent', // Accepted and discarded only for older command payloads.
     'routeStep',
     'avoidWalls',
     'walkSeconds',
@@ -133,7 +132,6 @@ export function validateManualTargetPolicy(value: unknown): ManualTargetPolicy {
     'mapPolicy',
   ]);
   if (
-    !integer(v.minHpPercent, 20, 95) ||
     !integer(v.routeStep, 1, 20) ||
     typeof v.avoidWalls !== 'boolean' ||
     !integer(v.walkSeconds, 1, 600) ||
@@ -153,7 +151,6 @@ export function validateManualTargetPolicy(value: unknown): ManualTargetPolicy {
   });
   const mapPolicy = Object.hasOwn(v, 'mapPolicy') ? validateMapPolicy(v.mapPolicy) : undefined;
   return {
-    minHpPercent: v.minHpPercent as number,
     routeStep: v.routeStep as number,
     avoidWalls: v.avoidWalls,
     walkSeconds: v.walkSeconds as number,
@@ -172,7 +169,6 @@ export function validateManualTargetPolicy(value: unknown): ManualTargetPolicy {
 export function manualTargetPolicy(settings: Settings): ManualTargetPolicy {
   const a = settings.automation ?? DEFAULT_AUTOMATION;
   return validateManualTargetPolicy({
-    minHpPercent: settings.minHpPercent,
     routeStep: settings.route_step,
     avoidWalls: settings.route_avoidWalls,
     walkSeconds: settings.route_randomWalk_maxRouteTime,
@@ -244,7 +240,6 @@ export function manualTargetSettings(request: ManualTargetRequest): Settings {
     route_randomWalk_maxRouteTime: p.walkSeconds,
     attackMaxRouteTime: p.approachSeconds,
     attackRouteMaxPathDistance: p.maxPathDistance,
-    minHpPercent: p.minHpPercent,
     automation: {
       ...structuredClone(DEFAULT_AUTOMATION),
       combat: {

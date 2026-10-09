@@ -719,20 +719,8 @@ export class FeatureUi {
     this.services = new NpcServiceStore(storage);
     for (const [section, panel] of Object.entries(mounts.sections) as Array<[Section, HTMLElement]>)
       this.panels.set(section, panel);
-    this.hpPotions = new RecoveryItemUi(
-      () => this.hooks.changed(),
-      () => {
-        // FeatureUi mounts before SettingsForm exists. Read this independent
-        // control so an invalid draft elsewhere cannot interrupt status rendering.
-        const input = this.host.querySelector<HTMLInputElement>('#min-hp');
-        return input ? Number(input.value) : this.hooks.settings().minHpPercent;
-      },
-    );
-    this.spPotions = new RecoveryItemUi(
-      () => this.hooks.changed(),
-      () => 0,
-      'sp',
-    );
+    this.hpPotions = new RecoveryItemUi(() => this.hooks.changed());
+    this.spPotions = new RecoveryItemUi(() => this.hooks.changed(), 'sp');
     const resourceLabel = document.createElement('label');
     resourceLabel.className = 'form-field';
     const resourceTitle = document.createElement('span');

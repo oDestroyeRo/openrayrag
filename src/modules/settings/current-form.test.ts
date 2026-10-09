@@ -36,6 +36,19 @@ it('retains configured target IDs before map/level/catalog readiness without wea
       .settings,
   ).toEqual(DEFAULT_SETTINGS);
 });
+it('restores legacy current forms with the cutoff removed and metadata retained', () => {
+  const input = {
+    version: 1,
+    revision: 53,
+    selectedProfileId: 'saved',
+    settings: { ...DEFAULT_SETTINGS, minHpPercent: 95 },
+  };
+  const restored = formDocument(input);
+  expect(restored).toMatchObject({ revision: 53, selectedProfileId: 'saved' });
+  expect(restored.settings).toEqual(DEFAULT_SETTINGS);
+  expect(restored.settings).not.toHaveProperty('minHpPercent');
+  expect(input.settings.minHpPercent).toBe(95);
+});
 it('manual edits win a delayed restore and saves are serialized by revision', async () => {
   let radius = 13;
   const writes: number[] = [];

@@ -83,11 +83,7 @@ export function escapeRecovery(settings: Settings): EscapeRecovery {
   return {
     hpPercent: Math.min(
       100,
-      Math.max(
-        policy.hpBelowPercent + 10,
-        settings.minHpPercent + 1,
-        recovery.enabled ? recovery.hpEnd : 0,
-      ),
+      Math.max(policy.hpBelowPercent + 10, recovery.enabled ? recovery.hpEnd : 0),
     ),
     threatCount: policy.threatEnabled ? policy.threatCount! : 0,
     quietSeconds: policy.threatEnabled ? policy.threatWindowSeconds! : 0,

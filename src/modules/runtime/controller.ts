@@ -3264,14 +3264,9 @@ export class CompanionController {
         );
         return true;
       }
-      if (
-        this.supply.ownsField &&
-        player &&
-        !player.dead &&
-        (!player.maxHp || (player.hp / player.maxHp) * 100 <= this.requestedSettings!.minHpPercent)
-      ) {
+      if (this.supply.ownsField && player && !player.dead && (player.hp <= 0 || !player.maxHp)) {
         this.supplyFailure(
-          'Supply interrupted for HP recovery; check stock and the return destination before restarting.',
+          'Supply interrupted by zero or unavailable HP; check the character before restarting.',
         );
         return true;
       }
@@ -3676,7 +3671,7 @@ export class CompanionController {
     this.escape.update(context);
     if (this.requestedSettings && this.escape.wants(this.requestedSettings, context)) {
       // Stop/cancel movement first, then wait 250ms before the wing/skill. The
-      // normal HP guard may already have sent Stop in this incoming packet.
+      // previous action owner may already have sent Stop in this incoming packet.
       this.pause('Preparing emergency escape.');
       this.escape.begin(this.requestedSettings, this.escapeContext());
     }
@@ -3913,8 +3908,8 @@ export class CompanionController {
         cycle.guard.uncertain = true;
         return wait('Waiting for confirmed standing posture before return.');
       }
-      if (!p.maxHp || (p.hp / p.maxHp) * 100 <= settings.minHpPercent)
-        return wait('Waiting for HP to recover above the configured field and travel limit.');
+      if (p.hp <= 0 || !p.maxHp)
+        return wait('Waiting for a living character with observed HP before return.');
       if (this.engine.character.sitting !== false)
         return wait('Waiting for confirmed standing posture before return.');
       cycle.guard.phase = 'return';
@@ -3924,11 +3919,11 @@ export class CompanionController {
       );
       cycle.guard.returnDeadline = cycle.returnUntil;
     }
-    if (!p.maxHp || (p.hp / p.maxHp) * 100 <= settings.minHpPercent) {
+    if (p.hp <= 0 || !p.maxHp) {
       if (this.travel.active)
         this.pause('Waiting for HP and a living character before travelling.');
       return fail(
-        'Return interrupted by unavailable or low HP. The original return deadline will not restart.',
+        'Return interrupted by zero or unavailable HP. The original return deadline will not restart.',
       );
     }
     if (this.travel.active) {
@@ -4072,8 +4067,8 @@ export class CompanionController {
       if (
         !context.player ||
         context.player.dead ||
-        !context.player.maxHp ||
-        (context.player.hp / context.player.maxHp) * 100 <= attempt.settings.minHpPercent
+        context.player.hp <= 0 ||
+        !context.player.maxHp
       ) {
         this.partyFollow.cancel('Health interrupted party rendezvous. Stop and Start to retry.');
         return true;
@@ -4105,10 +4100,7 @@ export class CompanionController {
     }
     if (this.partyFollow.ownsTravel && this.travel.active) {
       const p = this.engine.player;
-      if (
-        p &&
-        (p.dead || !p.maxHp || (p.hp / p.maxHp) * 100 <= this.requestedSettings!.minHpPercent)
-      )
+      if (p && (p.dead || p.hp <= 0 || !p.maxHp))
         this.partyFollow.cancel('Health interrupted party rendezvous. Stop and Start to retry.');
       else this.travel.tick(this.engine.map, p);
       const travel = this.travel.snapshot();
@@ -4651,7 +4643,6 @@ export class CompanionController {
       maxDeaths: policy.respawn.maxDeaths,
       hp: player.hp,
       maxHp: player.maxHp,
-      minHpPercent: settings.minHpPercent,
       npcMode: this.world.npc.mode,
       npcId: this.world.npc.id,
       vending: !!this.world.vending,
@@ -4884,7 +4875,7 @@ export class CompanionController {
     }
     if (this.deathRecoveryTick()) return;
     // Escape owns its own receipt rather than the scheduler's cost-only ACK.
-    // It must run while a requested field run is already waiting below its HP floor.
+    // It retains its configured HP/threat triggers while field activity is waiting.
     if (this.escapeTick()) return;
     if (
       (!this.macro.active ||
@@ -4907,13 +4898,7 @@ export class CompanionController {
     );
     this.captureActionFailure();
     this.applySettledSettings();
-    if (
-      this.runRequested &&
-      wasRunning &&
-      !this.engine.running &&
-      !this.engine.player?.dead &&
-      !this.engine.reason.includes('HP reached')
-    ) {
+    if (this.runRequested && wasRunning && !this.engine.running && !this.engine.player?.dead) {
       this.waitingReason = this.engine.reason;
       this.retryAt = Math.max(this.retryAt, now + 5_000);
     }
@@ -4976,12 +4961,7 @@ export class CompanionController {
     }
     if (this.travel.active) {
       const player = this.engine.player;
-      if (
-        player &&
-        (player.dead ||
-          !player.maxHp ||
-          (player.hp / player.maxHp) * 100 <= (this.travelSettings?.minHpPercent ?? 45))
-      ) {
+      if (player && (player.dead || player.hp <= 0 || !player.maxHp)) {
         this.pause('Waiting for HP and a living character before travelling.');
       } else {
         try {
