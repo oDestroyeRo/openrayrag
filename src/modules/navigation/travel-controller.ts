@@ -403,7 +403,7 @@ export class TravelController {
       this.installedStart = null;
       this.executionIdentity = context.identity;
       this.since = this.now();
-      this.deadline = this.now() + 60_000;
+      this.deadline = this.since + 60_000;
       this.databaseTrip = {
         trip: this.trip,
         fromMap: map,

@@ -18,6 +18,7 @@ import { BUILTIN_SERVICES } from '../services/npc-services';
 import { DEFAULT_SUPPLY } from '../services/supply-trip';
 import { FEATURE_OP } from '../protocol/protocol-feature';
 import { validateControllerUpdateCheckpoint } from '../update/controller-update';
+import { validateDatabaseTravelCheckpoint } from './travel-controller-logic';
 
 const own: Entity = {
   id: 0,
@@ -169,6 +170,34 @@ function travelFixture(sendFailure = false, reserve = () => true) {
     },
   };
 }
+
+it('keeps an internally captured Database deadline valid when clock reads advance', () => {
+  let clock = 100_000;
+  const send = vi.fn();
+  const travel = new TravelController(
+    () => {},
+    () => clock++,
+    undefined,
+    {
+      context: () => ({
+        identity: 'source lifetime',
+        connection: 'connection 1',
+        map: 'prt_fild08',
+        player: own,
+      }),
+      databaseTravel: { supported: supportsDatabaseTravel, send, ready: () => false },
+    },
+  );
+  travel.start('prt_fild08', own, 'prontera', 10, true);
+  const captured = travel.databaseCheckpoint();
+  expect(captured).not.toBeNull();
+  const checkpoint = validateDatabaseTravelCheckpoint(
+    { ...captured, teleportUntil: 0, quietUntil: 0 },
+    clock,
+  );
+  expect(checkpoint.deadline - checkpoint.preparedAt).toBe(60_000);
+  expect(send).not.toHaveBeenCalled();
+});
 
 describe('Database travel wire contract', () => {
   it('accepts only bounded, exact server teleport cooldown messages', () => {
