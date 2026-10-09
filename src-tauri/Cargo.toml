@@ -51,7 +51,7 @@ tar = "0.4"
 flate2 = "1"
 plist = "1"
 dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
-objc2 = "=0.6.4"
+objc2 = "=0.6.5"
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSAlert", "NSButton", "NSView", "NSWindow", "NSScrollView", "NSLayoutConstraint"] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString"] }
 
