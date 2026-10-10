@@ -357,7 +357,7 @@ const automation = object(
           weightEndPercent: percent(1, 99),
           minimumIntervalSeconds: seconds(1, 86400),
           maxTrips: number(1, 100),
-          maxActions: number(1, 100),
+          maxActions: number(1, 1000),
           maxDurationSeconds: seconds(30, 3600),
           maxSpend: number(0, MACRO_LIMITS.maxSpend),
           storageService: string(),

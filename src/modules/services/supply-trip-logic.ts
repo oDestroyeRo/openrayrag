@@ -180,7 +180,7 @@ export function validateSupplySettings(input: unknown): SupplySettings {
     value.weightEndPercent >= value.weightStartPercent ||
     !integer(value.minimumIntervalSeconds, 1, 86400) ||
     !integer(value.maxTrips, 1, 100) ||
-    !integer(value.maxActions, 1, 100) ||
+    !integer(value.maxActions, 1, 1000) ||
     !integer(value.maxDurationSeconds, 30, 3600) ||
     !integer(value.maxSpend, 0, 2_000_000_000) ||
     ['storageService', 'buyService', 'sellService'].some(
@@ -223,7 +223,7 @@ export function validateSupplyResumeGuard(input: unknown): SupplyResumeGuard {
     /[\u0000-\u001f\u007f]/.test(value.character) ||
     ['latched', 'interrupted', 'uncertain'].some((key) => typeof value[key] !== 'boolean') ||
     !integer(value.remainingTrips, 0, 100) ||
-    !integer(value.actions, 0, 100) ||
+    !integer(value.actions, 0, 1000) ||
     !integer(value.spent, 0, 2_000_000_000) ||
     !integer(value.reserved, 0, 2_000_000_000) ||
     !integer(value.intervalSeconds, 0, 86400) ||

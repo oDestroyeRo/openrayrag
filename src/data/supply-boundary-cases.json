@@ -80,7 +80,7 @@
     "valid": false
   },
   {
-    "name": "reject setting maxActions 101",
+    "name": "reject setting maxActions 1001",
     "kind": "settings",
     "value": {
       "enabled": true,
@@ -90,7 +90,7 @@
       "weightEndPercent": 60,
       "minimumIntervalSeconds": 300,
       "maxTrips": 1,
-      "maxActions": 101,
+      "maxActions": 1001,
       "maxDurationSeconds": 600,
       "maxSpend": 0,
       "storageService": "",
@@ -392,7 +392,7 @@
       "character": "Tester",
       "latched": true,
       "remainingTrips": 1,
-      "actions": 101,
+      "actions": 1001,
       "spent": 100,
       "reserved": 100,
       "intervalSeconds": 250,
@@ -958,6 +958,96 @@
       "buyService": "",
       "sellService": "",
       "returnMinStock": 0
+    },
+    "valid": true
+  },
+  {
+    "name": "accept setting maxActions 500",
+    "kind": "settings",
+    "value": {
+      "enabled": false,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 500,
+      "maxDurationSeconds": 600,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": true
+  },
+  {
+    "name": "accept guard actions 500",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 500,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "accept setting maxActions 1000",
+    "kind": "settings",
+    "value": {
+      "enabled": false,
+      "stockEnabled": true,
+      "weightEnabled": false,
+      "weightStartPercent": 80,
+      "weightEndPercent": 60,
+      "minimumIntervalSeconds": 300,
+      "maxTrips": 1,
+      "maxActions": 1000,
+      "maxDurationSeconds": 600,
+      "maxSpend": 0,
+      "storageService": "",
+      "buyService": "",
+      "sellService": ""
+    },
+    "valid": true
+  },
+  {
+    "name": "accept guard actions 1000",
+    "kind": "guard",
+    "value": {
+      "version": 1,
+      "character": "Tester",
+      "latched": true,
+      "remainingTrips": 1,
+      "actions": 1000,
+      "spent": 100,
+      "reserved": 100,
+      "intervalSeconds": 250,
+      "deadlineSeconds": 500,
+      "interrupted": true,
+      "uncertain": true,
+      "returnDestination": {
+        "map": "prt_fild08",
+        "position": {
+          "x": 100,
+          "y": 101
+        }
+      }
     },
     "valid": true
   }
