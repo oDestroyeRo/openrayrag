@@ -4,6 +4,7 @@ import type { Entity, GameEvent, Position } from '../protocol/protocol';
 import type { routeBetweenMapsAsync } from './travel';
 import { mapCode, milliseconds, type MapCode, type Milliseconds } from '../../shared/domain-values';
 import { supportsDatabaseTravel } from './database-travel-protocol';
+import type { WalkGrid } from './navigation-logic';
 
 /** An unsent field trip carries intent and clock debt, never transport authority. */
 export interface DatabaseTravelInput {
@@ -72,6 +73,38 @@ export interface TravelSnapshot {
   remainingMaps: string[];
   route: Position[];
   leg: Position[];
+}
+
+/** GridNavigator validates these dimensions and bounds a simple route to the
+ * finite map grid. Returning to a captured work cell may cross that whole map. */
+export function finalApproachCellLimit(
+  purpose: TravelSnapshot['purpose'],
+  grid: Pick<WalkGrid, 'width' | 'height'>,
+): number {
+  return purpose === 'return' ? grid.width * grid.height : 512;
+}
+
+export function finalApproachReason(
+  purpose: TravelSnapshot['purpose'],
+  state: 'walking' | 'complete' | 'timeout' | 'unreachable',
+): string {
+  if (purpose === 'return')
+    return {
+      walking: 'Returning to the captured work cell on verified ground.',
+      complete: 'Captured return cell confirmed.',
+      timeout: 'Final return approach reached its five-minute limit.',
+      unreachable: 'The captured return cell is unreachable within the verified map grid.',
+    }[state];
+  return {
+    walking:
+      purpose === 'field-entry'
+        ? 'Entering the field lock area.'
+        : 'Approaching the NPC on verified ground.',
+    complete:
+      purpose === 'field-entry' ? 'Field lock entry confirmed.' : 'Final NPC approach confirmed.',
+    timeout: 'Final NPC approach reached its five-minute limit.',
+    unreachable: 'The final approach is unreachable or exceeds 512 cells.',
+  }[state];
 }
 
 export interface TravelTransition {

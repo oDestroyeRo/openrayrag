@@ -3,7 +3,7 @@ import { type Action } from '../automation/engine';
 import { walkDuration } from './movement';
 import { decode, OP, type Entity, type Position, type Walk } from '../protocol/protocol';
 import { BitWriter } from '../../shared/binary';
-import { searchGrid, type WalkGrid } from './navigation';
+import { GridNavigator, searchGrid, type WalkGrid } from './navigation';
 import { TravelController } from './travel-controller';
 import { CompanionController } from '../runtime/controller';
 
@@ -800,3 +800,101 @@ it('enforces the original 512-cell approach bound after an off-corridor nudge', 
   expect(controller.snapshot().state).toBe('failed');
   expect(controller.snapshot().reason).toContain('512 cells');
 });
+
+it('long supply return completes the verified 592-cell iz_dun00 route at the captured work cell', () => {
+  const from = { x: 247, y: 318 },
+    target = { x: 303, y: 77 };
+  const grid = searchGrid('iz_dun00')!;
+  const route = new GridNavigator(grid).plan(from, target, { avoidWalls: true });
+  expect(route).toHaveLength(592);
+  const { controller, actions, advance, acceptLeg } = fixture();
+  let current = player(from);
+
+  controller.startApproach('iz_dun00', current, target, 10, undefined, 'return');
+  const trip = controller.tripId;
+  controller.tick('iz_dun00', current);
+  for (let i = 0; i < 300 && controller.active; i++) {
+    if (controller.snapshot().leg.length > 1) current = acceptLeg('iz_dun00', current);
+    else {
+      advance(300);
+      controller.tick('iz_dun00', current);
+    }
+  }
+
+  expect(controller.tripId).toBe(trip);
+  expect(current).toMatchObject(target);
+  expect(controller.snapshot()).toMatchObject({ state: 'complete', purpose: 'return' });
+  expect(controller.snapshot().reason).toContain('return cell');
+  expect(actions.every((action) => action.type === 'walk')).toBe(true);
+  expect(actions.length).toBeGreaterThan(50);
+  expect(actions.at(-1)).toEqual({ type: 'walk', destination: target });
+});
+
+it('long supply return replans beyond 512 cells after a nudge without renewing its five-minute deadline', () => {
+  const { controller, actions, advance, acknowledge, nudge } = approachFixture({
+    width: 512,
+    height: 3,
+    walkable: (p) => p.y === 0 || (p.y === 1 && p.x <= 1) || (p.x === 0 && p.y === 2),
+  });
+  const start = player({ x: 0, y: 0 });
+  controller.startApproach('fixture', start, { x: 511, y: 0 }, 1, undefined, 'return');
+  const trip = controller.tripId;
+  advance(299000);
+  controller.tick('fixture', start);
+  expect(acknowledge()).toEqual({ x: 1, y: 0 });
+  nudge({ x: 1, y: 0 }, { x: 1, y: 1 });
+  nudge({ x: 1, y: 1 }, { x: 0, y: 1 });
+  nudge({ x: 0, y: 1 }, { x: 0, y: 2 });
+  advance(301);
+  controller.tick('fixture', player({ x: 0, y: 2 }));
+  expect(controller.tripId).toBe(trip);
+  expect(controller.snapshot().state).toBe('walking');
+  const commandsBeforeDeadline = actions.length;
+
+  advance(700);
+  controller.tick('fixture', player({ x: 0, y: 2 }));
+
+  expect(controller.snapshot()).toMatchObject({ state: 'failed', purpose: 'return' });
+  expect(controller.snapshot().reason).toContain('five-minute');
+  expect(controller.snapshot().reason).not.toContain('NPC');
+  expect(actions.slice(commandsBeforeDeadline)).toEqual([{ type: 'stop' }]);
+});
+
+it('long supply return still rejects an unreachable captured work cell before dispatch', () => {
+  const { controller, actions } = approachFixture({
+    width: 12,
+    height: 12,
+    walkable: (p) => p.x !== 6,
+  });
+  expect(() =>
+    controller.startApproach(
+      'fixture',
+      player({ x: 3, y: 5 }),
+      { x: 8, y: 5 },
+      10,
+      undefined,
+      'return',
+    ),
+  ).toThrow('unreachable');
+  expect(controller.active).toBe(false);
+  expect(actions).toEqual([]);
+});
+
+it.each(['service', 'field-entry', 'travel', 'party-follow'] as const)(
+  'keeps the 512-cell final approach cap for %s',
+  (purpose) => {
+    const { controller, actions } = fixture();
+    expect(() =>
+      controller.startApproach(
+        'iz_dun00',
+        player({ x: 247, y: 318 }),
+        { x: 303, y: 77 },
+        10,
+        undefined,
+        purpose,
+      ),
+    ).toThrow('512 cells');
+    expect(controller.active).toBe(false);
+    expect(actions).toEqual([]);
+  },
+);
