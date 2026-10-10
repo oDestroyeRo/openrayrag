@@ -29,6 +29,7 @@ import {
 import type { SupplyPolicySettings } from './supply-trip-logic';
 import type { WorkflowReceipt } from './workflows';
 import { farmingReadiness } from '../client/farming-readiness-logic';
+import { DEFAULT_MAP_POLICY } from '../navigation/map-policy-logic';
 const rule = {
   itemId: 501,
   keep: 0,
@@ -600,6 +601,202 @@ describe('bounded supply runtime', () => {
   });
 });
 describe('supply direct configuration allowance', () => {
+  it('charges one explicit replacement after settlement and interval without resetting cumulative economics or destination', () => {
+    const f = setup();
+    f.prepare();
+    f.send();
+    f.confirm();
+    f.runtime.stop();
+    const original = f.runtime.guard()!;
+    f.c.position = { x: 100, y: 100 };
+    f.runtime.configure(configured, f.c, undefined, { explicitStart: true });
+    expect(f.runtime.ownsField).toBe(true);
+    expect(f.runtime.snapshot()).toMatchObject({
+      state: 'waiting',
+      latched: true,
+      remainingTrips: 1,
+      actions: 1,
+      spent: 100,
+      reserved: 100,
+      deadline: 0,
+      returnDestination: original.returnDestination,
+    });
+    f.advance(300001);
+    f.c.settled = false;
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.snapshot().remainingTrips).toBe(1);
+    f.c.settled = true;
+    expect(f.runtime.next(f.c)?.type).toBe('prepare');
+    expect(f.runtime.snapshot()).toMatchObject({
+      remainingTrips: 0,
+      actions: 1,
+      spent: 100,
+      reserved: 100,
+      returnDestination: original.returnDestination,
+    });
+    expect(f.runtime.snapshot().deadline).toBeGreaterThan(400000);
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.snapshot().remainingTrips).toBe(0);
+  });
+  it.each(['default', 'restore', 'automatic', 'Stop', 'connection'] as const)(
+    'does not grant replacement permission through %s',
+    (boundary) => {
+      const f = setup();
+      f.prepare();
+      f.runtime.stop();
+      const guard = f.runtime.guard()!;
+      f.runtime.configure(
+        configured,
+        f.c,
+        boundary === 'automatic'
+          ? { ...guard, interrupted: true }
+          : boundary === 'restore'
+            ? { ...guard, interrupted: false }
+            : undefined,
+        { explicitStart: boundary !== 'default' && boundary !== 'restore' },
+      );
+      if (boundary === 'Stop') f.runtime.stop();
+      if (boundary === 'connection') {
+        f.c.connected = false;
+        f.runtime.observe(f.c);
+        f.c.connected = true;
+      }
+      f.advance(300001);
+      expect(f.runtime.next(f.c)).toBeNull();
+      expect(f.runtime.snapshot()).toMatchObject({
+        remainingTrips: 1,
+        latched: true,
+        returnDestination: guard.returnDestination,
+      });
+    },
+  );
+  it.each([
+    'stale',
+    'dead',
+    'foreign',
+    'economics',
+    'inventory',
+    'revisions',
+    'policy',
+    'destination',
+    'exhausted',
+    'actions',
+    'save-return',
+  ] as const)('does not charge or dispatch a replacement with %s evidence', (boundary) => {
+    const f = setup();
+    f.prepare();
+    f.runtime.stop();
+    const guard = f.runtime.guard()!;
+    const input: SupplyPolicySettings = {
+      ...configured,
+      map: boundary === 'destination' ? 'prontera' : configured.map,
+      automation: {
+        ...configured.automation!,
+        ...(boundary === 'policy'
+          ? { mapPolicy: { ...DEFAULT_MAP_POLICY, deny: ['prt_fild05'] } }
+          : {}),
+        ...(boundary === 'save-return'
+          ? {
+              supply: {
+                ...configured.automation!.supply!,
+                transport: 'butterfly',
+                saveMap: 'prontera',
+              },
+            }
+          : {}),
+      },
+    };
+    f.runtime.configure(
+      input,
+      f.c,
+      {
+        ...guard,
+        interrupted: false,
+        ...(boundary === 'exhausted' ? { remainingTrips: 0 } : {}),
+        ...(boundary === 'actions' ? { actions: 100 } : {}),
+      },
+      { explicitStart: true },
+    );
+    if (boundary === 'stale') f.c.fresh = false;
+    if (boundary === 'dead') f.c.alive = false;
+    if (boundary === 'foreign') f.c.character = 'Other';
+    if (boundary === 'economics') f.c.economicUncertain = true;
+    if (boundary === 'inventory') f.c.disposition.containers.inventory.items = null;
+    if (boundary === 'revisions') f.c.currencyRevision = revisionFor('currency', 0);
+    if (boundary === 'policy') f.c.map = 'prontera';
+    f.advance(300001);
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.snapshot()).toMatchObject({
+      remainingTrips: boundary === 'exhausted' ? 0 : 1,
+      latched: true,
+      returnDestination: guard.returnDestination,
+    });
+    expect(f.runtime.ownsField).toBe(true);
+  });
+  it('fresh economics reconcile a restored uncertain guard without granting replacement permission', () => {
+    const f = setup();
+    f.prepare();
+    f.send();
+    const g = setup();
+    g.runtime.configure(configured, g.c, f.runtime.guard(), { explicitStart: true });
+    g.advance(300001);
+    expect(g.runtime.uncertain).toBe(false);
+    expect(g.runtime.next(g.c)).toBeNull();
+    expect(g.runtime.snapshot().remainingTrips).toBe(1);
+  });
+  it('returns without another transaction when fresh recovery observations already satisfy the captured goals', () => {
+    const f = setup();
+    f.prepare();
+    f.runtime.stop();
+    setStock(f.c, 10);
+    f.runtime.configure(configured, f.c, undefined, { explicitStart: true });
+    f.advance(300001);
+    const close = f.next();
+    expect(close.type).toBe('close');
+    f.c.disposition.workflow.world.apply({ type: 'npcEnd' });
+    f.ack(close);
+    expect(f.next().type).toBe('return');
+    expect(f.runtime.snapshot()).toMatchObject({ latched: true, remainingTrips: 0, actions: 0 });
+  });
+  it.each(['explicit destination', 'lock area'] as const)(
+    'uses the existing %s precedence when admitting the captured work map',
+    (boundary) => {
+      const f = setup();
+      f.prepare();
+      f.runtime.stop();
+      const input: SupplyPolicySettings = {
+        ...configured,
+        map: 'prontera',
+        automation: {
+          ...configured.automation!,
+          travel: {
+            ...configured.automation!.travel,
+            destinationMap: boundary === 'explicit destination' ? 'prt_fild05' : 'prontera',
+          },
+          ...(boundary === 'lock area'
+            ? {
+                mapPolicy: {
+                  ...DEFAULT_MAP_POLICY,
+                  lockArea: { map: 'prt_fild05', minX: 280, minY: 210, maxX: 300, maxY: 230 },
+                },
+              }
+            : {}),
+        },
+      };
+      f.runtime.configure(input, f.c, undefined, { explicitStart: true });
+      f.advance(300001);
+      expect(f.next().type).toBe('prepare');
+    },
+  );
+  it('admits the full existing signed-32-bit currency range for fresh supply recovery', () => {
+    const f = setup();
+    f.prepare();
+    f.runtime.stop();
+    f.c.disposition.workflow.zeny = 2_147_483_647;
+    f.runtime.configure(configured, f.c, undefined, { explicitStart: true });
+    f.advance(300001);
+    expect(f.next()?.type).toBe('prepare');
+  });
   it('publishes exhausted retained capacity instead of waiting for a trigger or renewing it on configure', () => {
     const f = setup();
     const retained = {

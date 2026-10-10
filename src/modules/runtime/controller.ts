@@ -1535,7 +1535,7 @@ export class CompanionController {
       throw new Error('Waiting for canceled rendezvous movement to settle before Start.');
     if (this.partyHeal.busy)
       throw new Error('Waiting for the previous party Heal execution receipt.');
-    this.beginRun(settings, escapeGuard, supplyGuard, recoveryGuard);
+    this.beginRun(settings, escapeGuard, supplyGuard, recoveryGuard, true);
     this.initialFieldEntryPending = !this.partyFollow.enabled && settings.map !== this.engine.map;
     if (protection) {
       this.resourceGuard = protection;
@@ -1701,10 +1701,11 @@ export class CompanionController {
     escapeGuard?: EscapeResumeGuard,
     supplyGuard?: SupplyResumeGuard,
     recoveryGuard?: DeathRecoveryGuard,
+    explicitStart = false,
   ): void {
     const context = this.supplyContext();
     this.partyHeal.newRun();
-    this.supply.configure(settings, context, supplyGuard);
+    this.supply.configure(settings, context, supplyGuard, { explicitStart });
     this.engine.acknowledgeLoadoutOverride();
     this.engine.prepareRequestedRun(settings);
     this.cycleDeaths = this.engine.deaths;

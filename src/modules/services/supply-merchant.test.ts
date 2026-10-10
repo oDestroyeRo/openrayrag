@@ -19,6 +19,29 @@ const settings = {
 };
 afterEach(() => vi.restoreAllMocks());
 describe('verified automatic merchant planning', () => {
+  it('explains an unusable actual arrival separately from merchant map restrictions', () => {
+    const resolver = new SupplyMerchantResolver(() => true);
+    const blocked = resolver.resolve(settings, 'izlude', { x: 145, y: 181 }, true);
+    expect(blocked.contractId).toBeNull();
+    expect(blocked.reason).toContain('izlude (145, 181)');
+    expect(blocked.reason).toContain('Stop');
+    expect(blocked.reason).toContain('manual');
+    expect(blocked.reason).not.toContain('map restrictions');
+    expect(
+      resolver.resolve(
+        {
+          ...settings,
+          automation: {
+            ...settings.automation,
+            mapPolicy: { ...DEFAULT_MAP_POLICY, allow: ['prt_fild08'] },
+          },
+        },
+        'prontera',
+        { x: 72, y: 133 },
+        true,
+      ).reason,
+    ).toContain('map restrictions');
+  });
   it('admits an allowed Database-only destination and waits to rank its actual landing merchants', () => {
     let available = true;
     const resolver = new SupplyMerchantResolver((map) => available && map === 'prontera');

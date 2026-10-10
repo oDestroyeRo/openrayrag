@@ -619,6 +619,100 @@ describe('owned auto-sell save-point trips', () => {
   });
 });
 describe('controller supply repair regressions', () => {
+  it('recovers a blocked actual Database landing only after Stop, manual relocation and a charged explicit Start', () => {
+    const configured = autoSellFixture('travel', 0).configured;
+    configured.map = 'iz_dun00';
+    configured.automation!.supply!.maxDurationSeconds = 30;
+    const requests: string[] = [];
+    const origin = { x: 281, y: 47 };
+    const f = setup(
+      configured,
+      'iz_dun00',
+      { ...player, ...origin },
+      {
+        supported: (map) => ['izlude', 'prontera', 'iz_dun00'].includes(map),
+        send: (map) => requests.push(map),
+      },
+    );
+    const observations = (count = 12, zeny = 1000) =>
+      f.packet(stats(count, zeny, { maxWeight: 1000 }));
+    const arrival = (map: string, x: number, y: number, count = 12, zeny = 1000) => {
+      f.packet(new BitWriter().u8(OP.remove).i32(player.id).u8(0).finish());
+      f.packet(new BitWriter().u8(OP.map).string(map).finish());
+      f.c.observeOfficialPacket(new Uint8Array([2]));
+      f.packet(spawn({ ...player, x, y }, 1));
+      observations(count, zeny);
+      f.advance(1200);
+    };
+    observations();
+    f.c.start(configured);
+    f.advance(1000);
+    expect(requests).toEqual(['izlude']);
+    arrival('izlude', 145, 181);
+    expect(f.c.supply.snapshot()).toMatchObject({ state: 'waiting', remainingTrips: 1 });
+    expect(f.c.supply.snapshot().reason).toContain('izlude (145, 181)');
+    expect(f.c.supply.snapshot().reason).toContain('Stop');
+    expect(f.sent.some((a) => ['walk', 'npcTalk', 'shop'].includes(a.type))).toBe(false);
+    f.advance(2000);
+    expect(requests).toEqual(['izlude']);
+    f.c.stop();
+    // Normal manual Database relocation is observed; automation sends no retry.
+    arrival('prontera', 112, 41);
+    f.packet(spawn({ ...npc, name: 'Flower Girl', x: 113, y: 42 }));
+    const corrected = settingsDraft(configured);
+    corrected.automation!.supply!.merchantMode = 'manual';
+    corrected.automation!.supply!.sellService = 'trader.prontera.flower-girl-south.sell.v1';
+    f.c.start(corrected);
+    expect(f.c.supply.snapshot()).toMatchObject({
+      state: 'waiting',
+      remainingTrips: 1,
+      latched: true,
+      returnDestination: { map: 'iz_dun00', position: origin },
+    });
+    expect(f.c.engine.running).toBe(false);
+    // The old 30-second deadline must not cancel permission while the 300-second interval ages.
+    for (let i = 0; i < 30; i++) {
+      observations();
+      f.advance(10000);
+    }
+    observations();
+    f.advance(1200);
+    expect(requests).toEqual(['izlude']);
+    expect(f.c.supply.snapshot()).toMatchObject({ remainingTrips: 0, latched: true });
+    expect(f.sent.filter((a) => a.type === 'npcTalk')).toEqual([{ type: 'npcTalk', id: 20 }]);
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(20).bool(true).finish());
+    const menu = new BitWriter().u8(WORLD_OP.npc).u8(2).i32(3);
+    for (const label of ['Buy', 'Sell', 'Cancel']) menu.string(label);
+    f.packet(menu.finish());
+    f.advance(500);
+    f.packet(new BitWriter().u8(WORLD_OP.shop).u8(0).i32(0).finish());
+    f.advance(600);
+    const sales = () => f.sent.filter((a) => a.type === 'shop' && a.rows.length);
+    expect(sales()).toEqual([{ type: 'shop', mode: 'sell', rows: [{ id: 501, count: 10 }] }]);
+    const spentActions = f.c.supply.snapshot().actions;
+    // Neither closure nor a currency-only update proves the sale.
+    f.end();
+    f.packet(new BitWriter().u8(FEATURE_OP.currency).i32(1250).finish());
+    f.advance(500);
+    expect(f.c.supply.uncertain).toBe(true);
+    expect(requests).toEqual(['izlude']);
+    expect(f.c.engine.running).toBe(false);
+    observations(2, 1250);
+    f.advance(1000);
+    expect(requests).toEqual(['izlude', 'iz_dun00']);
+    arrival('iz_dun00', 290, 47, 2, 1250);
+    expect(f.c.engine.running).toBe(false);
+    for (let i = 0; i < 60 && f.c.supply.snapshot().state !== 'complete'; i++) {
+      if (f.c.travel.snapshot().leg.length > 1) f.settleWalk();
+      else f.step();
+    }
+    f.advance(600);
+    expect(f.c.engine.player).toMatchObject(origin);
+    expect(f.c.engine.running).toBe(true);
+    expect(f.c.supply.snapshot()).toMatchObject({ state: 'complete', remainingTrips: 0, spent: 0 });
+    expect(f.c.supply.snapshot().actions).toBeGreaterThanOrEqual(spentActions);
+    expect(sales()).toHaveLength(1);
+  });
   it('does not reserve low-stock supply on the departure map before configured field entry', () => {
     const value = { ...settings, map: 'prt_fild08' };
     const f = setup(value);

@@ -702,11 +702,13 @@ export class PersistentFieldRun {
       guard.interrupted = true;
       guard.uncertain = true;
     }
-    // An explicit Start may create a new field run after a canceled, reconciled
-    // trip. Its spent trip allowance and latch survive; the old trip never resumes.
+    // A settled same-owner update is still automatic: it cannot authorize a new
+    // attempt for a latched trip. Keep the destination for an explicit recovery.
+    if (automatic && guard.latched && guard.returnDestination) guard.interrupted = true;
+    // Explicit Start may request a new bounded attempt after reconciliation.
+    // The old command never resumes, and all counters and the work cell survive.
     if (!automatic && !guard.uncertain) {
       guard.interrupted = false;
-      guard.returnDestination = null;
     }
     return validateSupplyResumeGuard(guard);
   }
