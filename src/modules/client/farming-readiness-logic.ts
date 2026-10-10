@@ -70,7 +70,7 @@ export function farmingReadiness(
   add(
     'limits',
     context.active ? 'Active run limits' : 'Next Start limits',
-    `${limit(a.limits.minutes, used ? Math.floor(used.elapsedSeconds / 60) : undefined, 'minutes')} · ${limit(a.limits.kills, used?.kills, 'kills')} · ${limit(a.limits.pickups, used?.pickups, 'pickups')} · hard weight wait ${a.limits.weightPercent ? `${a.limits.weightPercent}%` : 'off (0)'}. Zero time/kills/pickups means unlimited; death and supply allowances stay finite.`,
+    `${limit(a.limits.minutes, used ? Math.floor(used.elapsedSeconds / 60) : undefined, 'minutes')} · ${limit(a.limits.kills, used?.kills, 'kills')} · ${limit(a.limits.pickups, used?.pickups, 'pickups')} · hard weight wait ${a.limits.weightPercent ? `${a.limits.weightPercent}%` : 'off (0)'}. Zero time/kills/pickups means unlimited; death recovery and supply trips have separate settings.`,
     'limits',
   );
   const remainingDeaths = Math.max(0, a.respawn.maxDeaths - (used?.deaths ?? 0));
