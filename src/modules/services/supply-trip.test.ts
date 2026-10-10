@@ -493,6 +493,195 @@ describe('bounded supply runtime', () => {
       expect(f.runtime.resumeIntent(f.c)).toBeNull();
     },
   );
+  it('timeout diagnostics preserve an earlier service interruption after the whole-trip deadline', () => {
+    const f = setup();
+    f.prepare();
+    const reason = 'NPC approach timed out before any sale was sent.';
+    f.runtime.interrupt(reason);
+    const before = f.runtime.snapshot();
+
+    f.advance(600001);
+
+    expect(f.runtime.snapshot()).toMatchObject({
+      state: 'waiting',
+      reason,
+      uncertain: false,
+      remainingTrips: before.remainingTrips,
+      actions: before.actions,
+      spent: before.spent,
+      reserved: before.reserved,
+    });
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.resumeIntent(f.c)).toBeNull();
+    expect(f.runtime.commandAllowed()).toBe(false);
+    expect(f.runtime.snapshot().reason).toBe(reason);
+  });
+  it('timeout diagnostics preserve the exact-receipt failure after the whole-trip deadline', () => {
+    const f = setup();
+    f.prepare();
+    f.send();
+    f.advance(10001);
+    const before = f.runtime.snapshot();
+    expect(before.reason).toContain('without an exact receipt');
+
+    f.advance(600001);
+
+    expect(f.runtime.snapshot()).toMatchObject({
+      state: 'waiting',
+      reason: before.reason,
+      uncertain: true,
+      remainingTrips: before.remainingTrips,
+      actions: before.actions,
+      spent: before.spent,
+      reserved: before.reserved,
+    });
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.resumeIntent(f.c)).toBeNull();
+  });
+  it('timeout diagnostics do not claim unresolved economics when an active trip sent no transaction', () => {
+    const f = setup();
+    f.prepare();
+
+    f.advance(600001);
+
+    expect(f.runtime.snapshot()).toMatchObject({
+      state: 'waiting',
+      uncertain: false,
+      actions: 0,
+      spent: 0,
+      reserved: 0,
+    });
+    expect(f.runtime.snapshot().reason).toContain('duration limit');
+    expect(f.runtime.snapshot().reason).not.toContain('unresolved economics');
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.resumeIntent(f.c)).toBeNull();
+  });
+  it('timeout diagnostics retain a recent sent receipt at the whole-trip deadline and drain a late exact result', () => {
+    const f = setup();
+    f.prepare();
+    f.advance(595000);
+    f.send();
+
+    f.advance(5001);
+
+    const before = f.runtime.snapshot();
+    expect(before).toMatchObject({ state: 'waiting', uncertain: true, actions: 1, reserved: 100 });
+    expect(before.reason).toContain('Whole-trip duration limit');
+    expect(before.reason).toContain('transaction was awaiting confirmation');
+    expect(f.runtime.next(f.c)).toBeNull();
+    f.advance(10000);
+    expect(f.runtime.snapshot().reason).toBe(before.reason);
+    f.confirm();
+    expect(f.runtime.snapshot()).toMatchObject({
+      state: 'waiting',
+      uncertain: false,
+      reason: before.reason,
+      actions: 1,
+      spent: 100,
+      reserved: 100,
+    });
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.resumeIntent(f.c)).toBeNull();
+  });
+  it.each([25740, 24430])(
+    'timeout diagnostics preserve unmet protected weight %i after the final permitted sale and exact closure',
+    (weight) => {
+      let now = 100000;
+      const c = context(0);
+      const protectedItems = [{ bagId: 501, itemId: 501, count: 367, type: 1 as const }];
+      const items = [...protectedItems, { bagId: 1052, itemId: 1052, count: 10, type: 1 as const }];
+      c.disposition.containers.inventory.items = items;
+      c.disposition.containers.inventory.weight = 30000;
+      c.disposition.containers.inventory.maxWeight = 34900;
+      c.disposition.workflow.inventory = items;
+      c.disposition.workflow.world.shop!.mode = 'sell';
+      const disposition = validateDispositionPolicy({
+        maxSpend: 0,
+        rules: [
+          {
+            ...rule,
+            itemId: 1052,
+            minimum: 0,
+            desired: 0,
+            maximum: 0,
+            sell: true,
+            restock: 'off',
+          },
+        ],
+      });
+      const supply = {
+        ...configured.automation!.supply!,
+        stockEnabled: false,
+        weightEnabled: true,
+        weightStartPercent: 80,
+        weightEndPercent: 70,
+        maxSpend: 0,
+      };
+      const runtime = new SupplyTripRuntime(
+        {
+          next: (ctx, goals, policy) => nextSupplyAction(ctx, goals, policy, supply),
+          confirm: confirmSupplyReceipt,
+        },
+        () => now,
+      );
+      runtime.configure(
+        { ...configured, automation: { ...configured.automation!, disposition, supply } },
+        c,
+      );
+      const prepare = runtime.next(c)!;
+      expect(prepare.type).toBe('prepare');
+      runtime.acknowledge(prepare.id, 'confirmed', c);
+      const sale = runtime.next(c)!;
+      if (sale.type !== 'action') throw Error('Expected the last permitted common-drop sale.');
+      expect(sale.action).toMatchObject({ kind: 'sell', itemId: 1052, count: 10 });
+      const receipt = createSupplyReceipt(
+        sale.action,
+        {
+          zeny: c.disposition.workflow.zeny,
+          cost: 0,
+          credit: sale.action.estimatedProceeds,
+          items: new Map(items.map((item) => [itemId(item.itemId), quantity(item.count)])),
+          bags: new Map(items.map((item) => [bagId(item.bagId), quantity(item.count)])),
+          itemChanges: new Map([[itemId(1052), -10]]),
+          bagChanges: new Map([[bagId(1052), -10]]),
+          strictStock: false,
+        },
+        c,
+      );
+      runtime.attachReceipt(sale.id, receipt, c);
+      expect(runtime.commandAllowed()).toBe(true);
+      runtime.markSent(sale.id);
+      c.disposition.containers.inventory.items = protectedItems;
+      c.disposition.containers.inventory.weight = weight;
+      c.disposition.workflow.inventory = protectedItems;
+      c.inventoryRevision = incrementRevision(c.inventoryRevision);
+      c.disposition.workflow.zeny += sale.action.estimatedProceeds;
+      c.currencyRevision = incrementRevision(c.currencyRevision);
+      runtime.observe(c);
+      expect(runtime.snapshot().uncertain).toBe(false);
+      c.disposition.workflow.world.apply({ type: 'npcEnd' });
+      const close = runtime.next(c)!;
+      expect(close.type).toBe('close');
+      runtime.acknowledge(close.id, 'confirmed', c);
+      expect(runtime.next(c)).toBeNull();
+      const reason = runtime.snapshot().reason;
+      expect(reason).toContain(`${((weight / 34900) * 100).toFixed(2)}% (${weight}/34900)`);
+      expect(reason).toContain('below 70%');
+      expect(reason).toContain('Protected stock remains retained');
+      expect(reason).toContain('finish threshold, storage setup or explicit item permissions');
+      expect(c.disposition.containers.inventory.items).toEqual(protectedItems);
+      const before = runtime.snapshot();
+      expect(runtime.commandAllowed()).toBe(false);
+
+      now += 600001;
+      runtime.observe(c);
+
+      expect(runtime.snapshot()).toEqual(before);
+      expect(runtime.next(c)).toBeNull();
+      expect(runtime.resumeIntent(c)).toBeNull();
+      expect(c.disposition.containers.inventory.items).toEqual(protectedItems);
+    },
+  );
   it('requires fresh inventory AND currency after connection reset; never repeats the old action', () => {
     const f = setup();
     f.prepare();

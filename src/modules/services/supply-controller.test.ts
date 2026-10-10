@@ -65,8 +65,19 @@ function spawn(e: Entity, entryType = 0) {
 function stats(
   count = 4,
   zeny = 1000,
-  options: { maxWeight?: number; wings?: number; returnSkill?: boolean; sp?: number } = {},
+  options: {
+    maxWeight?: number;
+    weight?: number;
+    items?: Array<{ itemId: number; count: number }>;
+    wings?: number;
+    returnSkill?: boolean;
+    sp?: number;
+  } = {},
 ) {
+  const items = options.items ?? [
+    ...(count ? [{ itemId: 501, count }] : []),
+    ...(options.wings ? [{ itemId: 602, count: options.wings }] : []),
+  ];
   const w = new BitWriter().u8(FEATURE_OP.stats);
   for (const n of [
     10,
@@ -90,19 +101,15 @@ function stats(
   ])
     w.i32(n);
   w.f32(0.4)
-    .i32(count * 70)
+    .i32(options.weight ?? count * 70)
     .i32(0)
     .bool(true)
     .i16(options.returnSkill ? 2 : 1)
     .i16(1)
     .u8(5);
   if (options.returnSkill) w.i16(54).u8(1);
-  w.i16(0)
-    .bool(true)
-    .u8(1)
-    .i32((count ? 1 : 0) + (options.wings ? 1 : 0));
-  if (count) w.i32(501).i16(count);
-  if (options.wings) w.i32(602).i16(options.wings);
+  w.i16(0).bool(true).u8(1).i32(items.length);
+  for (const item of items) w.i32(item.itemId).i16(item.count);
   w.i32(0).u8(0);
   for (let i = 0; i < 10; i++) w.i32(0);
   return w.i32(-1).finish();
@@ -619,6 +626,115 @@ describe('owned auto-sell save-point trips', () => {
   });
 });
 describe('controller supply repair regressions', () => {
+  it('retains the protected-weight blocker and explicitly recovers under a corrected strict finish threshold', () => {
+    const configured = autoSellFixture('travel', 0).configured;
+    configured.map = 'prt_fild05';
+    configured.automation!.supply = {
+      ...configured.automation!.supply!,
+      merchantMode: 'manual',
+      sellService: 'trader.prt-fild05.tool-dealer.sell.v1',
+      weightEndPercent: 70,
+      minimumIntervalSeconds: 1,
+      maxDurationSeconds: 30,
+    };
+    configured.automation!.disposition!.rules = [
+      {
+        ...configured.automation!.disposition!.rules[0]!,
+        itemId: 1052,
+        keep: 0,
+        minimum: 0,
+        desired: 0,
+        maximum: 0,
+      },
+    ];
+    const origin = { x: 285, y: 220 };
+    const f = setup(configured, 'prt_fild05', { ...player, ...origin });
+    const protectedItems = [{ itemId: 501, count: 367 }];
+    const observations = (sold = false, zeny = 1000) =>
+      f.packet(
+        stats(0, zeny, {
+          maxWeight: 34900,
+          weight: sold ? 25740 : 30000,
+          items: [...protectedItems, ...(sold ? [] : [{ itemId: 1052, count: 10 }])],
+        }),
+      );
+    const walkUntil = (predicate: () => boolean) => {
+      for (let i = 0; i < 90 && !predicate(); i++) {
+        if (f.c.travel.snapshot().leg.length > 1) f.settleWalk();
+        else f.step();
+      }
+      expect(predicate(), f.c.supply.snapshot().reason).toBe(true);
+    };
+    observations();
+    f.c.start(configured);
+    walkUntil(() => f.sent.some((action) => action.type === 'npcTalk'));
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(20).bool(true).finish());
+    const menu = new BitWriter().u8(WORLD_OP.npc).u8(2).i32(3);
+    for (const label of ['Buy', 'Sell', 'Cancel']) menu.string(label);
+    f.packet(menu.finish());
+    f.advance(500);
+    f.packet(new BitWriter().u8(WORLD_OP.shop).u8(0).i32(0).finish());
+    f.advance(600);
+    const sales = () => f.sent.filter((action) => action.type === 'shop' && action.rows.length);
+    expect(sales()).toEqual([{ type: 'shop', mode: 'sell', rows: [{ id: 1052, count: 10 }] }]);
+    f.end();
+    f.packet(new BitWriter().u8(FEATURE_OP.currency).i32(1460).finish());
+    f.advance(500);
+    expect(f.c.supply.uncertain).toBe(true);
+    observations(true, 1460);
+    f.advance(1000);
+    const before = f.c.supply.snapshot();
+    const counters = () => ({
+      kills: f.c.engine.kills,
+      pickups: f.c.engine.looted,
+      deaths: f.c.engine.deaths,
+    });
+    const beforeCounters = counters();
+    expect(before).toMatchObject({ state: 'waiting', uncertain: false, remainingTrips: 1 });
+    expect(before.reason).toContain('73.75% (25740/34900)');
+    expect(before.reason).toContain('below 70%');
+    expect(f.c.engine.running).toBe(false);
+    const sentBeforeDeadline = [...f.sent];
+    // Refresh normal observations while the original trip deadline elapses.
+    for (let i = 0; i < 4; i++) {
+      observations(true, 1460);
+      f.advance(10000);
+    }
+    expect(f.c.supply.snapshot()).toMatchObject({
+      state: 'waiting',
+      reason: before.reason,
+      uncertain: false,
+      actions: before.actions,
+      remainingTrips: before.remainingTrips,
+      spent: before.spent,
+      reserved: before.reserved,
+    });
+    expect(f.sent).toEqual(sentBeforeDeadline);
+    expect(counters()).toEqual(beforeCounters);
+
+    f.c.stop();
+    const corrected = settingsDraft(configured);
+    corrected.automation!.supply!.weightEndPercent = 75;
+    f.c.start(corrected);
+    expect(f.c.supply.snapshot()).toMatchObject({
+      actions: before.actions,
+      remainingTrips: 0,
+      returnDestination: { map: 'prt_fild05', position: origin },
+    });
+    expect(f.c.engine.running).toBe(false);
+    // The protected-only weight now meets the explicit new goal; no new sale is permitted.
+    walkUntil(() => f.c.supply.snapshot().state === 'complete');
+    f.advance(600);
+    expect(f.c.engine.player).toMatchObject(origin);
+    expect(f.c.engine.running).toBe(true);
+    expect(f.c.supply.snapshot()).toMatchObject({ state: 'complete', remainingTrips: 0, spent: 0 });
+    expect(f.c.supply.snapshot().actions).toBeGreaterThanOrEqual(before.actions);
+    expect(counters()).toEqual(beforeCounters);
+    expect(sales()).toHaveLength(1);
+    expect(f.c.engine.character.snapshot().inventory).toEqual(
+      protectedItems.map((item) => ({ ...item, bagId: item.itemId, type: 1 })),
+    );
+  });
   it('recovers a blocked actual Database landing only after Stop, manual relocation and a charged explicit Start', () => {
     const configured = autoSellFixture('travel', 0).configured;
     configured.map = 'iz_dun00';

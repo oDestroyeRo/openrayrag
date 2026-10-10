@@ -297,18 +297,26 @@ export class SupplyTripRuntime<Receipt> {
         context.epoch !== this.epoch)
     )
       this.interrupt('Supply trip interrupted by death, character or connection change.');
-    if (this.receipt?.sent && this.now() - this.receipt.since >= 10000) {
+    if (!this.interrupted && this.receipt?.sent && this.now() - this.receipt.since >= 10000) {
       this.interrupted = true;
       this.pending = null;
       this.phase = 'waiting';
       this.reason =
         'Transaction timed out without an exact receipt. No repeat request will be sent.';
     }
-    if (this.ownsField && this.deadline && this.now() >= this.deadline) {
+    if (
+      !this.interrupted &&
+      this.phase !== 'waiting' &&
+      this.ownsField &&
+      this.deadline &&
+      this.now() >= this.deadline
+    ) {
       this.interrupted = true;
       this.pending = null;
       this.phase = 'waiting';
-      this.reason = 'Whole-trip duration limit reached; unresolved economics remain owned.';
+      this.reason = this.uncertain
+        ? 'Whole-trip duration limit reached while a transaction was awaiting confirmation. No repeat request will be sent.'
+        : 'Whole-trip duration limit reached with no pending transaction. Check the trip before starting again.';
     }
     if (this.phase === 'armed' || this.phase === 'complete') {
       if (this.latched && (this.phase === 'armed' || this.resumed) && this.goalsMet(context)) {
@@ -352,6 +360,7 @@ export class SupplyTripRuntime<Receipt> {
       !context.fieldRequested ||
       this.pending ||
       this.interrupted ||
+      (this.phase === 'waiting' && !this.replacementPending) ||
       this.uncertain
     )
       return null;
@@ -533,7 +542,15 @@ export class SupplyTripRuntime<Receipt> {
       if (next.type === 'ready') {
         if (!this.goalsMet(context)) {
           this.phase = 'waiting';
-          this.reason = 'The service plan is empty but captured stock or weight goals are not met.';
+          const inventory = context.disposition.containers.inventory;
+          this.reason =
+            this.weightGoal &&
+            typeof inventory.weight === 'number' &&
+            typeof inventory.maxWeight === 'number' &&
+            inventory.maxWeight > 0 &&
+            (inventory.weight / inventory.maxWeight) * 100 >= this.policy.weightEndPercent
+              ? `The permitted service plan is empty. Weight is ${((inventory.weight / inventory.maxWeight) * 100).toFixed(2)}% (${inventory.weight}/${inventory.maxWeight}); it must be below ${this.policy.weightEndPercent}%. Protected stock remains retained. Review the finish threshold, storage setup or explicit item permissions, then Stop/Start to request a bounded replacement.`
+              : 'The service plan is empty but captured stock goals are not met. Review the refill settings, then Stop/Start to request a bounded replacement.';
           return null;
         }
         this.phase = 'closing';
@@ -598,7 +615,8 @@ export class SupplyTripRuntime<Receipt> {
   commandAllowed(): boolean {
     if (this.replacementPending) return false;
     if (!this.ownsField) return true;
-    if (this.interrupted || this.actions >= this.policy.maxActions || this.now() >= this.deadline) {
+    if (this.interrupted || this.phase === 'waiting') return false;
+    if (this.actions >= this.policy.maxActions || this.now() >= this.deadline) {
       this.interrupt('Supply command or duration allowance exhausted.');
       return false;
     }
