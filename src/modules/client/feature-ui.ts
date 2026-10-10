@@ -1010,6 +1010,7 @@ export class FeatureUi {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'secondary compact';
+    button.dataset.config = 'true';
     button.textContent = 'Preview item disposition';
     button.addEventListener('click', () => {
       try {
@@ -1095,6 +1096,7 @@ export class FeatureUi {
       });
     button.type = 'button';
     button.className = 'secondary compact';
+    button.dataset.config = 'true';
     button.textContent = 'Preview auto sell & supply trip';
     const output = document.createElement('div');
     output.id = 'supply-preview';
