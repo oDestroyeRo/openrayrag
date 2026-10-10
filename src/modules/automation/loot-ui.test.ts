@@ -114,7 +114,7 @@ class Element {
   matches(selector: string): boolean {
     if (selector.startsWith('#')) return this.id === selector.slice(1);
     if (selector.startsWith('.')) return this.className.split(/\s+/).includes(selector.slice(1));
-    const data = selector.match(/^\[data-(setting|config|column)(?:="([^"]+)")?\]$/);
+    const data = selector.match(/^\[data-(setting|config|column|manual|service)(?:="([^"]+)")?\]$/);
     if (data)
       return (
         this.dataset[data[1]!] !== undefined && (!data[2] || this.dataset[data[1]!] === data[2])
@@ -301,6 +301,50 @@ it('mounts canonical auto-sell controls in Loot & supplies and keeps saving/prev
     expect(hooks[name]).not.toHaveBeenCalled();
   ui.lock(true, true);
   expect(input('enabled').disabled).toBe(true);
+});
+it('restores both previews after the startup lock and keeps manual and service locks independent', () => {
+  const { ui, host, manualTools, hooks } = setup(true, true);
+  ui.write(structuredClone(DEFAULT_AUTOMATION));
+  const previews = ['Preview item disposition', 'Preview auto sell & supply trip'].map((label) => {
+    const button = host.querySelectorAll('button').find((button) => button.textContent === label);
+    expect(button).toBeDefined();
+    return button!;
+  });
+  const manual = host.querySelector('#manual-run-walk')!,
+    service = new Element('button');
+  service.dataset.service = 'true';
+  manualTools.append(service);
+  // main.ts disables every control while native saved settings are loading.
+  for (const input of host.querySelectorAll('input,select,button,textarea')) input.disabled = true;
+  ui.lock(true, true, true);
+  for (const button of previews) expect(button.disabled).toBe(true);
+
+  ui.lock(false, true, true);
+  for (const button of previews) expect(button.disabled).toBe(false);
+  expect(manual.disabled).toBe(true);
+  expect(service.disabled).toBe(true);
+  for (const button of previews) button.emit('click');
+  expect(host.querySelector('#disposition-preview')!.textContent).toContain(
+    'Preview only · 0 suggested actions',
+  );
+  expect(host.querySelector('#supply-preview')!.textContent).toBe(
+    'Supply trips are off. No trip will start.',
+  );
+  for (const name of [
+    'apply',
+    'command',
+    'workflow',
+    'routine',
+    'service',
+    'social',
+    'memo',
+  ] as const)
+    expect(hooks[name]).not.toHaveBeenCalled();
+
+  ui.lock(true, false, false);
+  for (const button of previews) expect(button.disabled).toBe(true);
+  expect(manual.disabled).toBe(false);
+  expect(service.disabled).toBe(false);
 });
 it('uses the supplied mounts once and separates manual roots from Bot and profiles', () => {
   const { ui, host, sections, manualTools } = setup();
