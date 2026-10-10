@@ -86,6 +86,7 @@
   "src-tauri/src/session/maintenance_logic.rs": "logic",
   "src-tauri/src/session/mod.rs": "orchestration",
   "src-tauri/src/session/mode_guard.rs": "orchestration",
+  "src-tauri/src/session/runtime_url_logic.rs": "logic",
   "src-tauri/src/settings/automation.rs": "logic",
   "src-tauri/src/settings/current_form.rs": "orchestration",
   "src-tauri/src/settings/current_form_logic.rs": "logic",

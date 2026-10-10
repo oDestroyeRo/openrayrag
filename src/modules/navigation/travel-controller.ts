@@ -31,6 +31,8 @@ import {
   cell,
   type DatabaseTravelCheckpoint,
   type DatabaseTravelInput,
+  finalApproachCellLimit,
+  finalApproachReason,
 } from './travel-controller-logic';
 
 export {
@@ -484,8 +486,8 @@ export class TravelController {
     const nav = new GridNavigator(grid);
     const destination = { ...target };
     const route = nav.plan(cell(player), destination, { avoidWalls: true });
-    if (!route?.length || route.length > 512)
-      throw new Error('The final approach is unreachable or exceeds 512 cells.');
+    if (!route?.length || route.length > finalApproachCellLimit(purpose, grid))
+      throw new Error(finalApproachReason(purpose, 'unreachable'));
     this.policy = structuredClone(policy);
     this.purpose = purpose;
     this.installedStart = null;
@@ -506,10 +508,7 @@ export class TravelController {
     this.since = this.now();
     this.lastAction = 0;
     this.state = 'walking';
-    this.reason =
-      purpose === 'field-entry'
-        ? 'Entering the field lock area.'
-        : 'Approaching the NPC on verified ground.';
+    this.reason = finalApproachReason(purpose, 'walking');
   }
 
   private planWeighted(
@@ -595,11 +594,13 @@ export class TravelController {
     );
   }
   private plan(player: Entity, verified?: Position[]): void {
+    let approachCellLimit = 512;
     // A final approach belongs to its captured destination map. Official travel
     // can move the character elsewhere, but cannot carry that collision grid.
     if (this.approachTarget) {
       const grid = this.map === this.destination ? this.gridFor(this.map) : null;
       this.approachNav = grid ? new GridNavigator(grid) : null;
+      if (grid) approachCellLimit = finalApproachCellLimit(this.purpose, grid);
       if (this.map === this.destination && !grid) {
         this.cancel('No verified collision map for the retained final approach.', true);
         return;
@@ -615,10 +616,10 @@ export class TravelController {
         : step
           ? planPortalApproach(this.map, cell(player), step.portal, this.avoidWalls)
           : planArrivalEscape(this.map, cell(player), this.avoidWalls));
-    if (!route?.length || (this.approachNav && route.length > 512)) {
+    if (!route?.length || (this.approachNav && route.length > approachCellLimit)) {
       this.cancel(
         this.approachNav
-          ? 'The final approach is unreachable or exceeds 512 cells.'
+          ? finalApproachReason(this.purpose, 'unreachable')
           : 'Arrival or next portal is unreachable on verified ground.',
         true,
       );
@@ -629,9 +630,7 @@ export class TravelController {
     this.leg = null;
     this.state = 'walking';
     this.reason = this.approachNav
-      ? this.purpose === 'field-entry'
-        ? 'Entering the field lock area.'
-        : 'Approaching the NPC on verified ground.'
+      ? finalApproachReason(this.purpose, 'walking')
       : step
         ? `Travel to ${this.destination}: approaching the portal to ${step.portal.toMap}.`
         : `Arrived in ${this.destination}; leaving the portal area.`;
@@ -1198,7 +1197,7 @@ export class TravelController {
       return;
     }
     if (this.approachTarget && now - this.since > 300_000) {
-      this.cancel('Final NPC approach reached its five-minute limit.', true);
+      this.cancel(finalApproachReason(this.purpose, 'timeout'), true);
       return;
     }
     if (now - this.since > 1_200_000) {
@@ -1278,9 +1277,7 @@ export class TravelController {
       if (this.finalEscape) {
         this.state = 'complete';
         this.reason = this.approachNav
-          ? this.purpose === 'field-entry'
-            ? 'Field lock entry confirmed.'
-            : 'Final NPC approach confirmed.'
+          ? finalApproachReason(this.purpose, 'complete')
           : `Arrived in ${this.destination}. Choose targets before starting combat.`;
       } else {
         this.state = 'transition';

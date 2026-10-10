@@ -5,6 +5,7 @@ use crate::{
     session::login::{ConnectionMode, SharedLogin},
     session::login_logic::DirectCredentials,
     session::maintenance::{GameIdentity, GameRetirement, Gate, SharedGate},
+    session::runtime_url_logic::{bot_runtime_url, RuntimeAssets},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
@@ -33,11 +34,14 @@ const CONTROL_EVENT_BYTES: usize = 256;
 // Keep those acknowledgements and the terminal event writable while reads pause.
 const RESERVED_EVENTS: usize = MAX_BATCH_EVENTS + 1;
 pub(crate) fn runtime_url() -> tauri::Url {
-    if cfg!(debug_assertions) {
-        "http://127.0.0.1:1420/bot-runtime.html".parse().unwrap()
+    let assets = if tauri::is_dev() {
+        RuntimeAssets::Development
     } else {
-        "tauri://localhost/bot-runtime.html".parse().unwrap()
-    }
+        RuntimeAssets::Bundled {
+            windows: cfg!(target_os = "windows"),
+        }
+    };
+    bot_runtime_url(assets).parse().unwrap()
 }
 pub(crate) fn url_for(mode: ConnectionMode) -> tauri::Url {
     match mode {
@@ -304,6 +308,15 @@ impl SharedDirect {
             .lock()
             .ok()
             .is_some_and(|s| s.current.as_ref().is_some_and(|c| c.entered_world))
+    }
+    // Cleanup uses native page ownership, not a WKWebView URL that may still be
+    // nil before its first load. This does not authorize any runtime IPC command.
+    pub(crate) fn cancel_pending_login(&self, gate: &mut Gate, in_world: bool) -> bool {
+        if in_world || !gate.owns_bot_runtime() || self.entered_world() {
+            return false;
+        }
+        self.cancel_admitted(gate);
+        true
     }
     // Caller holds SharedGate, preventing retirement/frame/write admission from racing ACK.
     pub(crate) fn settled_for(&self, identity: &GameIdentity) -> bool {
@@ -945,6 +958,7 @@ mod tests {
             }
         }
         let shared = Arc::new(committed_gate(true));
+        shared.lock().unwrap().game_opened(ConnectionMode::BotOnly);
         let direct = Arc::new(SharedDirect::default());
         let stopped = Arc::new(AtomicBool::new(false));
         let proof = DropProof {
@@ -986,7 +1000,9 @@ mod tests {
                 .is_err());
         }
         direct.request_game_close(&mut gate, &owner).unwrap();
+        assert!(gate.owns_bot_runtime());
         direct.game_destroyed(&mut gate);
+        assert!(!gate.owns_bot_runtime());
         assert!(direct.replacement_ready(&gate, &owner));
         {
             let mut state = direct.0.lock().unwrap();
@@ -1139,6 +1155,56 @@ mod tests {
         }
     }
     #[test]
+    fn bundled_runtime_url_follows_tauri_asset_mode_even_with_debug_assertions() {
+        let expected = if tauri::is_dev() {
+            "http://127.0.0.1:1420/bot-runtime.html"
+        } else if cfg!(target_os = "windows") {
+            "http://tauri.localhost/bot-runtime.html"
+        } else {
+            "tauri://localhost/bot-runtime.html"
+        };
+        assert_eq!(runtime_url().as_str(), expected);
+    }
+    #[test]
+    fn pending_stop_cancels_native_owned_bot_runtime_before_any_page_or_socket_exists() {
+        let direct = SharedDirect::default();
+        let mut gate = Gate::default();
+        assert!(!direct.cancel_pending_login(&mut gate, false));
+        gate.game_opened(ConnectionMode::BotOnly);
+        // No webview or URL observation is required at this cancellation boundary.
+        assert!(direct.cancel_pending_login(&mut gate, false));
+        assert!(direct.0.lock().unwrap().empty());
+        assert!(gate.owns_bot_runtime()); // Closure, not cancellation, ends page ownership.
+        direct.game_destroyed(&mut gate);
+        assert!(!direct.cancel_pending_login(&mut gate, false));
+    }
+    #[test]
+    fn pending_stop_cancels_connecting_but_preserves_in_world_and_official_runtimes() {
+        let direct = SharedDirect::default();
+        let mut gate = Gate::default();
+        gate.game_opened(ConnectionMode::BotOnly);
+        direct.0.lock().unwrap().reserve().unwrap();
+        assert!(direct.cancel_pending_login(&mut gate, false));
+        assert!(direct.0.lock().unwrap().connecting.is_none());
+
+        direct.0.lock().unwrap().current = Some(connection(9));
+        assert!(!direct.cancel_pending_login(&mut gate, true));
+        direct
+            .0
+            .lock()
+            .unwrap()
+            .current
+            .as_mut()
+            .unwrap()
+            .entered_world = true;
+        assert!(!direct.cancel_pending_login(&mut gate, false));
+        assert!(direct.0.lock().unwrap().current.is_some());
+
+        direct.game_destroyed(&mut gate);
+        gate.game_opened(ConnectionMode::GameClient);
+        assert!(!direct.cancel_pending_login(&mut gate, false));
+    }
+    #[test]
     fn connection_urls_are_exact() {
         assert_eq!(
             mode_for_url(&runtime_url()).unwrap(),
@@ -1153,8 +1219,28 @@ mod tests {
             "https://other.rayrag.com/",
             "http://127.0.0.1:1420/index.html",
             "http://127.0.0.1:1420/bot-runtime.html?x=1",
+            "tauri://localhost/bot-runtime.html?x=1",
+            "tauri://localhost/bot-runtime.html#other",
+            "tauri://other/bot-runtime.html",
+            "http://tauri.localhost/bot-runtime.html?x=1",
+            "http://tauri.localhost/other.html",
+            "https://tauri.localhost/bot-runtime.html",
         ] {
             assert!(mode_for_url(&url.parse().unwrap()).is_err());
+        }
+        let other_runtime = if tauri::is_dev() {
+            "tauri://localhost/bot-runtime.html"
+        } else {
+            "http://127.0.0.1:1420/bot-runtime.html"
+        };
+        assert!(mode_for_url(&other_runtime.parse().unwrap()).is_err());
+        if !tauri::is_dev() {
+            let other_platform = if cfg!(target_os = "windows") {
+                "tauri://localhost/bot-runtime.html"
+            } else {
+                "http://tauri.localhost/bot-runtime.html"
+            };
+            assert!(mode_for_url(&other_platform.parse().unwrap()).is_err());
         }
     }
     #[test]

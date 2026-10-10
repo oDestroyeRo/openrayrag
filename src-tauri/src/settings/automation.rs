@@ -395,7 +395,7 @@ struct SupplySettings {
     weight_end_percent: u8,
     minimum_interval_seconds: u32,
     max_trips: u8,
-    max_actions: u8,
+    max_actions: u16,
     max_duration_seconds: u16,
     max_spend: u32,
     storage_service: String,
@@ -439,7 +439,7 @@ impl SupplySettings {
             && self.weight_end_percent < self.weight_start_percent
             && (1..=86400).contains(&self.minimum_interval_seconds)
             && (1..=100).contains(&self.max_trips)
-            && (1..=100).contains(&self.max_actions)
+            && (1..=1000).contains(&self.max_actions)
             && (30..=3600).contains(&self.max_duration_seconds)
             && self.max_spend <= 2_000_000_000
             && contract(&self.storage_service)
@@ -506,7 +506,7 @@ pub(crate) struct SupplyResumeGuard {
     character: String,
     latched: bool,
     remaining_trips: u8,
-    actions: u8,
+    actions: u16,
     spent: u32,
     reserved: u32,
     interval_seconds: u32,
@@ -546,7 +546,7 @@ impl SupplyResumeGuard {
                 .chars()
                 .any(|c| c <= '\u{001f}' || c == '\u{007f}')
             && self.remaining_trips <= 100
-            && self.actions <= 100
+            && self.actions <= 1000
             && self.spent <= 2_000_000_000
             && self.reserved <= 2_000_000_000
             && self.interval_seconds <= 86400

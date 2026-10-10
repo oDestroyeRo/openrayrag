@@ -29,6 +29,7 @@ import {
 import type { SupplyPolicySettings } from './supply-trip-logic';
 import type { WorkflowReceipt } from './workflows';
 import { farmingReadiness } from '../client/farming-readiness-logic';
+import { DEFAULT_MAP_POLICY } from '../navigation/map-policy-logic';
 const rule = {
   itemId: 501,
   keep: 0,
@@ -365,11 +366,12 @@ function setup(settings = configured) {
 describe('bounded supply runtime', () => {
   it('defaults off and strictly validates limits/IDs and config-free guards', () => {
     expect(validateSupplySettings(DEFAULT_SUPPLY).enabled).toBe(false);
+    expect(validateSupplySettings(DEFAULT_SUPPLY).maxActions).toBe(100);
     expect(validateSupplySettings(configured.automation!.supply!).buyService).toContain('.v1');
     for (const patch of [
       { enabled: 1 },
       { maxTrips: 0 },
-      { maxActions: 101 },
+      { maxActions: 1001 },
       { maxSpend: 2000000001 },
       { weightEndPercent: 80 },
       { unknown: true },
@@ -491,6 +493,195 @@ describe('bounded supply runtime', () => {
       expect(f.runtime.resumeIntent(f.c)).toBeNull();
     },
   );
+  it('timeout diagnostics preserve an earlier service interruption after the whole-trip deadline', () => {
+    const f = setup();
+    f.prepare();
+    const reason = 'NPC approach timed out before any sale was sent.';
+    f.runtime.interrupt(reason);
+    const before = f.runtime.snapshot();
+
+    f.advance(600001);
+
+    expect(f.runtime.snapshot()).toMatchObject({
+      state: 'waiting',
+      reason,
+      uncertain: false,
+      remainingTrips: before.remainingTrips,
+      actions: before.actions,
+      spent: before.spent,
+      reserved: before.reserved,
+    });
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.resumeIntent(f.c)).toBeNull();
+    expect(f.runtime.commandAllowed()).toBe(false);
+    expect(f.runtime.snapshot().reason).toBe(reason);
+  });
+  it('timeout diagnostics preserve the exact-receipt failure after the whole-trip deadline', () => {
+    const f = setup();
+    f.prepare();
+    f.send();
+    f.advance(10001);
+    const before = f.runtime.snapshot();
+    expect(before.reason).toContain('without an exact receipt');
+
+    f.advance(600001);
+
+    expect(f.runtime.snapshot()).toMatchObject({
+      state: 'waiting',
+      reason: before.reason,
+      uncertain: true,
+      remainingTrips: before.remainingTrips,
+      actions: before.actions,
+      spent: before.spent,
+      reserved: before.reserved,
+    });
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.resumeIntent(f.c)).toBeNull();
+  });
+  it('timeout diagnostics do not claim unresolved economics when an active trip sent no transaction', () => {
+    const f = setup();
+    f.prepare();
+
+    f.advance(600001);
+
+    expect(f.runtime.snapshot()).toMatchObject({
+      state: 'waiting',
+      uncertain: false,
+      actions: 0,
+      spent: 0,
+      reserved: 0,
+    });
+    expect(f.runtime.snapshot().reason).toContain('duration limit');
+    expect(f.runtime.snapshot().reason).not.toContain('unresolved economics');
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.resumeIntent(f.c)).toBeNull();
+  });
+  it('timeout diagnostics retain a recent sent receipt at the whole-trip deadline and drain a late exact result', () => {
+    const f = setup();
+    f.prepare();
+    f.advance(595000);
+    f.send();
+
+    f.advance(5001);
+
+    const before = f.runtime.snapshot();
+    expect(before).toMatchObject({ state: 'waiting', uncertain: true, actions: 1, reserved: 100 });
+    expect(before.reason).toContain('Whole-trip duration limit');
+    expect(before.reason).toContain('transaction was awaiting confirmation');
+    expect(f.runtime.next(f.c)).toBeNull();
+    f.advance(10000);
+    expect(f.runtime.snapshot().reason).toBe(before.reason);
+    f.confirm();
+    expect(f.runtime.snapshot()).toMatchObject({
+      state: 'waiting',
+      uncertain: false,
+      reason: before.reason,
+      actions: 1,
+      spent: 100,
+      reserved: 100,
+    });
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.resumeIntent(f.c)).toBeNull();
+  });
+  it.each([25740, 24430])(
+    'timeout diagnostics preserve unmet protected weight %i after the final permitted sale and exact closure',
+    (weight) => {
+      let now = 100000;
+      const c = context(0);
+      const protectedItems = [{ bagId: 501, itemId: 501, count: 367, type: 1 as const }];
+      const items = [...protectedItems, { bagId: 1052, itemId: 1052, count: 10, type: 1 as const }];
+      c.disposition.containers.inventory.items = items;
+      c.disposition.containers.inventory.weight = 30000;
+      c.disposition.containers.inventory.maxWeight = 34900;
+      c.disposition.workflow.inventory = items;
+      c.disposition.workflow.world.shop!.mode = 'sell';
+      const disposition = validateDispositionPolicy({
+        maxSpend: 0,
+        rules: [
+          {
+            ...rule,
+            itemId: 1052,
+            minimum: 0,
+            desired: 0,
+            maximum: 0,
+            sell: true,
+            restock: 'off',
+          },
+        ],
+      });
+      const supply = {
+        ...configured.automation!.supply!,
+        stockEnabled: false,
+        weightEnabled: true,
+        weightStartPercent: 80,
+        weightEndPercent: 70,
+        maxSpend: 0,
+      };
+      const runtime = new SupplyTripRuntime(
+        {
+          next: (ctx, goals, policy) => nextSupplyAction(ctx, goals, policy, supply),
+          confirm: confirmSupplyReceipt,
+        },
+        () => now,
+      );
+      runtime.configure(
+        { ...configured, automation: { ...configured.automation!, disposition, supply } },
+        c,
+      );
+      const prepare = runtime.next(c)!;
+      expect(prepare.type).toBe('prepare');
+      runtime.acknowledge(prepare.id, 'confirmed', c);
+      const sale = runtime.next(c)!;
+      if (sale.type !== 'action') throw Error('Expected the last permitted common-drop sale.');
+      expect(sale.action).toMatchObject({ kind: 'sell', itemId: 1052, count: 10 });
+      const receipt = createSupplyReceipt(
+        sale.action,
+        {
+          zeny: c.disposition.workflow.zeny,
+          cost: 0,
+          credit: sale.action.estimatedProceeds,
+          items: new Map(items.map((item) => [itemId(item.itemId), quantity(item.count)])),
+          bags: new Map(items.map((item) => [bagId(item.bagId), quantity(item.count)])),
+          itemChanges: new Map([[itemId(1052), -10]]),
+          bagChanges: new Map([[bagId(1052), -10]]),
+          strictStock: false,
+        },
+        c,
+      );
+      runtime.attachReceipt(sale.id, receipt, c);
+      expect(runtime.commandAllowed()).toBe(true);
+      runtime.markSent(sale.id);
+      c.disposition.containers.inventory.items = protectedItems;
+      c.disposition.containers.inventory.weight = weight;
+      c.disposition.workflow.inventory = protectedItems;
+      c.inventoryRevision = incrementRevision(c.inventoryRevision);
+      c.disposition.workflow.zeny += sale.action.estimatedProceeds;
+      c.currencyRevision = incrementRevision(c.currencyRevision);
+      runtime.observe(c);
+      expect(runtime.snapshot().uncertain).toBe(false);
+      c.disposition.workflow.world.apply({ type: 'npcEnd' });
+      const close = runtime.next(c)!;
+      expect(close.type).toBe('close');
+      runtime.acknowledge(close.id, 'confirmed', c);
+      expect(runtime.next(c)).toBeNull();
+      const reason = runtime.snapshot().reason;
+      expect(reason).toContain(`${((weight / 34900) * 100).toFixed(2)}% (${weight}/34900)`);
+      expect(reason).toContain('below 70%');
+      expect(reason).toContain('Protected stock remains retained');
+      expect(reason).toContain('finish threshold, storage setup or explicit item permissions');
+      expect(c.disposition.containers.inventory.items).toEqual(protectedItems);
+      const before = runtime.snapshot();
+      expect(runtime.commandAllowed()).toBe(false);
+
+      now += 600001;
+      runtime.observe(c);
+
+      expect(runtime.snapshot()).toEqual(before);
+      expect(runtime.next(c)).toBeNull();
+      expect(runtime.resumeIntent(c)).toBeNull();
+      expect(c.disposition.containers.inventory.items).toEqual(protectedItems);
+    },
+  );
   it('requires fresh inventory AND currency after connection reset; never repeats the old action', () => {
     const f = setup();
     f.prepare();
@@ -564,6 +755,22 @@ describe('bounded supply runtime', () => {
     expect(f.runtime.commandAllowed()).toBe(false);
     expect(f.runtime.next(f.c)).toBeNull();
   });
+  it.each([500, 1000])('enforces exactly %i commands across the whole trip', (maxActions) => {
+    const f = setup({
+      ...configured,
+      automation: {
+        ...configured.automation!,
+        supply: { ...configured.automation!.supply!, maxActions },
+      },
+    });
+    f.prepare();
+    for (let command = 0; command < maxActions; command++)
+      expect(f.runtime.commandAllowed()).toBe(true);
+    expect(f.runtime.guard()?.actions).toBe(maxActions);
+    expect(f.runtime.commandAllowed()).toBe(false);
+    expect(f.runtime.snapshot()).toMatchObject({ actions: maxActions, state: 'waiting' });
+    expect(f.runtime.next(f.c)).toBeNull();
+  });
   it('blocks unknown inventory, weight, capacity, equipment and uncertain external economics', () => {
     for (const field of ['stock', 'weight', 'capacity', 'equipment', 'uncertain'] as const) {
       const f = setup();
@@ -600,6 +807,245 @@ describe('bounded supply runtime', () => {
   });
 });
 describe('supply direct configuration allowance', () => {
+  it('preserves counters above 255 through Stop, guard serialization and explicit replacement', () => {
+    const settings = {
+      ...configured,
+      automation: {
+        ...configured.automation!,
+        supply: { ...configured.automation!.supply!, maxActions: 500 },
+      },
+    };
+    const f = setup(settings);
+    f.prepare();
+    for (let transaction = 0; transaction < 3; transaction++) {
+      f.send();
+      f.confirm();
+      f.c.disposition.workflow.world.apply({ type: 'npcEnd' });
+      f.ack(f.next());
+    }
+    for (let command = 3; command < 300; command++) expect(f.runtime.commandAllowed()).toBe(true);
+    f.runtime.stop();
+    const guard = validateSupplyResumeGuard(JSON.parse(JSON.stringify(f.runtime.guard())));
+    expect(guard).toMatchObject({ actions: 300, spent: 300, reserved: 300, remainingTrips: 1 });
+    const resumed = setup(settings);
+    resumed.runtime.configure(
+      settings,
+      resumed.c,
+      { ...guard, interrupted: false },
+      {
+        explicitStart: true,
+      },
+    );
+    resumed.advance(300001);
+    resumed.prepare();
+    expect(resumed.runtime.snapshot()).toMatchObject({
+      actions: 300,
+      spent: 300,
+      reserved: 300,
+      remainingTrips: 0,
+      returnDestination: guard.returnDestination,
+    });
+    for (let command = 300; command < 500; command++)
+      expect(resumed.runtime.commandAllowed()).toBe(true);
+    expect(resumed.runtime.commandAllowed()).toBe(false);
+    expect(resumed.runtime.guard()?.actions).toBe(500);
+  });
+  it('charges one explicit replacement after settlement and interval without resetting cumulative economics or destination', () => {
+    const f = setup();
+    f.prepare();
+    f.send();
+    f.confirm();
+    f.runtime.stop();
+    const original = f.runtime.guard()!;
+    f.c.position = { x: 100, y: 100 };
+    f.runtime.configure(configured, f.c, undefined, { explicitStart: true });
+    expect(f.runtime.ownsField).toBe(true);
+    expect(f.runtime.snapshot()).toMatchObject({
+      state: 'waiting',
+      latched: true,
+      remainingTrips: 1,
+      actions: 1,
+      spent: 100,
+      reserved: 100,
+      deadline: 0,
+      returnDestination: original.returnDestination,
+    });
+    f.advance(300001);
+    f.c.settled = false;
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.snapshot().remainingTrips).toBe(1);
+    f.c.settled = true;
+    expect(f.runtime.next(f.c)?.type).toBe('prepare');
+    expect(f.runtime.snapshot()).toMatchObject({
+      remainingTrips: 0,
+      actions: 1,
+      spent: 100,
+      reserved: 100,
+      returnDestination: original.returnDestination,
+    });
+    expect(f.runtime.snapshot().deadline).toBeGreaterThan(400000);
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.snapshot().remainingTrips).toBe(0);
+  });
+  it.each(['default', 'restore', 'automatic', 'Stop', 'connection'] as const)(
+    'does not grant replacement permission through %s',
+    (boundary) => {
+      const f = setup();
+      f.prepare();
+      f.runtime.stop();
+      const guard = f.runtime.guard()!;
+      f.runtime.configure(
+        configured,
+        f.c,
+        boundary === 'automatic'
+          ? { ...guard, interrupted: true }
+          : boundary === 'restore'
+            ? { ...guard, interrupted: false }
+            : undefined,
+        { explicitStart: boundary !== 'default' && boundary !== 'restore' },
+      );
+      if (boundary === 'Stop') f.runtime.stop();
+      if (boundary === 'connection') {
+        f.c.connected = false;
+        f.runtime.observe(f.c);
+        f.c.connected = true;
+      }
+      f.advance(300001);
+      expect(f.runtime.next(f.c)).toBeNull();
+      expect(f.runtime.snapshot()).toMatchObject({
+        remainingTrips: 1,
+        latched: true,
+        returnDestination: guard.returnDestination,
+      });
+    },
+  );
+  it.each([
+    'stale',
+    'dead',
+    'foreign',
+    'economics',
+    'inventory',
+    'revisions',
+    'policy',
+    'destination',
+    'exhausted',
+    'actions',
+    'save-return',
+  ] as const)('does not charge or dispatch a replacement with %s evidence', (boundary) => {
+    const f = setup();
+    f.prepare();
+    f.runtime.stop();
+    const guard = f.runtime.guard()!;
+    const input: SupplyPolicySettings = {
+      ...configured,
+      map: boundary === 'destination' ? 'prontera' : configured.map,
+      automation: {
+        ...configured.automation!,
+        ...(boundary === 'policy'
+          ? { mapPolicy: { ...DEFAULT_MAP_POLICY, deny: ['prt_fild05'] } }
+          : {}),
+        ...(boundary === 'save-return'
+          ? {
+              supply: {
+                ...configured.automation!.supply!,
+                transport: 'butterfly',
+                saveMap: 'prontera',
+              },
+            }
+          : {}),
+      },
+    };
+    f.runtime.configure(
+      input,
+      f.c,
+      {
+        ...guard,
+        interrupted: false,
+        ...(boundary === 'exhausted' ? { remainingTrips: 0 } : {}),
+        ...(boundary === 'actions' ? { actions: 100 } : {}),
+      },
+      { explicitStart: true },
+    );
+    if (boundary === 'stale') f.c.fresh = false;
+    if (boundary === 'dead') f.c.alive = false;
+    if (boundary === 'foreign') f.c.character = 'Other';
+    if (boundary === 'economics') f.c.economicUncertain = true;
+    if (boundary === 'inventory') f.c.disposition.containers.inventory.items = null;
+    if (boundary === 'revisions') f.c.currencyRevision = revisionFor('currency', 0);
+    if (boundary === 'policy') f.c.map = 'prontera';
+    f.advance(300001);
+    expect(f.runtime.next(f.c)).toBeNull();
+    expect(f.runtime.snapshot()).toMatchObject({
+      remainingTrips: boundary === 'exhausted' ? 0 : 1,
+      latched: true,
+      returnDestination: guard.returnDestination,
+    });
+    expect(f.runtime.ownsField).toBe(true);
+  });
+  it('fresh economics reconcile a restored uncertain guard without granting replacement permission', () => {
+    const f = setup();
+    f.prepare();
+    f.send();
+    const g = setup();
+    g.runtime.configure(configured, g.c, f.runtime.guard(), { explicitStart: true });
+    g.advance(300001);
+    expect(g.runtime.uncertain).toBe(false);
+    expect(g.runtime.next(g.c)).toBeNull();
+    expect(g.runtime.snapshot().remainingTrips).toBe(1);
+  });
+  it('returns without another transaction when fresh recovery observations already satisfy the captured goals', () => {
+    const f = setup();
+    f.prepare();
+    f.runtime.stop();
+    setStock(f.c, 10);
+    f.runtime.configure(configured, f.c, undefined, { explicitStart: true });
+    f.advance(300001);
+    const close = f.next();
+    expect(close.type).toBe('close');
+    f.c.disposition.workflow.world.apply({ type: 'npcEnd' });
+    f.ack(close);
+    expect(f.next().type).toBe('return');
+    expect(f.runtime.snapshot()).toMatchObject({ latched: true, remainingTrips: 0, actions: 0 });
+  });
+  it.each(['explicit destination', 'lock area'] as const)(
+    'uses the existing %s precedence when admitting the captured work map',
+    (boundary) => {
+      const f = setup();
+      f.prepare();
+      f.runtime.stop();
+      const input: SupplyPolicySettings = {
+        ...configured,
+        map: 'prontera',
+        automation: {
+          ...configured.automation!,
+          travel: {
+            ...configured.automation!.travel,
+            destinationMap: boundary === 'explicit destination' ? 'prt_fild05' : 'prontera',
+          },
+          ...(boundary === 'lock area'
+            ? {
+                mapPolicy: {
+                  ...DEFAULT_MAP_POLICY,
+                  lockArea: { map: 'prt_fild05', minX: 280, minY: 210, maxX: 300, maxY: 230 },
+                },
+              }
+            : {}),
+        },
+      };
+      f.runtime.configure(input, f.c, undefined, { explicitStart: true });
+      f.advance(300001);
+      expect(f.next().type).toBe('prepare');
+    },
+  );
+  it('admits the full existing signed-32-bit currency range for fresh supply recovery', () => {
+    const f = setup();
+    f.prepare();
+    f.runtime.stop();
+    f.c.disposition.workflow.zeny = 2_147_483_647;
+    f.runtime.configure(configured, f.c, undefined, { explicitStart: true });
+    f.advance(300001);
+    expect(f.next()?.type).toBe('prepare');
+  });
   it('publishes exhausted retained capacity instead of waiting for a trigger or renewing it on configure', () => {
     const f = setup();
     const retained = {

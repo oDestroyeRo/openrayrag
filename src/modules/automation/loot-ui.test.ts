@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FeatureUi } from '../client/feature-ui';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, DEFAULT_RETREAT } from '../settings/settings';
 import { DEFAULT_SUPPLY } from '../services/supply-trip';
+import { formatBotScript, parseBotScript } from '../settings/bot-script';
 
 // Exercise the actual field creation/read/write/lock paths. Unrelated feature
 // panels are stubbed so this fixture needs no browser or account-bearing main.
@@ -114,7 +115,7 @@ class Element {
   matches(selector: string): boolean {
     if (selector.startsWith('#')) return this.id === selector.slice(1);
     if (selector.startsWith('.')) return this.className.split(/\s+/).includes(selector.slice(1));
-    const data = selector.match(/^\[data-(setting|config|column)(?:="([^"]+)")?\]$/);
+    const data = selector.match(/^\[data-(setting|config|column|manual|service)(?:="([^"]+)")?\]$/);
     if (data)
       return (
         this.dataset[data[1]!] !== undefined && (!data[2] || this.dataset[data[1]!] === data[2])
@@ -220,6 +221,26 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+it.each([500, 1000])(
+  'round-trips a %i-command supply budget between Form and Script',
+  (maxActions) => {
+    const { ui, host, hooks } = setup(true);
+    ui.write({ ...structuredClone(DEFAULT_AUTOMATION), supply: { ...DEFAULT_SUPPLY, maxActions } });
+    const input = host.querySelector('[data-setting="supply.maxActions"]')!;
+    expect(Reflect.get(input, 'max')).toBe('1000');
+    expect(input.value).toBe(String(maxActions));
+    const settings = { ...hooks.settings(), automation: ui.read() };
+    const source = formatBotScript({ settings, script: null });
+    expect(source).toContain(`set automation.supply.maxActions = ${maxActions}`);
+    const parsed = parseBotScript(source);
+    expect(parsed.settings.automation?.supply?.maxActions).toBe(maxActions);
+    ui.write(parsed.settings.automation!);
+    expect(ui.read().supply?.maxActions).toBe(maxActions);
+    expect(input.value).toBe(String(maxActions));
+    for (const name of ['apply', 'command', 'workflow', 'routine', 'service'] as const)
+      expect(hooks[name]).not.toHaveBeenCalled();
+  },
+);
 it('adds a valid sale rule through the real editor and saves retained quantities without sending commands', () => {
   const { ui, sections, hooks } = setup(true, true);
   const panel = sections.inventory.querySelector('.auto-sell-setup')!;
@@ -301,6 +322,50 @@ it('mounts canonical auto-sell controls in Loot & supplies and keeps saving/prev
     expect(hooks[name]).not.toHaveBeenCalled();
   ui.lock(true, true);
   expect(input('enabled').disabled).toBe(true);
+});
+it('restores both previews after the startup lock and keeps manual and service locks independent', () => {
+  const { ui, host, manualTools, hooks } = setup(true, true);
+  ui.write(structuredClone(DEFAULT_AUTOMATION));
+  const previews = ['Preview item disposition', 'Preview auto sell & supply trip'].map((label) => {
+    const button = host.querySelectorAll('button').find((button) => button.textContent === label);
+    expect(button).toBeDefined();
+    return button!;
+  });
+  const manual = host.querySelector('#manual-run-walk')!,
+    service = new Element('button');
+  service.dataset.service = 'true';
+  manualTools.append(service);
+  // main.ts disables every control while native saved settings are loading.
+  for (const input of host.querySelectorAll('input,select,button,textarea')) input.disabled = true;
+  ui.lock(true, true, true);
+  for (const button of previews) expect(button.disabled).toBe(true);
+
+  ui.lock(false, true, true);
+  for (const button of previews) expect(button.disabled).toBe(false);
+  expect(manual.disabled).toBe(true);
+  expect(service.disabled).toBe(true);
+  for (const button of previews) button.emit('click');
+  expect(host.querySelector('#disposition-preview')!.textContent).toContain(
+    'Preview only · 0 suggested actions',
+  );
+  expect(host.querySelector('#supply-preview')!.textContent).toBe(
+    'Supply trips are off. No trip will start.',
+  );
+  for (const name of [
+    'apply',
+    'command',
+    'workflow',
+    'routine',
+    'service',
+    'social',
+    'memo',
+  ] as const)
+    expect(hooks[name]).not.toHaveBeenCalled();
+
+  ui.lock(true, false, false);
+  for (const button of previews) expect(button.disabled).toBe(true);
+  expect(manual.disabled).toBe(false);
+  expect(service.disabled).toBe(false);
 });
 it('uses the supplied mounts once and separates manual roots from Bot and profiles', () => {
   const { ui, host, sections, manualTools } = setup();

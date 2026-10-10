@@ -93,7 +93,7 @@ describe('supply successor and disabled guard repair', () => {
       remainingTrips: 2,
       uncertain: false,
       interrupted: false,
-      returnDestination: null,
+      returnDestination: guard.returnDestination,
       reserved: 120,
     });
   });
@@ -367,7 +367,7 @@ describe('supply settings, profile and reload boundaries', () => {
       uncertain: true,
     });
   });
-  it('a reconciled explicit new run retains finite allowance and latch without resuming the canceled trip', () => {
+  it('retains the canceled work destination for explicit recovery and disarms automatic starts including the same owner', () => {
     const run = new PersistentFieldRun(() => 100000);
     run.observe({
       sessionId: 'old',
@@ -375,13 +375,19 @@ describe('supply settings, profile and reload boundaries', () => {
       compatible: true,
       map: 'prt_fild08',
       player: { name: 'Tester' },
-      supplyGuard: { ...guard, uncertain: false },
+      supplyGuard: { ...guard, interrupted: false, uncertain: false },
     });
     expect(run.supplyGuardForStart(settings, 'Tester', 'old')).toMatchObject({
       remainingTrips: 2,
       latched: true,
       interrupted: false,
-      returnDestination: null,
+      returnDestination: guard.returnDestination,
+    });
+    expect(run.supplyGuardForStart(settings, 'Tester', 'old', true)).toMatchObject({
+      remainingTrips: 2,
+      interrupted: true,
+      uncertain: false,
+      returnDestination: guard.returnDestination,
     });
   });
   it('bounds all public supply telemetry and guards independently of existing features', () => {

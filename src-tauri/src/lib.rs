@@ -40,7 +40,11 @@ fn open_game(app: tauri::AppHandle, window: Webview) -> Result<(), String> {
     if app.get_webview("game").is_none() {
         permit.authorize_navigation();
     }
-    let result = open_game_window(&app, session::login::ConnectionMode::GameClient);
+    let result = open_game_window(
+        &app,
+        session::login::ConnectionMode::GameClient,
+        &mut permit,
+    );
     if result.is_err() {
         permit.cancel_navigation();
     }
@@ -84,6 +88,7 @@ fn close_game_runtime(
 fn open_game_window(
     app: &tauri::AppHandle,
     mode: session::login::ConnectionMode,
+    gate: &mut session::maintenance::Gate,
 ) -> Result<(), String> {
     session::mode_guard::check_app(app, mode)?;
     if let Some(game) = app.get_webview("game") {
@@ -151,6 +156,7 @@ fn open_game_window(
         size,
     )
     .map_err(|_| "Could not open the game view.".to_string())?;
+    gate.game_opened(mode);
     Ok(())
 }
 
@@ -286,17 +292,14 @@ fn control_bot(
             in_world = state.in_world;
             state.cancel();
         }
-        if !in_world {
-            if let Some(game) = app.get_webview("game") {
-                if session::direct::runtime_mode(&game)? == session::login::ConnectionMode::BotOnly
-                    && !app.state::<session::direct::SharedDirect>().entered_world()
-                {
-                    session::direct::cancel_admitted(&app, &mut _permit);
-                    close_game_runtime(&app, &mut _permit)
-                        .map_err(|_| "Could not cancel the connection.")?;
-                    return Ok(());
-                }
-            }
+        if app.get_webview("game").is_some()
+            && app
+                .state::<session::direct::SharedDirect>()
+                .cancel_pending_login(&mut _permit, in_world)
+        {
+            close_game_runtime(&app, &mut _permit)
+                .map_err(|_| "Could not cancel the connection.")?;
+            return Ok(());
         }
     }
     let admitted_settings = if action == "start" {

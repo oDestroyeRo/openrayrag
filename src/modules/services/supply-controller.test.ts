@@ -65,8 +65,19 @@ function spawn(e: Entity, entryType = 0) {
 function stats(
   count = 4,
   zeny = 1000,
-  options: { maxWeight?: number; wings?: number; returnSkill?: boolean; sp?: number } = {},
+  options: {
+    maxWeight?: number;
+    weight?: number;
+    items?: Array<{ itemId: number; count: number }>;
+    wings?: number;
+    returnSkill?: boolean;
+    sp?: number;
+  } = {},
 ) {
+  const items = options.items ?? [
+    ...(count ? [{ itemId: 501, count }] : []),
+    ...(options.wings ? [{ itemId: 602, count: options.wings }] : []),
+  ];
   const w = new BitWriter().u8(FEATURE_OP.stats);
   for (const n of [
     10,
@@ -90,19 +101,15 @@ function stats(
   ])
     w.i32(n);
   w.f32(0.4)
-    .i32(count * 70)
+    .i32(options.weight ?? count * 70)
     .i32(0)
     .bool(true)
     .i16(options.returnSkill ? 2 : 1)
     .i16(1)
     .u8(5);
   if (options.returnSkill) w.i16(54).u8(1);
-  w.i16(0)
-    .bool(true)
-    .u8(1)
-    .i32((count ? 1 : 0) + (options.wings ? 1 : 0));
-  if (count) w.i32(501).i16(count);
-  if (options.wings) w.i32(602).i16(options.wings);
+  w.i16(0).bool(true).u8(1).i32(items.length);
+  for (const item of items) w.i32(item.itemId).i16(item.count);
   w.i32(0).u8(0);
   for (let i = 0; i < 10; i++) w.i32(0);
   return w.i32(-1).finish();
@@ -619,6 +626,294 @@ describe('owned auto-sell save-point trips', () => {
   });
 });
 describe('controller supply repair regressions', () => {
+  it.each([500, 85])(
+    'holds the field through a long captured-cell return under the remaining %i-command cap',
+    (maxActions) => {
+      const configured = autoSellFixture('travel', 0).configured;
+      configured.map = 'iz_dun00';
+      configured.automation!.limits!.minutes = 0;
+      configured.automation!.supply = {
+        ...configured.automation!.supply!,
+        maxTrips: 100,
+        maxActions,
+        maxDurationSeconds: 600,
+        weightEndPercent: 75,
+      };
+      const origin = { x: 303, y: 77 };
+      const f = setup(configured, 'iz_dun00', { ...player, x: 247, y: 318 });
+      const protectedItems = [{ itemId: 501, count: 2 }];
+      const observations = () =>
+        f.packet(stats(0, 213305, { maxWeight: 34900, weight: 25740, items: protectedItems }));
+      observations();
+      // Exact economics and NPC closure were settled before this explicit recovery.
+      f.c.start(configured, undefined, {
+        version: 1,
+        character: 'Tester',
+        latched: true,
+        remainingTrips: 99,
+        actions: 81,
+        spent: 0,
+        reserved: 0,
+        intervalSeconds: 0,
+        deadlineSeconds: 0,
+        interrupted: false,
+        uncertain: false,
+        returnDestination: { map: 'iz_dun00', position: origin },
+      });
+      expect(f.c.supply.snapshot()).toMatchObject({
+        remainingTrips: 98,
+        actions: 81,
+        uncertain: false,
+        returnDestination: { map: 'iz_dun00', position: origin },
+      });
+      expect(f.c.engine.running).toBe(false);
+      for (
+        let i = 0;
+        i < 300 && !['complete', 'waiting'].includes(f.c.supply.snapshot().state);
+        i++
+      ) {
+        expect(f.c.engine.running).toBe(false);
+        observations();
+        if (f.c.travel.snapshot().leg.length > 1) f.settleWalk();
+        else f.step();
+      }
+      const walks = f.sent.filter((action) => action.type === 'walk');
+      expect(
+        f.sent.some((action) => ['shop', 'npcTalk', 'useItem', 'skill'].includes(action.type)),
+      ).toBe(false);
+      expect(f.c.supply.snapshot()).toMatchObject({ remainingTrips: 98, spent: 0, reserved: 0 });
+      expect(f.c.engine.character.snapshot().inventory).toEqual(
+        protectedItems.map((item) => ({ ...item, bagId: item.itemId, type: 1 })),
+      );
+      if (maxActions === 500) {
+        f.advance(600);
+        expect(f.c.supply.snapshot().state).toBe('complete');
+        expect(f.c.engine.player).toMatchObject(origin);
+        expect(f.c.engine.running).toBe(true);
+        expect(walks).toHaveLength(100);
+        expect(f.c.supply.snapshot().actions).toBe(81 + walks.length);
+      } else {
+        expect(f.c.supply.snapshot()).toMatchObject({ state: 'waiting', actions: 85 });
+        expect(f.c.supply.snapshot().reason).toContain('allowance');
+        expect(f.c.engine.running).toBe(false);
+        expect(f.c.engine.player).not.toMatchObject(origin);
+        const sentBefore = [...f.sent];
+        f.advance(1000);
+        expect(f.sent).toEqual(sentBefore);
+        expect(f.c.supply.snapshot().actions).toBe(85);
+        f.c.stop();
+        const sentBeforeRestart = [...f.sent];
+        f.c.start(configured);
+        f.advance(1000);
+        expect(f.c.supply.snapshot()).toMatchObject({ actions: 85, remainingTrips: 98 });
+        expect(f.c.engine.running).toBe(false);
+        expect(f.sent).toEqual(sentBeforeRestart);
+      }
+    },
+  );
+  it('retains the protected-weight blocker and explicitly recovers under a corrected strict finish threshold', () => {
+    const configured = autoSellFixture('travel', 0).configured;
+    configured.map = 'prt_fild05';
+    configured.automation!.supply = {
+      ...configured.automation!.supply!,
+      merchantMode: 'manual',
+      sellService: 'trader.prt-fild05.tool-dealer.sell.v1',
+      weightEndPercent: 70,
+      minimumIntervalSeconds: 1,
+      maxDurationSeconds: 30,
+    };
+    configured.automation!.disposition!.rules = [
+      {
+        ...configured.automation!.disposition!.rules[0]!,
+        itemId: 1052,
+        keep: 0,
+        minimum: 0,
+        desired: 0,
+        maximum: 0,
+      },
+    ];
+    const origin = { x: 285, y: 220 };
+    const f = setup(configured, 'prt_fild05', { ...player, ...origin });
+    const protectedItems = [{ itemId: 501, count: 367 }];
+    const observations = (sold = false, zeny = 1000) =>
+      f.packet(
+        stats(0, zeny, {
+          maxWeight: 34900,
+          weight: sold ? 25740 : 30000,
+          items: [...protectedItems, ...(sold ? [] : [{ itemId: 1052, count: 10 }])],
+        }),
+      );
+    const walkUntil = (predicate: () => boolean) => {
+      for (let i = 0; i < 90 && !predicate(); i++) {
+        if (f.c.travel.snapshot().leg.length > 1) f.settleWalk();
+        else f.step();
+      }
+      expect(predicate(), f.c.supply.snapshot().reason).toBe(true);
+    };
+    observations();
+    f.c.start(configured);
+    walkUntil(() => f.sent.some((action) => action.type === 'npcTalk'));
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(20).bool(true).finish());
+    const menu = new BitWriter().u8(WORLD_OP.npc).u8(2).i32(3);
+    for (const label of ['Buy', 'Sell', 'Cancel']) menu.string(label);
+    f.packet(menu.finish());
+    f.advance(500);
+    f.packet(new BitWriter().u8(WORLD_OP.shop).u8(0).i32(0).finish());
+    f.advance(600);
+    const sales = () => f.sent.filter((action) => action.type === 'shop' && action.rows.length);
+    expect(sales()).toEqual([{ type: 'shop', mode: 'sell', rows: [{ id: 1052, count: 10 }] }]);
+    f.end();
+    f.packet(new BitWriter().u8(FEATURE_OP.currency).i32(1460).finish());
+    f.advance(500);
+    expect(f.c.supply.uncertain).toBe(true);
+    observations(true, 1460);
+    f.advance(1000);
+    const before = f.c.supply.snapshot();
+    const counters = () => ({
+      kills: f.c.engine.kills,
+      pickups: f.c.engine.looted,
+      deaths: f.c.engine.deaths,
+    });
+    const beforeCounters = counters();
+    expect(before).toMatchObject({ state: 'waiting', uncertain: false, remainingTrips: 1 });
+    expect(before.reason).toContain('73.75% (25740/34900)');
+    expect(before.reason).toContain('below 70%');
+    expect(f.c.engine.running).toBe(false);
+    const sentBeforeDeadline = [...f.sent];
+    // Refresh normal observations while the original trip deadline elapses.
+    for (let i = 0; i < 4; i++) {
+      observations(true, 1460);
+      f.advance(10000);
+    }
+    expect(f.c.supply.snapshot()).toMatchObject({
+      state: 'waiting',
+      reason: before.reason,
+      uncertain: false,
+      actions: before.actions,
+      remainingTrips: before.remainingTrips,
+      spent: before.spent,
+      reserved: before.reserved,
+    });
+    expect(f.sent).toEqual(sentBeforeDeadline);
+    expect(counters()).toEqual(beforeCounters);
+
+    f.c.stop();
+    const corrected = settingsDraft(configured);
+    corrected.automation!.supply!.weightEndPercent = 75;
+    f.c.start(corrected);
+    expect(f.c.supply.snapshot()).toMatchObject({
+      actions: before.actions,
+      remainingTrips: 0,
+      returnDestination: { map: 'prt_fild05', position: origin },
+    });
+    expect(f.c.engine.running).toBe(false);
+    // The protected-only weight now meets the explicit new goal; no new sale is permitted.
+    walkUntil(() => f.c.supply.snapshot().state === 'complete');
+    f.advance(600);
+    expect(f.c.engine.player).toMatchObject(origin);
+    expect(f.c.engine.running).toBe(true);
+    expect(f.c.supply.snapshot()).toMatchObject({ state: 'complete', remainingTrips: 0, spent: 0 });
+    expect(f.c.supply.snapshot().actions).toBeGreaterThanOrEqual(before.actions);
+    expect(counters()).toEqual(beforeCounters);
+    expect(sales()).toHaveLength(1);
+    expect(f.c.engine.character.snapshot().inventory).toEqual(
+      protectedItems.map((item) => ({ ...item, bagId: item.itemId, type: 1 })),
+    );
+  });
+  it('recovers a blocked actual Database landing only after Stop, manual relocation and a charged explicit Start', () => {
+    const configured = autoSellFixture('travel', 0).configured;
+    configured.map = 'iz_dun00';
+    configured.automation!.supply!.maxDurationSeconds = 30;
+    const requests: string[] = [];
+    const origin = { x: 281, y: 47 };
+    const f = setup(
+      configured,
+      'iz_dun00',
+      { ...player, ...origin },
+      {
+        supported: (map) => ['izlude', 'prontera', 'iz_dun00'].includes(map),
+        send: (map) => requests.push(map),
+      },
+    );
+    const observations = (count = 12, zeny = 1000) =>
+      f.packet(stats(count, zeny, { maxWeight: 1000 }));
+    const arrival = (map: string, x: number, y: number, count = 12, zeny = 1000) => {
+      f.packet(new BitWriter().u8(OP.remove).i32(player.id).u8(0).finish());
+      f.packet(new BitWriter().u8(OP.map).string(map).finish());
+      f.c.observeOfficialPacket(new Uint8Array([2]));
+      f.packet(spawn({ ...player, x, y }, 1));
+      observations(count, zeny);
+      f.advance(1200);
+    };
+    observations();
+    f.c.start(configured);
+    f.advance(1000);
+    expect(requests).toEqual(['izlude']);
+    arrival('izlude', 145, 181);
+    expect(f.c.supply.snapshot()).toMatchObject({ state: 'waiting', remainingTrips: 1 });
+    expect(f.c.supply.snapshot().reason).toContain('izlude (145, 181)');
+    expect(f.c.supply.snapshot().reason).toContain('Stop');
+    expect(f.sent.some((a) => ['walk', 'npcTalk', 'shop'].includes(a.type))).toBe(false);
+    f.advance(2000);
+    expect(requests).toEqual(['izlude']);
+    f.c.stop();
+    // Normal manual Database relocation is observed; automation sends no retry.
+    arrival('prontera', 112, 41);
+    f.packet(spawn({ ...npc, name: 'Flower Girl', x: 113, y: 42 }));
+    const corrected = settingsDraft(configured);
+    corrected.automation!.supply!.merchantMode = 'manual';
+    corrected.automation!.supply!.sellService = 'trader.prontera.flower-girl-south.sell.v1';
+    f.c.start(corrected);
+    expect(f.c.supply.snapshot()).toMatchObject({
+      state: 'waiting',
+      remainingTrips: 1,
+      latched: true,
+      returnDestination: { map: 'iz_dun00', position: origin },
+    });
+    expect(f.c.engine.running).toBe(false);
+    // The old 30-second deadline must not cancel permission while the 300-second interval ages.
+    for (let i = 0; i < 30; i++) {
+      observations();
+      f.advance(10000);
+    }
+    observations();
+    f.advance(1200);
+    expect(requests).toEqual(['izlude']);
+    expect(f.c.supply.snapshot()).toMatchObject({ remainingTrips: 0, latched: true });
+    expect(f.sent.filter((a) => a.type === 'npcTalk')).toEqual([{ type: 'npcTalk', id: 20 }]);
+    f.packet(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(20).bool(true).finish());
+    const menu = new BitWriter().u8(WORLD_OP.npc).u8(2).i32(3);
+    for (const label of ['Buy', 'Sell', 'Cancel']) menu.string(label);
+    f.packet(menu.finish());
+    f.advance(500);
+    f.packet(new BitWriter().u8(WORLD_OP.shop).u8(0).i32(0).finish());
+    f.advance(600);
+    const sales = () => f.sent.filter((a) => a.type === 'shop' && a.rows.length);
+    expect(sales()).toEqual([{ type: 'shop', mode: 'sell', rows: [{ id: 501, count: 10 }] }]);
+    const spentActions = f.c.supply.snapshot().actions;
+    // Neither closure nor a currency-only update proves the sale.
+    f.end();
+    f.packet(new BitWriter().u8(FEATURE_OP.currency).i32(1250).finish());
+    f.advance(500);
+    expect(f.c.supply.uncertain).toBe(true);
+    expect(requests).toEqual(['izlude']);
+    expect(f.c.engine.running).toBe(false);
+    observations(2, 1250);
+    f.advance(1000);
+    expect(requests).toEqual(['izlude', 'iz_dun00']);
+    arrival('iz_dun00', 290, 47, 2, 1250);
+    expect(f.c.engine.running).toBe(false);
+    for (let i = 0; i < 60 && f.c.supply.snapshot().state !== 'complete'; i++) {
+      if (f.c.travel.snapshot().leg.length > 1) f.settleWalk();
+      else f.step();
+    }
+    f.advance(600);
+    expect(f.c.engine.player).toMatchObject(origin);
+    expect(f.c.engine.running).toBe(true);
+    expect(f.c.supply.snapshot()).toMatchObject({ state: 'complete', remainingTrips: 0, spent: 0 });
+    expect(f.c.supply.snapshot().actions).toBeGreaterThanOrEqual(spentActions);
+    expect(sales()).toHaveLength(1);
+  });
   it('does not reserve low-stock supply on the departure map before configured field entry', () => {
     const value = { ...settings, map: 'prt_fild08' };
     const f = setup(value);
