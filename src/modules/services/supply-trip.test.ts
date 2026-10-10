@@ -366,11 +366,12 @@ function setup(settings = configured) {
 describe('bounded supply runtime', () => {
   it('defaults off and strictly validates limits/IDs and config-free guards', () => {
     expect(validateSupplySettings(DEFAULT_SUPPLY).enabled).toBe(false);
+    expect(validateSupplySettings(DEFAULT_SUPPLY).maxActions).toBe(100);
     expect(validateSupplySettings(configured.automation!.supply!).buyService).toContain('.v1');
     for (const patch of [
       { enabled: 1 },
       { maxTrips: 0 },
-      { maxActions: 101 },
+      { maxActions: 1001 },
       { maxSpend: 2000000001 },
       { weightEndPercent: 80 },
       { unknown: true },
@@ -565,6 +566,22 @@ describe('bounded supply runtime', () => {
     expect(f.runtime.commandAllowed()).toBe(false);
     expect(f.runtime.next(f.c)).toBeNull();
   });
+  it.each([500, 1000])('enforces exactly %i commands across the whole trip', (maxActions) => {
+    const f = setup({
+      ...configured,
+      automation: {
+        ...configured.automation!,
+        supply: { ...configured.automation!.supply!, maxActions },
+      },
+    });
+    f.prepare();
+    for (let command = 0; command < maxActions; command++)
+      expect(f.runtime.commandAllowed()).toBe(true);
+    expect(f.runtime.guard()?.actions).toBe(maxActions);
+    expect(f.runtime.commandAllowed()).toBe(false);
+    expect(f.runtime.snapshot()).toMatchObject({ actions: maxActions, state: 'waiting' });
+    expect(f.runtime.next(f.c)).toBeNull();
+  });
   it('blocks unknown inventory, weight, capacity, equipment and uncertain external economics', () => {
     for (const field of ['stock', 'weight', 'capacity', 'equipment', 'uncertain'] as const) {
       const f = setup();
@@ -601,6 +618,49 @@ describe('bounded supply runtime', () => {
   });
 });
 describe('supply direct configuration allowance', () => {
+  it('preserves counters above 255 through Stop, guard serialization and explicit replacement', () => {
+    const settings = {
+      ...configured,
+      automation: {
+        ...configured.automation!,
+        supply: { ...configured.automation!.supply!, maxActions: 500 },
+      },
+    };
+    const f = setup(settings);
+    f.prepare();
+    for (let transaction = 0; transaction < 3; transaction++) {
+      f.send();
+      f.confirm();
+      f.c.disposition.workflow.world.apply({ type: 'npcEnd' });
+      f.ack(f.next());
+    }
+    for (let command = 3; command < 300; command++) expect(f.runtime.commandAllowed()).toBe(true);
+    f.runtime.stop();
+    const guard = validateSupplyResumeGuard(JSON.parse(JSON.stringify(f.runtime.guard())));
+    expect(guard).toMatchObject({ actions: 300, spent: 300, reserved: 300, remainingTrips: 1 });
+    const resumed = setup(settings);
+    resumed.runtime.configure(
+      settings,
+      resumed.c,
+      { ...guard, interrupted: false },
+      {
+        explicitStart: true,
+      },
+    );
+    resumed.advance(300001);
+    resumed.prepare();
+    expect(resumed.runtime.snapshot()).toMatchObject({
+      actions: 300,
+      spent: 300,
+      reserved: 300,
+      remainingTrips: 0,
+      returnDestination: guard.returnDestination,
+    });
+    for (let command = 300; command < 500; command++)
+      expect(resumed.runtime.commandAllowed()).toBe(true);
+    expect(resumed.runtime.commandAllowed()).toBe(false);
+    expect(resumed.runtime.guard()?.actions).toBe(500);
+  });
   it('charges one explicit replacement after settlement and interval without resetting cumulative economics or destination', () => {
     const f = setup();
     f.prepare();

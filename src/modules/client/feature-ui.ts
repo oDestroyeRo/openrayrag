@@ -328,7 +328,7 @@ const fields: Record<Section, Field[]> = {
       max: 86400,
     },
     { path: 'supply.maxTrips', label: 'Maximum supply trips', min: 1, max: 100 },
-    { path: 'supply.maxActions', label: 'Commands per trip', min: 1, max: 100 },
+    { path: 'supply.maxActions', label: 'Commands per trip', min: 1, max: 1000 },
     { path: 'supply.maxDurationSeconds', label: 'Trip deadline, seconds', min: 30, max: 3600 },
     {
       path: 'supply.maxSpend',

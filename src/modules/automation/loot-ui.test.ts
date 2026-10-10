@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FeatureUi } from '../client/feature-ui';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS, DEFAULT_RETREAT } from '../settings/settings';
 import { DEFAULT_SUPPLY } from '../services/supply-trip';
+import { formatBotScript, parseBotScript } from '../settings/bot-script';
 
 // Exercise the actual field creation/read/write/lock paths. Unrelated feature
 // panels are stubbed so this fixture needs no browser or account-bearing main.
@@ -220,6 +221,26 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+it.each([500, 1000])(
+  'round-trips a %i-command supply budget between Form and Script',
+  (maxActions) => {
+    const { ui, host, hooks } = setup(true);
+    ui.write({ ...structuredClone(DEFAULT_AUTOMATION), supply: { ...DEFAULT_SUPPLY, maxActions } });
+    const input = host.querySelector('[data-setting="supply.maxActions"]')!;
+    expect(Reflect.get(input, 'max')).toBe('1000');
+    expect(input.value).toBe(String(maxActions));
+    const settings = { ...hooks.settings(), automation: ui.read() };
+    const source = formatBotScript({ settings, script: null });
+    expect(source).toContain(`set automation.supply.maxActions = ${maxActions}`);
+    const parsed = parseBotScript(source);
+    expect(parsed.settings.automation?.supply?.maxActions).toBe(maxActions);
+    ui.write(parsed.settings.automation!);
+    expect(ui.read().supply?.maxActions).toBe(maxActions);
+    expect(input.value).toBe(String(maxActions));
+    for (const name of ['apply', 'command', 'workflow', 'routine', 'service'] as const)
+      expect(hooks[name]).not.toHaveBeenCalled();
+  },
+);
 it('adds a valid sale rule through the real editor and saves retained quantities without sending commands', () => {
   const { ui, sections, hooks } = setup(true, true);
   const panel = sections.inventory.querySelector('.auto-sell-setup')!;

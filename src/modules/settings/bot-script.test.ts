@@ -539,6 +539,9 @@ describe('approachable bot scripts', () => {
 });
 
 describe('bot script diagnostics and boundaries', () => {
+  it.each([0, 1001, -1, 500.5])('rejects invalid supply command budget %s', (maxActions) => {
+    lineError(`script "Supply"\nset automation.supply.maxActions = ${maxActions}`, 2);
+  });
   it.each([
     ['set radius = 12', 1, 'Begin with'],
     ['script "Test"\nset unknown = true', 2, 'Unknown setting'],
