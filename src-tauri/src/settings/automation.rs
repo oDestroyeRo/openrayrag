@@ -391,6 +391,8 @@ struct SupplySettings {
     enabled: bool,
     stock_enabled: bool,
     weight_enabled: bool,
+    #[serde(default)]
+    sell_all_permitted: bool,
     weight_start_percent: u8,
     weight_end_percent: u8,
     minimum_interval_seconds: u32,
@@ -438,7 +440,7 @@ impl SupplySettings {
             && self.weight_end_percent > 0
             && self.weight_end_percent < self.weight_start_percent
             && (1..=86400).contains(&self.minimum_interval_seconds)
-            && (1..=100).contains(&self.max_trips)
+            && self.max_trips <= 100
             && (1..=1000).contains(&self.max_actions)
             && (30..=3600).contains(&self.max_duration_seconds)
             && self.max_spend <= 2_000_000_000
@@ -505,7 +507,9 @@ pub(crate) struct SupplyResumeGuard {
     version: u8,
     character: String,
     latched: bool,
-    remaining_trips: u8,
+    remaining_trips: i16,
+    #[serde(default)]
+    trip_sequence: u64,
     actions: u16,
     spent: u32,
     reserved: u32,
@@ -545,7 +549,8 @@ impl SupplyResumeGuard {
                 .character
                 .chars()
                 .any(|c| c <= '\u{001f}' || c == '\u{007f}')
-            && self.remaining_trips <= 100
+            && (-1..=100).contains(&self.remaining_trips)
+            && self.trip_sequence <= 9_007_199_254_740_991
             && self.actions <= 1000
             && self.spent <= 2_000_000_000
             && self.reserved <= 2_000_000_000
@@ -2429,10 +2434,38 @@ mod tests {
         assert!(valid(value.clone()));
         let legacy: SupplySettings = serde_json::from_value(cases[0]["value"].clone()).unwrap();
         let normalized = serde_json::to_value(legacy).unwrap();
+        assert_eq!(normalized["sellAllPermitted"], false);
         assert_eq!(normalized["merchantMode"], "manual");
         assert_eq!(normalized["transport"], "travel");
         assert_eq!(normalized["saveMap"], "");
         assert_eq!(normalized["returnMinStock"], 1);
+        let enabled: SupplySettings = serde_json::from_value(
+            cases
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == "sell all permitted enabled")
+                .unwrap()["value"]
+                .clone(),
+        )
+        .unwrap();
+        let enabled = serde_json::to_value(enabled).unwrap();
+        assert_eq!(enabled["sellAllPermitted"], true);
+        assert_eq!(enabled["maxTrips"], 0);
+        let legacy_guard: SupplyResumeGuard = serde_json::from_value(
+            cases
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["kind"] == "guard" && case["valid"] == true)
+                .unwrap()["value"]
+                .clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(legacy_guard).unwrap()["tripSequence"],
+            0
+        );
         value["automation"]["supply"] = Value::Null;
         assert!(!valid(value.clone()));
         value["automation"]

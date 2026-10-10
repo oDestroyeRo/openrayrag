@@ -711,6 +711,125 @@ describe('controller supply repair regressions', () => {
       }
     },
   );
+  it.each([
+    [false, 'complete'],
+    [true, 'complete'],
+    [true, 'unquoted'],
+    [true, 'stop'],
+    [true, 'timeout'],
+  ] as const)(
+    'sell-all permitted %s with second service %s retains exact ownership after crossing the weight goal',
+    (sellAllPermitted, outcome) => {
+      const configured = autoSellFixture('travel', 0).configured;
+      configured.map = 'prt_fild05';
+      configured.automation!.supply = {
+        ...configured.automation!.supply!,
+        merchantMode: 'manual',
+        sellService: 'trader.prt-fild05.tool-dealer.sell.v1',
+        weightEndPercent: 60,
+        sellAllPermitted,
+      };
+      configured.automation!.disposition!.rules = [918, 1052].map((itemId) => ({
+        ...configured.automation!.disposition!.rules[0]!,
+        itemId,
+        keep: 0,
+        minimum: 0,
+        desired: 0,
+        maximum: 0,
+      }));
+      const f = setup(configured);
+      const protectedItems = [
+        { itemId: 501, count: 2 },
+        { itemId: 4001, count: 1 },
+      ];
+      const observations = (stage: number, zeny: number) =>
+        f.packet(
+          stats(0, zeny, {
+            maxWeight: 1000,
+            weight: [900, 500, 300][stage],
+            items: [
+              ...protectedItems,
+              ...(stage === 0 ? [{ itemId: 918, count: 10 }] : []),
+              ...(stage < 2 ? [{ itemId: 1052, count: 10 }] : []),
+            ],
+          }),
+        );
+      const sales = () => f.sent.filter((action) => action.type === 'shop' && action.rows.length);
+      const until = (predicate: () => boolean) => {
+        for (let i = 0; i < 90 && !predicate(); i++) {
+          if (f.c.travel.snapshot().leg.length > 1) f.settleWalk();
+          else f.step();
+        }
+        expect(predicate(), f.c.supply.snapshot().reason).toBe(true);
+      };
+      const openSell = (quoted = true) => {
+        f.packet(new BitWriter().u8(WORLD_OP.npc).u8(0).i32(20).bool(true).finish());
+        const menu = new BitWriter().u8(WORLD_OP.npc).u8(2).i32(3);
+        for (const label of ['Buy', 'Sell', 'Cancel']) menu.string(label);
+        f.packet(menu.finish());
+        f.advance(500);
+        if (quoted) f.packet(new BitWriter().u8(WORLD_OP.shop).u8(0).i32(0).finish());
+        f.advance(600);
+      };
+      observations(0, 1000);
+      f.c.start(configured);
+      until(() => f.sent.some((action) => action.type === 'npcTalk'));
+      openSell();
+      expect(sales()).toEqual([{ type: 'shop', mode: 'sell', rows: [{ id: 918, count: 10 }] }]);
+      // Catalog price is authoritative; the exact receipt requires both new stock and currency.
+      // Sticky Webfoot sells for 20z at the observed zero overcharge shop.
+      f.end();
+      observations(1, 1200);
+      f.advance(1000);
+      expect(f.c.supply.uncertain).toBe(false);
+      if (sellAllPermitted) {
+        until(() => f.sent.filter((action) => action.type === 'npcTalk').length === 2);
+        if (outcome === 'stop') {
+          f.c.stop();
+          const stopped = [...f.sent];
+          f.advance(1500);
+          expect(f.sent).toEqual(stopped);
+          expect(sales()).toHaveLength(1);
+          expect(f.c.engine.running).toBe(false);
+          return;
+        }
+        openSell(outcome !== 'unquoted');
+        if (outcome === 'unquoted') {
+          f.advance(1500);
+          expect(sales()).toHaveLength(1);
+          expect(f.c.supply.snapshot().state).not.toBe('complete');
+          expect(f.c.engine.running).toBe(false);
+          return;
+        }
+        expect(sales()).toHaveLength(2);
+        expect(sales()[1]).toEqual({ type: 'shop', mode: 'sell', rows: [{ id: 1052, count: 10 }] });
+        if (outcome === 'timeout') {
+          f.advance(11000);
+          expect(sales()).toHaveLength(2);
+          expect(f.c.engine.running).toBe(false);
+          expect(f.c.supply.snapshot().state).toBe('waiting');
+          return;
+        }
+        f.end();
+        observations(2, 1660);
+        f.advance(1000);
+      }
+      until(() => f.c.supply.snapshot().state === 'complete');
+      f.advance(600);
+      expect(f.c.engine.running).toBe(true);
+      expect(f.c.supply.snapshot()).toMatchObject({
+        state: 'complete',
+        uncertain: false,
+        remainingTrips: 1,
+      });
+      expect(f.c.engine.character.snapshot().inventory).toEqual(
+        [...protectedItems, ...(sellAllPermitted ? [] : [{ itemId: 1052, count: 10 }])].map(
+          (item) => ({ ...item, bagId: item.itemId, type: 1 }),
+        ),
+      );
+      expect(sales()).toHaveLength(sellAllPermitted ? 2 : 1);
+    },
+  );
   it('retains the protected-weight blocker and explicitly recovers under a corrected strict finish threshold', () => {
     const configured = autoSellFixture('travel', 0).configured;
     configured.map = 'prt_fild05';

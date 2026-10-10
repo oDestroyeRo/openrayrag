@@ -1,3 +1,8 @@
+import {
+  meetSupplyTripAllowance,
+  supplyTripAllowance,
+  supplyTripCapacityText,
+} from '../services/supply-trip-logic';
 import type { SettingsInput } from '../settings/settings';
 import { DEFAULT_SUPPLY } from '../services/supply-trip-logic';
 import { serviceByContractId } from '../services/npc-services-logic';
@@ -146,11 +151,14 @@ export function farmingReadiness(
     );
   } else {
     const retained = context.remainingSupplyTrips,
-      remaining = retained === null ? null : Math.min(supply.maxTrips, retained);
+      remaining =
+        retained === null
+          ? null
+          : meetSupplyTripAllowance(supplyTripAllowance(supply.maxTrips), retained);
     add(
       'supply',
       remaining === 0 ? 'Supply trip allowance exhausted' : 'Supply trip capacity',
-      `${remaining === null ? `Retained capacity unobserved; configured cap ${supply.maxTrips}` : `${remaining} trips remaining (configured cap ${supply.maxTrips})`}. Stop/Start and unlimited time do not replenish spent trips. ${supply.maxActions} commands/trip · ${supply.maxDurationSeconds}s/trip · ${supply.maxSpend}z spend cap.`,
+      `${retained === null ? `Retained capacity unobserved; configured cap ${supply.maxTrips === 0 ? 'unlimited' : supply.maxTrips}` : supplyTripCapacityText(supply.maxTrips, retained)}. Stop/Start and unlimited time do not replenish spent trips. ${supply.maxActions} commands/trip · ${supply.maxDurationSeconds}s/trip · ${supply.maxSpend}z spend cap.`,
       'supply',
       remaining === 0 ? 'error' : 'info',
     );
@@ -159,7 +167,7 @@ export function farmingReadiness(
       add(
         'selling',
         'Auto sell',
-        `At ${supply.weightStartPercent}% → below ${supply.weightEndPercent}%. Only explicitly permitted excess is sold; protected and recovery/return reserves remain retained.`,
+        `At ${supply.weightStartPercent}% → below ${supply.weightEndPercent}%. Only explicitly permitted excess is sold; protected and recovery/return reserves remain retained.${supply.sellAllPermitted ? ' Each visit sells all permitted excess before returning.' : ''}`,
         'supply',
       );
       if (!rules.some((rule) => rule.sell))

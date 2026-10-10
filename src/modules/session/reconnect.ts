@@ -19,7 +19,13 @@ import {
   type SettingsInput as Settings,
   type RunSettings,
 } from '../settings/settings';
-import { validateSupplyResumeGuard, type SupplyResumeGuard } from '../services/supply-trip-logic';
+import {
+  validateSupplyResumeGuard,
+  supplyTripAllowance,
+  meetSupplyTripAllowance,
+  chargeSupplyTrip,
+  type SupplyResumeGuard,
+} from '../services/supply-trip-logic';
 import {
   CONSERVATIVE_ESCAPE_RECOVERY,
   escapeRecovery,
@@ -278,7 +284,8 @@ export class PersistentFieldRun {
             version: 1,
             character,
             latched: false,
-            remainingTrips: checked.automation.supply.maxTrips,
+            remainingTrips: supplyTripAllowance(checked.automation.supply.maxTrips),
+            tripSequence: 0,
             actions: 0,
             spent: 0,
             reserved: 0,
@@ -289,6 +296,14 @@ export class PersistentFieldRun {
             returnDestination: null,
           })
         : undefined;
+    const previousSupply = this.supplyGuards.get(character);
+    if (previousSupply && checked.automation?.supply?.enabled) {
+      // begin is the explicit Start boundary. Change only trip mode; retain the
+      // old session/time anchor and every economic and interruption guard.
+      const cap = checked.automation.supply.maxTrips;
+      previousSupply.guard.remainingTrips =
+        cap === 0 ? -1 : meetSupplyTripAllowance(cap, previousSupply.guard.remainingTrips);
+    }
     const previousDeath = this.deathGuards.get(character);
     if (previousDeath && !previousDeath.guard.uncertain) this.deathGuards.delete(character);
     this.desired = checked;
@@ -438,15 +453,33 @@ export class PersistentFieldRun {
       try {
         const guard = validateSupplyResumeGuard(status.supplyGuard),
           old = this.supplyGuards.get(guard.character);
-        // A blank/new page cannot replenish the finite allowance of an older page.
+        // Stale finite telemetry cannot undo an explicit unlimited grant, and
+        // a delayed sentinel cannot undo a later finite setting.
+        guard.remainingTrips =
+          old?.guard.remainingTrips === -1 && this.unlimitedSupplyRequested(guard.character)
+            ? -1
+            : old
+              ? meetSupplyTripAllowance(old.guard.remainingTrips, guard.remainingTrips)
+              : guard.remainingTrips;
+        // A blank/new page cannot replenish the allowance of an older page.
+        const sequence = guard.tripSequence ?? 0,
+          previousSequence = old?.guard.tripSequence ?? 0;
         if (
-          old?.session === status.sessionId ||
           (!old && this.supplyGuards.size < 64) ||
-          (old && guard.remainingTrips < old.guard.remainingTrips)
+          (old &&
+            sequence >= previousSequence &&
+            (old.session === status.sessionId ||
+              (sequence === previousSequence &&
+                guard.remainingTrips !== old.guard.remainingTrips &&
+                meetSupplyTripAllowance(old.guard.remainingTrips, guard.remainingTrips) ===
+                  guard.remainingTrips)))
         ) {
           if (old) {
-            guard.remainingTrips = Math.min(old.guard.remainingTrips, guard.remainingTrips);
-            if (guard.remainingTrips === old.guard.remainingTrips)
+            guard.remainingTrips = meetSupplyTripAllowance(
+              old.guard.remainingTrips,
+              guard.remainingTrips,
+            );
+            if (sequence === previousSequence && guard.remainingTrips === old.guard.remainingTrips)
               guard.reserved = Math.max(old.guard.reserved, guard.reserved);
           }
           this.supplyGuards.set(guard.character, {
@@ -698,7 +731,7 @@ export class PersistentFieldRun {
     guard.intervalSeconds = Math.max(0, guard.intervalSeconds - elapsed);
     guard.deadlineSeconds = Math.max(0, guard.deadlineSeconds - elapsed);
     if (automatic && sessionId !== old.session) {
-      if (!guard.returnDestination) guard.remainingTrips = Math.max(0, guard.remainingTrips - 1);
+      if (!guard.returnDestination) guard.remainingTrips = chargeSupplyTrip(guard.remainingTrips);
       guard.interrupted = true;
       guard.uncertain = true;
     }
@@ -903,6 +936,13 @@ export class PersistentFieldRun {
     }
     return true;
   }
+  private unlimitedSupplyRequested(character: string): boolean {
+    return (
+      this.character === character &&
+      this.desired?.automation?.supply?.enabled === true &&
+      this.desired.automation.supply.maxTrips === 0
+    );
+  }
   completeSupplyStart(character: string, sessionId: string, guard?: SupplyResumeGuard): void {
     const old = this.supplyGuards.get(character);
     if (!guard && !old) return;
@@ -921,7 +961,8 @@ export class PersistentFieldRun {
       latest.deadlineSeconds = Math.max(0, latest.deadlineSeconds - elapsed);
       // A successful callback may follow a newer sent/reconciled publication.
       // Same-owner telemetry is authoritative; transfer must retain uncertainty.
-      if (old.session === sessionId) retained = latest;
+      if (old.session === sessionId || (latest.tripSequence ?? 0) > (requested.tripSequence ?? 0))
+        retained = latest;
       else {
         retained.uncertain = retained.uncertain || latest.uncertain;
         retained.latched = retained.latched || latest.latched;
@@ -932,8 +973,16 @@ export class PersistentFieldRun {
           retained.deadlineSeconds = latest.deadlineSeconds;
         }
       }
-      retained.remainingTrips = Math.min(requested.remainingTrips, latest.remainingTrips);
-      retained.reserved = Math.max(requested.reserved, latest.reserved);
+      retained.remainingTrips =
+        latest.remainingTrips === -1 && this.unlimitedSupplyRequested(character)
+          ? -1
+          : meetSupplyTripAllowance(requested.remainingTrips, latest.remainingTrips);
+      if ((requested.tripSequence ?? 0) === (latest.tripSequence ?? 0))
+        retained.reserved = Math.max(requested.reserved, latest.reserved);
+      if (old.session !== sessionId) {
+        retained.uncertain ||= requested.uncertain;
+        retained.interrupted ||= requested.interrupted || retained.uncertain;
+      }
     }
     this.supplyGuards.set(character, { session: sessionId, at: this.now(), guard: retained });
   }

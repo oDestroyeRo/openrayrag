@@ -1,3 +1,4 @@
+import { supplySaleRemainder } from './supply-sales-logic';
 import { quantity, type Revision } from '../../shared/domain-values';
 import { insideLockArea, mapAllowed, mapPolicy } from '../navigation/map-policy-logic';
 import type { SettingsInput as Settings } from '../settings/settings';
@@ -19,6 +20,9 @@ import {
   validateSupplySettings,
   validateSupplyResumeGuard,
   count,
+  supplyTripAllowance,
+  meetSupplyTripAllowance,
+  chargeSupplyTrip,
 } from './supply-trip-logic';
 
 export {
@@ -48,6 +52,7 @@ export class SupplyTripRuntime<Receipt> {
   private phase: SupplyPhase = 'idle';
   private reason = 'Supply trips are disabled.';
   private remainingTrips = 0;
+  private tripSequence = 0;
   private latched = false;
   private nextTripAt = 0;
   private deadline = 0;
@@ -111,27 +116,49 @@ export class SupplyTripRuntime<Receipt> {
     if (retainedGuard && retainedGuard.character !== context.character)
       throw new Error('Supply resume state belongs to a different character.');
     const localGuard = this.guard();
+    const explicitUnlimited =
+      policy.enabled &&
+      policy.maxTrips === 0 &&
+      options.explicitStart &&
+      retainedGuard?.remainingTrips === -1;
     if (localGuard?.character === context.character) {
       // A delayed controller-window publication cannot replenish this owner's
       // allowance or erase its captured work cell. Only explicit Start can
       // authorize a new attempt; an automatic guard still vetoes that permission.
-      retainedGuard = retainedGuard
-        ? {
-            ...retainedGuard,
-            remainingTrips: Math.min(retainedGuard.remainingTrips, localGuard.remainingTrips),
-            intervalSeconds: Math.max(retainedGuard.intervalSeconds, localGuard.intervalSeconds),
-            actions: Math.max(retainedGuard.actions, localGuard.actions),
-            spent: Math.max(retainedGuard.spent, localGuard.spent),
-            reserved: Math.max(retainedGuard.reserved, localGuard.reserved),
-            latched: retainedGuard.latched || localGuard.latched,
-            returnDestination:
-              (localGuard.latched && localGuard.returnDestination) ||
-              retainedGuard.returnDestination ||
-              localGuard.returnDestination,
-            interrupted:
-              retainedGuard.interrupted || (!options.explicitStart && localGuard.interrupted),
-          }
-        : { ...localGuard, interrupted: options.explicitStart ? false : localGuard.interrupted };
+      if (retainedGuard && (retainedGuard.tripSequence ?? 0) !== (localGuard.tripSequence ?? 0)) {
+        const newest =
+          (retainedGuard.tripSequence ?? 0) > (localGuard.tripSequence ?? 0)
+            ? retainedGuard
+            : localGuard;
+        retainedGuard = {
+          ...newest,
+          remainingTrips: meetSupplyTripAllowance(
+            retainedGuard.remainingTrips,
+            explicitUnlimited ? -1 : localGuard.remainingTrips,
+          ),
+          interrupted: retainedGuard.interrupted || (!options.explicitStart && newest.interrupted),
+        };
+      } else
+        retainedGuard = retainedGuard
+          ? {
+              ...retainedGuard,
+              remainingTrips: meetSupplyTripAllowance(
+                retainedGuard.remainingTrips,
+                explicitUnlimited ? -1 : localGuard.remainingTrips,
+              ),
+              intervalSeconds: Math.max(retainedGuard.intervalSeconds, localGuard.intervalSeconds),
+              actions: Math.max(retainedGuard.actions, localGuard.actions),
+              spent: Math.max(retainedGuard.spent, localGuard.spent),
+              reserved: Math.max(retainedGuard.reserved, localGuard.reserved),
+              latched: retainedGuard.latched || localGuard.latched,
+              returnDestination:
+                (localGuard.latched && localGuard.returnDestination) ||
+                retainedGuard.returnDestination ||
+                localGuard.returnDestination,
+              interrupted:
+                retainedGuard.interrupted || (!options.explicitStart && localGuard.interrupted),
+            }
+          : { ...localGuard, interrupted: options.explicitStart ? false : localGuard.interrupted };
     }
     const copiedSettings = structuredClone(settings);
     const disposition = structuredClone(
@@ -147,7 +174,11 @@ export class SupplyTripRuntime<Receipt> {
     this.disposition = disposition;
     this.character = context.character;
     this.epoch = context.epoch;
-    this.remainingTrips = this.policy.maxTrips;
+    this.remainingTrips =
+      this.policy.maxTrips === 0 && !retainedGuard && !options.explicitStart
+        ? 0
+        : supplyTripAllowance(this.policy.maxTrips);
+    this.tripSequence = retainedGuard?.tripSequence ?? 0;
     this.latched = false;
     this.actions = 0;
     this.spent = 0;
@@ -169,7 +200,7 @@ export class SupplyTripRuntime<Receipt> {
       : 'Supply trips are disabled.';
     if (retainedGuard) {
       const retained = retainedGuard;
-      this.remainingTrips = Math.min(this.remainingTrips, retained.remainingTrips);
+      this.remainingTrips = meetSupplyTripAllowance(this.remainingTrips, retained.remainingTrips);
       this.actions = retained.actions;
       this.spent = retained.spent;
       this.committed = retained.reserved;
@@ -235,7 +266,7 @@ export class SupplyTripRuntime<Receipt> {
       reasons.push('Waiting for the exact economic receipt; no repeat transaction is allowed.');
     return reasons;
   }
-  private goalsMet(context: SupplyContext): boolean {
+  private capturedGoalsMet(context: SupplyContext): boolean {
     const inventory = context.disposition.containers.inventory;
     return (
       this.goals.every((goal) => (count(context, goal.itemId) ?? -1) >= goal.desired) &&
@@ -244,6 +275,13 @@ export class SupplyTripRuntime<Receipt> {
           typeof inventory.maxWeight === 'number' &&
           inventory.maxWeight > 0 &&
           (inventory.weight / inventory.maxWeight) * 100 < this.policy.weightEndPercent))
+    );
+  }
+  private goalsMet(context: SupplyContext): boolean {
+    return (
+      this.capturedGoalsMet(context) &&
+      (!this.policy.sellAllPermitted ||
+        supplySaleRemainder(this.disposition, context.disposition)?.length === 0)
     );
   }
   observe(context: SupplyContext): void {
@@ -412,7 +450,7 @@ export class SupplyTripRuntime<Receipt> {
           'Configured hard weight stop reached before supply recovery. Lower the auto-sell trigger below that stop.';
         return null;
       }
-      this.remainingTrips--;
+      this.remainingTrips = chargeSupplyTrip(this.remainingTrips);
       this.replacementPending = false;
       this.nextTripAt = this.now() + this.policy.minimumIntervalSeconds * 1000;
       this.deadline = this.now() + this.policy.maxDurationSeconds * 1000;
@@ -472,11 +510,16 @@ export class SupplyTripRuntime<Receipt> {
         desired: rule.desired,
       }));
       this.weightGoal = high;
+      if (this.tripSequence === Number.MAX_SAFE_INTEGER) {
+        this.reason = 'Supply trip sequence exhausted. No new trip can be admitted.';
+        return null;
+      }
+      this.tripSequence++;
       this.destination = {
         map: context.map,
         position: { ...context.position },
       };
-      this.remainingTrips--;
+      this.remainingTrips = chargeSupplyTrip(this.remainingTrips);
       this.latched = true;
       this.nextTripAt = this.now() + this.policy.minimumIntervalSeconds * 1000;
       this.deadline = this.now() + this.policy.maxDurationSeconds * 1000;
@@ -486,6 +529,7 @@ export class SupplyTripRuntime<Receipt> {
       this.held = 0;
       this.prepared = false;
       this.departed = false;
+      this.resumed = false;
       this.phase = 'preparing';
       this.reason = 'Preparing a bounded supply trip.';
     }
@@ -528,6 +572,11 @@ export class SupplyTripRuntime<Receipt> {
           rule.minimum = goal.desired;
           rule.desired = goal.desired;
         }
+      }
+      if (this.policy.sellAllPermitted && this.capturedGoalsMet(context)) {
+        const pending = supplySaleRemainder(policy, context.disposition);
+        if (pending !== null)
+          policy.rules = policy.rules.filter((rule) => pending.includes(rule.itemId));
       }
       const next = this.ports.next(context, structuredClone(this.goals), policy, remaining);
       if (next.type === 'blocked') {
@@ -754,6 +803,7 @@ export class SupplyTripRuntime<Receipt> {
       character: this.character,
       latched: this.latched,
       remainingTrips: this.remainingTrips,
+      tripSequence: this.tripSequence,
       actions: this.actions,
       spent: this.spent,
       reserved: this.committed + this.held,
@@ -775,6 +825,7 @@ export class SupplyTripRuntime<Receipt> {
       uncertain: this.uncertain,
       latched: this.latched,
       remainingTrips: this.remainingTrips,
+      tripSequence: this.tripSequence,
       actions: this.actions,
       spent: this.spent,
       reserved: this.committed + this.held,

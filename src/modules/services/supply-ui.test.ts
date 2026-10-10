@@ -84,3 +84,16 @@ describe('supply status transitions', () => {
     expect(ui.output.textContent).toBe('Preview only · 1 stock goal');
   });
 });
+
+it('renders unlimited trips distinctly from the exhausted zero allowance', () => {
+  const ui = setup();
+  ui.render({
+    state: 'returning',
+    active: true,
+    uncertain: false,
+    reason: 'Return',
+    remainingTrips: -1,
+  });
+  expect(ui.output.textContent).toContain('unlimited trips');
+  expect(ui.output.textContent).not.toContain('-1 trips');
+});
