@@ -32,6 +32,16 @@ export class SupplyMerchantResolver {
         reason: 'A verified arrival map and cell are required to select the merchant.',
         preview: '',
       };
+    if (
+      arrivalOnly &&
+      mapAllowed(policy, map) &&
+      !this.planner.planArrivalEscape(map, position, settings.route_avoidWalls)
+    )
+      return {
+        contractId: null,
+        reason: `The actual arrival at ${map} (${position.x}, ${position.y}) has no verified walkable escape. Stop, use normal manual Database travel to a walkable cell, check the merchant, then Start for another supply attempt using one remaining trip.`,
+        preview: '',
+      };
     const databaseMaps = [...new Set(BUILTIN_SERVICES.map((service) => service.map))].filter(
       this.databaseSupported,
     );

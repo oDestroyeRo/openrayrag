@@ -349,7 +349,7 @@ fn reopen_game(
         game.navigate(crate::session::direct::url_for(mode))
             .map_err(|_| "Could not reopen the game.".to_string())
     } else {
-        crate::open_game_window(app, mode)
+        crate::open_game_window(app, mode, gate)
     };
     if result.is_err() {
         if let Ok(mut state) = app.state::<SharedLogin>().lock() {

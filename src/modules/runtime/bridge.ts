@@ -378,6 +378,7 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
             )
               return;
             NativeSocket.prototype.send.call(this, copy);
+            controller.officialInputSent(copy, generation);
           })
           .catch(() => {
             if (active === this) {
@@ -475,6 +476,14 @@ if (location.origin === new URL(GAME_URL).origin && location.pathname === '/' &&
         }
       }
       super.send(data);
+      if (
+        active === this &&
+        this.readyState === NativeSocket.OPEN &&
+        engine.connected &&
+        engine.compatible &&
+        page.buildUrl === VERIFIED_BUILD
+      )
+        controller.officialInputSent(data, this.runtimeGeneration);
     }
     private readonly gameSocket: boolean;
     private gameplayReady = false;

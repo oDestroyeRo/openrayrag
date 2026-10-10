@@ -328,7 +328,7 @@ const fields: Record<Section, Field[]> = {
       max: 86400,
     },
     { path: 'supply.maxTrips', label: 'Maximum supply trips', min: 1, max: 100 },
-    { path: 'supply.maxActions', label: 'Commands per trip', min: 1, max: 100 },
+    { path: 'supply.maxActions', label: 'Commands per trip', min: 1, max: 1000 },
     { path: 'supply.maxDurationSeconds', label: 'Trip deadline, seconds', min: 30, max: 3600 },
     {
       path: 'supply.maxSpend',
@@ -1010,6 +1010,7 @@ export class FeatureUi {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'secondary compact';
+    button.dataset.config = 'true';
     button.textContent = 'Preview item disposition';
     button.addEventListener('click', () => {
       try {
@@ -1095,6 +1096,7 @@ export class FeatureUi {
       });
     button.type = 'button';
     button.className = 'secondary compact';
+    button.dataset.config = 'true';
     button.textContent = 'Preview auto sell & supply trip';
     const output = document.createElement('div');
     output.id = 'supply-preview';

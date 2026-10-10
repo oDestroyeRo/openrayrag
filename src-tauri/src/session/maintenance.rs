@@ -1,3 +1,4 @@
+use crate::session::login::ConnectionMode;
 pub(crate) use crate::session::maintenance_logic::GameIdentity;
 use std::{
     sync::{
@@ -60,6 +61,9 @@ pub(crate) struct Gate {
     pub observed: Option<Instant>,
     pub initialized: bool,
     pub form_revision: Option<u64>,
+    // Native-created page ownership is for cleanup only; runtime commands must
+    // still validate their actual webview URL at the existing origin boundary.
+    runtime_mode: Option<ConnectionMode>,
     retirement: Option<Retirement>,
     navigation_authorized: Arc<AtomicBool>,
     page: Arc<PageLifetime>,
@@ -101,6 +105,12 @@ impl SharedGate {
     }
 }
 impl Gate {
+    pub fn game_opened(&mut self, mode: ConnectionMode) {
+        self.runtime_mode = Some(mode);
+    }
+    pub fn owns_bot_runtime(&self) -> bool {
+        self.runtime_mode == Some(ConnectionMode::BotOnly)
+    }
     fn committed_for(&self, nonce: &str) -> bool {
         self.lease.as_ref().is_some_and(|l| {
             l.nonce == nonce
@@ -175,6 +185,7 @@ impl Gate {
             return false;
         }
         self.retirement.as_mut().unwrap().destroyed = true;
+        self.runtime_mode = None;
         true
     }
     pub fn replacement_ready(&self, owner: &GameRetirement) -> bool {
@@ -185,6 +196,7 @@ impl Gate {
                 .is_some_and(|r| r.transport_joined && r.destroyed)
     }
     pub fn game_closed(&mut self) {
+        self.runtime_mode = None;
         self.retirement = None;
         self.page_closed();
         self.game_generation += 1;
@@ -372,12 +384,36 @@ pub(crate) fn admit(app: &tauri::AppHandle) -> Result<MutexGuard<'_, Gate>, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::login::ConnectionMode;
     fn gate() -> Gate {
         Gate {
             initialized: true,
             form_revision: Some(3),
             ..Default::default()
         }
+    }
+    #[test]
+    fn native_runtime_ownership_survives_readiness_and_reconnect_until_actual_close() {
+        let mut g = gate();
+        assert!(!g.owns_bot_runtime());
+        g.game_opened(ConnectionMode::BotOnly);
+        assert!(g.owns_bot_runtime());
+        g.identity = Some(GameIdentity {
+            session_id: "page".into(),
+            connection_id: "socket".into(),
+        });
+        g.authorize_navigation();
+        assert!(g.identity.is_none());
+        assert!(g.owns_bot_runtime());
+        g.page_navigation();
+        assert!(g.owns_bot_runtime());
+        g.game_closed();
+        assert!(!g.owns_bot_runtime());
+        g.game_opened(ConnectionMode::GameClient);
+        assert!(!g.owns_bot_runtime());
+        g.game_closed();
+        g.game_opened(ConnectionMode::BotOnly);
+        assert!(g.owns_bot_runtime());
     }
     #[test]
     fn startup_requires_initialization_and_never_opened_game() {

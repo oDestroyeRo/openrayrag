@@ -2043,6 +2043,165 @@ describe('persistent field run ownership', () => {
     advance(1000);
     expect(sent.filter((action) => action.type === 'useItem')).toHaveLength(1);
   });
+  it.each([{ prelude: [] }, { prelude: [OP.stop, OP.attack, OP.walk, OP.pickup, OP.look] }])(
+    'paces zero-cooldown recovery before the server silently rejects accumulated input $prelude',
+    ({ prelude }) => {
+      // Pinned Player.CanPerformCharacterActions rejects input debt > 1 second;
+      // each accepted UseInventoryItem adds 200 ms. Consumption does not clear it.
+      let debt = 0;
+      let serverAt = 100_000;
+      let hp = 200;
+      let rejected = 0;
+      let accepted = 0;
+      let replies: number[] = [];
+      const attemptedAt: number[] = [];
+      let f: ReturnType<typeof setup>;
+      const drain = (at: number) => {
+        debt = Math.max(0, debt - (at - serverAt));
+        serverAt = at;
+      };
+      f = setup(grid, (action) => {
+        drain(f.time());
+        if (action.type !== 'useItem') return;
+        attemptedAt.push(f.time());
+        if (debt > 1000) {
+          rejected++;
+          return; // The pinned handler sends no rejection or inventory response.
+        }
+        debt += 200;
+        accepted++;
+        replies.push(accepted);
+      });
+      const automation = policy();
+      automation.recovery.enabled = false;
+      automation.hpPotions = {
+        mode: 'any',
+        itemIds: [],
+        belowPercent: 80,
+        minStock: 10,
+        cooldownSeconds: 0,
+      };
+      f.receive(
+        { type: 'death', id: 2 },
+        { type: 'heal', id: 1, hp, maxHp: 1000 },
+        {
+          type: 'inventory',
+          items: [{ bagId: 501, itemId: 501, type: 1, count: 30 }],
+          equipment: [],
+          ammoId: -1,
+        },
+      );
+      for (const opcode of prelude) {
+        const cost =
+          opcode === OP.attack || opcode === OP.walk ? 250 : opcode === OP.look ? 100 : 200;
+        debt += cost;
+        f.controller.officialInputSent(Uint8Array.of(opcode));
+      }
+      f.controller.start({ ...settings, automation });
+      for (let elapsed = 0; elapsed < 8000; elapsed += 50) {
+        drain(f.time() + 50);
+        f.step(50);
+        const batch = replies;
+        replies = [];
+        for (const _ of batch) {
+          hp += 50;
+          f.packet(new BitWriter().u8(OP.heal).i32(1).i32(0).i32(hp).i32(1000));
+          f.packet(
+            new BitWriter()
+              .u8(FEATURE_OP.inventoryDelta)
+              .bool(false)
+              .i32(501)
+              .i16(1)
+              .i32(0)
+              .bool(false),
+          );
+        }
+      }
+      expect({
+        rejected,
+        accepted,
+        stock: f.controller.engine.character.count(domainItemId(501)),
+        outcome: f.controller.snapshot().itemAttempt?.outcome,
+      }).toEqual({ rejected: 0, accepted: 13, stock: 17, outcome: 'confirmed' });
+      expect(f.controller.snapshot().reason).not.toContain('Waiting for a confirmed result');
+      expect(f.controller.engine.settings.automation?.hpPotions?.cooldownSeconds).toBe(0);
+      if (prelude.length === 0) expect(attemptedAt[1]! - attemptedAt[0]!).toBeLessThanOrEqual(50);
+    },
+  );
+  it('keeps Stop available and retains input debt across Stop and Start', () => {
+    const f = setup();
+    const automation = policy();
+    automation.recovery.enabled = false;
+    automation.hpPotions = {
+      mode: 'any',
+      itemIds: [],
+      belowPercent: 80,
+      minStock: 10,
+      cooldownSeconds: 0,
+    };
+    f.receive(
+      { type: 'death', id: 2 },
+      { type: 'heal', id: 1, hp: 200, maxHp: 1000 },
+      {
+        type: 'inventory',
+        items: [{ bagId: 501, itemId: 501, type: 1, count: 30 }],
+        equipment: [],
+        ammoId: -1,
+      },
+    );
+    for (let i = 0; i < 4; i++) f.controller.officialInputSent(Uint8Array.of(OP.stop));
+    f.controller.start({ ...settings, automation });
+    f.step(100);
+    expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(0);
+    const stops = f.sent.filter((a) => a.type === 'stop').length;
+    f.controller.stop();
+    expect(f.sent.filter((a) => a.type === 'stop')).toHaveLength(stops + 1);
+    f.controller.start({ ...settings, automation });
+    f.step(299);
+    expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(0);
+    expect(f.controller.engine.actionResult.status).not.toBe('pending');
+    f.step(1);
+    expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(1);
+  });
+  it.each([0, 1])(
+    'does not drain input while own%s is absent across a same-connection clear',
+    (id) => {
+      const f = setup();
+      if (id === 0) {
+        f.packet(new BitWriter().u8(OP.enter).i32(0).string(settings.map));
+        f.packet(ownPacket({ ...player, id: 0 }, 1));
+      }
+      const automation = policy();
+      automation.recovery.enabled = false;
+      automation.hpPotions = {
+        mode: 'any',
+        itemIds: [],
+        belowPercent: 80,
+        minStock: 10,
+        cooldownSeconds: 0,
+      };
+      f.receive(
+        { type: 'death', id: 2 },
+        { type: 'heal', id, hp: 200, maxHp: 1000 },
+        {
+          type: 'inventory',
+          items: [{ bagId: 501, itemId: 501, type: 1, count: 30 }],
+          equipment: [],
+          ammoId: -1,
+        },
+      );
+      for (let i = 0; i < 4; i++) f.controller.officialInputSent(Uint8Array.of(OP.stop));
+      f.controller.start({ ...settings, automation });
+      f.packet(new BitWriter().u8(OP.clear));
+      f.advance(10_000);
+      f.packet(ownPacket({ ...player, id, hp: 200, maxHp: 1000 }, 2));
+      expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(0);
+      f.advance(199);
+      expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(0);
+      f.advance(1000);
+      expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(1);
+    },
+  );
   it('retains bounded dispatch and receive evidence for an unconfirmed item', () => {
     const f = setup();
     const automation = policy();
@@ -2087,34 +2246,119 @@ describe('persistent field run ownership', () => {
     expect(f.controller.snapshot().itemAttempt?.outcome).toBe('late-confirmed');
     expect(f.sent.filter((action) => action.type === 'useItem')).toHaveLength(1);
   });
-  it.each([0, 1100])('keeps observed status hints distinct from unknown after %sms', (elapsed) => {
+  it.each(
+    [2, 3, 4, 10, 26].flatMap((statusId) =>
+      [false, true].map((recovery) => ({ statusId, recovery })),
+    ),
+  )(
+    'defers the first automatic item while own status$statusId is positively observed with sitting recovery $recovery',
+    ({ statusId, recovery }) => {
+      const f = setup();
+      const automation = policy();
+      automation.recovery.enabled = recovery;
+      automation.items = [
+        { itemId: 501, resource: 'hp', belowPercent: 100, minStock: 0, cooldownSeconds: 1 },
+      ];
+      f.receive(
+        { type: 'spawn', entity: { ...player, statuses: [] } },
+        { type: 'heal', id: 1, hp: 55, maxHp: 100 },
+        { type: 'status', id: 1, statusId, seconds: 30 },
+        {
+          type: 'inventory',
+          items: [{ bagId: 501, itemId: 501, type: 1, count: 4 }],
+          equipment: [],
+          ammoId: -1,
+        },
+      );
+      f.controller.start({ ...settings, automation });
+      f.advance(1000);
+      expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(0);
+      expect(f.controller.snapshot().itemAttempt).toBeNull();
+      f.packet(new BitWriter().u8(FEATURE_OP.removeStatus).i32(1).u8(statusId).bool(false));
+      f.step();
+      expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(1);
+    },
+  );
+  it('keeps expired Hiding unknown and re-evaluates the first request without inventing a removal', () => {
     const f = setup();
     const automation = policy();
     automation.items = [
       { itemId: 501, resource: 'hp', belowPercent: 100, minStock: 0, cooldownSeconds: 1 },
     ];
-    f.receive({ type: 'spawn', entity: { ...player, statuses: [] } });
-    f.receive({ type: 'status', id: 1, statusId: 26, seconds: 1 });
-    f.receive({
-      type: 'inventory',
-      items: [{ bagId: 501, itemId: 501, type: 1, count: 4 }],
-      equipment: [],
-      ammoId: -1,
-    });
-    f.advance(elapsed);
+    f.receive(
+      { type: 'spawn', entity: { ...player, statuses: [] } },
+      { type: 'status', id: 1, statusId: 26, seconds: 0.2 },
+      {
+        type: 'inventory',
+        items: [{ bagId: 501, itemId: 501, type: 1, count: 4 }],
+        equipment: [],
+        ammoId: -1,
+      },
+    );
     f.controller.start({ ...settings, automation });
-    f.step();
-    const attempt = f.controller.snapshot().itemAttempt!;
-    expect(attempt.context?.statuses).toContainEqual({
+    f.step(100);
+    expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(0);
+    f.step(200);
+    expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(1);
+    expect(f.controller.snapshot().itemAttempt?.context?.statuses).toContainEqual({
       id: 26,
-      state: elapsed === 0 ? 'observed' : 'unknown',
+      state: 'unknown',
     });
-    expect(attempt.context?.statuses).toContainEqual({ id: 28, state: 'not-observed' });
-    attempt.context!.statuses[0]!.state = 'observed';
-    attempt.received.removals = 999;
-    expect(f.controller.snapshot().itemAttempt?.context?.statuses[0]?.state).toBe('not-observed');
-    expect(f.controller.snapshot().itemAttempt?.received.removals).toBe(0);
   });
+  it.each([9, 28])(
+    'allows first item with status%s, which does not imply Disabled or Hidden',
+    (statusId) => {
+      const f = setup();
+      const automation = policy();
+      automation.items = [
+        { itemId: 501, resource: 'hp', belowPercent: 100, minStock: 0, cooldownSeconds: 1 },
+      ];
+      f.receive(
+        { type: 'spawn', entity: { ...player, statuses: [] } },
+        { type: 'status', id: 1, statusId, seconds: 30 },
+        {
+          type: 'inventory',
+          items: [{ bagId: 501, itemId: 501, type: 1, count: 4 }],
+          equipment: [],
+          ammoId: -1,
+        },
+      );
+      f.controller.start({ ...settings, automation });
+      f.step();
+      expect(f.sent.filter((a) => a.type === 'useItem')).toHaveLength(1);
+    },
+  );
+  it.each([0, 1100])(
+    'keeps allowed observed status hints distinct from unknown after %sms',
+    (elapsed) => {
+      const f = setup();
+      const automation = policy();
+      automation.items = [
+        { itemId: 501, resource: 'hp', belowPercent: 100, minStock: 0, cooldownSeconds: 1 },
+      ];
+      f.receive({ type: 'spawn', entity: { ...player, statuses: [] } });
+      f.receive({ type: 'status', id: 1, statusId: 28, seconds: 1 });
+      f.receive({
+        type: 'inventory',
+        items: [{ bagId: 501, itemId: 501, type: 1, count: 4 }],
+        equipment: [],
+        ammoId: -1,
+      });
+      f.advance(elapsed);
+      f.controller.start({ ...settings, automation });
+      f.step();
+      const attempt = f.controller.snapshot().itemAttempt!;
+      expect(attempt.context?.statuses).toContainEqual({
+        id: 28,
+        state: elapsed === 0 ? 'observed' : 'unknown',
+      });
+      expect(attempt.context?.statuses).toContainEqual({ id: 26, state: 'not-observed' });
+      attempt.context!.statuses[0]!.state = 'observed';
+      attempt.received.removals = 999;
+      expect(f.controller.snapshot().itemAttempt?.context?.statuses[0]?.state).toBe('not-observed');
+      expect(f.controller.snapshot().itemAttempt?.received.removals).toBe(0);
+    },
+  );
   it('does not count a replacement connection as responses to the former item dispatch', () => {
     const f = setup();
     const automation = policy();

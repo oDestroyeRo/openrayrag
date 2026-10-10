@@ -1,6 +1,7 @@
 import { quantity, type Revision } from '../../shared/domain-values';
 import { insideLockArea, mapAllowed, mapPolicy } from '../navigation/map-policy-logic';
 import type { SettingsInput as Settings } from '../settings/settings';
+import { farmingDestination } from '../recovery/death-recovery';
 import { VALIDATED_DEFAULT_DISPOSITION, type ValidatedDispositionPolicy } from './disposition';
 
 import {
@@ -76,6 +77,7 @@ export class SupplyTripRuntime<Receipt> {
   private interrupted = false;
   private resumed = false;
   private retained = false;
+  private replacementPending = false;
   constructor(
     private readonly ports: SupplyPorts<Receipt>,
     private readonly now = Date.now,
@@ -99,6 +101,7 @@ export class SupplyTripRuntime<Receipt> {
     settings: SupplyPolicySettings,
     context: SupplyContext,
     guard?: SupplyResumeGuard,
+    options: { explicitStart?: boolean } = {},
   ): void {
     if (this.uncertain)
       throw new Error('Waiting for the previous supply transaction to reconcile before starting.');
@@ -110,7 +113,8 @@ export class SupplyTripRuntime<Receipt> {
     const localGuard = this.guard();
     if (localGuard?.character === context.character) {
       // A delayed controller-window publication cannot replenish this owner's
-      // allowance. Explicit Start cancels the old continuation after readback.
+      // allowance or erase its captured work cell. Only explicit Start can
+      // authorize a new attempt; an automatic guard still vetoes that permission.
       retainedGuard = retainedGuard
         ? {
             ...retainedGuard,
@@ -120,8 +124,14 @@ export class SupplyTripRuntime<Receipt> {
             spent: Math.max(retainedGuard.spent, localGuard.spent),
             reserved: Math.max(retainedGuard.reserved, localGuard.reserved),
             latched: retainedGuard.latched || localGuard.latched,
+            returnDestination:
+              (localGuard.latched && localGuard.returnDestination) ||
+              retainedGuard.returnDestination ||
+              localGuard.returnDestination,
+            interrupted:
+              retainedGuard.interrupted || (!options.explicitStart && localGuard.interrupted),
           }
-        : { ...localGuard, interrupted: false, returnDestination: null };
+        : { ...localGuard, interrupted: options.explicitStart ? false : localGuard.interrupted };
     }
     const copiedSettings = structuredClone(settings);
     const disposition = structuredClone(
@@ -152,6 +162,7 @@ export class SupplyTripRuntime<Receipt> {
     this.weightGoal = false;
     this.destination = null;
     this.interrupted = false;
+    this.replacementPending = false;
     this.phase = this.policy.enabled ? 'armed' : 'idle';
     this.reason = this.policy.enabled
       ? 'Waiting for a verified supply trigger.'
@@ -172,17 +183,39 @@ export class SupplyTripRuntime<Receipt> {
       this.destination = structuredClone(retained.returnDestination);
       this.reloadUncertainty = retained.uncertain;
       this.interrupted = retained.interrupted;
-      if (retained.interrupted || retained.uncertain) {
+      if (retained.latched && this.destination) {
+        this.replacementPending =
+          this.policy.enabled &&
+          !!options.explicitStart &&
+          !retained.interrupted &&
+          !retained.uncertain;
+        this.interrupted = !this.replacementPending;
+        // An expired old deadline cannot cancel a request waiting for its retained
+        // interval. Duration starts only after charging the replacement allowance.
+        this.deadline = 0;
+        this.phase = 'waiting';
+        this.reason = this.replacementPending
+          ? 'Waiting for fresh settled state before another supply attempt using one remaining trip.'
+          : 'Supply trip was interrupted. Stop, check the result and merchant, then explicitly Start to request a bounded replacement.';
+      } else if (retained.interrupted || retained.uncertain) {
         this.phase = 'waiting';
         this.reason =
           'Supply trip was interrupted. Check the result and return destination before starting a new run.';
       }
+      if (!this.remainingTrips && this.phase === 'waiting')
+        this.reason =
+          'Supply trip allowance exhausted. Stop/Start and unlimited farming time do not replenish spent trips.';
     }
   }
   private known(context: SupplyContext): string[] {
     const inventory = context.disposition.containers.inventory;
     const reasons: string[] = [];
-    if (!context.connected || !context.fresh)
+    if (
+      !context.connected ||
+      !context.fresh ||
+      !context.inventoryRevision ||
+      !context.currencyRevision
+    )
       reasons.push('Waiting for fresh character, inventory and currency observations.');
     if (!context.alive) reasons.push('Waiting for a living character.');
     if (context.character !== this.character)
@@ -196,6 +229,8 @@ export class SupplyTripRuntime<Receipt> {
       reasons.push('Verified inventory, weight and capacity are required.');
     if (context.disposition.equipment === null || context.disposition.ammoId === null)
       reasons.push('Equipment and ammunition are not observed.');
+    if (!integer(context.disposition.workflow.zeny, 0, 2_147_483_647))
+      reasons.push('Verified currency is required.');
     if (context.economicUncertain || this.uncertain)
       reasons.push('Waiting for the exact economic receipt; no repeat transaction is allowed.');
     return reasons;
@@ -262,18 +297,26 @@ export class SupplyTripRuntime<Receipt> {
         context.epoch !== this.epoch)
     )
       this.interrupt('Supply trip interrupted by death, character or connection change.');
-    if (this.receipt?.sent && this.now() - this.receipt.since >= 10000) {
+    if (!this.interrupted && this.receipt?.sent && this.now() - this.receipt.since >= 10000) {
       this.interrupted = true;
       this.pending = null;
       this.phase = 'waiting';
       this.reason =
         'Transaction timed out without an exact receipt. No repeat request will be sent.';
     }
-    if (this.ownsField && this.deadline && this.now() >= this.deadline) {
+    if (
+      !this.interrupted &&
+      this.phase !== 'waiting' &&
+      this.ownsField &&
+      this.deadline &&
+      this.now() >= this.deadline
+    ) {
       this.interrupted = true;
       this.pending = null;
       this.phase = 'waiting';
-      this.reason = 'Whole-trip duration limit reached; unresolved economics remain owned.';
+      this.reason = this.uncertain
+        ? 'Whole-trip duration limit reached while a transaction was awaiting confirmation. No repeat request will be sent.'
+        : 'Whole-trip duration limit reached with no pending transaction. Check the trip before starting again.';
     }
     if (this.phase === 'armed' || this.phase === 'complete') {
       if (this.latched && (this.phase === 'armed' || this.resumed) && this.goalsMet(context)) {
@@ -284,6 +327,7 @@ export class SupplyTripRuntime<Receipt> {
   }
   interrupt(reason: string): void {
     if (!this.ownsField && !this.receipt) return;
+    this.replacementPending = false;
     this.interrupted = true;
     this.pending = null;
     this.phase = 'waiting';
@@ -294,6 +338,7 @@ export class SupplyTripRuntime<Receipt> {
     }
   }
   stop(reason = 'Supply trip stopped by you.'): void {
+    this.replacementPending = false;
     this.interrupted = true;
     this.pending = null;
     this.phase = 'cancelled';
@@ -315,6 +360,7 @@ export class SupplyTripRuntime<Receipt> {
       !context.fieldRequested ||
       this.pending ||
       this.interrupted ||
+      (this.phase === 'waiting' && !this.replacementPending) ||
       this.uncertain
     )
       return null;
@@ -322,6 +368,57 @@ export class SupplyTripRuntime<Receipt> {
     if (reasons.length) {
       this.reason = reasons.join(' ');
       return null;
+    }
+    if (this.replacementPending) {
+      if ((this.policy.transport ?? 'travel') !== 'travel') {
+        this.reason =
+          'Interrupted supply recovery requires normal travel. Choose Travel to selected merchant before Stop/Start; no save-return command will be replayed.';
+        return null;
+      }
+      if (!this.remainingTrips || this.actions >= this.policy.maxActions) {
+        this.reason =
+          'Interrupted supply recovery has no remaining trip or command allowance. Stop/Start does not replenish either allowance.';
+        return null;
+      }
+      if (this.now() < this.nextTripAt) {
+        this.reason =
+          'Waiting for the retained minimum supply interval before a replacement attempt.';
+        return null;
+      }
+      if (!context.canPrepare || !context.settled) {
+        this.reason =
+          'Waiting for movement, casts, services and resource actions to settle before supply recovery.';
+        return null;
+      }
+      const executionPolicy = mapPolicy(this.settings!);
+      if (
+        !context.position ||
+        !integer(context.position.x, 0, 511) ||
+        !integer(context.position.y, 0, 511) ||
+        !this.destination ||
+        !mapAllowed(executionPolicy, context.map) ||
+        farmingDestination(this.settings!) !== this.destination.map ||
+        !mapAllowed(executionPolicy, this.destination.map) ||
+        !insideLockArea(executionPolicy, this.destination.map, this.destination.position)
+      ) {
+        this.reason =
+          'Supply recovery requires a permitted actual arrival and the original work cell on the current farming destination. Restore that destination before Stop/Start.';
+        return null;
+      }
+      const inventory = context.disposition.containers.inventory;
+      const hardWeight = this.settings?.automation?.limits.weightPercent ?? 0;
+      if (hardWeight && (inventory.weight! / Number(inventory.maxWeight)) * 100 >= hardWeight) {
+        this.reason =
+          'Configured hard weight stop reached before supply recovery. Lower the auto-sell trigger below that stop.';
+        return null;
+      }
+      this.remainingTrips--;
+      this.replacementPending = false;
+      this.nextTripAt = this.now() + this.policy.minimumIntervalSeconds * 1000;
+      this.deadline = this.now() + this.policy.maxDurationSeconds * 1000;
+      this.phase = this.goalsMet(context) ? 'closing' : 'preparing';
+      this.reason =
+        'Preparing another supply attempt using one remaining trip. Previous command and spending totals still apply.';
     }
     if (this.phase === 'armed' || this.phase === 'complete') {
       if (!this.remainingTrips) {
@@ -445,7 +542,15 @@ export class SupplyTripRuntime<Receipt> {
       if (next.type === 'ready') {
         if (!this.goalsMet(context)) {
           this.phase = 'waiting';
-          this.reason = 'The service plan is empty but captured stock or weight goals are not met.';
+          const inventory = context.disposition.containers.inventory;
+          this.reason =
+            this.weightGoal &&
+            typeof inventory.weight === 'number' &&
+            typeof inventory.maxWeight === 'number' &&
+            inventory.maxWeight > 0 &&
+            (inventory.weight / inventory.maxWeight) * 100 >= this.policy.weightEndPercent
+              ? `The permitted service plan is empty. Weight is ${((inventory.weight / inventory.maxWeight) * 100).toFixed(2)}% (${inventory.weight}/${inventory.maxWeight}); it must be below ${this.policy.weightEndPercent}%. Protected stock remains retained. Review the finish threshold, storage setup or explicit item permissions, then Stop/Start to request a bounded replacement.`
+              : 'The service plan is empty but captured stock goals are not met. Review the refill settings, then Stop/Start to request a bounded replacement.';
           return null;
         }
         this.phase = 'closing';
@@ -508,8 +613,10 @@ export class SupplyTripRuntime<Receipt> {
     return structuredClone(this.pending);
   }
   commandAllowed(): boolean {
+    if (this.replacementPending) return false;
     if (!this.ownsField) return true;
-    if (this.interrupted || this.actions >= this.policy.maxActions || this.now() >= this.deadline) {
+    if (this.interrupted || this.phase === 'waiting') return false;
+    if (this.actions >= this.policy.maxActions || this.now() >= this.deadline) {
       this.interrupt('Supply command or duration allowance exhausted.');
       return false;
     }
