@@ -2,7 +2,9 @@ import {
   dispositionItemProtection,
   type DispositionContext,
   type DispositionPolicyView,
+  type DispositionRuleView,
 } from './disposition';
+import type { ItemId } from '../../shared/domain-values';
 
 /** Sender-free eligible quantity/weight estimate. Price and exact economics are
  * deliberately deferred to the fresh shop; this never authorizes a sale. */
@@ -63,4 +65,41 @@ export function previewSupplySales(policy: DispositionPolicyView, context: Dispo
         ? null
         : Math.max(0, context.containers.inventory.weight - removableWeight),
   };
+}
+
+/** Remaining permitted excess, independent of weight or quotes. Unknown sale
+ * permission stays pending so the planner can hold on its actual prerequisite. */
+export function supplySaleRemainder(
+  policy: DispositionPolicyView,
+  context: DispositionContext,
+): ItemId[] | null {
+  const items = context.containers.inventory.items;
+  if (items === null || context.equipment === null || context.ammoId === null) return null;
+  return policy.rules
+    .filter(
+      (rule) =>
+        rule.sell &&
+        context.metadata[rule.itemId]?.sell !== false &&
+        supplyDispositionExcess(rule, context) > 0,
+    )
+    .map((rule) => rule.itemId);
+}
+export function supplyDispositionExcess(
+  rule: DispositionRuleView,
+  context: DispositionContext,
+): number {
+  const items = (context.containers.inventory.items ?? []).filter(
+    (item) => item.itemId === rule.itemId,
+  );
+  const carried = items.reduce((sum, item) => sum + item.count, 0);
+  const floor = Math.max(
+    rule.keep,
+    rule.maximum,
+    ...(context.minimumStock?.filter((row) => row.itemId === rule.itemId).map((row) => row.count) ??
+      []),
+  );
+  const unprotected = items
+    .filter((item) => dispositionItemProtection(context, item, 'inventory', rule) === null)
+    .reduce((sum, item) => sum + item.count, 0);
+  return Math.min(unprotected, Math.max(0, carried - floor));
 }

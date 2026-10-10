@@ -13,8 +13,12 @@ import {
   type DispositionRuleView,
 } from './disposition';
 import { serviceByContractId } from './npc-services-logic';
-import { DEFAULT_SUPPLY, validateSupplySettings } from './supply-trip-logic';
-import { previewSupplySales } from './supply-sales-logic';
+import {
+  DEFAULT_SUPPLY,
+  validateSupplySettings,
+  supplyTripCapacityText,
+} from './supply-trip-logic';
+import { previewSupplySales, supplyDispositionExcess } from './supply-sales-logic';
 import type {
   SupplyContext,
   SupplyGoal,
@@ -59,7 +63,12 @@ export function nextSupplyAction(
   // Dispose before receiving new stock, so capacity is based on confirmed data.
   const target =
     rules.find(
-      (rule) => (rule.store || rule.cart || rule.sell) && carried(rule.itemId) > floor(rule),
+      (rule) =>
+        (rule.store || rule.cart || rule.sell) &&
+        carried(rule.itemId) > floor(rule) &&
+        (!supply.sellAllPermitted ||
+          (supplyDispositionExcess(rule, c) > 0 &&
+            (rule.store || rule.cart || c.metadata[rule.itemId]?.sell !== false))),
     ) ??
     rules.find((rule) =>
       goals.some((goal) => goal.itemId === rule.itemId && carried(rule.itemId) < goal.desired),
@@ -224,7 +233,10 @@ export function previewSupplyTrip(
     ...(!goals.length && !weight ? ['No stock or weight trigger is active.'] : []),
     ...goals.map((goal) => `Item #${goal.itemId}: ${stock(goal.itemId)} → ${goal.desired}`),
     `Return: ${context.map || 'unknown map'} (${context.position?.x ?? '?'}, ${context.position?.y ?? '?'})`,
-    `Limits: ${typeof context.remainingTrips === 'number' && Number.isInteger(context.remainingTrips) && context.remainingTrips >= 0 && context.remainingTrips <= 100 ? `${Math.min(supply.maxTrips, context.remainingTrips)} trips remaining (configured cap ${supply.maxTrips})` : `retained trip capacity unobserved (configured cap ${supply.maxTrips})`} · ${supply.maxActions} commands/trip · ${supply.maxDurationSeconds}s · ${supply.maxSpend}z reserved cap. Stop/Start does not replenish spent trips.`,
+    `Limits: ${supplyTripCapacityText(supply.maxTrips, context.remainingTrips)} · ${supply.maxActions} commands/trip · ${supply.maxDurationSeconds}s · ${supply.maxSpend}z reserved cap. Stop/Start does not replenish spent trips.`,
+    supply.sellAllPermitted
+      ? 'Each visit: sell all explicitly permitted excess before returning; protected stock and retained floors remain.'
+      : 'Each visit: return once captured stock and weight goals are met.',
     `Auto sell: at ${supply.weightStartPercent}% → below ${supply.weightEndPercent}% · merchant ${supply.merchantMode ?? 'manual'}`,
     (settings.automation?.limits.weightPercent ?? 0) > 0
       ? `Hard weight stop: ${settings.automation!.limits.weightPercent}%${supply.weightStartPercent >= settings.automation!.limits.weightPercent ? ' · auto-sell trigger must be lower; the hard stop prevents departure.' : ' · stops departure at that limit, even during a weight jump.'}`

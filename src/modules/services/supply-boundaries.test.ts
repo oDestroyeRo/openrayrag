@@ -401,3 +401,182 @@ describe('supply settings, profile and reload boundaries', () => {
     expect(validFeatureStatus({ supplyGuard: { npcId: 'x'.repeat(8193) } })).toBe(false);
   });
 });
+
+describe('explicit unlimited supply trip authority', () => {
+  it('promotes only at begin and retains timers, uncertainty and stale-publication protection', () => {
+    let now = 100000;
+    const run = new PersistentFieldRun(() => now);
+    run.begin(settings, 'Tester', 'old');
+    run.observe({
+      map: settings.map,
+      sessionId: 'old',
+      connected: true,
+      compatible: true,
+      player: { name: 'Tester' },
+      supplyGuard: guard,
+    });
+    now += 10000;
+    const unlimited = {
+      ...settings,
+      automation: {
+        ...settings.automation,
+        supply: { ...settings.automation.supply, maxTrips: 0 },
+      },
+    };
+    // Merely requesting a guard for a different setting must not renew capacity.
+    expect(run.supplyGuardForStart(unlimited, 'Tester', 'old', true)?.remainingTrips).toBe(2);
+    run.begin(unlimited, 'Tester', 'old');
+    const granted = run.supplyGuardForStart(unlimited, 'Tester', 'old')!;
+    expect(granted).toMatchObject({
+      ...guard,
+      remainingTrips: -1,
+      intervalSeconds: 290,
+      deadlineSeconds: 490,
+    });
+    run.observe({
+      map: settings.map,
+      sessionId: 'old',
+      connected: true,
+      compatible: true,
+      player: { name: 'Tester' },
+      supplyGuard: { ...guard, remainingTrips: 1 },
+    });
+    run.completeSupplyStart('Tester', 'old', granted);
+    expect(run.readinessFor('Tester').remainingSupplyTrips).toBe(-1);
+    // Foreign finite telemetry cannot take ownership of the unlimited grant.
+    run.observe({
+      map: settings.map,
+      connected: true,
+      compatible: true,
+      player: { name: 'Tester' },
+      sessionId: 'foreign',
+      supplyGuard: { ...guard, remainingTrips: 0, actions: 0, uncertain: false },
+    });
+    expect(run.supplyGuardForStart(unlimited, 'Tester', 'old', true)?.uncertain).toBe(true);
+    run.begin(settings, 'Tester', 'old');
+    expect(run.readinessFor('Tester').remainingSupplyTrips).toBe(3);
+    run.observe({
+      map: settings.map,
+      connected: true,
+      compatible: true,
+      player: { name: 'Tester' },
+      sessionId: 'old',
+      supplyGuard: { ...guard, remainingTrips: -1 },
+    });
+    expect(run.readinessFor('Tester').remainingSupplyTrips).toBe(3);
+  });
+});
+
+it('new unlimited trips own fresh budgets; stale publications and delayed prior-trip callbacks cannot resurrect reservations', () => {
+  const run = new PersistentFieldRun(() => 100000);
+  const unlimited = {
+    ...settings,
+    automation: { ...settings.automation, supply: { ...settings.automation.supply, maxTrips: 0 } },
+  };
+  run.begin(unlimited, 'Tester', 'old');
+  const publish = (supplyGuard: typeof guard, sessionId = 'old') =>
+    run.observe({
+      sessionId,
+      connected: true,
+      compatible: true,
+      map: settings.map,
+      player: { name: 'Tester' },
+      supplyGuard,
+    });
+  const first = {
+    ...guard,
+    remainingTrips: -1,
+    tripSequence: 1,
+    actions: 20,
+    spent: 1000,
+    reserved: 1000,
+    uncertain: false,
+  };
+  publish(first);
+  publish({ ...first, latched: false, returnDestination: null });
+  const requested = run.supplyGuardForStart(unlimited, 'Tester', 'old')!;
+  const next = { ...first, tripSequence: 2, actions: 1, spent: 0, reserved: 0 };
+  publish(next);
+  expect(run.supplyGuardForStart(unlimited, 'Tester', 'old')).toMatchObject({
+    tripSequence: 2,
+    actions: 1,
+    spent: 0,
+    reserved: 0,
+  });
+  run.completeSupplyStart('Tester', 'old', requested);
+  publish(first);
+  expect(run.supplyGuardForStart(unlimited, 'Tester', 'old')).toMatchObject({
+    tripSequence: 2,
+    actions: 1,
+    spent: 0,
+    reserved: 0,
+  });
+  publish({ ...next, tripSequence: 3, actions: 0, reserved: 0 }, 'foreign');
+  expect(run.supplyGuardForStart(unlimited, 'Tester', 'old')).toMatchObject({
+    tripSequence: 2,
+    actions: 1,
+    uncertain: false,
+  });
+  publish({ ...next, reserved: 50 });
+  publish({ ...next, reserved: 0 });
+  expect(run.supplyGuardForStart(unlimited, 'Tester', 'old')?.reserved).toBe(50);
+});
+
+it('unlimited setup cannot bypass the 64-character retained registry or uncertainty on automatic reload', () => {
+  const run = new PersistentFieldRun(() => 100000);
+  const unlimited = {
+    ...settings,
+    automation: { ...settings.automation, supply: { ...settings.automation.supply, maxTrips: 0 } },
+  };
+  for (let i = 0; i < 64; i++) run.begin(unlimited, `Unlimited${i}`, 'old');
+  run.begin(unlimited, 'Overflow', 'old');
+  expect(run.supplyGuardForStart(unlimited, 'Overflow', 'new')).toMatchObject({
+    remainingTrips: 0,
+    interrupted: true,
+    uncertain: true,
+  });
+  expect(run.supplyGuardForStart(unlimited, 'Unlimited0', 'new', true)).toMatchObject({
+    remainingTrips: -1,
+    interrupted: true,
+    uncertain: true,
+  });
+});
+
+it('newer old-owner trip economics never erase automatic transfer uncertainty from an older handoff request', () => {
+  const run = new PersistentFieldRun(() => 100000);
+  const unlimited = {
+    ...settings,
+    automation: { ...settings.automation, supply: { ...settings.automation.supply, maxTrips: 0 } },
+  };
+  run.begin(unlimited, 'Tester', 'old');
+  const publish = (supplyGuard: typeof guard) =>
+    run.observe({
+      sessionId: 'old',
+      connected: true,
+      compatible: true,
+      map: settings.map,
+      player: { name: 'Tester' },
+      supplyGuard,
+    });
+  publish({ ...guard, tripSequence: 1, remainingTrips: -1, uncertain: false });
+  const requested = run.supplyGuardForStart(unlimited, 'Tester', 'new', true)!;
+  expect(requested.uncertain).toBe(true);
+  publish({
+    ...guard,
+    tripSequence: 2,
+    remainingTrips: -1,
+    actions: 1,
+    spent: 0,
+    reserved: 0,
+    uncertain: false,
+  });
+  run.completeSupplyStart('Tester', 'new', requested);
+  expect(run.supplyGuardForStart(unlimited, 'Tester', 'new')).toMatchObject({
+    tripSequence: 2,
+    actions: 1,
+    spent: 0,
+    reserved: 0,
+    uncertain: true,
+    interrupted: true,
+  });
+});

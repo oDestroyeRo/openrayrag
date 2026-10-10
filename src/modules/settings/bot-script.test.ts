@@ -768,3 +768,18 @@ describe('synchronizing the graphical settings view', () => {
     expect(parseBotScript(updated)).toEqual({ settings: populatedSettings(), script: macro() });
   });
 });
+
+it('round-trips sell-all and unlimited trip settings and defaults legacy sell-all off', () => {
+  const full = populatedSettings();
+  full.automation!.supply = { ...DEFAULT_SUPPLY, sellAllPermitted: true, maxTrips: 0 };
+  const source = formatBotScript({ settings: full, script: null });
+  expect(source).toContain('automation.supply.sellAllPermitted = true');
+  expect(source).toContain('automation.supply.maxTrips = 0');
+  expect(parseBotScript(source).settings.automation!.supply).toEqual(full.automation!.supply);
+  expect(
+    validateFormSettings(
+      parseBotScript(source.replace(/set automation.supply.sellAllPermitted = true\n/, ''))
+        .settings,
+    ).automation!.supply!.sellAllPermitted,
+  ).toBe(false);
+});

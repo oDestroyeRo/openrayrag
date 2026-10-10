@@ -295,6 +295,11 @@ const fields: Record<Section, Field[]> = {
       label: 'Auto sell when weight reaches the trigger',
       kind: 'checkbox',
     },
+    {
+      path: 'supply.sellAllPermitted',
+      label: 'Sell all permitted items each visit',
+      kind: 'checkbox',
+    },
     { path: 'supply.weightStartPercent', label: 'Start selling at weight %', min: 1, max: 100 },
     { path: 'supply.weightEndPercent', label: 'Finish below weight %', min: 1, max: 99 },
     {
@@ -327,7 +332,7 @@ const fields: Record<Section, Field[]> = {
       min: 1,
       max: 86400,
     },
-    { path: 'supply.maxTrips', label: 'Maximum supply trips', min: 1, max: 100 },
+    { path: 'supply.maxTrips', label: 'Maximum supply trips (0 = unlimited)', min: 0, max: 100 },
     { path: 'supply.maxActions', label: 'Commands per trip', min: 1, max: 1000 },
     { path: 'supply.maxDurationSeconds', label: 'Trip deadline, seconds', min: 30, max: 3600 },
     {
@@ -3144,7 +3149,7 @@ export class FeatureUi {
         : '';
     const supply = object(s.supply),
       supplyOutput = this.host.querySelector<HTMLElement>('#supply-preview')!;
-    const supplyText = `${text(supply.state)} · ${text(supply.reason)} · ${number(supply.actions) ?? 0} commands · ${number(supply.spent) ?? 0}z spent / ${number(supply.reserved) ?? 0}z reserved · ${number(supply.remainingTrips) ?? 0} trips left`;
+    const supplyText = `${text(supply.state)} · ${text(supply.reason)} · ${number(supply.actions) ?? 0} commands · ${number(supply.spent) ?? 0}z spent / ${number(supply.reserved) ?? 0}z reserved · ${supply.remainingTrips === -1 ? 'unlimited trips' : `${number(supply.remainingTrips) ?? 0} trips left`}`;
     if (
       supply.active === true ||
       supply.uncertain === true ||

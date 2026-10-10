@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PersistentFieldRun, ReconnectPolicy, type RunSession } from './reconnect';
 import { RunIntentDispatch } from './run-intent-dispatch';
+import { DEFAULT_SUPPLY } from '../services/supply-trip-logic';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from '../settings/settings';
 
 function deferred() {
@@ -439,4 +440,59 @@ it('Stop fences a deferred settings Apply and ignores its late native acceptance
   await stopped;
   expect(f.actions()).toEqual(['start', 'apply', 'stop', 'stop']);
   expect(f.field.requested).toBe(false);
+});
+
+it('explicit dispatch grants unlimited trips while stale finite publications before and after acknowledgement retain economics', async () => {
+  const f = fixture();
+  const configured = {
+    ...settings(),
+    automation: {
+      ...structuredClone(DEFAULT_AUTOMATION),
+      supply: { ...DEFAULT_SUPPLY, enabled: true, maxTrips: 100 },
+    },
+  };
+  await f.dispatch.start(configured, ready());
+  const guard = {
+    version: 1 as const,
+    character: 'Synthetic',
+    latched: true,
+    remainingTrips: 98,
+    actions: 51,
+    spent: 0,
+    reserved: 120,
+    intervalSeconds: 300,
+    deadlineSeconds: 500,
+    interrupted: true,
+    uncertain: false,
+    returnDestination: { map: 'prt_fild08', position: { x: 100, y: 101 } },
+  };
+  f.field.observe({ ...ready(), supplyGuard: guard });
+  await f.dispatch.stop();
+  f.advance(10000);
+  const pending = f.defer('control_bot', 'start');
+  configured.automation.supply.maxTrips = 0;
+  const starting = f.dispatch.start(configured, ready());
+  const requested = f.native.mock.calls.at(-1)![1]!.supplyGuard;
+  expect(requested).toMatchObject({
+    ...guard,
+    remainingTrips: -1,
+    interrupted: false,
+    intervalSeconds: 290,
+    deadlineSeconds: 490,
+  });
+  f.field.observe({ ...ready(), supplyGuard: { ...guard, remainingTrips: 97, actions: 52 } });
+  expect(f.field.readinessFor('Synthetic').remainingSupplyTrips).toBe(-1);
+  pending.resolve();
+  expect((await starting).outcome.status).toBe('accepted');
+  f.field.observe({ ...ready(), supplyGuard: { ...guard, remainingTrips: 96, actions: 53 } });
+  expect(f.field.supplyGuardForStart(configured, 'Synthetic', 'old')).toMatchObject({
+    remainingTrips: -1,
+    actions: 53,
+    reserved: 120,
+  });
+  configured.automation.supply.maxTrips = 2;
+  await f.dispatch.stop();
+  await f.dispatch.start(configured, ready());
+  f.field.observe({ ...ready(), supplyGuard: { ...guard, remainingTrips: -1 } });
+  expect(f.field.readinessFor('Synthetic').remainingSupplyTrips).toBe(2);
 });

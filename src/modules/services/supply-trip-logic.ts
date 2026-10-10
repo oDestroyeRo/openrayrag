@@ -12,6 +12,7 @@ export interface SupplySettings {
   enabled: boolean;
   stockEnabled: boolean;
   weightEnabled: boolean;
+  sellAllPermitted: boolean;
   weightStartPercent: number;
   weightEndPercent: number;
   minimumIntervalSeconds: number;
@@ -32,6 +33,7 @@ export const DEFAULT_SUPPLY: SupplySettings = {
   enabled: false,
   stockEnabled: true,
   weightEnabled: false,
+  sellAllPermitted: false,
   weightStartPercent: 80,
   weightEndPercent: 60,
   minimumIntervalSeconds: 300,
@@ -125,6 +127,7 @@ export interface SupplySnapshot {
   uncertain: boolean;
   latched: boolean;
   remainingTrips: number;
+  tripSequence?: number;
   actions: number;
   spent: number;
   reserved: number;
@@ -141,6 +144,7 @@ export interface SupplyResumeGuard {
   character: string;
   latched: boolean;
   remainingTrips: number;
+  tripSequence?: number;
   actions: number;
   spent: number;
   reserved: number;
@@ -170,16 +174,25 @@ export function validateSupplySettings(input: unknown): SupplySettings {
   if (!input || typeof input !== 'object' || Array.isArray(input))
     throw new Error('Invalid supply fields.');
   const value = record(
-    { merchantMode: 'manual', transport: 'travel', saveMap: '', returnMinStock: 1, ...input },
+    {
+      sellAllPermitted: false,
+      merchantMode: 'manual',
+      transport: 'travel',
+      saveMap: '',
+      returnMinStock: 1,
+      ...input,
+    },
     Object.keys(DEFAULT_SUPPLY),
   );
   if (
-    ['enabled', 'stockEnabled', 'weightEnabled'].some((key) => typeof value[key] !== 'boolean') ||
+    ['enabled', 'stockEnabled', 'weightEnabled', 'sellAllPermitted'].some(
+      (key) => typeof value[key] !== 'boolean',
+    ) ||
     !integer(value.weightStartPercent, 1, 100) ||
     !integer(value.weightEndPercent, 1, 99) ||
     value.weightEndPercent >= value.weightStartPercent ||
     !integer(value.minimumIntervalSeconds, 1, 86400) ||
-    !integer(value.maxTrips, 1, 100) ||
+    !integer(value.maxTrips, 0, 100) ||
     !integer(value.maxActions, 1, 1000) ||
     !integer(value.maxDurationSeconds, 30, 3600) ||
     !integer(value.maxSpend, 0, 2_000_000_000) ||
@@ -201,20 +214,27 @@ export function validateSupplySettings(input: unknown): SupplySettings {
 }
 
 export function validateSupplyResumeGuard(input: unknown): SupplyResumeGuard {
-  const value = record(input, [
-    'version',
-    'character',
-    'latched',
-    'remainingTrips',
-    'actions',
-    'spent',
-    'reserved',
-    'intervalSeconds',
-    'deadlineSeconds',
-    'interrupted',
-    'uncertain',
-    'returnDestination',
-  ]);
+  const value = record(
+    {
+      tripSequence: 0,
+      ...(input && typeof input === 'object' && !Array.isArray(input) ? input : {}),
+    },
+    [
+      'version',
+      'tripSequence',
+      'character',
+      'latched',
+      'remainingTrips',
+      'actions',
+      'spent',
+      'reserved',
+      'intervalSeconds',
+      'deadlineSeconds',
+      'interrupted',
+      'uncertain',
+      'returnDestination',
+    ],
+  );
   if (
     value.version !== 1 ||
     typeof value.character !== 'string' ||
@@ -222,7 +242,8 @@ export function validateSupplyResumeGuard(input: unknown): SupplyResumeGuard {
     value.character.length > 64 ||
     /[\u0000-\u001f\u007f]/.test(value.character) ||
     ['latched', 'interrupted', 'uncertain'].some((key) => typeof value[key] !== 'boolean') ||
-    !integer(value.remainingTrips, 0, 100) ||
+    !integer(value.remainingTrips, -1, 100) ||
+    !integer(value.tripSequence, 0, Number.MAX_SAFE_INTEGER) ||
     !integer(value.actions, 0, 1000) ||
     !integer(value.spent, 0, 2_000_000_000) ||
     !integer(value.reserved, 0, 2_000_000_000) ||
@@ -248,3 +269,23 @@ export const count = (context: SupplyContext, id: ItemId) =>
   context.disposition.containers.inventory.items == null
     ? null
     : inventoryItemCount(id)(context.disposition.containers.inventory.items);
+
+/** Settings use zero for unlimited; retained guards reserve zero for exhausted. */
+export const supplyTripAllowance = (maxTrips: number): number => (maxTrips === 0 ? -1 : maxTrips);
+/** Meet retained allowances without treating the unlimited sentinel as exhausted. */
+export const meetSupplyTripAllowance = (left: number, right: number): number =>
+  left === -1 ? right : right === -1 ? left : Math.min(left, right);
+export const chargeSupplyTrip = (remaining: number): number =>
+  remaining === -1 ? -1 : Math.max(0, remaining - 1);
+export function supplyTripCapacityText(
+  maxTrips: number,
+  retained: number | null | undefined,
+): string {
+  const configured = maxTrips === 0 ? 'unlimited' : String(maxTrips);
+  if (typeof retained !== 'number' || !integer(retained, -1, 100))
+    return `retained trip capacity unobserved (configured cap ${configured})`;
+  const remaining = meetSupplyTripAllowance(supplyTripAllowance(maxTrips), retained);
+  return remaining === -1
+    ? 'Unlimited supply trips'
+    : `${remaining} trips remaining (configured cap ${configured})`;
+}

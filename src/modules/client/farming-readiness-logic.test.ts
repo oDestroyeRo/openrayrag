@@ -222,3 +222,20 @@ describe('farming readiness', () => {
     expect(farmingReadiness(null, null, context)).toEqual([]);
   });
 });
+
+it('distinguishes explicitly retained unlimited trips from exhausted finite and unobserved capacity', () => {
+  const s = supplySettings();
+  s.automation!.supply!.maxTrips = 0;
+  expect(row(s, 'supply', { ...context, remainingSupplyTrips: -1 })?.detail).toContain(
+    'Unlimited supply trips',
+  );
+  expect(row(s, 'supply', { ...context, remainingSupplyTrips: 0 })?.title).toBe(
+    'Supply trip allowance exhausted',
+  );
+  expect(row(s, 'supply', { ...context, remainingSupplyTrips: 2 })?.detail).toContain(
+    '2 trips remaining (configured cap unlimited)',
+  );
+  expect(row(s, 'supply')?.detail).toContain(
+    'Retained capacity unobserved; configured cap unlimited',
+  );
+});

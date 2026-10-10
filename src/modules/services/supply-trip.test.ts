@@ -15,7 +15,7 @@ import {
   type SupplyIntent,
 } from './supply-trip';
 import { nextSupplyAction, previewSupplyTrip } from './supply-plan';
-import { previewSupplySales } from './supply-sales-logic';
+import { previewSupplySales, supplySaleRemainder } from './supply-sales-logic';
 import { dispositionStockFloors } from './disposition-ui-logic';
 import { createSupplyReceipt, observeSupplyReceipt, confirmSupplyReceipt } from './supply-receipt';
 import { DEFAULT_AUTOMATION, DEFAULT_SETTINGS } from '../settings/settings';
@@ -370,7 +370,7 @@ describe('bounded supply runtime', () => {
     expect(validateSupplySettings(configured.automation!.supply!).buyService).toContain('.v1');
     for (const patch of [
       { enabled: 1 },
-      { maxTrips: 0 },
+      { maxTrips: -1 },
       { maxActions: 1001 },
       { maxSpend: 2000000001 },
       { weightEndPercent: 80 },
@@ -1114,7 +1114,7 @@ describe('supply configuration atomicity', () => {
               ...configured,
               automation: {
                 ...configured.automation!,
-                supply: { ...configured.automation!.supply!, maxTrips: 0 },
+                supply: { ...configured.automation!.supply!, maxTrips: -1 },
               },
             }
           : configured;
@@ -1437,3 +1437,284 @@ describe('phase planning and exact receipts', () => {
     expect(confirmSupplyReceipt(wrong, c)).toBe(false);
   });
 });
+
+describe('sell-all remaining excess and unlimited allowance', () => {
+  const salePolicy = (ids = [918, 1052]) =>
+    validateDispositionPolicy({
+      maxSpend: 0,
+      rules: ids.map((id) => ({
+        ...rule,
+        itemId: id,
+        keep: 0,
+        minimum: 0,
+        desired: 0,
+        maximum: 0,
+        sell: true,
+        restock: 'off',
+      })),
+    });
+  it('skips genuinely protected earlier items, preserves aggregate floors and ignores weight estimates', () => {
+    const c = context(0);
+    const items = [
+      { bagId: 918, itemId: 918, count: 10, type: 1 as const },
+      { bagId: 1052, itemId: 1052, count: 10, type: 1 as const },
+    ];
+    c.disposition.containers.inventory.items = items;
+    c.disposition.workflow.inventory = items;
+    c.disposition.workflow.protectedItemIds = [918];
+    c.disposition.minimumStock = [{ itemId: 1052, count: 8 }];
+    c.disposition.metadata = {
+      ...c.disposition.metadata,
+      1052: { ...c.disposition.metadata[1052]!, weight: null },
+    };
+    c.disposition.workflow.world.shop!.mode = 'sell';
+    const policy = salePolicy();
+    const supply = { ...DEFAULT_SUPPLY, sellAllPermitted: true };
+    expect(supplySaleRemainder(policy, c.disposition)).toEqual([1052]);
+    expect(nextSupplyAction(c, [], policy, supply)).toMatchObject({
+      type: 'action',
+      action: { kind: 'sell', itemId: 1052, count: 2 },
+    });
+    items[1]!.count = 8;
+    expect(supplySaleRemainder(policy, c.disposition)).toEqual([]);
+  });
+  it('preserves equipped, selected ammunition, refined, carded and unique stock while selling another permitted item', () => {
+    const c = context(0);
+    const protectedItems = [
+      { bagId: 918, itemId: 918, count: 1, type: 1 as const },
+      { bagId: 938, itemId: 938, count: 1, type: 1 as const },
+      { bagId: 928, itemId: 928, count: 1, type: 1 as const, refine: 1 },
+      { bagId: 955, itemId: 955, count: 1, type: 1 as const, slots: [4001, 0, 0, 0] },
+      { bagId: 9001, itemId: 960, count: 1, type: 2 as const },
+    ];
+    const items = [...protectedItems, { bagId: 1052, itemId: 1052, count: 2, type: 1 as const }];
+    c.disposition.containers.inventory.items = items;
+    c.disposition.workflow.inventory = items;
+    c.disposition.equipment = [918];
+    c.disposition.ammoId = 938;
+    expect(supplySaleRemainder(salePolicy([918, 938, 928, 955, 960, 1052]), c.disposition)).toEqual(
+      [1052],
+    );
+  });
+  it('keeps unknown permission or price pending, skips a verified prohibition and holds missing quotes', () => {
+    const c = context(0);
+    const items = [{ bagId: 1052, itemId: 1052, count: 2, type: 1 as const }];
+    c.disposition.containers.inventory.items = items;
+    c.disposition.workflow.inventory = items;
+    c.disposition.workflow.world.shop!.mode = 'sell';
+    const policy = salePolicy([1052]),
+      supply = { ...DEFAULT_SUPPLY, sellAllPermitted: true };
+    c.disposition.metadata = {
+      ...c.disposition.metadata,
+      1052: { ...c.disposition.metadata[1052]!, sell: undefined },
+    };
+    expect(supplySaleRemainder(policy, c.disposition)).toEqual([1052]);
+    expect(nextSupplyAction(c, [], policy, supply).type).toBe('blocked');
+    c.disposition.metadata = {
+      ...c.disposition.metadata,
+      1052: { ...c.disposition.metadata[1052]!, sell: true, sellPrice: null },
+    };
+    expect(supplySaleRemainder(policy, c.disposition)).toEqual([1052]);
+    expect(nextSupplyAction(c, [], policy, supply).type).toBe('blocked');
+    c.disposition.metadata = {
+      ...c.disposition.metadata,
+      1052: { ...c.disposition.metadata[1052]!, sell: false },
+    };
+    expect(supplySaleRemainder(policy, c.disposition)).toEqual([]);
+  });
+  it.each([
+    { maxTrips: 0, visits: 103 },
+    { maxTrips: 3, visits: 2 },
+  ])(
+    'completes $visits visits with cap $maxTrips while interval and command guards still apply',
+    ({ maxTrips, visits }) => {
+      let now = 100000;
+      const c = context(0),
+        supply = {
+          ...DEFAULT_SUPPLY,
+          enabled: true,
+          stockEnabled: false,
+          weightEnabled: true,
+          maxTrips,
+          maxActions: 1,
+          minimumIntervalSeconds: 1,
+        };
+      const settings = { ...configured, automation: { ...configured.automation!, supply } };
+      const runtime = new SupplyTripRuntime(
+        { next: () => ({ type: 'ready' as const }), confirm: () => true },
+        () => now,
+      );
+      runtime.configure(settings, c, undefined, { explicitStart: true });
+      for (let i = 0; i < visits; i++) {
+        c.disposition.containers.inventory.weight = 9000;
+        const prepare = runtime.next(c)!;
+        expect(prepare.type).toBe('prepare');
+        runtime.acknowledge(prepare.id, 'confirmed', c);
+        expect(runtime.snapshot()).toMatchObject({
+          remainingTrips: maxTrips === 0 ? -1 : maxTrips - i - 1,
+          tripSequence: i + 1,
+        });
+        c.disposition.containers.inventory.weight = 1000;
+        c.disposition.workflow.world.apply({ type: 'npcEnd' });
+        const close = runtime.next(c)!;
+        expect(close.type).toBe('close');
+        runtime.acknowledge(close.id, 'confirmed', c);
+        const returning = runtime.next(c)!;
+        expect(returning.type).toBe('return');
+        runtime.acknowledge(returning.id, 'confirmed', c);
+        const resume = runtime.resumeIntent(c)!;
+        expect(resume, `trip ${i + 1}`).not.toBeNull();
+        runtime.acknowledge(resume.id, 'confirmed', c);
+        c.disposition.containers.inventory.weight = 9000;
+        expect(runtime.next(c)).toBeNull();
+        now += 1000;
+      }
+      expect(runtime.snapshot().remainingTrips).toBe(maxTrips === 0 ? -1 : maxTrips - visits);
+      const nextTrip = runtime.next(c)!;
+      expect(nextTrip.type).toBe('prepare');
+      expect(runtime.commandAllowed()).toBe(true);
+      expect(runtime.commandAllowed()).toBe(false);
+      runtime.stop();
+      expect(runtime.next(c)).toBeNull();
+    },
+  );
+  it('config0 cannot promote a retained finite automatic guard; only an explicit sentinel grant can promote local state', () => {
+    const f = setup();
+    const before = f.runtime.guard()!;
+    const unlimited = {
+      ...configured,
+      automation: {
+        ...configured.automation!,
+        supply: { ...configured.automation!.supply!, maxTrips: 0 },
+      },
+    };
+    f.runtime.configure(unlimited, f.c, before, { explicitStart: true });
+    expect(f.runtime.snapshot().remainingTrips).toBe(2);
+    f.runtime.configure(unlimited, f.c, { ...before, remainingTrips: -1 }, { explicitStart: true });
+    expect(f.runtime.snapshot().remainingTrips).toBe(-1);
+    f.runtime.configure(
+      configured,
+      f.c,
+      { ...before, remainingTrips: -1 },
+      { explicitStart: true },
+    );
+    expect(f.runtime.snapshot().remainingTrips).toBe(2);
+    f.runtime.configure(unlimited, f.c, before);
+    expect(f.runtime.snapshot().remainingTrips).toBe(2);
+  });
+});
+
+it('sell-all skips sale-prohibited earlier stock while weight remains high and later permitted excess exists', () => {
+  const c = context(0),
+    items = [918, 1052].map((id) => ({ itemId: id, bagId: id, count: 10, type: 1 as const }));
+  c.disposition.containers.inventory.items = items;
+  c.disposition.workflow.inventory = items;
+  c.disposition.containers.inventory.weight = 9000;
+  c.disposition.metadata = {
+    ...c.disposition.metadata,
+    918: { ...c.disposition.metadata[918]!, sell: false },
+  };
+  c.disposition.workflow.world.shop!.mode = 'sell';
+  const policy = validateDispositionPolicy({
+    maxSpend: 0,
+    rules: [918, 1052].map((id) => ({
+      ...rule,
+      itemId: id,
+      keep: 0,
+      minimum: 0,
+      desired: 0,
+      maximum: 0,
+      sell: true,
+      restock: 'off',
+    })),
+  });
+  expect(
+    nextSupplyAction(c, [], policy, { ...DEFAULT_SUPPLY, sellAllPermitted: true }),
+  ).toMatchObject({ type: 'action', action: { itemId: 1052, kind: 'sell', count: 10 } });
+});
+
+it('runtime configure keeps the newer local trip capsule rather than merging old reservations, latch or destination', () => {
+  const f = setup();
+  const old = {
+    ...f.runtime.guard()!,
+    tripSequence: 1,
+    actions: 50,
+    spent: 100,
+    reserved: 1000,
+    latched: true,
+    returnDestination: { map: 'prt_fild05', position: { x: 50, y: 50 } },
+  };
+  const current = {
+    ...old,
+    tripSequence: 2,
+    actions: 1,
+    spent: 0,
+    reserved: 0,
+    returnDestination: { map: 'prt_fild05', position: { x: 289, y: 220 } },
+  };
+  f.runtime.configure(configured, f.c, current);
+  f.runtime.configure(configured, f.c, old);
+  expect(f.runtime.guard()).toMatchObject({
+    tripSequence: 2,
+    actions: 1,
+    spent: 0,
+    reserved: 0,
+    returnDestination: current.returnDestination,
+  });
+});
+
+it('holds sequence overflow without consuming allowance or admitting a new trip', () => {
+  const f = setup(),
+    before = { ...f.runtime.guard()!, tripSequence: Number.MAX_SAFE_INTEGER, remainingTrips: -1 };
+  const unlimited = {
+    ...configured,
+    automation: {
+      ...configured.automation!,
+      supply: { ...configured.automation!.supply!, maxTrips: 0 },
+    },
+  };
+  f.runtime.configure(unlimited, f.c, before, { explicitStart: true });
+  expect(f.runtime.next(f.c)).toBeNull();
+  expect(f.runtime.snapshot()).toMatchObject({
+    tripSequence: Number.MAX_SAFE_INTEGER,
+    remainingTrips: -1,
+    actions: 0,
+  });
+  expect(f.runtime.snapshot().reason).toContain('sequence exhausted');
+});
+
+it.each([false, true])(
+  'lagged previous-trip guard preserves explicit replacement permission and incoming interruption veto %s',
+  (interrupted) => {
+    const f = setup();
+    const delayed = f.runtime.guard()!;
+    f.prepare();
+    const before = f.runtime.guard()!;
+    f.runtime.stop();
+    f.runtime.configure(configured, f.c, { ...delayed, interrupted }, { explicitStart: true });
+    expect(f.runtime.guard()).toMatchObject({
+      tripSequence: 1,
+      remainingTrips: before.remainingTrips,
+      actions: before.actions,
+      reserved: before.reserved,
+      returnDestination: before.returnDestination,
+    });
+    if (interrupted) expect(f.runtime.snapshot().reason).toContain('was interrupted');
+    else
+      expect(f.runtime.snapshot().reason).toContain(
+        'Waiting for fresh settled state before another supply attempt',
+      );
+    f.advance(300000);
+    if (interrupted) expect(f.runtime.next(f.c)).toBeNull();
+    else {
+      expect(f.runtime.next(f.c)?.type).toBe('prepare');
+      expect(f.runtime.guard()).toMatchObject({
+        tripSequence: 1,
+        remainingTrips: before.remainingTrips - 1,
+        actions: before.actions,
+        reserved: before.reserved,
+        returnDestination: before.returnDestination,
+      });
+    }
+  },
+);
