@@ -56,19 +56,19 @@ jobs:
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
           bun install --frozen-lockfile
           bun run bridge
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: matrix.language == 'rust'
         with:
           workspaces: src-tauri -> ../../rayrag-codeql-target
           save-if: ${{ github.repository == 'oDestroyeRo/openrayrag' && github.ref == 'refs/heads/main' }}
           key: codeql-rust-v4.38.2-${{ hashFiles('vendor/glib/**') }}
           env-vars: CODEQL_EXTRACTOR_RUST_OPTION_
-      - uses: github/codeql-action/init@v4.38.2
+      - uses: github/codeql-action/init@v4.39.1
         with:
           languages: ${{ matrix.language }}
           build-mode: none
           queries: security-extended
-      - uses: github/codeql-action/analyze@v4.38.2
+      - uses: github/codeql-action/analyze@v4.39.1
         with:
           category: /language:${{ matrix.language }}
 
