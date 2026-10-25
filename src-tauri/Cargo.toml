@@ -19,7 +19,7 @@ tauri-build = { version = "2", features = [] }
 rmcp = { version = "=3.6.0", default-features = false, features = ["server", "transport-streamable-http-server"] }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
 tokio-util = { version = "=0.7.20", features = ["rt"] }
-tokio = { version = "=1.53.3", features = ["rt", "net", "sync", "time", "macros"] }
+tokio = { version = "=1.54.1", features = ["rt", "net", "sync", "time", "macros"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 tauri = { version = "2", features = ["unstable"] }
